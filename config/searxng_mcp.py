@@ -11,6 +11,15 @@ import urllib.request
 import urllib.parse
 from typing import Dict, Any, List
 
+# Add parent dir to path so the shared protocol module resolves when this
+# script is launched directly as `python3 config/searxng_mcp.py`.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from runner.mcp_protocol import StdioJsonRpcServer, ToolSpec  # noqa: E402
+
 SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://localhost:8080")
 
 def search_searxng(query: str, categories: str = "general", max_results: int = 10) -> List[Dict[str, Any]]:
@@ -23,7 +32,7 @@ def search_searxng(query: str, categories: str = "general", max_results: int = 1
     }
     url = f"{SEARXNG_URL.rstrip('/')}/search?{urllib.parse.urlencode(params)}"
     req = urllib.request.Request(url, headers={"User-Agent": "EpistemicSwarm/1.0"})
-    
+
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -41,93 +50,43 @@ def search_searxng(query: str, categories: str = "general", max_results: int = 1
         return [{"error": f"Failed to query SearXNG at {SEARXNG_URL}: {str(e)}"}]
 
 
-def handle_json_rpc(line: str):
-    """Minimal JSON-RPC 2.0 loop for MCP protocol."""
-    try:
-        msg = json.loads(line)
-    except Exception:
-        return
+def build_server() -> StdioJsonRpcServer:
+    def handle_searxng_search(args: Dict[str, Any]) -> str:
+        res = search_searxng(
+            query=args.get("query", ""),
+            categories=args.get("categories", "general"),
+            max_results=args.get("max_results", 10),
+        )
+        return json.dumps(res, indent=2)
 
-    msg_id = msg.get("id")
-    method = msg.get("method")
-
-    if method == "initialize":
-        response = {
-            "jsonrpc": "2.0",
-            "id": msg_id,
-            "result": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {
-                    "tools": {}
+    return StdioJsonRpcServer(
+        server_name="searxng-mcp",
+        version="1.0.0",
+        tools=[
+            ToolSpec(
+                name="searxng_search",
+                description="Execute an unbiased multi-engine metasearch via SearXNG.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"},
+                        "categories": {
+                            "type": "string",
+                            "description": "Categories (general, science, it)",
+                            "default": "general"
+                        },
+                        "max_results": {"type": "integer", "default": 10}
+                    },
+                    "required": ["query"]
                 },
-                "serverInfo": {
-                    "name": "searxng-mcp",
-                    "version": "1.0.0"
-                }
-            }
-        }
-        sys.stdout.write(json.dumps(response) + "\n")
-        sys.stdout.flush()
-
-    elif method == "tools/list":
-        response = {
-            "jsonrpc": "2.0",
-            "id": msg_id,
-            "result": {
-                "tools": [
-                    {
-                        "name": "searxng_search",
-                        "description": "Execute an unbiased multi-engine metasearch via SearXNG.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "query": {"type": "string", "description": "Search query"},
-                                "categories": {
-                                    "type": "string",
-                                    "description": "Categories (general, science, it)",
-                                    "default": "general"
-                                },
-                                "max_results": {"type": "integer", "default": 10}
-                            },
-                            "required": ["query"]
-                        }
-                    }
-                ]
-            }
-        }
-        sys.stdout.write(json.dumps(response) + "\n")
-        sys.stdout.flush()
-
-    elif method == "tools/call":
-        params = msg.get("params", {})
-        tool_name = params.get("name")
-        args = params.get("arguments", {})
-
-        if tool_name == "searxng_search":
-            query = args.get("query", "")
-            cat = args.get("categories", "general")
-            limit = args.get("max_results", 10)
-            res = search_searxng(query, categories=cat, max_results=limit)
-            response = {
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps(res, indent=2)
-                        }
-                    ]
-                }
-            }
-            sys.stdout.write(json.dumps(response) + "\n")
-            sys.stdout.flush()
+                handler=handle_searxng_search,
+            )
+        ],
+    )
 
 
 def main():
-    for line in sys.stdin:
-        if line.strip():
-            handle_json_rpc(line.strip())
+    build_server().serve_forever()
 
 if __name__ == "__main__":
     main()

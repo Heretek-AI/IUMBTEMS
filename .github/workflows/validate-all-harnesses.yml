@@ -60,19 +60,64 @@ jobs:
           claude plugin validate --strict .claude-plugin/plugin.json
           claude plugin validate --strict .
 
+      - name: Smoke test first-party MCP server handshake
+        run: |
+          python3 - <<'EOF'
+          import json, subprocess, sys
+
+          reqs = [
+              {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+              {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+          ]
+          stdin = "".join(json.dumps(r) + "\n" for r in reqs)
+          proc = subprocess.run(
+              [sys.executable, "runner/mcp_server.py"],
+              input=stdin, capture_output=True, text=True, timeout=60,
+          )
+          assert proc.returncode == 0, proc.stderr
+          lines = [json.loads(l) for l in proc.stdout.strip().splitlines() if l.strip()]
+          assert len(lines) == 2, f"expected 2 responses, got {len(lines)}"
+          init, tools_list = lines
+          assert init["result"]["protocolVersion"] == "2024-11-05", init
+          assert init["result"]["serverInfo"]["name"] == "iumbtems", init
+          names = sorted(t["name"] for t in tools_list["result"]["tools"])
+          expected = sorted([
+              "iumbtems_config", "iumbtems_code_audit", "iumbtems_oss_scout",
+              "iumbtems_swarm_research", "iumbtems_verify_quote",
+              "iumbtems_socratic_frontier", "iumbtems_brainstorm",
+              "iumbtems_reindex_claims",
+          ])
+          assert names == expected, f"tool mismatch: {names}"
+          print("MCP server tools OK:", ",".join(names))
+          EOF
+
       - name: Smoke test OpenCode plugin tool discovery
         run: |
+          EXPECTED=$(python3 - <<'EOF'
+          import json, subprocess, sys
+          stdin = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) + "\n"
+          proc = subprocess.run([sys.executable, "runner/mcp_server.py"], input=stdin,
+                                capture_output=True, text=True, timeout=60)
+          line = [l for l in proc.stdout.strip().splitlines() if l.strip()][0]
+          names = sorted(t["name"] for t in json.loads(line)["result"]["tools"])
+          print(",".join(names))
+          EOF
+          )
+          echo "MCP canonical tools: $EXPECTED"
           node --input-type=module -e "
-          import plugin from './plugins/opencode/index.js';
-          import { IUMBEMS_TOOL_NAMES } from './plugins/opencode/index.js';
+          import plugin, { IUMBTEMS_TOOL_NAMES, IUMBEMS_TOOL_NAMES } from './plugins/opencode/index.js';
           const tools = plugin.server().map(t => t.name);
-          const expected = ['iumbtems_config','iumbtems_code_audit','iumbtems_oss_scout','iumbtems_swarm_research','iumbtems_verify_quote','iumbtems_socratic_frontier','iumbtems_brainstorm'];
+          const expected = process.argv[1].split(',');
           for (const t of expected) {
             if (!tools.includes(t)) { console.error('MISSING OpenCode tool: ' + t); process.exit(1); }
-            if (!IUMBEMS_TOOL_NAMES.includes(t)) { console.error('MISSING V2 shim tool: ' + t); process.exit(1); }
+            if (!IUMBTEMS_TOOL_NAMES.includes(t)) { console.error('MISSING canonical export tool: ' + t); process.exit(1); }
+            if (!IUMBEMS_TOOL_NAMES.includes(t)) { console.error('MISSING V2 shim alias tool: ' + t); process.exit(1); }
+          }
+          if (IUMBTEMS_TOOL_NAMES.join() !== IUMBEMS_TOOL_NAMES.join()) {
+            console.error('canonical/alias exports diverged'); process.exit(1);
           }
           console.log('OpenCode tools OK: ' + tools.join(','));
-          "
+          " "$EXPECTED"
 
       - name: Smoke test Pi/OMP extension commands and tools
         run: |

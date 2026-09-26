@@ -52,6 +52,15 @@ try:
         claude_data["mcpServers"] = {}
 
     for server_name, server_def in mcp_data.get("mcpServers", {}).items():
+        # The first-party iumbtems server must resolve absolutely: a relative
+        # "runner/mcp_server.py" only works when cwd is the repo root.
+        if server_name == "iumbtems":
+            server_def = dict(server_def)
+            server_def["args"] = [str(Path("$REPO_DIR") / "runner" / "mcp_server.py")]
+            env = dict(server_def.get("env") or {})
+            env["PYTHONPATH"] = "$REPO_DIR"
+            server_def["env"] = env
+
         if server_name not in claude_data["mcpServers"]:
             claude_data["mcpServers"][server_name] = server_def
             print(f"   + Added MCP server: {server_name}")

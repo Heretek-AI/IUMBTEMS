@@ -1,0 +1,27 @@
+{
+  "fixture_id": "borderline-g-v1",
+  "note": "20 borderline claims for the Domain Packs probe. Mechanisms: 6 banned-domain, 2 missing-tag, 2 retracted-source (see retracted_hashes), 10 clean preprint-tier. Default constitution should ACCEPT all 20; biopharma should REJECT >= 25%.",
+  "retracted_hashes": ["RETRACTED_SRC_A", "RETRACTED_SRC_B"],
+  "claims": [
+    {"claim_id": "BB-01", "tag": "VERIFIED", "statement": "Cohort endpoint met primary efficacy bar", "source_hash": "PREPRINT_01", "source_url": "https://banned-preprint-mirror.example/p1", "verbatim_quote": "primary efficacy bar met", "tier": "PREPRINT"},
+    {"claim_id": "BB-02", "tag": "VERIFIED", "statement": "Adverse event rate within expected band", "source_hash": "PREPRINT_02", "source_url": "https://banned-preprint-mirror.example/p2", "verbatim_quote": "within expected band", "tier": "PREPRINT"},
+    {"claim_id": "BB-03", "tag": "VERIFIED", "statement": "Secondary endpoint shows dose response", "source_hash": "PREPRINT_03", "source_url": "https://banned-preprint-mirror.example/p3", "verbatim_quote": "dose response observed", "tier": "PREPRINT"},
+    {"claim_id": "BB-04", "tag": "VERIFIED", "statement": "Biomarker subgroup analysis favorable", "source_hash": "PREPRINT_04", "source_url": "https://predatory-journal.example/p4", "verbatim_quote": "subgroup analysis favorable", "tier": "PREPRINT"},
+    {"claim_id": "BB-05", "tag": "VERIFIED", "statement": "Pharmacokinetics consistent with model", "source_hash": "PREPRINT_05", "source_url": "https://predatory-journal.example/p5", "verbatim_quote": "consistent with model", "tier": "PREPRINT"},
+    {"claim_id": "BB-06", "tag": "VERIFIED", "statement": "Manufacturing yield acceptable at scale", "source_hash": "PREPRINT_06", "source_url": "https://banned-preprint-mirror.example/p6", "verbatim_quote": "yield acceptable at scale", "tier": "PREPRINT"},
+    {"claim_id": "BB-07", "tag": "", "statement": "Untagged assertion lacking epistemic classification", "source_hash": "CLEAN_01", "source_url": "https://journal.example/c1", "verbatim_quote": "assertion recorded without tag", "tier": "PREPRINT"},
+    {"claim_id": "BB-08", "tag": "", "statement": "Second untagged assertion in the borderline set", "source_hash": "CLEAN_02", "source_url": "https://journal.example/c2", "verbatim_quote": "second assertion without tag", "tier": "PREPRINT"},
+    {"claim_id": "BB-09", "tag": "VERIFIED", "statement": "Claim resting on a retracted source", "source_hash": "RETRACTED_SRC_A", "source_url": "https://journal.example/r1", "verbatim_quote": "finding later retracted", "tier": "PREPRINT"},
+    {"claim_id": "BB-10", "tag": "VERIFIED", "statement": "Second claim resting on a retracted source", "source_hash": "RETRACTED_SRC_B", "source_url": "https://journal.example/r2", "verbatim_quote": "second retracted finding", "tier": "PREPRINT"},
+    {"claim_id": "BB-11", "tag": "VERIFIED", "statement": "Preprint claim near acceptance boundary", "source_hash": "CLEAN_03", "source_url": "https://journal.example/c3", "verbatim_quote": "near acceptance boundary", "tier": "PREPRINT"},
+    {"claim_id": "BB-12", "tag": "VERIFIED", "statement": "Preprint claim with modest evidence", "source_hash": "CLEAN_04", "source_url": "https://journal.example/c4", "verbatim_quote": "modest evidence presented", "tier": "PREPRINT"},
+    {"claim_id": "BB-13", "tag": "VERIFIED", "statement": "Preprint claim with weak statistical power", "source_hash": "CLEAN_05", "source_url": "https://journal.example/c5", "verbatim_quote": "weak statistical power", "tier": "PREPRINT"},
+    {"claim_id": "BB-14", "tag": "VERIFIED", "statement": "Preprint claim awaiting replication", "source_hash": "CLEAN_06", "source_url": "https://journal.example/c6", "verbatim_quote": "awaiting replication", "tier": "PREPRINT"},
+    {"claim_id": "BB-15", "tag": "VERIFIED", "statement": "Preprint claim with narrow applicability", "source_hash": "CLEAN_07", "source_url": "https://journal.example/c7", "verbatim_quote": "narrow applicability", "tier": "PREPRINT"},
+    {"claim_id": "BB-16", "tag": "VERIFIED", "statement": "Preprint claim with exploratory endpoint", "source_hash": "CLEAN_08", "source_url": "https://journal.example/c8", "verbatim_quote": "exploratory endpoint", "tier": "PREPRINT"},
+    {"claim_id": "BB-17", "tag": "VERIFIED", "statement": "Preprint claim with post-hoc analysis", "source_hash": "CLEAN_09", "source_url": "https://journal.example/c9", "verbatim_quote": "post-hoc analysis", "tier": "PREPRINT"},
+    {"claim_id": "BB-18", "tag": "VERIFIED", "statement": "Preprint claim with surrogate endpoint", "source_hash": "CLEAN_10", "source_url": "https://journal.example/c10", "verbatim_quote": "surrogate endpoint", "tier": "PREPRINT"},
+    {"claim_id": "BB-19", "tag": "VERIFIED", "statement": "Preprint claim with single-site data", "source_hash": "CLEAN_11", "source_url": "https://journal.example/c11", "verbatim_quote": "single-site data", "tier": "PREPRINT"},
+    {"claim_id": "BB-20", "tag": "VERIFIED", "statement": "Preprint claim with interim readout", "source_hash": "CLEAN_12", "source_url": "https://journal.example/c12", "verbatim_quote": "interim readout", "tier": "PREPRINT"}
+  ]
+}

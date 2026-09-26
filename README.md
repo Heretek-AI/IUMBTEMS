@@ -27,7 +27,7 @@ Modern LLMs suffer from parametric hallucination, sycophancy, and premature narr
 ## 🌐 Universal Multi-Platform Support
 
 IUMBTEMS is packaged as a single universal npm package (`@heretek-ai/epistemic-swarm` with `iumbtems` binary) that runs across seven major autonomous agent harnesses.
-Single source of truth: `skills/*` + `prompts/*`. Target adapters are generated with `python3 scripts/build_adapters.py` (`iumbtems adapters`) into `plugins/*`, `.agents/skills`, and `.omp/`:
+Single source of truth: `skills/*` + `prompts/*`. The canonical programmatic surface is the first-party MCP server (`python3 runner/mcp_server.py`), which exposes the `iumbtems_*` tools in-process. Harness targets register that server and carry only thin skill stubs generated with `python3 scripts/build_adapters.py` (`iumbtems adapters`) into `plugins/*`, `.agents/skills` — stubs point at the canonical `skills/*` prose instead of copying code.
 
 ### 1. Claude Code (Native Marketplace & Overlay)
 
@@ -107,7 +107,7 @@ OpenCode V2 automatically registers the full tool suite:
 gemini extensions install https://github.com/Heretek-AI/IUMBTEMS --path plugins/gemini
 # local dev: gemini extensions link ./plugins/gemini
 ```
-Bundle: `plugins/gemini/gemini-extension.json` (MCP servers), `GEMINI.md` (context), `commands/*.toml` (`/swarm`, `/grill`, `/audit`, `/scout`, `/brainstorming`, `/swarm-config`), `hooks/hooks.json`, `skills/` mirrors.
+Bundle: `plugins/gemini/gemini-extension.json` (MCP servers, incl. the canonical `iumbtems` server), `GEMINI.md` (context), `commands/*.toml` (`/swarm`, `/grill`, `/audit`, `/scout`, `/brainstorming`, `/swarm-config`), `hooks/hooks.json`, `skills/` thin stubs.
 
 ### 5. Codex CLI
 Codex reads repo-local `.agents/skills/*` (already generated in this repo) — `$brainstorming <prompt>` or implicit activation. Distributable pack in `plugins/codex/` (`openai.yaml`, `config.toml.snippet` for `[mcp_servers.*]`, `AGENTS.md.snippet`). Legacy `~/.codex/prompts/*.md` (`/prompts:<name>`) is deprecated; use skills.
@@ -117,7 +117,7 @@ Codex reads repo-local `.agents/skills/*` (already generated in this repo) — `
 agy plugin install https://github.com/Heretek-AI/IUMBTEMS --path plugins/antigravity
 agy plugin validate ./plugins/antigravity
 ```
-Bundle: `plugins/antigravity/plugin.json`, `mcp_config.json`, `hooks.json`, `skills/` mirrors, `agents/` (alpha/beta/auditor/brainstormer), `rules/epistemic-integrity.md`.
+Bundle: `plugins/antigravity/plugin.json`, `mcp_config.json`, `hooks.json`, `skills/` thin stubs, `agents/` (alpha/beta/auditor/brainstormer), `rules/epistemic-integrity.md`.
 
 ### 7. OMP (oh-my-pi, `omp.sh`)
 ```bash

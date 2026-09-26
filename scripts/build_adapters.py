@@ -1,26 +1,29 @@
 #!/usr/bin/env python3
 """
 IUMBTEMS Universal Harness Adapter builder.
-Single canonical source of truth: skills/*/SKILL.md + prompts/*.md.
-Generates target-specific mirrors (copies, never symlinks so npm publish,
-agy/gemini installs, and Codex/OMP discovery all work from plain files):
 
-  plugins/antigravity/skills/<skill>/  <- skills/<skill> (SKILL.md + scripts + .py)
-  plugins/gemini/skills/<skill>/        <- skills/<skill>
-  plugins/codex/skills/<skill>/         <- skills/<skill> (SKILL.md only + runner pointers)
-  .agents/skills/<skill>/               <- skills/<skill> (Codex repo-local discovery)
-  .omp/skills mirror is NOT needed (OMP reads skills/ directly + .omp/commands)
+Single canonical source of truth: skills/*/SKILL.md + prompts/*.md.
+Since the MCP-canonical migration (Stream A2b), harness mirrors are THIN STUBS,
+not code copies: each target skill dir holds one ~10-line SKILL.md pointing at
+the canonical prose (skills/<skill>/) and the canonical programmatic surface
+(runner/mcp_server.py). Full skill copies were retired deliberately — see
+.research/scratchpads/brainstorm_where-do-we-go-from-here/g1_probe.md.
+
+Targets (each gets one stub per canonical skill):
+  plugins/antigravity/skills/<skill>/SKILL.md
+  plugins/gemini/skills/<skill>/SKILL.md
+  plugins/codex/skills/<skill>/SKILL.md
+  .agents/skills/<skill>/SKILL.md
 
 Also validates every manifest referenced in package.json pi/omp blocks.
 
 Usage:
-  python3 scripts/build_adapters.py            # build all mirrors
-  python3 scripts/build_adapters.py --check     # verify mirrors are in sync (CI)
-  python3 scripts/build_adapters.py --clean     # remove generated mirrors
+  python3 scripts/build_adapters.py            # build all stubs
+  python3 scripts/build_adapters.py --check     # verify stubs match template (CI)
+  python3 scripts/build_adapters.py --clean     # remove generated stubs
 """
 
 import argparse
-import filecmp
 import json
 import shutil
 import sys
@@ -37,41 +40,58 @@ CANONICAL_SKILLS = [
     "brainstorming",
 ]
 
-# (target dir relative to root, copy mode)
-# "full" = whole skill dir; "skill-md" = SKILL.md + scripts/ only (lean for Codex)
+# Skill -> the MCP tool(s) that now carry its programmatic surface.
+SKILL_TOOLS = {
+    "grilling": ["iumbtems_socratic_frontier"],
+    "research_cache": ["iumbtems_verify_quote"],
+    "epistemic_search": ["brave_web_search / firecrawl_scrape (research MCP servers)"],
+    "swarm_config": ["iumbtems_config"],
+    "code_audit": ["iumbtems_code_audit"],
+    "oss_scout": ["iumbtems_oss_scout"],
+    "brainstorming": ["iumbtems_brainstorm"],
+}
+
+SKILL_TITLES = {
+    "grilling": "Socratic Grilling",
+    "research_cache": "Research Cache",
+    "epistemic_search": "Epistemic Search",
+    "swarm_config": "Swarm Config",
+    "code_audit": "Code Audit",
+    "oss_scout": "OSS Scout",
+    "brainstorming": "Brainstorming",
+}
+
+# (target dir relative to root, mode). All targets are stubs since A2b.
 TARGETS = [
-    ("plugins/antigravity/skills", "full"),
-    ("plugins/gemini/skills", "full"),
-    ("plugins/codex/skills", "skill-md"),
-    (".agents/skills", "skill-md"),
+    ("plugins/antigravity/skills", "stub"),
+    ("plugins/gemini/skills", "stub"),
+    ("plugins/codex/skills", "stub"),
+    (".agents/skills", "stub"),
 ]
 
-SKILL_MD_ONLY_KEEP = {"SKILL.md", "scripts", "__init__.py"}
+STUB_TEMPLATE = """# {title} (thin adapter stub)
+
+This file is a POINTER, not the implementation. It exists so harness skill
+discovery finds an entry; the real skill lives in the IUMBTEMS repo.
+
+- Canonical prose & scripts: `skills/{skill}/`
+- Canonical programmatic surface: `python3 runner/mcp_server.py` (stdio MCP),
+  or one-shot: `python3 runner/mcp_server.py call <tool> '{{...json...}}'`
+- MCP tools for this skill: {tools}
+
+Epistemic rules apply regardless of harness: tag claims as
+`[VERIFIED: <hash>]`, `[INFERRED: <reasoning>]`, `[HYPOTHESIS: <test>]`, or
+`[NEGATIVE_KNOWLEDGE: <query>]`. Writes go only to `.research/`.
+"""
 
 
-def copy_skill(src: Path, dst: Path, mode: str):
-    if dst.exists():
-        shutil.rmtree(dst)
-    if mode == "full":
-        shutil.copytree(
-            src,
-            dst,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
-        )
-    else:
-        dst.mkdir(parents=True, exist_ok=True)
-        for child in sorted(src.iterdir()):
-            if child.name in ("__pycache__", ".DS_Store"):
-                continue
-            if child.name in SKILL_MD_ONLY_KEEP:
-                if child.is_dir():
-                    shutil.copytree(
-                        child,
-                        dst / child.name,
-                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-                    )
-                else:
-                    shutil.copy2(child, dst / child.name)
+def render_stub(skill: str) -> str:
+    tools = ", ".join(f"`{t}`" for t in SKILL_TOOLS.get(skill, []))
+    return STUB_TEMPLATE.format(
+        title=SKILL_TITLES.get(skill, skill.replace("_", " ").title()),
+        skill=skill,
+        tools=tools,
+    )
 
 
 def build():
@@ -82,43 +102,40 @@ def build():
         for skill in CANONICAL_SKILLS:
             src = PROJECT_ROOT / "skills" / skill
             if not src.exists():
-                print(
-                    f"[WARN] canonical skill missing: skills/{skill}", file=sys.stderr
-                )
+                print(f"[WARN] canonical skill missing: skills/{skill}", file=sys.stderr)
                 continue
             if not (src / "SKILL.md").exists():
                 print(f"[WARN] skills/{skill}/SKILL.md missing", file=sys.stderr)
                 continue
-            copy_skill(src, target_base / skill, mode)
+            dst = target_base / skill
+            if dst.exists():
+                shutil.rmtree(dst)
+            dst.mkdir(parents=True, exist_ok=True)
+            (dst / "SKILL.md").write_text(render_stub(skill), encoding="utf-8")
             count += 1
-    print(f"✅ Built {count} skill mirrors across {len(TARGETS)} targets.")
+    print(f"✅ Built {count} thin skill stubs across {len(TARGETS)} targets.")
     return 0
 
 
 def check():
-    """Verify mirrors match canonical sources (file-by-file compare)."""
+    """Verify stubs match the generated template (not the skill bodies)."""
     errors = []
     for target_rel, mode in TARGETS:
         for skill in CANONICAL_SKILLS:
-            src = PROJECT_ROOT / "skills" / skill
-            dst = PROJECT_ROOT / target_rel / skill
+            dst = PROJECT_ROOT / target_rel / skill / "SKILL.md"
             if not dst.exists():
-                errors.append(f"MISSING mirror: {target_rel}/{skill}")
+                errors.append(f"MISSING stub: {target_rel}/{skill}/SKILL.md")
                 continue
-            for src_file in src.rglob("*"):
-                if "__pycache__" in src_file.parts or src_file.suffix == ".pyc":
-                    continue
-                if mode == "skill-md":
-                    rel = src_file.relative_to(src)
-                    if rel.parts[0] not in SKILL_MD_ONLY_KEEP:
-                        continue
-                rel = src_file.relative_to(src)
-                dst_file = dst / rel
-                if src_file.is_file() and (
-                    not dst_file.exists()
-                    or not filecmp.cmp(src_file, dst_file, shallow=False)
-                ):
-                    errors.append(f"OUT OF SYNC: {target_rel}/{skill}/{rel}")
+            if dst.read_text(encoding="utf-8") != render_stub(skill):
+                errors.append(f"OUT OF SYNC: {target_rel}/{skill}/SKILL.md")
+            # Stubs must not drag code bodies back in.
+            stray = [
+                p.name
+                for p in (PROJECT_ROOT / target_rel / skill).iterdir()
+                if p.name != "SKILL.md"
+            ]
+            if stray:
+                errors.append(f"STRAY FILES in {target_rel}/{skill}: {sorted(stray)}")
     # Validate package.json pi/omp blocks resolve
     pkg = json.loads((PROJECT_ROOT / "package.json").read_text())
     for key in ("pi", "omp"):
@@ -138,7 +155,7 @@ def check():
         for e in errors:
             print(f"   - {e}")
         return 1
-    print("✅ All adapter mirrors in sync; package.json pi/omp blocks resolve.")
+    print("✅ All adapter stubs in sync with template; package.json pi/omp blocks resolve.")
     return 0
 
 

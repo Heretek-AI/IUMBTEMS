@@ -15,6 +15,7 @@ from typing import Dict, Any, List, Tuple, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from skills.research_cache.hasher import SourceHasher
 from runner.state_machine import ResearchStateMachine, ScopeStatus
+from runner.refinement import compute_epistemic_score
 
 class EpistemicAuditorEngine:
     def __init__(self, base_dir: Optional[Path] = None):
@@ -22,8 +23,18 @@ class EpistemicAuditorEngine:
         self.hasher = SourceHasher(base_dir=self.base_dir)
         self.state_machine = ResearchStateMachine(base_dir=self.base_dir)
 
-    def audit_scope(self, scope_id: str) -> Dict[str, Any]:
-        """Runs the audit pipeline on a scope with ready dossiers."""
+    def audit_scope(self, scope_id: str, constitution: Optional[Any] = None) -> Dict[str, Any]:
+        """Runs the audit pipeline on a scope with ready dossiers.
+
+        `constitution` (Stream G) is an optional Domain Pack. Omitting it
+        preserves legacy behavior exactly (flat 1.0 weights, 0.65 threshold,
+        no domain/tag rules). Passing one enables tier-weighted scoring and
+        the pack's per-claim gates (banned domains, mandatory tags,
+        retraction policy).
+        """
+        from runner.refinement import LEGACY_CONSTITUTION
+
+        constitution = constitution or LEGACY_CONSTITUTION
         scope_dir = self.state_machine.get_scope_dir(scope_id)
         alpha_file = scope_dir / "alpha_dossier.json"
         beta_file = scope_dir / "beta_dossier.json"
@@ -40,17 +51,17 @@ class EpistemicAuditorEngine:
 
         # 1. Audit Alpha Claims
         alpha_results, alpha_verified, alpha_rejected = self._verify_claims(
-            alpha_dossier.get("affirmative_claims", [])
+            alpha_dossier.get("affirmative_claims", []), constitution=constitution
         )
 
         # 2. Audit Beta Claims
         beta_results, beta_verified, beta_rejected = self._verify_claims(
-            beta_dossier.get("falsification_claims", [])
+            beta_dossier.get("falsification_claims", []), constitution=constitution
         )
 
         total_verified = alpha_verified + beta_verified
         total_rejected = alpha_rejected + beta_rejected
-        
+
         # Negative knowledge counts
         neg_knowledge_alpha = len(alpha_dossier.get("negative_knowledge", []))
         neg_knowledge_beta = len(beta_dossier.get("negative_knowledge", []))
@@ -59,10 +70,71 @@ class EpistemicAuditorEngine:
         total_inferred = len(alpha_dossier.get("inferred_implications", []))
         total_hypotheses = len(beta_dossier.get("hypotheses", []))
 
-        # 3. Calculate Epistemic Score
-        total_assertions = max(1, total_verified + total_inferred + total_hypotheses + total_rejected)
-        raw_score = (1.0 * total_verified + 0.5 * total_neg_knowledge - 2.5 * total_rejected) / total_assertions
-        epistemic_score = max(0.0, min(1.0, round(raw_score, 3)))
+        # 3. Calculate Epistemic Score via the pure refinement function.
+        #    NOTE (docs/impl mismatch, deliberate): docs/SYSTEM_ARCHITECTURE.md
+        #    §1.2 publishes tier-weighted V(c_i); the runtime has always scored
+        #    flat 1.0 per verified claim. LEGACY_CONSTITUTION preserves that;
+        #    tier weighting is opt-in via Domain Packs (Stream G).
+        if constitution is not LEGACY_CONSTITUTION:
+            from runner.claim_witness import STATUS_REJECTED, claims_from_dossier
+            from runner.refinement import compute_epistemic_score_from_claims
+
+            results_by_id = {
+                r["claim_id"]: r for r in (alpha_results + beta_results)
+            }
+            score_claims = claims_from_dossier(alpha_dossier) + claims_from_dossier(beta_dossier)
+            for c in score_claims:
+                r = results_by_id.get(c.claim_id)
+                if r is not None and r.get("audited_tag") == "UNVERIFIED_REJECTED":
+                    # Reflect the auditor's verdict, not the dossier's claim.
+                    c.tag = "UNVERIFIED_REJECTED"
+                    c.status = STATUS_REJECTED
+            epistemic_score, _breakdown = compute_epistemic_score_from_claims(
+                score_claims, constitution=constitution
+            )
+        else:
+            epistemic_score, _breakdown = compute_epistemic_score({
+                "verified": total_verified,
+                "rejected": total_rejected,
+                "inferred": total_inferred,
+                "hypotheses": total_hypotheses,
+                "neg_knowledge": total_neg_knowledge,
+            })
+        accept_threshold = constitution.accept_threshold
+
+        # 3b. Living Dossiers (Stream C): a VERIFIED claim is a time-bounded
+        #     loan against its source. Join against retraction events —
+        #     RETRACTED => STALE even when the quote still matches locally.
+        degradation = {"events": [], "degraded_scopes": []}
+        try:
+            from runner.living_dossiers import (
+                apply_degradation,
+                append_ledger,
+                load_retractions,
+                queue_requeue,
+            )
+            from runner.claim_witness import claims_from_dossier
+
+            retractions = load_retractions(self.base_dir)
+            if retractions:
+                all_claims = (
+                    claims_from_dossier(alpha_dossier)
+                    + claims_from_dossier(beta_dossier)
+                )
+                _degraded, events = apply_degradation(
+                    all_claims, retractions, scope_id=scope_id
+                )
+                if events:
+                    append_ledger(self.base_dir, events)
+                    queue_requeue(
+                        self.base_dir, scope_id, reason="claim degradation (retraction event)"
+                    )
+                degradation = {
+                    "events": [e.to_dict() for e in events],
+                    "degraded_scopes": [scope_id] if events else [],
+                }
+        except Exception as exc:  # noqa: BLE001 - degradation must not break audit
+            print(f"[auditor] living-dossiers pass skipped: {exc}", file=sys.stderr)
 
         # 4. Calculate Divergence Score
         divergence_score, divergence_matrix = self._compute_divergence(alpha_dossier, beta_dossier)
@@ -79,11 +151,12 @@ class EpistemicAuditorEngine:
                 "negative_knowledge_count": total_neg_knowledge,
                 "epistemic_score": epistemic_score,
                 "divergence_score": divergence_score,
-                "verdict": "CERTIFIED" if epistemic_score >= 0.65 else "WARNING_LOW_GROUNDING"
+                "verdict": "CERTIFIED" if epistemic_score >= accept_threshold else "WARNING_LOW_GROUNDING"
             },
             "alpha_claims_audit": alpha_results,
             "beta_claims_audit": beta_results,
-            "divergence_matrix": divergence_matrix
+            "divergence_matrix": divergence_matrix,
+            "degradation": degradation
         }
 
         # Save audit_report.json
@@ -105,10 +178,35 @@ class EpistemicAuditorEngine:
 
         return audit_report
 
-    def _verify_claims(self, claims: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int, int]:
+    def _verify_claims(
+        self,
+        claims: List[Dict[str, Any]],
+        constitution: Optional[Any] = None,
+    ) -> Tuple[List[Dict[str, Any]], int, int]:
         audited_claims = []
         verified_count = 0
         rejected_count = 0
+
+        # Domain Pack gate (Stream G): per-claim rules beyond quote matching
+        # (banned domains, mandatory tags, zero-tolerance retraction). Legacy
+        # constitution adds no rules, so default behavior is unchanged.
+        claim_gate = None
+        retracted_hashes = None
+        if constitution is not None:
+            from runner.claim_witness import normalize_claim
+            from runner.living_dossiers import load_retractions
+            from runner.refinement import claim_verdict
+
+            retractions = load_retractions(self.base_dir)
+            retracted_hashes = {
+                h for h, ev in retractions.items() if ev.event == "RETRACTED"
+            }
+            claim_gate = lambda raw: claim_verdict(  # noqa: E731
+                normalize_claim(raw),
+                hasher=self.hasher,
+                constitution=constitution,
+                retracted_hashes=retracted_hashes,
+            )
 
         for claim in claims:
             cid = claim.get("claim_id", "UNKNOWN")
@@ -129,6 +227,23 @@ class EpistemicAuditorEngine:
                 continue
 
             passed, conf, msg = self.hasher.verify_quote(shash, quote)
+
+            if passed and claim_gate is not None:
+                verdict = claim_gate(claim)
+                if verdict["verdict"] == "REJECTED":
+                    audited_claims.append({
+                        "claim_id": cid,
+                        "statement": statement,
+                        "original_tag": claim.get("tag", "VERIFIED"),
+                        "audited_tag": "UNVERIFIED_REJECTED",
+                        "source_hash": shash,
+                        "rejected_quote": quote,
+                        "reason": "; ".join(verdict["reasons"]),
+                        "confidence": conf
+                    })
+                    rejected_count += 1
+                    continue
+
             if passed:
                 audited_claims.append({
                     "claim_id": cid,

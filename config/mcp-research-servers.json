@@ -1,5 +1,12 @@
 {
   "mcpServers": {
+    "iumbtems": {
+      "command": "python3",
+      "args": ["runner/mcp_server.py"],
+      "env": {
+        "PYTHONPATH": "${IUMBTEMS_ROOT}"
+      }
+    },
     "brave-search": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-brave-search"],

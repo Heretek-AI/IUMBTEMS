@@ -24,6 +24,13 @@
       "env": {
         "SEARXNG_URL": "${SEARXNG_URL:-http://localhost:8080}"
       }
+    },
+    "iumbtems": {
+      "command": "python3",
+      "args": ["${extensionPath}/../../runner/mcp_server.py"],
+      "env": {
+        "PYTHONPATH": "${extensionPath}/../.."
+      }
     }
   },
   "contextFileName": "GEMINI.md",

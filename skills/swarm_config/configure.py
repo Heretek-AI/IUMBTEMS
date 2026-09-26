@@ -18,6 +18,22 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "cache_raw_markdown": True,
     "license_whitelist": ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC"],
     "output_dir": ".research",
+    # Scope allocation policy (Stream F): "dag" = legacy dependency-first
+    # order; "auction" = Frontier Markets (highest expected-information-gain
+    # bid first). Default "dag" preserves existing behavior exactly.
+    "allocation": "dag",
+    # Regulated Domain Pack id (Stream G) or null for the legacy constitution.
+    # Loaded via runner.refinement.load_domain_pack (config/domain_packs/).
+    "domain_pack": None,
+    # Per-agent backends. Asymmetry is the point (Stream E): Alpha and Beta on
+    # different model families/weights probe divergence that prompt-level
+    # red-teaming cannot reach. `backend` is a command list, not just a model
+    # string, because cross-FAMILY means non-Claude processes.
+    # mock mode never builds or spawns these commands.
+    "agents": {
+        "alpha": {"backend": ["claude", "-p"], "model": None},
+        "beta": {"backend": ["claude", "-p"], "model": None},
+    },
 }
 
 

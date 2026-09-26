@@ -36,144 +36,55 @@ def run_zero_key_mcp_server(service: str):
     """Run lightweight JSON-RPC MCP server handling search and fetch without API keys."""
     from skills.epistemic_search.scripts.search import search_duckduckgo
     from skills.epistemic_search.scripts.fetch import fetch_and_cache
+    from runner.mcp_protocol import StdioJsonRpcServer, ToolSpec
 
-    def send_response(response: Dict[str, Any]):
-        out = json.dumps(response)
-        sys.stdout.write(f"Content-Length: {len(out)}\r\n\r\n{out}")
-        sys.stdout.flush()
+    tools = []
+    if service == "brave-search":
+        def handle_brave_search(args: Dict[str, Any]) -> str:
+            results = search_duckduckgo(
+                query=args.get("query", ""), max_results=args.get("count", 10)
+            )
+            return json.dumps(results, indent=2)
 
-    def send_json(response: Dict[str, Any]):
-        # Direct newline JSON-RPC for stdio transports
-        sys.stdout.write(json.dumps(response) + "\n")
-        sys.stdout.flush()
+        tools.append(ToolSpec(
+            name="brave_web_search",
+            description="Web search with DuckDuckGo fallback (zero API key required). Returns verifiable search results with titles, URLs, and snippets.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query terms"},
+                    "count": {"type": "number", "description": "Number of results (1-20)", "default": 10},
+                },
+                "required": ["query"],
+            },
+            handler=handle_brave_search,
+            aliases=("search",),
+        ))
+    elif service == "firecrawl":
+        def handle_firecrawl_scrape(args: Dict[str, Any]) -> str:
+            return fetch_and_cache(url=args.get("url", ""))
 
-    while True:
-        try:
-            line = sys.stdin.readline()
-            if not line:
-                break
-            line = line.strip()
-            if not line:
-                continue
+        tools.append(ToolSpec(
+            name="firecrawl_scrape",
+            description="Scrape and extract clean markdown with automatic content-addressed SHA-256 caching into .research/sources/.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to scrape and cache"},
+                },
+                "required": ["url"],
+            },
+            handler=handle_firecrawl_scrape,
+            aliases=("scrape", "fetch"),
+        ))
 
-            # Check if line is Content-Length header or raw JSON
-            if line.startswith("Content-Length:"):
-                length = int(line.split(":")[1].strip())
-                # Read blank line
-                sys.stdin.readline()
-                body = sys.stdin.read(length)
-                req = json.loads(body)
-                use_headers = True
-            else:
-                req = json.loads(line)
-                use_headers = False
-
-            req_id = req.get("id")
-            method = req.get("method")
-            params = req.get("params", {})
-
-            if method == "initialize":
-                res = {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "serverInfo": {
-                            "name": f"epistemic-{service}-fallback",
-                            "version": "0.2.1"
-                        },
-                        "capabilities": {
-                            "tools": {}
-                        }
-                    }
-                }
-            elif method == "tools/list":
-                if service == "brave-search":
-                    tools = [
-                        {
-                            "name": "brave_web_search",
-                            "description": "Web search with DuckDuckGo fallback (zero API key required). Returns verifiable search results with titles, URLs, and snippets.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "query": {"type": "string", "description": "The search query terms"},
-                                    "count": {"type": "number", "description": "Number of results (1-20)", "default": 10}
-                                },
-                                "required": ["query"]
-                            }
-                        }
-                    ]
-                elif service == "firecrawl":
-                    tools = [
-                        {
-                            "name": "firecrawl_scrape",
-                            "description": "Scrape and extract clean markdown with automatic content-addressed SHA-256 caching into .research/sources/.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "url": {"type": "string", "description": "URL to scrape and cache"}
-                                },
-                                "required": ["url"]
-                            }
-                        }
-                    ]
-                else:
-                    tools = []
-
-                res = {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {"tools": tools}
-                }
-            elif method == "tools/call":
-                tool_name = params.get("name")
-                args = params.get("arguments", {})
-
-                if tool_name in ("brave_web_search", "search"):
-                    q = args.get("query", "")
-                    count = args.get("count", 10)
-                    results = search_duckduckgo(query=q, max_results=count)
-                    text_out = json.dumps(results, indent=2)
-                    res = {
-                        "jsonrpc": "2.0",
-                        "id": req_id,
-                        "result": {
-                            "content": [{"type": "text", "text": text_out}]
-                        }
-                    }
-                elif tool_name in ("firecrawl_scrape", "scrape", "fetch"):
-                    target_url = args.get("url", "")
-                    content = fetch_and_cache(url=target_url)
-                    res = {
-                        "jsonrpc": "2.0",
-                        "id": req_id,
-                        "result": {
-                            "content": [{"type": "text", "text": content}]
-                        }
-                    }
-                else:
-                    res = {
-                        "jsonrpc": "2.0",
-                        "id": req_id,
-                        "error": {"code": -32601, "message": f"Tool {tool_name} not found"}
-                    }
-            elif method == "notifications/initialized":
-                continue
-            else:
-                res = {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "error": {"code": -32601, "message": f"Method {method} not handled"}
-                }
-
-            if use_headers:
-                send_response(res)
-            else:
-                send_json(res)
-
-        except Exception as e:
-            sys.stderr.write(f"[mcp-launcher] Error handling request: {e}\n")
-            break
+    server = StdioJsonRpcServer(
+        server_name=f"epistemic-{service}-fallback",
+        version="0.2.1",
+        tools=tools,
+        log_prefix="[mcp-launcher]",
+    )
+    server.serve_forever()
 
 def main():
     service = sys.argv[1] if len(sys.argv) > 1 else "brave-search"

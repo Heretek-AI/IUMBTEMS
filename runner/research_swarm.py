@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +35,9 @@ class SwarmRunner:
         mode: Optional[str] = None,
         engine: Optional[str] = None,
         depth: Optional[int] = None,
+        agent_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+        allocation: Optional[str] = None,
+        domain_pack: Optional[str] = None,
     ):
         self.base_dir = base_dir or Path(".research")
         self.mock_mode = mock_mode
@@ -42,24 +45,74 @@ class SwarmRunner:
         self.mode = mode or self.config.get("mode", "research")
         self.engine = engine or self.config.get("search_engine", "duckduckgo")
         self.depth = depth or self.config.get("max_iterations", 2)
+        # Stream F: "dag" (legacy default) or "auction" (Frontier Markets).
+        self.allocation = allocation or self.config.get("allocation", "dag")
+        # Stream G: optional Domain Pack (constitution) for the auditor.
+        self.domain_pack = domain_pack if domain_pack is not None else self.config.get("domain_pack")
+        # Per-agent backend/model overrides (CLI > env > config > default).
+        # Keys are role names ("alpha", "beta"); values are {"backend": [...],
+        # "model": str|None}. Empty dict means "fall through to next source".
+        self.agent_overrides: Dict[str, Dict[str, Any]] = agent_overrides or {}
         self.state_machine = ResearchStateMachine(base_dir=self.base_dir)
         self.auditor = EpistemicAuditorEngine(base_dir=self.base_dir)
         self.hasher = SourceHasher(base_dir=self.base_dir)
         self.prompts_dir = PROJECT_ROOT / "prompts"
+
+    def _resolve_agent_backend(self, role: str) -> Tuple[List[str], Optional[str]]:
+        """Resolve (backend_cmd, model) for an agent role.
+
+        Precedence (Stream E): explicit override (set by CLI flags) > env >
+        config > default. Returns (["claude", "-p"], None) when nothing is
+        configured, preserving prior behavior byte-for-byte.
+        """
+        override = self.agent_overrides.get(role) or {}
+        env_backend = os.environ.get(f"IUMBTEMS_BACKEND_{role.upper()}")
+        env_model = os.environ.get(f"IUMBTEMS_MODEL_{role.upper()}")
+
+        agents_cfg = self.config.get("agents") or {}
+        role_cfg = agents_cfg.get(role) or {}
+
+        backend = (
+            override.get("backend")
+            or (env_backend.split() if env_backend else None)
+            or role_cfg.get("backend")
+            or ["claude", "-p"]
+        )
+        model = override.get("model") or env_model or role_cfg.get("model")
+        return list(backend), model
+
+    def build_agent_cmd(
+        self,
+        prompt: str,
+        system_prompt_file: Optional[Path] = None,
+        tools: str = "default",
+        role: str = "alpha",
+    ) -> List[str]:
+        """Construct the backend argv for an agent. Pure — no subprocess.
+
+        Exposed separately so tests can assert argv shape (e.g. `--model`
+        present when configured, absent in mock/default) without spawning.
+        """
+        backend, model = self._resolve_agent_backend(role)
+        cmd = list(backend) + [prompt, "--tools", tools]
+        if model:
+            cmd.extend(["--model", str(model)])
+        if system_prompt_file and system_prompt_file.exists():
+            cmd.extend(["--system-prompt", str(system_prompt_file)])
+        return cmd
 
     def run_claude_process(
         self,
         prompt: str,
         system_prompt_file: Optional[Path] = None,
         tools: str = "default",
+        role: str = "alpha",
     ) -> str:
-        """Executes a headless Claude Code session via `claude -p`."""
+        """Executes a headless agent session on the configured backend."""
         if self.mock_mode:
             return self._mock_claude_response(prompt)
 
-        cmd = ["claude", "-p", prompt, "--tools", tools]
-        if system_prompt_file and system_prompt_file.exists():
-            cmd.extend(["--system-prompt", str(system_prompt_file)])
+        cmd = self.build_agent_cmd(prompt, system_prompt_file, tools, role=role)
 
         try:
             res = subprocess.run(
@@ -284,7 +337,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 system_prompt = self.prompts_dir / "agent_brainstormer.md"
             else:
                 system_prompt = self.prompts_dir / "agent_alpha_thesis.md"
-            self.run_claude_process(prompt, system_prompt_file=system_prompt)
+            self.run_claude_process(prompt, system_prompt_file=system_prompt, role="alpha")
             dossier_path = (
                 self.state_machine.get_scope_dir(scope_id) / "alpha_dossier.json"
             )
@@ -442,7 +495,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 system_prompt = self.prompts_dir / "agent_brainstormer.md"
             else:
                 system_prompt = self.prompts_dir / "agent_beta_antithesis.md"
-            self.run_claude_process(prompt, system_prompt_file=system_prompt)
+            self.run_claude_process(prompt, system_prompt_file=system_prompt, role="beta")
             dossier_path = (
                 self.state_machine.get_scope_dir(scope_id) / "beta_dossier.json"
             )
@@ -452,8 +505,8 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         self.state_machine.record_agent_completion(scope_id, "beta", dossier)
         print(f"  [Beta] ✅ Completed Agent Beta for [{scope_id}].")
 
-    def execute_scope_dialectic(self, scope: Dict[str, Any]):
-        """Dispatches Agent Alpha and Agent Beta concurrently."""
+    def execute_scope_dialectic(self, scope: Dict[str, Any]) -> Dict[str, Any]:
+        """Dispatches Agent Alpha and Agent Beta concurrently. Returns the audit report."""
         scope_id = scope["scope_id"]
         print(
             f"\n⚡ [Swarm Dispatch] Launching Dialectic Pair for [{scope_id}]: '{scope.get('title')}'"
@@ -472,11 +525,17 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         print(
             f"⚖️ [Auditor] Auditing evidence & computing divergence for [{scope_id}]..."
         )
-        audit_report = self.auditor.audit_scope(scope_id)
+        constitution = None
+        if self.domain_pack:
+            from runner.refinement import load_domain_pack
+
+            constitution = load_domain_pack(self.domain_pack)
+        audit_report = self.auditor.audit_scope(scope_id, constitution=constitution)
         summary = audit_report["summary"]
         print(
             f"  [Audit Result] Score: {summary['epistemic_score']}/1.0 | Divergence: {summary['divergence_score']} | Verified: {summary['verified_passed']} | Rejected: {summary['unverified_rejected']}"
         )
+        return audit_report
 
     def run_swarm(self, objective: str, frontier_file: Optional[Path] = None):
         """Full end-to-end execution loop."""
@@ -513,8 +572,40 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                     self.state_machine.update_session_status(SessionStatus.FAILED)
                     return
 
-            for scope in ready_scopes:
-                self.execute_scope_dialectic(scope)
+            # Stream F: "auction" reorders each ready batch by expected
+            # information gain; "dag" keeps legacy dependency order (all ready
+            # scopes dispatched in the batch, unchanged).
+            if self.allocation == "auction":
+                from runner.auctioneer import (
+                    estimate_tokens,
+                    record_scope_telemetry,
+                    score_scopes,
+                )
+
+                scored = score_scopes(ready_scopes, base_dir=self.base_dir)
+                ordered = [s for _b, s in scored]
+                bids = {s.get("scope_id"): b for b, s in scored}
+                for ordered_scope in ordered:
+                    audit_report = self.execute_scope_dialectic(ordered_scope)
+                    summary = (audit_report or {}).get("summary", {})
+                    sid = ordered_scope.get("scope_id", "")
+                    # tokens_used is a chars/4 ESTIMATE — flagged approximation.
+                    dossier_chars = 0
+                    scope_dir = self.state_machine.get_scope_dir(sid)
+                    for name in ("alpha_dossier.json", "beta_dossier.json"):
+                        p = scope_dir / name
+                        if p.exists():
+                            dossier_chars += p.stat().st_size
+                    record_scope_telemetry(
+                        self.base_dir,
+                        sid,
+                        tokens_used=estimate_tokens("x" * dossier_chars),
+                        verified_claims=summary.get("verified_passed", 0),
+                        bid=bids.get(sid),
+                    )
+            else:
+                for scope in ready_scopes:
+                    self.execute_scope_dialectic(scope)
 
         # 3. Master Synthesis Compilation
         print(
@@ -639,14 +730,38 @@ def main():
         help="Max dialectic depth / iterations",
     )
 
+    # Stream E: per-agent backend/model overrides (CLI > env > config).
+    parser.add_argument("--model-alpha", type=str, default=None,
+                        help="Model id for Agent Alpha (thesis)")
+    parser.add_argument("--model-beta", type=str, default=None,
+                        help="Model id for Agent Beta (antithesis)")
+    parser.add_argument("--beta-backend", type=str, nargs="+", default=None,
+                        help="Backend command list for Beta, e.g. --beta-backend ollama run qwen3")
+    parser.add_argument("--allocation", choices=["dag", "auction"], default=None,
+                        help="Scope allocation policy (default: config/dag; auction = Frontier Markets)")
+    parser.add_argument("--domain-pack", type=str, default=None,
+                        help="Regulated Domain Pack id (config/domain_packs/<id>.json), e.g. biopharma")
+
     args = parser.parse_args()
     frontier_path = Path(args.frontier) if args.frontier else None
+
+    agent_overrides: Dict[str, Dict[str, Any]] = {}
+    if args.model_alpha:
+        agent_overrides.setdefault("alpha", {})["model"] = args.model_alpha
+    if args.model_beta:
+        agent_overrides.setdefault("beta", {})["model"] = args.model_beta
+    if args.beta_backend:
+        agent_overrides.setdefault("beta", {})["backend"] = args.beta_backend
+
     runner = SwarmRunner(
         base_dir=Path(args.dir),
         mock_mode=args.mock_claude,
         mode=args.mode,
         engine=args.engine,
         depth=args.depth,
+        agent_overrides=agent_overrides or None,
+        allocation=args.allocation,
+        domain_pack=args.domain_pack,
     )
     runner.run_swarm(args.objective, frontier_file=frontier_path)
 

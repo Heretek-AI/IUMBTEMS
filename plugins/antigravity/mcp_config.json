@@ -21,6 +21,13 @@
       "env": {
         "SEARXNG_URL": "${SEARXNG_URL:-http://localhost:8080}"
       }
+    },
+    "iumbtems": {
+      "command": "python3",
+      "args": ["${pluginPath}/../../runner/mcp_server.py"],
+      "env": {
+        "PYTHONPATH": "${pluginPath}/../.."
+      }
     }
   }
 }

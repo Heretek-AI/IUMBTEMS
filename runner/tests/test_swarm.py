@@ -316,12 +316,18 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
     def test_opencode_and_pi_extension_interfaces(self):
         import subprocess
 
-        # 1. Test OpenCode Plugin registration
+        # 1. Test OpenCode Plugin registration (A2b: thin forwarders + both
+        #    name exports — canonical IUMBTEMS_TOOL_NAMES and the deprecated
+        #    IUMBEMS_TOOL_NAMES alias).
         node_code_oc = """
-        import plugin from "./plugins/opencode/index.js";
+        import plugin, { IUMBTEMS_TOOL_NAMES, IUMBEMS_TOOL_NAMES } from "./plugins/opencode/index.js";
         const tools = plugin.server();
         const names = tools.map(t => t.name);
-        console.log(JSON.stringify(names));
+        console.log(JSON.stringify({
+          names,
+          canonical: IUMBTEMS_TOOL_NAMES,
+          alias: IUMBEMS_TOOL_NAMES
+        }));
         """
         res_oc = subprocess.run(
             ["node", "--input-type=module", "-e", node_code_oc],
@@ -335,17 +341,27 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
         lines = [
             line.strip()
             for line in res_oc.stdout.strip().split("\n")
-            if line.strip().startswith("[")
+            if line.strip().startswith("{")
         ]
-        tools = json.loads(lines[-1])
+        data_oc = json.loads(lines[-1])
+        tools = data_oc["names"]
+        # Canonical + deprecated alias must both exist and agree.
+        self.assertEqual(data_oc["canonical"], data_oc["alias"])
+        self.assertEqual(sorted(data_oc["canonical"]), sorted(tools))
         expected_tools = [
             "iumbtems_config",
+            "iumbtems_swarm_research",
             "iumbtems_code_audit",
             "iumbtems_oss_scout",
-            "iumbtems_swarm_research",
+            "iumbtems_brainstorm",
             "iumbtems_verify_quote",
             "iumbtems_socratic_frontier",
-            "iumbtems_brainstorm",
+            "iumbtems_reindex_claims",
+            "iumbtems_report_retraction",
+            "iumbtems_check_staleness",
+            "iumbtems_set_domain_pack",
+            "iumbtems_export_brief",
+            "iumbtems_verify_brief",
         ]
         for t in expected_tools:
             self.assertIn(t, tools)

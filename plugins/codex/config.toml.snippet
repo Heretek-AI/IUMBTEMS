@@ -13,6 +13,11 @@ args = ["<IUMBTEMS_ROOT>/config/mcp_launcher.py", "firecrawl"]
 command = "python3"
 args = ["<IUMBTEMS_ROOT>/config/mcp_launcher.py", "searxng"]
 
+# Canonical first-party tool surface: the 7 iumbtems_* tools as MCP tools.
+[mcp_servers.iumbtems]
+command = "python3"
+args = ["<IUMBTEMS_ROOT>/runner/mcp_server.py"]
+
 # Optional: pin skill paths explicitly (repo .agents/skills auto-discovery
 # usually makes this unnecessary). Replace <IUMBTEMS_ROOT> with repo path.
 # [[skills.config]]

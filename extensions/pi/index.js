@@ -1,10 +1,15 @@
 /**
  * IUMBTEMS: I Use My Brain To Express My Self
- * Native Extension for Pi (pi.dev)
- * 
- * Exposes /swarm, /grill, /swarm-config, /audit, /scout, and /brainstorming
- * slash commands along with epistemic verification and configuration
- * tools in Pi (and OMP via the shared pi/omp extension entry point).
+ * Native Extension for Pi (pi.dev) and OMP (oh-my-pi)
+ *
+ * THIN REGISTRATION (Stream A2b): slash commands keep their UX; every body
+ * forwards to the canonical first-party MCP surface:
+ *
+ *   python3 runner/mcp_server.py call <tool> '<json>'
+ *
+ * The one exception is the brainstorming context scaffold
+ * (skills/brainstorming/scripts/brainstorm.py), which is skill-local tooling,
+ * not a duplicate tool implementation.
  */
 
 import { spawnSync } from 'child_process';
@@ -14,6 +19,39 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PKG_ROOT = path.resolve(__dirname, '../..');
+const MCP_SERVER = path.join(PKG_ROOT, 'runner', 'mcp_server.py');
+
+/** Uniform dispatch: one-shot MCP call. Returns {ok, text}. */
+function callMcp(tool, args = {}, ctx = {}) {
+  const res = spawnSync(
+    'python3',
+    [MCP_SERVER, 'call', tool, JSON.stringify(args || {})],
+    {
+      encoding: 'utf-8',
+      cwd: ctx.cwd || process.cwd(),
+      env: { ...process.env, PYTHONPATH: PKG_ROOT },
+    }
+  );
+  return {
+    ok: res.status === 0,
+    text: res.stdout || res.stderr,
+  };
+}
+
+/** Parse `/swarm-config --engine X --depth N --mode M [--show]` into tool args. */
+function parseConfigArgs(raw) {
+  const tokens = raw.trim() ? raw.trim().split(/\s+/) : [];
+  const out = {};
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '--engine' || t === '-e') out.search_engine = tokens[++i];
+    else if (t === '--depth' || t === '-d' || t === '--iterations') out.max_iterations = Number(tokens[++i]);
+    else if (t === '--mode' || t === '-m') out.mode = tokens[++i];
+    else if (t === '--divergence') out.divergence_threshold = Number(tokens[++i]);
+    // --show / bare invocation = read-only inspect (MCP tool's default)
+  }
+  return out;
+}
 
 export default function initPiExtension(pi) {
   // Check if Pi extension API is available
@@ -33,18 +71,12 @@ export default function initPiExtension(pi) {
         }
 
         ctx.output?.(`🌟 [IUMBTEMS] Dispatching Dialectic Swarm: "${objective}"...`);
-        const runnerPath = path.join(PKG_ROOT, 'runner/research_swarm.py');
-        const res = spawnSync('python3', [runnerPath, '--objective', objective], {
-          encoding: 'utf-8',
-          cwd: ctx.cwd || process.cwd(),
-          env: { ...process.env, PYTHONPATH: PKG_ROOT }
-        });
-
-        if (res.status === 0) {
-          ctx.output?.(res.stdout);
+        const r = callMcp('iumbtems_swarm_research', { objective }, ctx);
+        if (r.ok) {
+          ctx.output?.(r.text);
           ctx.output?.('\n✅ Research complete! Summary written to .research/final_synthesis.md');
         } else {
-          ctx.output?.(`❌ Swarm failed:\n${res.stderr || res.stdout}`);
+          ctx.output?.(`❌ Swarm failed:\n${r.text}`);
         }
       }
     });
@@ -55,13 +87,13 @@ export default function initPiExtension(pi) {
       usage: '/grill [--objective <text>]',
       handler: async (args, ctx) => {
         ctx.output?.('🧠 [IUMBTEMS] Launching Socratic Grilling decision tree...');
-        const treePath = path.join(PKG_ROOT, 'skills/grilling/socratic_tree.py');
-        const forwardArgs = args.trim() ? ['--objective', args.trim()] : ['--show-frontier'];
-        const res = spawnSync('python3', [treePath, ...forwardArgs], {
-          encoding: 'utf-8',
-          cwd: ctx.cwd || process.cwd()
-        });
-        ctx.output?.(res.stdout || res.stderr);
+        const objective = args.trim();
+        const r = callMcp(
+          'iumbtems_socratic_frontier',
+          objective ? { objective, file: '.research/frontier.json' } : { file: '.research/frontier.json' },
+          ctx
+        );
+        ctx.output?.(r.text);
       }
     });
 
@@ -70,14 +102,8 @@ export default function initPiExtension(pi) {
       description: 'Inspect or update Epistemic Swarm parameters (engine, depth, mode)',
       usage: '/swarm-config [--engine <e>] [--depth <d>] [--mode <m>] [--show]',
       handler: async (args, ctx) => {
-        const configScript = path.join(PKG_ROOT, 'skills/swarm_config/configure.py');
-        const rawArgs = args.trim() ? args.trim().split(/\s+/) : ['--show'];
-        const res = spawnSync('python3', [configScript, ...rawArgs], {
-          encoding: 'utf-8',
-          cwd: ctx.cwd || process.cwd(),
-          env: { ...process.env, PYTHONPATH: PKG_ROOT }
-        });
-        ctx.output?.(res.stdout || res.stderr);
+        const r = callMcp('iumbtems_config', parseConfigArgs(args), ctx);
+        ctx.output?.(r.text);
       }
     });
 
@@ -88,17 +114,12 @@ export default function initPiExtension(pi) {
       handler: async (args, ctx) => {
         const target = args.trim() || 'Full repository architecture and vulnerability audit';
         ctx.output?.(`🛡️ [IUMBTEMS Audit] Launching Codebase Audit for: "${target}"...`);
-        const runnerPath = path.join(PKG_ROOT, 'runner/research_swarm.py');
-        const res = spawnSync('python3', [runnerPath, '--mode', 'audit', '--objective', target], {
-          encoding: 'utf-8',
-          cwd: ctx.cwd || process.cwd(),
-          env: { ...process.env, PYTHONPATH: PKG_ROOT }
-        });
-        if (res.status === 0) {
-          ctx.output?.(res.stdout);
+        const r = callMcp('iumbtems_code_audit', { target }, ctx);
+        if (r.ok) {
+          ctx.output?.(r.text);
           ctx.output?.('\n✅ Audit complete! Report written to .research/code_audit_report.md');
         } else {
-          ctx.output?.(`❌ Audit failed:\n${res.stderr || res.stdout}`);
+          ctx.output?.(`❌ Audit failed:\n${r.text}`);
         }
       }
     });
@@ -114,17 +135,12 @@ export default function initPiExtension(pi) {
           return;
         }
         ctx.output?.(`🔭 [IUMBTEMS Scout] Scouting open-source solutions for: "${feature}"...`);
-        const runnerPath = path.join(PKG_ROOT, 'runner/research_swarm.py');
-        const res = spawnSync('python3', [runnerPath, '--mode', 'scout', '--objective', feature], {
-          encoding: 'utf-8',
-          cwd: ctx.cwd || process.cwd(),
-          env: { ...process.env, PYTHONPATH: PKG_ROOT }
-        });
-        if (res.status === 0) {
-          ctx.output?.(res.stdout);
+        const r = callMcp('iumbtems_oss_scout', { feature }, ctx);
+        if (r.ok) {
+          ctx.output?.(r.text);
           ctx.output?.('\n✅ Scout complete! Blueprint written to .research/oss_scout_report.md');
         } else {
-          ctx.output?.(`❌ Scout failed:\n${res.stderr || res.stdout}`);
+          ctx.output?.(`❌ Scout failed:\n${r.text}`);
         }
       }
     });
@@ -136,45 +152,39 @@ export default function initPiExtension(pi) {
       handler: async (args, ctx) => {
         const objective = args.trim() || 'Where do we go from here?';
         ctx.output?.(`💡 [IUMBTEMS Brainstorm] Diverging on: "${objective}"...`);
+        // Skill-local context scaffold (not a tool duplicate) -> then canonical tool.
         const scaffold = path.join(PKG_ROOT, 'skills/brainstorming/scripts/brainstorm.py');
         const pre = spawnSync('python3', [scaffold, '--objective', objective, '--show-context'], {
           encoding: 'utf-8',
           cwd: ctx.cwd || process.cwd()
         });
         ctx.output?.(pre.stdout || pre.stderr);
-        const runnerPath = path.join(PKG_ROOT, 'runner/research_swarm.py');
-        const res = spawnSync('python3', [runnerPath, '--mode', 'brainstorm', '--objective', objective], {
-          encoding: 'utf-8',
-          cwd: ctx.cwd || process.cwd(),
-          env: { ...process.env, PYTHONPATH: PKG_ROOT }
-        });
-        if (res.status === 0) {
-          ctx.output?.(res.stdout);
+        const r = callMcp('iumbtems_brainstorm', { objective }, ctx);
+        if (r.ok) {
+          ctx.output?.(r.text);
           ctx.output?.('\n✅ Brainstorm complete! Portfolio written to .research/brainstorm_report.md');
         } else {
-          ctx.output?.(`❌ Brainstorm failed:\n${res.stderr || res.stdout}`);
+          ctx.output?.(`❌ Brainstorm failed:\n${r.text}`);
         }
       }
     });
 
     // /brainstorm alias
-    if (typeof pi.registerCommand === 'function') {
-      try {
-        pi.registerCommand('brainstorm', {
-          description: 'Alias for /brainstorming',
-          usage: '/brainstorm <ambiguous-prompt>',
-          handler: async (args, ctx) => {
-            const cmds = typeof pi.getCommands === 'function' ? pi.getCommands() : {};
-            const target = cmds?.brainstorming?.handler || cmds?.['brainstorming'];
-            if (typeof target === 'function') return target(args, ctx);
-            ctx.output?.('Use /brainstorming <prompt> instead.');
-          }
-        });
-      } catch { /* alias is best-effort across pi/omp versions */ }
-    }
+    try {
+      pi.registerCommand('brainstorm', {
+        description: 'Alias for /brainstorming',
+        usage: '/brainstorm <ambiguous-prompt>',
+        handler: async (args, ctx) => {
+          const cmds = typeof pi.getCommands === 'function' ? pi.getCommands() : {};
+          const target = cmds?.brainstorming?.handler || cmds?.['brainstorming'];
+          if (typeof target === 'function') return target(args, ctx);
+          ctx.output?.('Use /brainstorming <prompt> instead.');
+        }
+      });
+    } catch { /* alias is best-effort across pi/omp versions */ }
   }
 
-  // 2. Register Agent Tools
+  // 2. Register Agent Tools (thin forwarders)
   if (typeof pi.registerTool === 'function') {
     // Tool: iumbtems_verify_quote
     pi.registerTool({
@@ -188,14 +198,9 @@ export default function initPiExtension(pi) {
         },
         required: ['hash', 'quote']
       },
-      execute: async ({ hash, quote }) => {
-        const hasherPath = path.join(PKG_ROOT, 'skills/research-cache/hasher.py');
-        const res = spawnSync('python3', [hasherPath, 'verify', '--hash', hash, '--quote', quote], {
-          encoding: 'utf-8'
-        });
-        return {
-          content: [{ type: 'text', text: res.stdout || res.stderr }]
-        };
+      execute: async (args = {}) => {
+        const r = callMcp('iumbtems_verify_quote', { hash: args.hash, quote: args.quote }, {});
+        return { content: [{ type: 'text', text: r.text }] };
       }
     });
 
@@ -214,24 +219,8 @@ export default function initPiExtension(pi) {
         }
       },
       execute: async (args = {}) => {
-        const configScript = path.join(PKG_ROOT, 'skills/swarm_config/configure.py');
-        const cmdArgs = [configScript];
-        if (args.show || (!args.search_engine && !args.max_iterations && !args.mode && args.divergence_threshold === undefined)) {
-          cmdArgs.push('--show');
-        } else {
-          if (args.search_engine) cmdArgs.push('--engine', args.search_engine);
-          if (args.max_iterations) cmdArgs.push('--depth', String(args.max_iterations));
-          if (args.mode) cmdArgs.push('--mode', args.mode);
-          if (args.divergence_threshold !== undefined) cmdArgs.push('--divergence', String(args.divergence_threshold));
-        }
-
-        const res = spawnSync('python3', cmdArgs, {
-          encoding: 'utf-8',
-          env: { ...process.env, PYTHONPATH: PKG_ROOT }
-        });
-        return {
-          content: [{ type: 'text', text: res.stdout || res.stderr }]
-        };
+        const r = callMcp('iumbtems_config', parseConfigArgsFromObject(args), {});
+        return { content: [{ type: 'text', text: r.text }] };
       }
     });
 
@@ -248,17 +237,22 @@ export default function initPiExtension(pi) {
         required: ['objective']
       },
       execute: async (args = {}) => {
-        const runnerPath = path.join(PKG_ROOT, 'runner/research_swarm.py');
-        const cmdArgs = [runnerPath, '--mode', 'brainstorm', '--objective', args.objective || 'Where do we go from here?'];
-        if (args.mock_mode) cmdArgs.push('--mock-claude');
-        const res = spawnSync('python3', cmdArgs, {
-          encoding: 'utf-8',
-          env: { ...process.env, PYTHONPATH: PKG_ROOT }
-        });
-        return {
-          content: [{ type: 'text', text: res.stdout || res.stderr }]
-        };
+        const r = callMcp('iumbtems_brainstorm', {
+          objective: args.objective || 'Where do we go from here?',
+          mock_claude: Boolean(args.mock_mode)
+        }, {});
+        return { content: [{ type: 'text', text: r.text }] };
       }
     });
   }
+}
+
+/** Map a structured args object onto the iumbtems_config tool contract. */
+function parseConfigArgsFromObject(args = {}) {
+  const out = {};
+  if (args.search_engine) out.search_engine = args.search_engine;
+  if (args.max_iterations) out.max_iterations = args.max_iterations;
+  if (args.mode) out.mode = args.mode;
+  if (args.divergence_threshold !== undefined) out.divergence_threshold = args.divergence_threshold;
+  return out;
 }
