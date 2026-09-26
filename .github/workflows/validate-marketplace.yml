@@ -1,0 +1,36 @@
+name: Validate Claude Code Marketplace
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Validate Claude Code Marketplace & Plugins
+        run: |
+          echo "Validating marketplace manifest..."
+          claude plugin validate --strict .claude-plugin/marketplace.json
+          echo "Validating root epistemic-swarm plugin manifest..."
+          claude plugin validate --strict .claude-plugin/plugin.json
+          echo "Validating modular socratic-grilling plugin manifest..."
+          claude plugin validate --strict plugins/socratic-grilling/.claude-plugin/plugin.json
+          echo "Validating modular research-cache plugin manifest..."
+          claude plugin validate --strict plugins/research-cache/.claude-plugin/plugin.json
+          echo "Validating workspace..."
+          claude plugin validate --strict .

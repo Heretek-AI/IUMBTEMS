@@ -28,6 +28,7 @@ Commands:
   run "<objective>"     Run the dialectic multi-agent research swarm
   grill                 Launch interactive Socratic decision tree framing
   install               Install skills & MCP servers into ~/.claude/
+  marketplace           Show Claude Code marketplace catalog & install commands
   test                  Run test suite for hashing, state machine & auditor
   doctor                Check environment requirements (Claude Code, Pi, OpenCode)
   help                  Show this help message
@@ -94,6 +95,28 @@ switch (command) {
 
   case 'install': {
     runBash('install.sh', args.slice(1));
+    break;
+  }
+
+  case 'marketplace': {
+    const mktPath = path.join(PKG_ROOT, '.claude-plugin', 'marketplace.json');
+    if (!fs.existsSync(mktPath)) {
+      console.error('Marketplace manifest not found.');
+      process.exit(1);
+    }
+    const mkt = JSON.parse(fs.readFileSync(mktPath, 'utf8'));
+    console.log(`\n🏪 CLAUDE CODE MARKETPLACE: ${mkt.name.toUpperCase()}`);
+    console.log(`================================================`);
+    console.log(`Owner:       ${mkt.owner ? mkt.owner.name : 'Unknown'} <${mkt.owner ? mkt.owner.email : ''}>`);
+    console.log(`Description: ${mkt.description}\n`);
+    console.log(`🚀 Add this marketplace to Claude Code:`);
+    console.log(`   claude plugin marketplace add Heretek-AI/IUMBTEMS\n`);
+    console.log(`📦 Available Plugins in Marketplace:`);
+    (mkt.plugins || []).forEach((p, idx) => {
+      console.log(`   ${idx + 1}. ${p.name} [${p.category || 'plugin'}]`);
+      console.log(`      Description: ${p.description}`);
+      console.log(`      Install:     claude plugin install ${p.name}@${mkt.name}\n`);
+    });
     break;
   }
 

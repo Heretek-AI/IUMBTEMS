@@ -1,0 +1,15 @@
+{
+  "name": "socratic-grilling",
+  "version": "0.2.0",
+  "description": "Matt Pocock-style Socratic interrogation, premise inversion, and lateral exploration skill for Claude Code.",
+  "author": {
+    "name": "Heretek AI",
+    "email": "dev@heretek.ai"
+  },
+  "license": "Apache-2.0",
+  "repository": "https://github.com/Heretek-AI/IUMBTEMS",
+  "homepage": "https://github.com/Heretek-AI/IUMBTEMS#readme",
+  "skills": [
+    "./skills/grilling"
+  ]
+}

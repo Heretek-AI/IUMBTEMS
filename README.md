@@ -3,6 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/@heretek-ai/epistemic-swarm.svg)](https://www.npmjs.com/package/@heretek-ai/epistemic-swarm)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI/CD](https://github.com/Heretek-AI/IUMBTEMS/actions/workflows/publish.yml/badge.svg)](https://github.com/Heretek-AI/IUMBTEMS/actions)
+[![Marketplace Validated](https://github.com/Heretek-AI/IUMBTEMS/actions/workflows/validate-marketplace.yml/badge.svg)](https://github.com/Heretek-AI/IUMBTEMS/actions)
 
 > **High-Integrity Dialectic Research Agent Harness**  
 > *Universal support for Claude Code, Pi (pi.dev), and OpenCode V2.*  
@@ -27,8 +28,26 @@ Modern LLMs suffer from parametric hallucination, sycophancy, and premature narr
 
 IUMBTEMS is packaged as a single universal npm package (`@heretek-ai/epistemic-swarm` with `iumbtems` binary) that runs across the three major autonomous agent platforms:
 
-### 1. Claude Code
-Install skills and MCP servers into `~/.claude/` and `~/.claude.json`:
+### 1. Claude Code (Native Marketplace & Overlay)
+
+#### Native Marketplace (Recommended)
+Add the official Heretek AI marketplace to Claude Code:
+```bash
+claude plugin marketplace add Heretek-AI/IUMBTEMS
+```
+Then install either the flagship harness or modular standalone plugins:
+```bash
+# Flagship dialectic research harness:
+claude plugin install epistemic-swarm@heretek-official
+
+# Or install standalone modular plugins:
+claude plugin install socratic-grilling@heretek-official
+claude plugin install research-cache@heretek-official
+```
+See [MARKETPLACE.md](MARKETPLACE.md) for full component specifications.
+
+#### CLI Overlay Installer
+Install skills and MCP servers directly into `~/.claude/` and `~/.claude.json`:
 ```bash
 npx @heretek-ai/epistemic-swarm install
 # or from local repo:

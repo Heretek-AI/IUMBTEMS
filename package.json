@@ -57,7 +57,7 @@
     ],
     "skills": [
       "./skills/grilling",
-      "./skills/research-cache"
+      "./skills/research_cache"
     ],
     "prompts": [
       "./prompts/*.md"
@@ -76,6 +76,7 @@
     ".claude-plugin",
     "install.sh",
     "README.md",
+    "MARKETPLACE.md",
     "LICENSE"
   ],
   "engines": {
@@ -83,6 +84,7 @@
   },
   "scripts": {
     "test": "python3 -m unittest discover -s runner/tests",
+    "validate:claude": "claude plugin validate --strict .claude-plugin/marketplace.json && claude plugin validate --strict .",
     "prepack": "python3 -m unittest discover -s runner/tests",
     "install-local": "bash install.sh"
   }
