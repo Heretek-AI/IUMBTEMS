@@ -32,6 +32,7 @@ jobs:
 
       - name: Run Test Suite
         run: |
+          npm ci --no-audit --no-fund
           python3 -m unittest discover -s runner/tests
 
       - name: Publish Package to npm (Trusted Publishing OIDC)
