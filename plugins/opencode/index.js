@@ -12,6 +12,7 @@
  */
 
 import { spawnSync } from 'child_process';
+import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -19,6 +20,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PKG_ROOT = path.resolve(__dirname, '../..');
 const MCP_SERVER = path.join(PKG_ROOT, 'runner', 'mcp_server.py');
+
+/** Plugin version tracks package.json so it cannot drift across releases. */
+let PKG_VERSION = '0.0.0';
+try {
+  const pkg = JSON.parse(readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf-8'));
+  if (pkg && typeof pkg.version === 'string') PKG_VERSION = pkg.version;
+} catch {
+  // keep fallback; version is informational only
+}
 
 /** Uniform dispatch: one-shot MCP call, return OpenCode's {content, status}. */
 function callMcp(tool, args = {}, cwd) {
@@ -331,7 +341,7 @@ export function createOpenCodePlugin(context = {}) {
   return {
     id: 'heretek.iumbtems.epistemic-swarm',
     name: 'IUMBTEMS Epistemic Swarm',
-    version: '0.3.0',
+    version: PKG_VERSION,
     description:
       'I Use My Brain To Express My Self: High-integrity dialectic research, code audits, and open-source scouting',
 
