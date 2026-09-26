@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/skills/epistemic_search/scripts/webcache.py gate"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/epistemic_search/scripts/webcache.py\" gate"
           }
         ]
       }
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/skills/epistemic_search/scripts/webcache.py archive"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/epistemic_search/scripts/webcache.py\" archive"
           }
         ]
       }
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/skills/epistemic_search/scripts/webcache.py stats"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/epistemic_search/scripts/webcache.py\" stats"
           }
         ]
       }

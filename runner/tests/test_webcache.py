@@ -203,18 +203,18 @@ class TestHooksManifest(unittest.TestCase):
         pre = hooks["hooks"]["PreToolUse"]
         webfetch_pre = [m for m in pre if m.get("matcher") == "WebFetch"]
         self.assertEqual(len(webfetch_pre), 1)
-        self.assertIn(
-            "webcache.py gate", webfetch_pre[0]["hooks"][0]["command"]
-        )
+        pre_cmd = webfetch_pre[0]["hooks"][0]["command"]
+        self.assertIn("webcache.py", pre_cmd)
+        self.assertTrue(pre_cmd.rstrip().endswith("gate"))
         post = hooks["hooks"]["PostToolUse"]
         webfetch_post = [m for m in post if m.get("matcher") == "WebFetch"]
         self.assertEqual(len(webfetch_post), 1)
-        self.assertIn(
-            "webcache.py archive", webfetch_post[0]["hooks"][0]["command"]
-        )
+        post_cmd = webfetch_post[0]["hooks"][0]["command"]
+        self.assertIn("webcache.py", post_cmd)
+        self.assertTrue(post_cmd.rstrip().endswith("archive"))
         session_start = hooks["hooks"].get("SessionStart", [])
         self.assertTrue(
-            any("webcache.py stats" in h.get("command", "") for m in session_start for h in m.get("hooks", []))
+            any("webcache.py" in h.get("command", "") and h.get("command", "").rstrip().endswith("stats") for m in session_start for h in m.get("hooks", []))
         )
 
 
