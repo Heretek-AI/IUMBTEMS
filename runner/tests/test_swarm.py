@@ -237,8 +237,59 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
             content = f.read()
             self.assertIn("Open-Source Software Discovery", content)
 
+    def test_opencode_and_pi_extension_interfaces(self):
+        import subprocess
+        # 1. Test OpenCode Plugin registration
+        node_code_oc = """
+        import plugin from "./plugins/opencode/index.js";
+        const tools = plugin.server();
+        const names = tools.map(t => t.name);
+        console.log(JSON.stringify(names));
+        """
+        res_oc = subprocess.run(
+            ["node", "--input-type=module", "-e", node_code_oc],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT)
+        )
+        self.assertEqual(res_oc.returncode, 0, f"OpenCode plugin test failed: {res_oc.stderr}")
+        lines = [line.strip() for line in res_oc.stdout.strip().split("\n") if line.strip().startswith("[")]
+        tools = json.loads(lines[-1])
+        expected_tools = [
+            "iumbtems_config", "iumbtems_code_audit", "iumbtems_oss_scout",
+            "iumbtems_swarm_research", "iumbtems_verify_quote", "iumbtems_socratic_frontier"
+        ]
+        for t in expected_tools:
+            self.assertIn(t, tools)
+
+        # 2. Test Pi Extension registration
+        node_code_pi = """
+        import initPi from "./extensions/pi/index.js";
+        const commands = [];
+        const tools = [];
+        initPi({
+          registerCommand: (name) => commands.push(name),
+          registerTool: (def) => tools.push(def.name)
+        });
+        console.log(JSON.stringify({ commands, tools }));
+        """
+        res_pi = subprocess.run(
+            ["node", "--input-type=module", "-e", node_code_pi],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT)
+        )
+        self.assertEqual(res_pi.returncode, 0, f"Pi extension test failed: {res_pi.stderr}")
+        lines = [line.strip() for line in res_pi.stdout.strip().split("\n") if line.strip().startswith("{")]
+        data = json.loads(lines[-1])
+        for c in ["swarm", "grill", "swarm-config", "audit", "scout"]:
+            self.assertIn(c, data["commands"])
+        for t in ["iumbtems_verify_quote", "iumbtems_config"]:
+            self.assertIn(t, data["tools"])
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

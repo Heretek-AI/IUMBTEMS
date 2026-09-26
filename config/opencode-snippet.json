@@ -1,9 +1,38 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    "@heretek-ai/epistemic-swarm"
+    [
+      "@heretek-ai/epistemic-swarm",
+      {
+        "search_engine": "duckduckgo",
+        "max_iterations": 2,
+        "mode": "research"
+      }
+    ]
   ],
   "agent": {
+    "code-auditor": {
+      "description": "IUMBTEMS Codebase Auditor: Dialectic architecture mapping and vulnerability red-teaming with line-level proof.",
+      "tools": {
+        "read": true,
+        "write": true,
+        "grep": true,
+        "glob": true,
+        "iumbtems_code_audit": true,
+        "iumbtems_config": true
+      }
+    },
+    "oss-scout": {
+      "description": "IUMBTEMS Open Source Scout: Discovers mature OSS packages, audits copyleft licensing, and generates clean-room blueprints.",
+      "tools": {
+        "read": true,
+        "write": true,
+        "grep": true,
+        "glob": true,
+        "iumbtems_oss_scout": true,
+        "iumbtems_config": true
+      }
+    },
     "alpha-thesis": {
       "description": "IUMBTEMS Proponent Agent: Gathers corroborating primary sources, benchmark results, and empirical proofs.",
       "tools": {
@@ -13,7 +42,9 @@
         "grep": true,
         "glob": true,
         "task": true,
-        "iumbtems_verify_quote": true
+        "iumbtems_swarm_research": true,
+        "iumbtems_verify_quote": true,
+        "iumbtems_config": true
       }
     },
     "beta-redteam": {
@@ -25,6 +56,7 @@
         "grep": true,
         "glob": true,
         "task": true,
+        "iumbtems_swarm_research": true,
         "iumbtems_verify_quote": true
       }
     },
@@ -42,7 +74,11 @@
   "skills": {
     "paths": [
       "./skills/grilling",
-      "./skills/research-cache"
+      "./skills/research_cache",
+      "./skills/epistemic_search",
+      "./skills/swarm_config",
+      "./skills/code_audit",
+      "./skills/oss_scout"
     ]
   }
 }

@@ -64,20 +64,36 @@ Install directly into Pi via its native package manager:
 ```bash
 pi install npm:@heretek-ai/epistemic-swarm
 ```
-- Exposes native `/swarm <objective>` and `/grill` slash commands in the Pi interactive terminal.
-- Discovers skills (`skills/grilling`, `skills/research-cache`) and prompts automatically via the `pi` manifest block.
+- **Slash Commands**:
+  - `/swarm <objective>`: Run autonomous dialectic research swarm
+  - `/grill`: Launch Socratic assumption-inversion and decision trees
+  - `/swarm-config`: Inspect or tune search engine, depth (1-4), and mode
+  - `/audit <target>`: Run dialectic codebase architecture and security audit
+  - `/scout <feature>`: Scout open-source software and clean-room blueprints
+- **Agent Tools**: `iumbtems_config`, `iumbtems_verify_quote`.
+- All commands automatically respect `.research/config.json`.
 
 ### 3. OpenCode V2 (`opencode.ai`)
-Enable IUMBTEMS in your `~/.config/opencode/opencode.json` or project `opencode.jsonc`:
+Enable IUMBTEMS in your `~/.config/opencode/opencode.json` or project `opencode.jsonc`. You can configure settings declaratively:
 ```json
 {
   "plugin": [
-    "@heretek-ai/epistemic-swarm"
+    [
+      "@heretek-ai/epistemic-swarm",
+      {
+        "search_engine": "duckduckgo",
+        "max_iterations": 2,
+        "mode": "research"
+      }
+    ]
   ]
 }
 ```
-OpenCode V2 automatically registers:
-- `iumbtems_swarm_research`: Dispatches dialectic researcher pairs.
+OpenCode V2 automatically registers the full tool suite:
+- `iumbtems_config`: Inspect or dynamically adjust active parameters in `.research/config.json`.
+- `iumbtems_code_audit`: Dispatches dialectic codebase review (structural architect vs. red-team).
+- `iumbtems_oss_scout`: Scouts open-source libraries, audits licenses, and builds clean-room blueprints.
+- `iumbtems_swarm_research`: Dispatches dialectic researcher pairs (Thesis vs. Antithesis).
 - `iumbtems_verify_quote`: Audits verbatim citations against the SHA-256 source cache.
 - `iumbtems_socratic_frontier`: Advances the Socratic decision tree frontier.
 

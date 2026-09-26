@@ -1,6 +1,6 @@
 {
   "name": "@heretek-ai/epistemic-swarm",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "IUMBTEMS: I Use My Brain To Express My Self — High-Integrity Dialectic Research Agent Harness for Claude Code, Pi (pi.dev), and OpenCode V2",
   "main": "bin/cli.js",
   "bin": {
