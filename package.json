@@ -4,12 +4,11 @@
   "description": "Epistemic Swarm: High-Integrity Dialectic Research Agent Harness for Claude Code",
   "main": "bin/cli.js",
   "bin": {
-    "epistemic-swarm": "./bin/cli.js",
-    "iumbtems": "./bin/cli.js"
+    "epistemic-swarm": "bin/cli.js",
+    "iumbtems": "bin/cli.js"
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   },
   "repository": {
     "type": "git",
