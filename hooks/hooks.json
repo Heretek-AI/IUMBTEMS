@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"WebSearch intercepted by epistemic-swarm to enforce verified citation integrity. Use epistemic search (python3 ${CLAUDE_PLUGIN_ROOT}/skills/epistemic_search/scripts/search.py \\\"<query>\\\") instead.\"}}'"
+          }
+        ]
+      },
+      {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"WebFetch intercepted by epistemic-swarm to enforce content-addressed caching. Use epistemic fetch (python3 ${CLAUDE_PLUGIN_ROOT}/skills/epistemic_search/scripts/fetch.py \\\"<url>\\\") which automatically stores documents in .research/sources/<sha256>.md for mathematical auditability.\"}}'"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -115,7 +115,8 @@ switch (command) {
     (mkt.plugins || []).forEach((p, idx) => {
       console.log(`   ${idx + 1}. ${p.name} [${p.category || 'plugin'}]`);
       console.log(`      Description: ${p.description}`);
-      console.log(`      Install:     claude plugin install ${p.name}@${mkt.name}\n`);
+      console.log(`      Install:     claude plugin install ${p.name}@${mkt.name}`);
+      console.log(`      Configure:   claude plugin configure ${p.name}@${mkt.name}\n`);
     });
     break;
   }

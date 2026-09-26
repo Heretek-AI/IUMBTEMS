@@ -38,15 +38,20 @@ claude plugin marketplace list
 ### 1. `epistemic-swarm` (Flagship Harness)
 - **Manifest**: [`.claude-plugin/plugin.json`](file:///.claude-plugin/plugin.json)
 - **Components**:
-  - **Skills**: `skills/grilling`, `skills/research-cache`
-  - **MCP Servers**:
-    - `brave-search`: Real-time web discovery SERP.
-    - `firecrawl`: Deep JS-rendered markdown extraction.
-    - `searxng`: Unbiased metasearch aggregator.
+  - **Skills**: `skills/grilling`, `skills/research_cache`, `skills/epistemic_search`
+  - **Hooks**: `hooks/hooks.json` (`PreToolUse` hook intercepting ungrounded `WebSearch` and `WebFetch` to enforce verifiable SHA-256 caching)
+  - **Zero-Key Search**: DuckDuckGo Lite search and automated content-addressed document caching out of the box (zero API key required).
+  - **Safe MCP Servers & Accelerators**:
+    - `brave-search`: Optional Brave SERP discovery (falls back smoothly to DuckDuckGo when unconfigured).
+    - `firecrawl`: Optional Firecrawl JS extraction (falls back smoothly to clean readability reader when unconfigured).
+    - `searxng`: Optional self-hosted metasearch instance proxy.
   - **System Prompts**: Base Epistemic System Override, Agent Alpha, Agent Beta, Epistemic Auditor, Orchestrator.
-- **Install**:
+- **Install & Configuration**:
   ```bash
   claude plugin install epistemic-swarm@heretek-official
+  # Configure optional API keys and endpoints interactively:
+  claude plugin configure epistemic-swarm
+  # Or inside Claude Code interactive session: /plugin configure
   ```
 
 ### 2. `socratic-grilling` (Modular Skill)

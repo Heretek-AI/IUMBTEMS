@@ -1,6 +1,6 @@
 {
   "name": "epistemic-swarm",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "High-Integrity Dialectic Research Agent Harness for Claude Code enforcing empirical evidence over parametric hallucination.",
   "author": {
     "name": "Heretek AI",
@@ -9,32 +9,53 @@
   "license": "Apache-2.0",
   "repository": "https://github.com/Heretek-AI/IUMBTEMS",
   "homepage": "https://github.com/Heretek-AI/IUMBTEMS#readme",
+  "userConfig": {
+    "brave_api_key": {
+      "type": "string",
+      "title": "Brave Search API Key",
+      "description": "API key for Brave Search discovery (optional; zero-key DuckDuckGo fallback is used when unset)",
+      "sensitive": true,
+      "required": false
+    },
+    "firecrawl_api_key": {
+      "type": "string",
+      "title": "Firecrawl API Key",
+      "description": "API key for Firecrawl deep web extraction (optional; zero-key readability fallback is used when unset)",
+      "sensitive": true,
+      "required": false
+    },
+    "firecrawl_api_url": {
+      "type": "string",
+      "title": "Firecrawl API URL",
+      "description": "Endpoint for Firecrawl API or self-hosted instance",
+      "default": "https://api.firecrawl.dev",
+      "required": false
+    },
+    "searxng_url": {
+      "type": "string",
+      "title": "SearXNG URL",
+      "description": "Endpoint for self-hosted SearXNG metasearch instance",
+      "default": "http://localhost:8080",
+      "required": false
+    }
+  },
   "mcpServers": {
     "brave-search": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
-      "env": {
-        "BRAVE_SEARCH_API_KEY": "${BRAVE_SEARCH_API_KEY}"
-      }
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/config/mcp_launcher.py", "brave-search"]
     },
     "firecrawl": {
-      "command": "npx",
-      "args": ["-y", "firecrawl-mcp"],
-      "env": {
-        "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}",
-        "FIRECRAWL_API_URL": "${FIRECRAWL_API_URL:-http://localhost:3002}"
-      }
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/config/mcp_launcher.py", "firecrawl"]
     },
     "searxng": {
       "command": "python3",
-      "args": ["${PLUGIN_DIR}/config/searxng_mcp.py"],
-      "env": {
-        "SEARXNG_URL": "${SEARXNG_URL:-http://localhost:8080}"
-      }
+      "args": ["${CLAUDE_PLUGIN_ROOT}/config/mcp_launcher.py", "searxng"]
     }
   },
   "skills": [
     "./skills/grilling",
-    "./skills/research_cache"
+    "./skills/research_cache",
+    "./skills/epistemic_search"
   ]
 }
