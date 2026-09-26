@@ -11,11 +11,16 @@
     ".": "./bin/cli.js",
     "./opencode": "./plugins/opencode/index.js",
     "./server": "./plugins/opencode/index.js",
+    "./tui": "./plugins/opencode/tui.js",
     "./pi": "./extensions/pi/index.js",
     "./omp": "./extensions/pi/index.js"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "dependencies": {
+    "solid-js": "1.9.12",
+    "@opentui/solid": ">=0.4.0 <0.6.0"
   },
   "repository": {
     "type": "git",

@@ -187,5 +187,104 @@ class TestInstallOpenCode(unittest.TestCase):
             self.assertEqual(oc_path.read_bytes(), before)
 
 
+class TestOpenCodeTui(unittest.TestCase):
+    def test_module_load_and_setup(self):
+        res = run_node(
+            """
+            import plugin, { readSwarmStatus, setupTui } from "./plugins/opencode/tui.js";
+            const calls = [];
+            const mock = {
+              theme: {}, directory: "/tmp/oc-tui-empty",
+              ui: { slot: (...a) => { calls.push(a.length); return () => {}; }, toast: { show: () => {} }, router: { current: () => ({type: "other"}) } },
+              keymap: { layer: () => {} }
+            };
+            const cleanup = setupTui(mock);
+            const empty = readSwarmStatus("/tmp/oc-tui-empty");
+            console.log(JSON.stringify({id: plugin.id, hasTui: !!plugin.tui, setupFn: typeof plugin.setup, slots: calls, cleanup: typeof cleanup, emptyWorkspace: empty.workspace}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"tui load test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertEqual(data["id"], "heretek.iumbtems.epistemic-swarm.tui")
+        self.assertTrue(data["hasTui"])
+        self.assertEqual(data["setupFn"], "function")
+        self.assertEqual(data["slots"], [1, 1])
+        self.assertEqual(data["cleanup"], "function")
+        self.assertFalse(data["emptyWorkspace"])
+
+    def test_status_snapshot_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            research = root / ".research"
+            (research / "ledger").mkdir(parents=True)
+            research.joinpath("config.json").write_text(
+                json.dumps(
+                    {
+                        "mode": "research",
+                        "search_engine": "duckduckgo",
+                        "max_iterations": 2,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            research.joinpath("final_synthesis.md").write_text(
+                "# synthesis\n", encoding="utf-8"
+            )
+            research.joinpath("frontier.json").write_text(
+                json.dumps({"nodes": [{"status": "open"}, {"status": "settled"}]}),
+                encoding="utf-8",
+            )
+            research.joinpath("ledger", "claim_status.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "scope_id": "s",
+                            "claim_id": "a",
+                            "from_status": "UNVERIFIED",
+                            "to_status": "VERIFIED",
+                            "reason": "",
+                            "at": "t1",
+                        },
+                        {
+                            "scope_id": "s",
+                            "claim_id": "a",
+                            "from_status": "VERIFIED",
+                            "to_status": "STALE",
+                            "reason": "retracted",
+                            "at": "t2",
+                        },
+                        {
+                            "scope_id": "s",
+                            "claim_id": "b",
+                            "from_status": "VERIFIED",
+                            "to_status": "SUSPECT",
+                            "reason": "",
+                            "at": "t3",
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            research.joinpath("requeue.json").write_text(
+                json.dumps([{"scope_id": "s1"}, {"scope_id": "s2"}]), encoding="utf-8"
+            )
+            res = run_node(
+                f"""
+                import {{ readSwarmStatus }} from "./plugins/opencode/tui.js";
+                console.log(JSON.stringify(readSwarmStatus({str(root)!r})));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"snapshot test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["workspace"])
+            self.assertEqual(data["mode"], "research")
+            self.assertEqual(data["searchEngine"], "duckduckgo")
+            self.assertEqual(len(data["reports"]), 1)
+            self.assertEqual(data["frontierOpen"], 1)
+            self.assertEqual(data["stale"], 1)
+            self.assertEqual(data["suspect"], 1)
+            self.assertEqual(data["requeued"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
