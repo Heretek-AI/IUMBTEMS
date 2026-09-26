@@ -1,127 +1,133 @@
-# Epistemic Swarm 🌟
+# IUMBTEMS: I Use My Brain To Express My Self 🧠
 
 [![npm version](https://img.shields.io/npm/v/@heretek-ai/epistemic-swarm.svg)](https://www.npmjs.com/package/@heretek-ai/epistemic-swarm)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI/CD](https://github.com/Heretek-AI/IUMBTEMS/actions/workflows/publish.yml/badge.svg)](https://github.com/Heretek-AI/IUMBTEMS/actions)
 
-> **High-Integrity Dialectic Research Agent Harness for Claude Code**  
+> **High-Integrity Dialectic Research Agent Harness**  
+> *Universal support for Claude Code, Pi (pi.dev), and OpenCode V2.*  
 > *Enforcing verified empirical evidence over parametric hallucination.*
 
 ---
 
-## 🎯 The Epistemic Mandate
+## 💡 The Philosophy of IUMBTEMS
 
-Current AI research assistants suffer from parametric hallucination, sycophancy, and premature narrative consensus. They invent citations, smooth over technical contradictions, and extrapolate beyond empirical bounds.
+**IUMBTEMS** (**I Use My Brain To Express My Self**) is grounded in a singular design mandate: **Epistemic Sovereignty**.
 
-**Epistemic Swarm** is an autonomous, dialectic research harness built on top of [Claude Code](https://claude.ai/code) (`~/.claude/` and `~/.claude.json`). It enforces **evidentiary primacy** through:
-1. **Mathematical Evidentiary Tags**: Every factual claim is tagged `[VERIFIED: <hash>]`, `[INFERRED: ...]`, `[HYPOTHESIS: ...]`, or `[NEGATIVE_KNOWLEDGE: ...]`.
-2. **Dialectic Swarm Architecture**: Competitively dispatches **Agent Alpha** (The Thesis / Primary Literature Proponent) and **Agent Beta** (The Antithesis / Hostile Red Team / Active Falsifier).
-3. **Content-Addressed Source Caching**: Web pages and papers are hashed to SHA-256 (`.research/sources/<sha256>.md`).
-4. **Algorithmic Epistemic Auditor**: Verifies cited quotes verbatim against the raw source cache, downgrades fabricated claims, scores divergence, and synthesizes the unvarnished empirical truth.
-5. **Socratic Grilling & Divergent Ideation**: Matt Pocock-style design tree traversal that explores assumption inversions and clarifies constraints *before* committing to search queries.
+Modern LLMs suffer from parametric hallucination, sycophancy, and premature narrative consensus. They invent citations, smooth over technical contradictions, and extrapolate beyond empirical bounds.
 
----
-
-## 🏗️ System Architecture
-
-```mermaid
-flowchart TD
-    User([Research Objective]) --> Grilling["Phase 1: Socratic Grilling (/grilling)\n(Assumption Inversion & Frontier Resolution)"]
-    Grilling --> SettledFrontier[Settled Problem Frontier & Constraints]
-    SettledFrontier --> Orchestrator["Phase 2: Swarm Orchestrator\n(Scope Decomposition & DAG Planner)"]
-    
-    Orchestrator --> Scope1[Scope 1: Technical Mechanisms]
-    Orchestrator --> Scope2[Scope 2: Scalability & Economics]
-    
-    subgraph DialecticLoop [Parallel Dialectic Execution per Scope]
-        Scope1 --> Alpha["Agent Alpha: The Proponent\n(Empirical Evidence, Primary Literature)"]
-        Scope1 --> Beta["Agent Beta: The Adversary\n(Active Falsification, Red-Teaming)"]
-        
-        Alpha -->|Writes| AlphaDossier[alpha_dossier.json + Cached Sources]
-        Beta -->|Writes| BetaDossier[beta_dossier.json + Cached Sources]
-        
-        AlphaDossier --> Auditor["Phase 3: Epistemic Auditor\n(Verbatim Quote Hash Verification & Divergence Scoring)"]
-        BetaDossier --> Auditor
-        Auditor --> ScopeSynth[Scope Synthesis & Audit Report]
-    end
-    
-    ScopeSynth --> MasterSynth["Phase 4: Master Synthesis (.research/final_synthesis.md)"]
-```
+**IUMBTEMS** restores rigorous empirical grounding by pairing an unconstrained divergent exploration phase (Matt Pocock-style Socratic grilling and assumption inversion) with a multi-agent dialectic swarm:
+1. **Agent Alpha (The Proponent / Thesis)**: Gathers corroborating primary sources, empirical proofs, and implementation benchmarks.
+2. **Agent Beta (The Adversary / Antithesis / Red Team)**: Hunts for counter-arguments, retracted data, methodology flaws, and edge-case failures.
+3. **Epistemic Auditor**: Verifies cited quotes verbatim against content-addressed raw markdown caches (`.research/sources/<sha256>.md`), prunes ungrounded assertions, and scores dialectic divergence.
 
 ---
 
-## ⚡ Quickstart
+## 🌐 Universal Multi-Platform Support
 
-### Option 1: Run via NPX (Zero Setup)
+IUMBTEMS is packaged as a single universal npm package (`@heretek-ai/epistemic-swarm` with `iumbtems` binary) that runs across the three major autonomous agent platforms:
+
+### 1. Claude Code
+Install skills and MCP servers into `~/.claude/` and `~/.claude.json`:
 ```bash
-# Execute deep research swarm directly
-npx @heretek-ai/epistemic-swarm run "Evaluate FPGA Poseidon prover latency bounds"
-
-# Run Socratic decision tree framing
-npx @heretek-ai/epistemic-swarm grill --objective "L1 vs L2 state verification trade-offs"
-```
-
-### Option 2: Install into Claude Code Environment
-```bash
-git clone https://github.com/Heretek-AI/IUMBTEMS.git
-cd IUMBTEMS
+npx @heretek-ai/epistemic-swarm install
+# or from local repo:
 npm run install-local
 ```
-This automatically symlinks the `/grilling` and `/research-cache` skills into `~/.claude/skills/` and configures MCP servers in `~/.claude.json`.
+- Run `/grilling` inside any interactive Claude Code session.
+- Run headless dialectic research:
+  ```bash
+  iumbtems run "Evaluate FPGA Poseidon prover latency bounds"
+  ```
+
+### 2. Pi (`pi.dev`)
+Install directly into Pi via its native package manager:
+```bash
+pi install npm:@heretek-ai/epistemic-swarm
+```
+- Exposes native `/swarm <objective>` and `/grill` slash commands in the Pi interactive terminal.
+- Discovers skills (`skills/grilling`, `skills/research-cache`) and prompts automatically via the `pi` manifest block.
+
+### 3. OpenCode V2 (`opencode.ai`)
+Enable IUMBTEMS in your `~/.config/opencode/opencode.json` or project `opencode.jsonc`:
+```json
+{
+  "plugin": [
+    "@heretek-ai/epistemic-swarm"
+  ]
+}
+```
+OpenCode V2 automatically registers:
+- `iumbtems_swarm_research`: Dispatches dialectic researcher pairs.
+- `iumbtems_verify_quote`: Audits verbatim citations against the SHA-256 source cache.
+- `iumbtems_socratic_frontier`: Advances the Socratic decision tree frontier.
+
+*(See [config/opencode-snippet.json](config/opencode-snippet.json) for custom agent definitions).*
+
+---
+
+## ⚡ CLI Command Reference
+
+```bash
+# Run the autonomous dialectic research swarm
+iumbtems run "Sub-millisecond ZK state updates on L1 rollups"
+
+# Run Socratic grilling and decision frontier calculation
+iumbtems grill --objective "L1 vs L2 state verification trade-offs"
+
+# Environment diagnostics (Claude Code, Node, Python)
+iumbtems doctor
+
+# Run automated test suite
+iumbtems test
+```
 
 ---
 
 ## 🏷️ Epistemic Tagging Taxonomy
 
-| Tag | Meaning | Requirement |
+Every factual claim in IUMBTEMS carries an explicit evidentiary tag:
+
+| Tag | Formal Definition | Verification Standard |
 | :--- | :--- | :--- |
-| `[VERIFIED: <hash>]` | Direct empirical fact backed by primary source. | Verbatim quote must exist in `.research/sources/<hash>.md`. |
-| `[INFERRED: <reasoning>]` | Deductive conclusion from verified facts. | Must list parent verified claims and deductive step. |
+| `[VERIFIED: <hash>]` | Direct empirical fact from primary source. | Verbatim quote must exist in `.research/sources/<hash>.md`. |
+| `[INFERRED: <reasoning>]` | Deductive conclusion from verified facts. | Explicit list of parent verified premises and bridging logic. |
 | `[HYPOTHESIS: <test>]` | Speculative assertion or projection. | Must define a measurable falsification criterion. |
-| `[NEGATIVE_KNOWLEDGE: <query>]` | Verified absence of empirical evidence. | Records exact search query and confirmed literature gap. |
+| `[NEGATIVE_KNOWLEDGE: <query>]` | Verified absence of empirical evidence. | Records exact search query and literature gap. |
 
 ---
 
 ## 🔍 Multi-Tier OSINT & Search Pipeline
 
-1. **Discovery Tier**: SearXNG (metasearch) and Brave Search API.
+1. **Discovery Tier**: SearXNG (unbiased metasearch) and Brave Search API.
 2. **Extraction Tier**: Firecrawl (headless JavaScript rendering, DOM cleaning, Markdown extraction).
-3. **Academic Tier**: Semantic Scholar / arXiv MCPs for DOI resolution.
+3. **Academic Tier**: Semantic Scholar / arXiv MCPs for DOI citation resolution.
 4. **Caching Tier**: Content-addressed SHA-256 storage (`skills/research-cache/hasher.py`).
 
-### Optional Turnkey Infrastructure (SearXNG + Firecrawl)
-To run your own unbiased metasearch and headless extractor locally:
+### Local Infrastructure (Optional)
+Run local SearXNG and Firecrawl instances via Docker Compose:
 ```bash
 docker compose -f config/docker-compose.infra.yml up -d
 ```
 
 ---
 
-## 🧪 Testing
+## 📦 CI/CD & Trusted Publishing
 
-Epistemic Swarm comes with an automated test suite verifying source hashing, quote substring matching, IPC state transitions, and mock swarm dispatch:
+This package is distributed on npm under `@heretek-ai` with [npm Trusted Publishing (OIDC)](https://docs.npmjs.com/trusted-publishers) and GitHub Actions.
 
+### First-Time CLI Bootstrap
 ```bash
-npm test
+git pull origin main
+npm publish --access public
 ```
 
----
-
-## 📦 Deployment & CI/CD
-
-This package is distributed via npm under `@heretek-ai` with [npm Trusted Publishing (OIDC)](https://docs.npmjs.com/trusted-publishers) and GitHub Actions.
-
-### First-Time Publication (One-Time Bootstrap)
-1. Authenticate locally:
-   ```bash
-   npm login
-   ```
-2. Publish initial version:
-   ```bash
-   npm publish --access public
-   ```
-3. In `npmjs.com/package/@heretek-ai/epistemic-swarm/access`, add **GitHub Actions** as a Trusted Publisher for repository `Heretek-AI/IUMBTEMS` and workflow `.github/workflows/publish.yml`.
-4. Subsequent releases publish automatically upon pushing a GitHub Release or git tag!
+### GitHub Actions OIDC Setup
+1. In `npmjs.com/package/@heretek-ai/epistemic-swarm/access`, add **GitHub Actions** as a Trusted Publisher:
+   - **Repository Owner**: `Heretek-AI`
+   - **Repository Name**: `IUMBTEMS`
+   - **Workflow Pattern**: `.github/workflows/publish.yml`
+2. Future releases publish automatically upon pushing a GitHub Release or version tag (`v*.*.*`)!
 
 ---
 

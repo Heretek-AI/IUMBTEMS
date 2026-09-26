@@ -1,0 +1,48 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "@heretek-ai/epistemic-swarm"
+  ],
+  "agent": {
+    "alpha-thesis": {
+      "description": "IUMBTEMS Proponent Agent: Gathers corroborating primary sources, benchmark results, and empirical proofs.",
+      "tools": {
+        "bash": true,
+        "read": true,
+        "write": true,
+        "grep": true,
+        "glob": true,
+        "task": true,
+        "iumbtems_verify_quote": true
+      }
+    },
+    "beta-redteam": {
+      "description": "IUMBTEMS Adversary Agent: Active falsification, red-teaming, hunting for counter-benchmarks, and edge-case failure modes.",
+      "tools": {
+        "bash": true,
+        "read": true,
+        "write": true,
+        "grep": true,
+        "glob": true,
+        "task": true,
+        "iumbtems_verify_quote": true
+      }
+    },
+    "epistemic-auditor": {
+      "description": "IUMBTEMS Synthesizer & Auditor: Verifies verbatim source quotes, downgrades unverified claims, and calculates divergence.",
+      "tools": {
+        "read": true,
+        "write": true,
+        "grep": true,
+        "glob": true,
+        "iumbtems_verify_quote": true
+      }
+    }
+  },
+  "skills": {
+    "paths": [
+      "./skills/grilling",
+      "./skills/research-cache"
+    ]
+  }
+}

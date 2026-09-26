@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * Epistemic Swarm CLI
- * Multi-agent dialectic research harness for Claude Code.
+ * IUMBTEMS CLI: I Use My Brain To Express My Self
+ * High-Integrity Dialectic Research Harness for Claude Code, Pi, and OpenCode V2.
  */
 
 const { spawnSync } = require('child_process');
@@ -15,20 +15,27 @@ const command = args[0] || 'help';
 
 function printHelp() {
   console.log(`
-🌟 Epistemic Swarm: High-Integrity Research Harness for Claude Code
+🧠 IUMBTEMS: I Use My Brain To Express My Self
+🌟 Epistemic Swarm: High-Integrity Research Harness
+   Platforms: Claude Code | Pi (pi.dev) | OpenCode V2
    Organization: @heretek-ai | Repository: Heretek-AI/IUMBTEMS
 
 Usage:
-  npx @heretek-ai/epistemic-swarm <command> [options]
   iumbtems <command> [options]
+  npx @heretek-ai/epistemic-swarm <command> [options]
 
 Commands:
   run "<objective>"     Run the dialectic multi-agent research swarm
   grill                 Launch interactive Socratic decision tree framing
   install               Install skills & MCP servers into ~/.claude/
   test                  Run test suite for hashing, state machine & auditor
-  doctor                Check environment requirements (Claude Code, Python, Node)
+  doctor                Check environment requirements (Claude Code, Pi, OpenCode)
   help                  Show this help message
+
+Platform Extensions:
+  Pi (pi.dev):          pi install npm:@heretek-ai/epistemic-swarm
+  OpenCode V2:          add "@heretek-ai/epistemic-swarm" to opencode.json plugins
+  Claude Code:          npx @heretek-ai/epistemic-swarm install
 
 Options:
   --mock-claude         Run swarm with synthetic mock responses (zero API cost)
@@ -36,9 +43,9 @@ Options:
   --dir <path>          Path to .research workspace directory (default: .research)
 
 Examples:
-  npx @heretek-ai/epistemic-swarm run "Verify sub-millisecond ZK prover latency"
-  npx @heretek-ai/epistemic-swarm grill --objective "Rollup architecture trade-offs"
-  npx @heretek-ai/epistemic-swarm install
+  iumbtems run "Verify sub-millisecond ZK prover latency"
+  iumbtems grill --objective "Rollup architecture trade-offs"
+  iumbtems doctor
 `);
 }
 

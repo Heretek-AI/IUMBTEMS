@@ -5,6 +5,7 @@ Tests source hashing, state machine IPC transitions, auditor engine, and swarm m
 """
 
 import sys
+import json
 import shutil
 import tempfile
 import unittest
@@ -173,6 +174,34 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
             self.assertIn("Master Epistemic Research Report", report_text)
             self.assertIn("Swarm Epistemic Audit Totals", report_text)
 
+    def test_pi_and_opencode_manifest_integrity(self):
+        pkg_json_path = PROJECT_ROOT / "package.json"
+        self.assertTrue(pkg_json_path.exists())
+        with open(pkg_json_path, "r", encoding="utf-8") as f:
+            pkg = json.load(f)
+
+        # 1. Pi manifest validation
+        self.assertIn("pi", pkg)
+        self.assertIn("pi-package", pkg.get("keywords", []))
+        for skill_path in pkg["pi"].get("skills", []):
+            resolved = (PROJECT_ROOT / skill_path).resolve()
+            self.assertTrue(resolved.exists(), f"Pi skill path not found: {skill_path}")
+
+        for ext_path in pkg["pi"].get("extensions", []):
+            resolved = (PROJECT_ROOT / ext_path).resolve()
+            self.assertTrue(resolved.exists(), f"Pi extension path not found: {ext_path}")
+
+        # 2. OpenCode plugin validation
+        self.assertIn("opencode", pkg.get("keywords", []))
+        self.assertIn("./opencode", pkg.get("exports", {}))
+        opencode_entry = PROJECT_ROOT / "plugins/opencode/index.js"
+        self.assertTrue(opencode_entry.exists())
+
+        # 3. IUMBTEMS binary alias
+        self.assertIn("iumbtems", pkg.get("bin", {}))
+        self.assertTrue((PROJECT_ROOT / pkg["bin"]["iumbtems"]).exists())
+
 
 if __name__ == "__main__":
     unittest.main()
+
