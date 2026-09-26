@@ -1,0 +1,21 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "epistemic-swarm",
+  "version": "0.3.0",
+  "description": "IUMBTEMS Epistemic Swarm: dialectic research, code audit, OSS scout, and lateral brainstorming for AntiGravity.",
+  "author": "Heretek AI",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/Heretek-AI/IUMBTEMS",
+  "homepage": "https://github.com/Heretek-AI/IUMBTEMS#readme",
+  "skills": [
+    "./skills/grilling",
+    "./skills/research_cache",
+    "./skills/epistemic_search",
+    "./skills/swarm_config",
+    "./skills/code_audit",
+    "./skills/oss_scout",
+    "./skills/brainstorming"
+  ],
+  "agents": ["./agents"],
+  "rules": ["./rules"]
+}

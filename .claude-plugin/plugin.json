@@ -1,6 +1,6 @@
 {
   "name": "epistemic-swarm",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "High-Integrity Dialectic Research Agent Harness for Claude Code enforcing empirical evidence over parametric hallucination.",
   "author": {
     "name": "Heretek AI",
@@ -42,15 +42,24 @@
   "mcpServers": {
     "brave-search": {
       "command": "python3",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/config/mcp_launcher.py", "brave-search"]
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/config/mcp_launcher.py",
+        "brave-search"
+      ]
     },
     "firecrawl": {
       "command": "python3",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/config/mcp_launcher.py", "firecrawl"]
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/config/mcp_launcher.py",
+        "firecrawl"
+      ]
     },
     "searxng": {
       "command": "python3",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/config/mcp_launcher.py", "searxng"]
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/config/mcp_launcher.py",
+        "searxng"
+      ]
     }
   },
   "skills": [
@@ -59,6 +68,7 @@
     "./skills/epistemic_search",
     "./skills/swarm_config",
     "./skills/code_audit",
-    "./skills/oss_scout"
+    "./skills/oss_scout",
+    "./skills/brainstorming"
   ]
 }

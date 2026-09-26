@@ -18,7 +18,7 @@ export function createOpenCodePlugin(context = {}) {
   return {
     id: "heretek.iumbtems.epistemic-swarm",
     name: "IUMBTEMS Epistemic Swarm",
-    version: "0.2.3",
+    version: "0.3.0",
     description: "I Use My Brain To Express My Self: High-integrity dialectic research, code audits, and open-source scouting",
 
     server: (toolContext) => [
@@ -41,8 +41,8 @@ export function createOpenCodePlugin(context = {}) {
             },
             mode: {
               type: "string",
-              enum: ["research", "audit", "scout", "hybrid"],
-              description: "Operating mode: research (literature), audit (codebase), scout (OSS), hybrid"
+              enum: ["research", "audit", "scout", "hybrid", "brainstorm"],
+              description: "Operating mode: research (literature), audit (codebase), scout (OSS), hybrid, brainstorm (lateral ideation)"
             },
             divergence_threshold: {
               type: "number",
@@ -275,6 +275,45 @@ export function createOpenCodePlugin(context = {}) {
             content: res.stdout || res.stderr
           };
         }
+      },
+
+      {
+        name: "iumbtems_brainstorm",
+        description: "Run lateral brainstorming: novel feature vectors, paradigm inversions, and falsifiable spike hypotheses (never bug-fix lists).",
+        input: {
+          type: "object",
+          properties: {
+            objective: {
+              type: "string",
+              description: "Ambiguous exploration prompt (e.g. 'Where do we go from here?')"
+            },
+            mock_mode: {
+              type: "boolean",
+              description: "Run in mock/dry-run mode without external API charges",
+              default: false
+            }
+          },
+          required: ["objective"]
+        },
+        options: { codemode: false },
+        execute: async (args) => {
+          const runnerPath = path.join(PKG_ROOT, "runner/research_swarm.py");
+          const cmdArgs = [runnerPath, "--mode", "brainstorm", "--objective", args.objective];
+          if (args.mock_mode) {
+            cmdArgs.push("--mock-claude");
+          }
+
+          const res = spawnSync("python3", cmdArgs, {
+            encoding: "utf-8",
+            cwd: toolContext?.cwd || process.cwd(),
+            env: { ...process.env, PYTHONPATH: PKG_ROOT }
+          });
+
+          return {
+            content: res.stdout || res.stderr,
+            status: res.status === 0 ? "success" : "error"
+          };
+        }
       }
     ],
 
@@ -301,3 +340,19 @@ export function createOpenCodePlugin(context = {}) {
 
 const defaultPlugin = createOpenCodePlugin();
 export default defaultPlugin;
+
+// OpenCode V2 Plugin.define compatibility shim.
+// Newer @opencode-ai/plugin/v2 hosts call Plugin.define({id, setup(ctx)})
+// with ctx.tool.transform / ctx.session.hook / ctx.event. This adapter keeps
+// the legacy server()/setup() surface working while exposing a V2 shape:
+// the tools array is re-exported as a catalog transform so V2 hosts can
+// discover iumbtems_* tools without the legacy server() hook.
+export const IUMBEMS_TOOL_NAMES = [
+  "iumbtems_config",
+  "iumbtems_code_audit",
+  "iumbtems_oss_scout",
+  "iumbtems_swarm_research",
+  "iumbtems_verify_quote",
+  "iumbtems_socratic_frontier",
+  "iumbtems_brainstorm",
+];

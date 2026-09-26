@@ -3,7 +3,7 @@
 Epistemic Swarm: Dialectic Multi-Agent Research Runner.
 Executes parallel Claude Code sub-processes (claude -p) for Proponent and Adversary agents,
 monitors filesystem IPC scratchpads, and invokes the Epistemic Auditor.
-Supports multiple modes: research, audit (codebase), scout (OSS), and hybrid.
+Supports multiple modes: research, audit (codebase), scout (OSS), hybrid, and brainstorm (lateral ideation).
 """
 
 import os
@@ -26,10 +26,16 @@ from runner.auditor_engine import EpistemicAuditorEngine
 from skills.research_cache.hasher import SourceHasher
 from skills.swarm_config.configure import load_config
 
+
 class SwarmRunner:
-    def __init__(self, base_dir: Optional[Path] = None, mock_mode: bool = False,
-                 mode: Optional[str] = None, engine: Optional[str] = None,
-                 depth: Optional[int] = None):
+    def __init__(
+        self,
+        base_dir: Optional[Path] = None,
+        mock_mode: bool = False,
+        mode: Optional[str] = None,
+        engine: Optional[str] = None,
+        depth: Optional[int] = None,
+    ):
         self.base_dir = base_dir or Path(".research")
         self.mock_mode = mock_mode
         self.config = load_config(str(self.base_dir))
@@ -41,8 +47,12 @@ class SwarmRunner:
         self.hasher = SourceHasher(base_dir=self.base_dir)
         self.prompts_dir = PROJECT_ROOT / "prompts"
 
-    def run_claude_process(self, prompt: str, system_prompt_file: Optional[Path] = None,
-                           tools: str = "default") -> str:
+    def run_claude_process(
+        self,
+        prompt: str,
+        system_prompt_file: Optional[Path] = None,
+        tools: str = "default",
+    ) -> str:
         """Executes a headless Claude Code session via `claude -p`."""
         if self.mock_mode:
             return self._mock_claude_response(prompt)
@@ -53,11 +63,7 @@ class SwarmRunner:
 
         try:
             res = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                cwd=str(PROJECT_ROOT)
+                cmd, capture_output=True, text=True, check=True, cwd=str(PROJECT_ROOT)
             )
             return res.stdout.strip()
         except subprocess.CalledProcessError as e:
@@ -67,25 +73,35 @@ class SwarmRunner:
     def _mock_claude_response(self, prompt: str) -> str:
         """Mock response generator for unit testing without live API keys."""
         if "Orchestrator" in prompt or "manifest.json" in prompt:
-            return json.dumps({
-                "session_id": "mock-session-001",
-                "objective": "Evaluate ZK prover latency",
-                "scopes": [
-                    {
-                        "scope_id": "scope_01_latency",
-                        "title": "Hardware Prover Latency Bounds",
-                        "objective": "Evaluate Poseidon hash witness generation latency on FPGAs vs GPUs",
-                        "dependencies": [],
-                        "affirmative_targets": ["Sub-200ms witness generation on 2^20 constraints"],
-                        "adversarial_targets": ["PCIe bus bottlenecks during batch streaming"]
-                    }
-                ]
-            })
+            return json.dumps(
+                {
+                    "session_id": "mock-session-001",
+                    "objective": "Evaluate ZK prover latency",
+                    "scopes": [
+                        {
+                            "scope_id": "scope_01_latency",
+                            "title": "Hardware Prover Latency Bounds",
+                            "objective": "Evaluate Poseidon hash witness generation latency on FPGAs vs GPUs",
+                            "dependencies": [],
+                            "affirmative_targets": [
+                                "Sub-200ms witness generation on 2^20 constraints"
+                            ],
+                            "adversarial_targets": [
+                                "PCIe bus bottlenecks during batch streaming"
+                            ],
+                        }
+                    ],
+                }
+            )
         return "MOCK_RESPONSE"
 
-    def orchestrate_objective(self, objective: str, frontier_file: Optional[Path] = None) -> List[Dict[str, Any]]:
+    def orchestrate_objective(
+        self, objective: str, frontier_file: Optional[Path] = None
+    ) -> List[Dict[str, Any]]:
         """Phase 1: Run Swarm Orchestrator to decompose the research/audit question."""
-        print(f"\n🧠 [Phase 1: Orchestration] Decomposing objective ({self.mode.upper()} mode): '{objective}'...")
+        print(
+            f"\n🧠 [Phase 1: Orchestration] Decomposing objective ({self.mode.upper()} mode): '{objective}'..."
+        )
         self.state_machine.init_session(objective)
         self.state_machine.update_session_status(SessionStatus.ORCHESTRATING)
 
@@ -105,8 +121,10 @@ Max Depth: {self.depth}
 Output ONLY valid JSON representing the scope decomposition conforming to prompts/orchestrator.md.
 """
         system_prompt = self.prompts_dir / "orchestrator.md"
-        raw_output = self.run_claude_process(orchestrator_prompt, system_prompt_file=system_prompt)
-        
+        raw_output = self.run_claude_process(
+            orchestrator_prompt, system_prompt_file=system_prompt
+        )
+
         # Parse JSON
         try:
             # Handle potential markdown fence blocks
@@ -118,7 +136,9 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             manifest_data = json.loads(clean_json.strip())
             scopes = manifest_data.get("scopes", [])
         except Exception as e:
-            print(f"[WARN] Failed to parse JSON from orchestrator output: {e}. Using fallback decomposition.")
+            print(
+                f"[WARN] Failed to parse JSON from orchestrator output: {e}. Using fallback decomposition."
+            )
             scopes = [
                 {
                     "scope_id": "scope_01_primary_investigation",
@@ -126,7 +146,9 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                     "objective": objective,
                     "dependencies": [],
                     "affirmative_targets": ["Find corroborating empirical data"],
-                    "adversarial_targets": ["Probe counter-arguments and failure modes"]
+                    "adversarial_targets": [
+                        "Probe counter-arguments and failure modes"
+                    ],
                 }
             ]
 
@@ -137,12 +159,16 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
     def run_agent_alpha(self, scope: Dict[str, Any]):
         """Executes Agent Alpha (Thesis / Proponent / Structural Auditor) for a scope."""
         scope_id = scope["scope_id"]
-        print(f"  [Alpha] 🏛️ Starting Agent Alpha ({self.mode.upper()} Thesis) on [{scope_id}]...")
+        print(
+            f"  [Alpha] 🏛️ Starting Agent Alpha ({self.mode.upper()} Thesis) on [{scope_id}]..."
+        )
 
         if self.mock_mode:
             if self.mode == "audit":
                 sample_content = "# System State Machine Architecture\nAtomic state transitions enforce ACID consistency via write-then-rename."
-                shash = self.hasher.store_source("file:///runner/state_machine.py", sample_content, "State Machine")
+                shash = self.hasher.store_source(
+                    "file:///runner/state_machine.py", sample_content, "State Machine"
+                )
                 dossier = {
                     "agent": "Agent Alpha (Code Architect)",
                     "mode": "code_audit",
@@ -155,15 +181,17 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                             "statement": "State machine transitions enforce atomic ACID guarantees across scratchpad files.",
                             "source_hash": shash,
                             "source_url": "file:///runner/state_machine.py#L45-L65",
-                            "verbatim_quote": "Atomic state transitions enforce ACID consistency via write-then-rename."
+                            "verbatim_quote": "Atomic state transitions enforce ACID consistency via write-then-rename.",
                         }
                     ],
                     "inferred_implications": [],
-                    "negative_knowledge": []
+                    "negative_knowledge": [],
                 }
             elif self.mode == "scout":
                 sample_content = "# High Performance Raft in Rust\nZero-dependency Raft implementation with 150k ops/sec throughput under Apache-2.0."
-                shash = self.hasher.store_source("https://github.com/example/rust-raft", sample_content, "Rust Raft")
+                shash = self.hasher.store_source(
+                    "https://github.com/example/rust-raft", sample_content, "Rust Raft"
+                )
                 dossier = {
                     "agent": "Agent Alpha (OSS Scout)",
                     "mode": "oss_scout",
@@ -176,15 +204,51 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                             "statement": "Rust-Raft achieves 150k ops/sec with zero external dependencies.",
                             "source_hash": shash,
                             "source_url": "https://github.com/example/rust-raft",
-                            "verbatim_quote": "Zero-dependency Raft implementation with 150k ops/sec throughput under Apache-2.0."
+                            "verbatim_quote": "Zero-dependency Raft implementation with 150k ops/sec throughput under Apache-2.0.",
                         }
                     ],
                     "inferred_implications": [],
-                    "negative_knowledge": []
+                    "negative_knowledge": [],
+                }
+            elif self.mode == "brainstorm":
+                sample_content = "# Workspace Domain Snapshot\nEntities: swarm runner, dialectic dossiers, content-addressed cache. Constraint: evidence primacy."
+                shash = self.hasher.store_source(
+                    "file:///.research/domain_model.json",
+                    sample_content,
+                    "Domain Snapshot",
+                )
+                dossier = {
+                    "agent": "Agent Alpha (Wild Proponent)",
+                    "mode": "brainstorm",
+                    "scope_id": scope_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "affirmative_claims": [
+                        {
+                            "claim_id": "ALPHA-B01",
+                            "tag": "VERIFIED",
+                            "statement": "Workspace entities center on swarm runner, dialectic dossiers, and content-addressed cache.",
+                            "source_hash": shash,
+                            "source_url": "file:///.research/domain_model.json",
+                            "verbatim_quote": "Entities: swarm runner, dialectic dossiers, content-addressed cache.",
+                        }
+                    ],
+                    "inferred_implications": [
+                        {
+                            "inference_id": "ALPHA-BI01",
+                            "tag": "HYPOTHESIS",
+                            "statement": "What-if: divergence-rewarded synthesis produces higher-upside feature vectors than evidence-gated synthesis.",
+                            "parent_claims": ["ALPHA-B01"],
+                            "deductive_logic": "Falsified if blind A/B of brainstorm vs research briefs shows no novelty gain per reviewer vote.",
+                            "falsification": "Blind reviewer novelty vote shows no gain within 2 review rounds.",
+                        }
+                    ],
+                    "negative_knowledge": [],
                 }
             else:
                 sample_content = "# FPGA Prover Benchmark\nOur FPGA pipeline executes the Poseidon round constraints in 184ms with a peak memory bandwidth of 45 GB/s."
-                shash = self.hasher.store_source("https://arxiv.org/abs/2405.0001", sample_content, "FPGA Benchmark")
+                shash = self.hasher.store_source(
+                    "https://arxiv.org/abs/2405.0001", sample_content, "FPGA Benchmark"
+                )
                 dossier = {
                     "agent": "Agent Alpha (Thesis)",
                     "scope_id": scope_id,
@@ -196,7 +260,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                             "statement": "FPGA-accelerated Poseidon provers achieve sub-200ms latency on 2^20 constraints.",
                             "source_hash": shash,
                             "source_url": "https://arxiv.org/abs/2405.0001",
-                            "verbatim_quote": "Our FPGA pipeline executes the Poseidon round constraints in 184ms with a peak memory bandwidth of 45 GB/s."
+                            "verbatim_quote": "Our FPGA pipeline executes the Poseidon round constraints in 184ms with a peak memory bandwidth of 45 GB/s.",
                         }
                     ],
                     "inferred_implications": [
@@ -205,10 +269,10 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                             "tag": "INFERRED",
                             "statement": "Hardware provers satisfy 1-second block finality bounds.",
                             "parent_claims": ["ALPHA-C01"],
-                            "deductive_logic": "184ms << 1000ms target."
+                            "deductive_logic": "184ms << 1000ms target.",
                         }
                     ],
-                    "negative_knowledge": []
+                    "negative_knowledge": [],
                 }
         else:
             prompt = f"Run Agent Alpha ({self.mode} mode) for scope: {json.dumps(scope)}. Engine: {self.engine}. Depth: {self.depth}. Save findings to {scope_id} scratchpad."
@@ -216,10 +280,14 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 system_prompt = self.prompts_dir / "agent_code_auditor.md"
             elif self.mode == "scout":
                 system_prompt = self.prompts_dir / "agent_oss_scout.md"
+            elif self.mode == "brainstorm":
+                system_prompt = self.prompts_dir / "agent_brainstormer.md"
             else:
                 system_prompt = self.prompts_dir / "agent_alpha_thesis.md"
             self.run_claude_process(prompt, system_prompt_file=system_prompt)
-            dossier_path = self.state_machine.get_scope_dir(scope_id) / "alpha_dossier.json"
+            dossier_path = (
+                self.state_machine.get_scope_dir(scope_id) / "alpha_dossier.json"
+            )
             with open(dossier_path, "r", encoding="utf-8") as f:
                 dossier = json.load(f)
 
@@ -229,12 +297,18 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
     def run_agent_beta(self, scope: Dict[str, Any]):
         """Executes Agent Beta (Antithesis / Red Team) for a scope."""
         scope_id = scope["scope_id"]
-        print(f"  [Beta] 🎯 Starting Agent Beta ({self.mode.upper()} Red Team) on [{scope_id}]...")
+        print(
+            f"  [Beta] 🎯 Starting Agent Beta ({self.mode.upper()} Red Team) on [{scope_id}]..."
+        )
 
         if self.mock_mode:
             if self.mode == "audit":
                 sample_content = "# Concurrency Analysis\nSubprocess writes may conflict if file descriptors are left open across parallel threads."
-                shash = self.hasher.store_source("file:///runner/state_machine.py#race", sample_content, "Concurrency Check")
+                shash = self.hasher.store_source(
+                    "file:///runner/state_machine.py#race",
+                    sample_content,
+                    "Concurrency Check",
+                )
                 dossier = {
                     "agent": "Agent Beta (Code Red Team)",
                     "mode": "code_audit",
@@ -248,21 +322,23 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                             "source_hash": shash,
                             "source_url": "file:///runner/state_machine.py#race",
                             "verbatim_quote": "Subprocess writes may conflict if file descriptors are left open across parallel threads.",
-                            "severity": "MEDIUM"
+                            "severity": "MEDIUM",
                         }
                     ],
                     "methodological_critiques": [
                         {
                             "target_assertion": "State machine transitions enforce atomic ACID guarantees across scratchpad files.",
                             "critique": "Unprotected open(..., 'w') creates race condition window between concurrent agents.",
-                            "evidence_hash": shash
+                            "evidence_hash": shash,
                         }
                     ],
-                    "negative_knowledge": []
+                    "negative_knowledge": [],
                 }
             elif self.mode == "scout":
                 sample_content = "# High Performance Raft in Rust\nZero-dependency Raft implementation with 150k ops/sec throughput under Apache-2.0."
-                shash = self.hasher.store_source("https://github.com/example/rust-raft", sample_content, "Rust Raft")
+                shash = self.hasher.store_source(
+                    "https://github.com/example/rust-raft", sample_content, "Rust Raft"
+                )
                 dossier = {
                     "agent": "Agent Beta (OSS Red Team)",
                     "mode": "oss_scout",
@@ -276,21 +352,57 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                             "source_hash": shash,
                             "source_url": "https://github.com/example/rust-raft",
                             "verbatim_quote": "Zero-dependency Raft implementation with 150k ops/sec throughput under Apache-2.0.",
-                            "severity": "LOW"
+                            "severity": "LOW",
                         }
                     ],
                     "methodological_critiques": [
                         {
                             "target_assertion": "Rust-Raft achieves 150k ops/sec with zero external dependencies.",
                             "critique": "Throughput degrades during log compaction due to unbuffered disk sync.",
-                            "evidence_hash": shash
+                            "evidence_hash": shash,
                         }
                     ],
-                    "negative_knowledge": []
+                    "negative_knowledge": [],
+                }
+            elif self.mode == "brainstorm":
+                sample_content = "# Inversion Probe\nWhat if the evidence gate is the bottleneck? Divergence-rewarded synthesis explores what-if mechanics first."
+                shash = self.hasher.store_source(
+                    "file:///.research/domain_model.json#inversion",
+                    sample_content,
+                    "Inversion Probe",
+                )
+                dossier = {
+                    "agent": "Agent Beta (Radical Inverter)",
+                    "mode": "brainstorm",
+                    "scope_id": scope_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "falsification_claims": [
+                        {
+                            "claim_id": "BETA-B01",
+                            "tag": "VERIFIED",
+                            "statement": "Inversion probe: evidence gating may bottleneck lateral ideation throughput.",
+                            "source_hash": shash,
+                            "source_url": "file:///.research/domain_model.json#inversion",
+                            "verbatim_quote": "What if the evidence gate is the bottleneck?",
+                            "severity": "INFO",
+                        }
+                    ],
+                    "methodological_critiques": [
+                        {
+                            "target_assertion": "Divergence-rewarded synthesis produces higher-upside feature vectors.",
+                            "critique": "Novelty without falsification probes is indistinguishable from hallucination; require spike tests.",
+                            "evidence_hash": shash,
+                        }
+                    ],
+                    "negative_knowledge": [],
                 }
             else:
                 sample_content = "# PCIe Bus Saturation Study\nIn continuous batch streaming, PCIe 4.0 transfers introduce a 650ms delay, yielding total latency > 800ms."
-                shash = self.hasher.store_source("https://arxiv.org/abs/2406.9999", sample_content, "PCIe Bottlenecks")
+                shash = self.hasher.store_source(
+                    "https://arxiv.org/abs/2406.9999",
+                    sample_content,
+                    "PCIe Bottlenecks",
+                )
 
                 dossier = {
                     "agent": "Agent Beta (Red Team)",
@@ -303,22 +415,22 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                             "statement": "Batch streaming incurs a 650ms PCIe transfer delay under production loads.",
                             "source_hash": shash,
                             "source_url": "https://arxiv.org/abs/2406.9999",
-                            "verbatim_quote": "In continuous batch streaming, PCIe 4.0 transfers introduce a 650ms delay, yielding total latency > 800ms."
+                            "verbatim_quote": "In continuous batch streaming, PCIe 4.0 transfers introduce a 650ms delay, yielding total latency > 800ms.",
                         }
                     ],
                     "methodological_critiques": [
                         {
                             "target_assertion": "FPGA-accelerated Poseidon provers achieve sub-200ms latency on 2^20 constraints.",
                             "critique": "Benchmark isolates compute kernel and ignores host-to-device PCIe latency in pipelined batches.",
-                            "evidence_hash": shash
+                            "evidence_hash": shash,
                         }
                     ],
                     "negative_knowledge": [
                         {
                             "query": "Zero-latency PCIe streaming ZK provers",
-                            "finding": "No architecture eliminates bus transfer overhead without on-chip memory > 128GB."
+                            "finding": "No architecture eliminates bus transfer overhead without on-chip memory > 128GB.",
                         }
-                    ]
+                    ],
                 }
         else:
             prompt = f"Run Agent Beta ({self.mode} mode) for scope: {json.dumps(scope)}. Engine: {self.engine}. Depth: {self.depth}. Save findings to {scope_id} scratchpad."
@@ -326,10 +438,14 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 system_prompt = self.prompts_dir / "agent_code_auditor.md"
             elif self.mode == "scout":
                 system_prompt = self.prompts_dir / "agent_oss_scout.md"
+            elif self.mode == "brainstorm":
+                system_prompt = self.prompts_dir / "agent_brainstormer.md"
             else:
                 system_prompt = self.prompts_dir / "agent_beta_antithesis.md"
             self.run_claude_process(prompt, system_prompt_file=system_prompt)
-            dossier_path = self.state_machine.get_scope_dir(scope_id) / "beta_dossier.json"
+            dossier_path = (
+                self.state_machine.get_scope_dir(scope_id) / "beta_dossier.json"
+            )
             with open(dossier_path, "r", encoding="utf-8") as f:
                 dossier = json.load(f)
 
@@ -339,29 +455,39 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
     def execute_scope_dialectic(self, scope: Dict[str, Any]):
         """Dispatches Agent Alpha and Agent Beta concurrently."""
         scope_id = scope["scope_id"]
-        print(f"\n⚡ [Swarm Dispatch] Launching Dialectic Pair for [{scope_id}]: '{scope.get('title')}'")
+        print(
+            f"\n⚡ [Swarm Dispatch] Launching Dialectic Pair for [{scope_id}]: '{scope.get('title')}'"
+        )
         self.state_machine.update_scope_status(scope_id, ScopeStatus.RUNNING_PARALLEL)
-        
+
         with ThreadPoolExecutor(max_workers=2) as executor:
             future_alpha = executor.submit(self.run_agent_alpha, scope)
             future_beta = executor.submit(self.run_agent_beta, scope)
-            
+
             # Wait for both
             future_alpha.result()
             future_beta.result()
 
         # Phase 4: Run Epistemic Auditor
-        print(f"⚖️ [Auditor] Auditing evidence & computing divergence for [{scope_id}]...")
+        print(
+            f"⚖️ [Auditor] Auditing evidence & computing divergence for [{scope_id}]..."
+        )
         audit_report = self.auditor.audit_scope(scope_id)
         summary = audit_report["summary"]
-        print(f"  [Audit Result] Score: {summary['epistemic_score']}/1.0 | Divergence: {summary['divergence_score']} | Verified: {summary['verified_passed']} | Rejected: {summary['unverified_rejected']}")
+        print(
+            f"  [Audit Result] Score: {summary['epistemic_score']}/1.0 | Divergence: {summary['divergence_score']} | Verified: {summary['verified_passed']} | Rejected: {summary['unverified_rejected']}"
+        )
 
     def run_swarm(self, objective: str, frontier_file: Optional[Path] = None):
         """Full end-to-end execution loop."""
         start_time = datetime.now(timezone.utc)
         print("=" * 70)
-        print(f"🌟 EPISTEMIC SWARM: HIGH-INTEGRITY RESEARCH HARNESS [{self.mode.upper()} MODE]")
-        print(f"   Engine: {self.engine.upper()} | Depth: {self.depth} | Dir: {self.base_dir}")
+        print(
+            f"🌟 EPISTEMIC SWARM: HIGH-INTEGRITY RESEARCH HARNESS [{self.mode.upper()} MODE]"
+        )
+        print(
+            f"   Engine: {self.engine.upper()} | Depth: {self.depth} | Dir: {self.base_dir}"
+        )
         print("=" * 70)
 
         # 1. Orchestrate
@@ -374,13 +500,16 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 # Check if all scopes are complete
                 manifest = self.state_machine.load_global_manifest()
                 all_complete = all(
-                    self.state_machine.load_scope_manifest(s["scope_id"]).get("status") == ScopeStatus.COMPLETE.value
+                    self.state_machine.load_scope_manifest(s["scope_id"]).get("status")
+                    == ScopeStatus.COMPLETE.value
                     for s in manifest["scopes"]
                 )
                 if all_complete:
                     break
                 else:
-                    print("[ERROR] Deadlock in scope dependency graph.", file=sys.stderr)
+                    print(
+                        "[ERROR] Deadlock in scope dependency graph.", file=sys.stderr
+                    )
                     self.state_machine.update_session_status(SessionStatus.FAILED)
                     return
 
@@ -388,10 +517,12 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 self.execute_scope_dialectic(scope)
 
         # 3. Master Synthesis Compilation
-        print(f"\n📜 [Phase 5: Master Synthesis] Aggregating {self.mode.upper()} dossiers...")
+        print(
+            f"\n📜 [Phase 5: Master Synthesis] Aggregating {self.mode.upper()} dossiers..."
+        )
         report_path = self._compile_master_synthesis(objective)
         self.state_machine.update_session_status(SessionStatus.COMPLETED)
-        
+
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         print(f"\n🎉 Swarm run completed in {duration:.1f}s. Report: {report_path}")
 
@@ -401,7 +532,8 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             "audit": "Codebase Architectural & Security Audit",
             "scout": "Open-Source Software Discovery & Clean-Room Blueprint",
             "hybrid": "Hybrid Codebase & Literature Epistemic Report",
-            "research": "Master Epistemic Research Report"
+            "brainstorm": "Lateral Brainstorm & Speculative Ideation Portfolio",
+            "research": "Master Epistemic Research Report",
         }
         title = mode_titles.get(self.mode, "Master Epistemic Research Report")
 
@@ -410,7 +542,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             f"**Session ID**: `{manifest['session_id']}` | **Mode**: `{self.mode.upper()}` | **Engine**: `{self.engine}` | **Generated**: `{manifest['updated_at']}`\n",
             "## Executive Summary",
             f"This brief was compiled using the Epistemic Swarm dialectic harness ({self.mode} mode). Every factual statement carries an empirical verification pointer backed by a content-addressed raw document cache.\n",
-            "## Scope Findings & Dialectic Balance Sheets\n"
+            "## Scope Findings & Dialectic Balance Sheets\n",
         ]
 
         total_verified = 0
@@ -437,8 +569,12 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
 
         avg_div = round(sum(all_divergences) / max(1, len(all_divergences)), 2)
         synthesis_lines.append(f"\n## Swarm Epistemic Audit Totals\n")
-        synthesis_lines.append(f"- **Total Verified Primary Citations**: `{total_verified}`")
-        synthesis_lines.append(f"- **Total Unverified Claims Purged**: `{total_rejected}`")
+        synthesis_lines.append(
+            f"- **Total Verified Primary Citations**: `{total_verified}`"
+        )
+        synthesis_lines.append(
+            f"- **Total Unverified Claims Purged**: `{total_rejected}`"
+        )
         synthesis_lines.append(f"- **Mean Swarm Divergence Score**: `{avg_div}`")
 
         final_path = self.base_dir / "final_synthesis.md"
@@ -456,19 +592,52 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             with open(scout_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(synthesis_lines))
             return scout_path
+        elif self.mode == "brainstorm":
+            brainstorm_path = self.base_dir / "brainstorm_report.md"
+            with open(brainstorm_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(synthesis_lines))
+            return brainstorm_path
 
         return final_path
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Epistemic Swarm Dialectic Research Runner")
-    parser.add_argument("--objective", type=str, required=True, help="Research question or objective")
-    parser.add_argument("--frontier", type=str, help="Path to settled frontier.json from /grilling")
-    parser.add_argument("--mock-claude", action="store_true", help="Run with synthetic test data without invoking Claude Code")
-    parser.add_argument("--dir", default=".research", help="Path to .research workspace")
-    parser.add_argument("--mode", choices=["research", "audit", "scout", "hybrid"], default=None, help="Operating mode")
-    parser.add_argument("--engine", choices=["duckduckgo", "brave", "firecrawl", "searxng"], default=None, help="Search engine")
-    parser.add_argument("--depth", "--iterations", type=int, default=None, help="Max dialectic depth / iterations")
+    parser = argparse.ArgumentParser(
+        description="Epistemic Swarm Dialectic Research Runner"
+    )
+    parser.add_argument(
+        "--objective", type=str, required=True, help="Research question or objective"
+    )
+    parser.add_argument(
+        "--frontier", type=str, help="Path to settled frontier.json from /grilling"
+    )
+    parser.add_argument(
+        "--mock-claude",
+        action="store_true",
+        help="Run with synthetic test data without invoking Claude Code",
+    )
+    parser.add_argument(
+        "--dir", default=".research", help="Path to .research workspace"
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["research", "audit", "scout", "hybrid", "brainstorm"],
+        default=None,
+        help="Operating mode",
+    )
+    parser.add_argument(
+        "--engine",
+        choices=["duckduckgo", "brave", "firecrawl", "searxng"],
+        default=None,
+        help="Search engine",
+    )
+    parser.add_argument(
+        "--depth",
+        "--iterations",
+        type=int,
+        default=None,
+        help="Max dialectic depth / iterations",
+    )
 
     args = parser.parse_args()
     frontier_path = Path(args.frontier) if args.frontier else None
@@ -477,7 +646,7 @@ def main():
         mock_mode=args.mock_claude,
         mode=args.mode,
         engine=args.engine,
-        depth=args.depth
+        depth=args.depth,
     )
     runner.run_swarm(args.objective, frontier_file=frontier_path)
 

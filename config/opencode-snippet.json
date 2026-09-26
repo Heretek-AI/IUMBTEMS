@@ -69,6 +69,17 @@
         "glob": true,
         "iumbtems_verify_quote": true
       }
+    },
+    "brainstormer": {
+      "description": "IUMBTEMS Lateral Brainstormer: divergent what-if features, paradigm inversions, falsifiable spikes (never bug fixes).",
+      "tools": {
+        "read": true,
+        "write": true,
+        "grep": true,
+        "glob": true,
+        "iumbtems_brainstorm": true,
+        "iumbtems_config": true
+      }
     }
   },
   "skills": {
@@ -78,7 +89,8 @@
       "./skills/epistemic_search",
       "./skills/swarm_config",
       "./skills/code_audit",
-      "./skills/oss_scout"
+      "./skills/oss_scout",
+      "./skills/brainstorming"
     ]
   }
 }

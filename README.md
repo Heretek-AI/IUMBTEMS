@@ -6,7 +6,7 @@
 [![Marketplace Validated](https://github.com/Heretek-AI/IUMBTEMS/actions/workflows/validate-marketplace.yml/badge.svg)](https://github.com/Heretek-AI/IUMBTEMS/actions)
 
 > **High-Integrity Dialectic Research Agent Harness**  
-> *Universal support for Claude Code, Pi (pi.dev), and OpenCode V2.*  
+> *Universal support for Claude Code, OpenCode V2, Pi (pi.dev), OMP (oh-my-pi), Gemini CLI, Codex CLI, and AntiGravity.*  
 > *Enforcing verified empirical evidence over parametric hallucination.*
 
 ---
@@ -26,7 +26,8 @@ Modern LLMs suffer from parametric hallucination, sycophancy, and premature narr
 
 ## 🌐 Universal Multi-Platform Support
 
-IUMBTEMS is packaged as a single universal npm package (`@heretek-ai/epistemic-swarm` with `iumbtems` binary) that runs across the three major autonomous agent platforms:
+IUMBTEMS is packaged as a single universal npm package (`@heretek-ai/epistemic-swarm` with `iumbtems` binary) that runs across seven major autonomous agent harnesses.
+Single source of truth: `skills/*` + `prompts/*`. Target adapters are generated with `python3 scripts/build_adapters.py` (`iumbtems adapters`) into `plugins/*`, `.agents/skills`, and `.omp/`:
 
 ### 1. Claude Code (Native Marketplace & Overlay)
 
@@ -70,7 +71,8 @@ pi install npm:@heretek-ai/epistemic-swarm
   - `/swarm-config`: Inspect or tune search engine, depth (1-4), and mode
   - `/audit <target>`: Run dialectic codebase architecture and security audit
   - `/scout <feature>`: Scout open-source software and clean-room blueprints
-- **Agent Tools**: `iumbtems_config`, `iumbtems_verify_quote`.
+- **Agent Tools**: `iumbtems_config`, `iumbtems_verify_quote`, `iumbtems_brainstorm`.
+- OMP (`omp.sh`, oh-my-pi) shares the same entry point: `omp install npm:@heretek-ai/epistemic-swarm`, project commands in `.omp/commands/` (`/swarm`, `/grill`, `/audit`, `/scout`, `/brainstorming`, `/swarm-config`), prompts in `.omp/prompts/`, hooks in `.omp/hooks/pre|post/`.
 - All commands automatically respect `.research/config.json`.
 
 ### 3. OpenCode V2 (`opencode.ai`)
@@ -96,8 +98,32 @@ OpenCode V2 automatically registers the full tool suite:
 - `iumbtems_swarm_research`: Dispatches dialectic researcher pairs (Thesis vs. Antithesis).
 - `iumbtems_verify_quote`: Audits verbatim citations against the SHA-256 source cache.
 - `iumbtems_socratic_frontier`: Advances the Socratic decision tree frontier.
+- `iumbtems_brainstorm`: Lateral ideation portfolio (feature vectors + paradigm moves + falsifiable spikes).
 
 *(See [config/opencode-snippet.json](config/opencode-snippet.json) for custom agent definitions).*
+
+### 4. Gemini CLI
+```bash
+gemini extensions install https://github.com/Heretek-AI/IUMBTEMS --path plugins/gemini
+# local dev: gemini extensions link ./plugins/gemini
+```
+Bundle: `plugins/gemini/gemini-extension.json` (MCP servers), `GEMINI.md` (context), `commands/*.toml` (`/swarm`, `/grill`, `/audit`, `/scout`, `/brainstorming`, `/swarm-config`), `hooks/hooks.json`, `skills/` mirrors.
+
+### 5. Codex CLI
+Codex reads repo-local `.agents/skills/*` (already generated in this repo) — `$brainstorming <prompt>` or implicit activation. Distributable pack in `plugins/codex/` (`openai.yaml`, `config.toml.snippet` for `[mcp_servers.*]`, `AGENTS.md.snippet`). Legacy `~/.codex/prompts/*.md` (`/prompts:<name>`) is deprecated; use skills.
+
+### 6. Google AntiGravity (`agy`)
+```bash
+agy plugin install https://github.com/Heretek-AI/IUMBTEMS --path plugins/antigravity
+agy plugin validate ./plugins/antigravity
+```
+Bundle: `plugins/antigravity/plugin.json`, `mcp_config.json`, `hooks.json`, `skills/` mirrors, `agents/` (alpha/beta/auditor/brainstormer), `rules/epistemic-integrity.md`.
+
+### 7. OMP (oh-my-pi, `omp.sh`)
+```bash
+omp install npm:@heretek-ai/epistemic-swarm
+```
+Shares the pi extension entry point (`package.json: {omp, pi}` blocks). Project-local slash commands (`.omp/commands/*.md`), prompt templates (`.omp/prompts/*.md`), hooks (`.omp/hooks/pre|post/*.ts`), system override (`.omp/SYSTEM.md`).
 
 ---
 
@@ -116,6 +142,9 @@ iumbtems scout "Zero-dependency Raft consensus implementations in Rust"
 
 # Run the autonomous dialectic research swarm
 iumbtems run "Sub-millisecond ZK state updates on L1 rollups"
+
+# Run lateral brainstorming (divergent what-if ideation, never bug fixes)
+iumbtems brainstorm "Where do we go from here?"
 
 # Run Socratic grilling and decision frontier calculation
 iumbtems grill --objective "L1 vs L2 state verification trade-offs"

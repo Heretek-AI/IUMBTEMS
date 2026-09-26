@@ -2,8 +2,9 @@
  * IUMBTEMS: I Use My Brain To Express My Self
  * Native Extension for Pi (pi.dev)
  * 
- * Exposes /swarm, /grill, /swarm-config, /audit, and /scout slash commands
- * along with epistemic verification and configuration tools in Pi.
+ * Exposes /swarm, /grill, /swarm-config, /audit, /scout, and /brainstorming
+ * slash commands along with epistemic verification and configuration
+ * tools in Pi (and OMP via the shared pi/omp extension entry point).
  */
 
 import { spawnSync } from 'child_process';
@@ -127,6 +128,50 @@ export default function initPiExtension(pi) {
         }
       }
     });
+
+    // /brainstorming: Lateral creative ideation (divergent, speculative)
+    pi.registerCommand('brainstorming', {
+      description: 'Lateral brainstorming: novel feature vectors, paradigm inversions, falsifiable spikes',
+      usage: '/brainstorming <ambiguous-prompt>',
+      handler: async (args, ctx) => {
+        const objective = args.trim() || 'Where do we go from here?';
+        ctx.output?.(`💡 [IUMBTEMS Brainstorm] Diverging on: "${objective}"...`);
+        const scaffold = path.join(PKG_ROOT, 'skills/brainstorming/scripts/brainstorm.py');
+        const pre = spawnSync('python3', [scaffold, '--objective', objective, '--show-context'], {
+          encoding: 'utf-8',
+          cwd: ctx.cwd || process.cwd()
+        });
+        ctx.output?.(pre.stdout || pre.stderr);
+        const runnerPath = path.join(PKG_ROOT, 'runner/research_swarm.py');
+        const res = spawnSync('python3', [runnerPath, '--mode', 'brainstorm', '--objective', objective], {
+          encoding: 'utf-8',
+          cwd: ctx.cwd || process.cwd(),
+          env: { ...process.env, PYTHONPATH: PKG_ROOT }
+        });
+        if (res.status === 0) {
+          ctx.output?.(res.stdout);
+          ctx.output?.('\n✅ Brainstorm complete! Portfolio written to .research/brainstorm_report.md');
+        } else {
+          ctx.output?.(`❌ Brainstorm failed:\n${res.stderr || res.stdout}`);
+        }
+      }
+    });
+
+    // /brainstorm alias
+    if (typeof pi.registerCommand === 'function') {
+      try {
+        pi.registerCommand('brainstorm', {
+          description: 'Alias for /brainstorming',
+          usage: '/brainstorm <ambiguous-prompt>',
+          handler: async (args, ctx) => {
+            const cmds = typeof pi.getCommands === 'function' ? pi.getCommands() : {};
+            const target = cmds?.brainstorming?.handler || cmds?.['brainstorming'];
+            if (typeof target === 'function') return target(args, ctx);
+            ctx.output?.('Use /brainstorming <prompt> instead.');
+          }
+        });
+      } catch { /* alias is best-effort across pi/omp versions */ }
+    }
   }
 
   // 2. Register Agent Tools
@@ -163,7 +208,7 @@ export default function initPiExtension(pi) {
         properties: {
           search_engine: { type: 'string', enum: ['duckduckgo', 'brave', 'firecrawl', 'searxng'] },
           max_iterations: { type: 'integer', minimum: 1, maximum: 4 },
-          mode: { type: 'string', enum: ['research', 'audit', 'scout', 'hybrid'] },
+          mode: { type: 'string', enum: ['research', 'audit', 'scout', 'hybrid', 'brainstorm'] },
           divergence_threshold: { type: 'number', minimum: 0, maximum: 1 },
           show: { type: 'boolean', default: false }
         }
@@ -180,6 +225,32 @@ export default function initPiExtension(pi) {
           if (args.divergence_threshold !== undefined) cmdArgs.push('--divergence', String(args.divergence_threshold));
         }
 
+        const res = spawnSync('python3', cmdArgs, {
+          encoding: 'utf-8',
+          env: { ...process.env, PYTHONPATH: PKG_ROOT }
+        });
+        return {
+          content: [{ type: 'text', text: res.stdout || res.stderr }]
+        };
+      }
+    });
+
+    // Tool: iumbtems_brainstorm (lateral ideation)
+    pi.registerTool({
+      name: 'iumbtems_brainstorm',
+      description: 'Run lateral brainstorming: novel feature vectors, paradigm inversions, falsifiable spikes',
+      parameters: {
+        type: 'object',
+        properties: {
+          objective: { type: 'string', description: 'Ambiguous exploration prompt' },
+          mock_mode: { type: 'boolean', description: 'Mock mode without LLM tokens', default: false }
+        },
+        required: ['objective']
+      },
+      execute: async (args = {}) => {
+        const runnerPath = path.join(PKG_ROOT, 'runner/research_swarm.py');
+        const cmdArgs = [runnerPath, '--mode', 'brainstorm', '--objective', args.objective || 'Where do we go from here?'];
+        if (args.mock_mode) cmdArgs.push('--mock-claude');
         const res = spawnSync('python3', cmdArgs, {
           encoding: 'utf-8',
           env: { ...process.env, PYTHONPATH: PKG_ROOT }

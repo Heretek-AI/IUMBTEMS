@@ -1,0 +1,8 @@
+description = "Run IUMBTEMS dialectic research swarm on an objective"
+prompt = """Run the IUMBTEMS dialectic research swarm on the given objective: {{args}}.
+
+Steps:
+1. Read skills/grilling/SKILL.md only if the objective is ambiguous.
+2. Execute: python3 runner/research_swarm.py --objective "{{args}}"
+3. Summarize .research/final_synthesis.md with [VERIFIED:<hash>] pointers preserved.
+"""

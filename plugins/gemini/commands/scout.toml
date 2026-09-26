@@ -1,0 +1,7 @@
+description = "Scout open-source libraries and build clean-room blueprints"
+prompt = """Scout open-source solutions for: {{args}}.
+
+Execute: python3 runner/research_swarm.py --mode scout --objective "{{args}}"
+Flag GPL/AGPL contamination, maintenance health, and dependency weight.
+Report: .research/oss_scout_report.md
+"""

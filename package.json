@@ -1,7 +1,7 @@
 {
   "name": "@heretek-ai/epistemic-swarm",
-  "version": "0.2.3",
-  "description": "IUMBTEMS: I Use My Brain To Express My Self — High-Integrity Dialectic Research Agent Harness for Claude Code, Pi (pi.dev), and OpenCode V2",
+  "version": "0.3.0",
+  "description": "IUMBTEMS: I Use My Brain To Express My Self — High-Integrity Dialectic Research Agent Harness for Claude Code, OpenCode V2, Pi, OMP (oh-my-pi), Gemini CLI, Codex CLI, and AntiGravity",
   "main": "bin/cli.js",
   "bin": {
     "iumbtems": "bin/cli.js",
@@ -11,7 +11,8 @@
     ".": "./bin/cli.js",
     "./opencode": "./plugins/opencode/index.js",
     "./server": "./plugins/opencode/index.js",
-    "./pi": "./extensions/pi/index.js"
+    "./pi": "./extensions/pi/index.js",
+    "./omp": "./extensions/pi/index.js"
   },
   "publishConfig": {
     "access": "public"
@@ -28,9 +29,15 @@
     "iumbtems",
     "i-use-my-brain-to-express-my-self",
     "pi-package",
+    "omp-package",
     "opencode",
     "opencode-plugin",
     "claude-code",
+    "gemini-cli",
+    "codex-cli",
+    "antigravity",
+    "oh-my-pi",
+    "omp",
     "ai-agents",
     "autonomous-agents",
     "multi-agent-systems",
@@ -45,6 +52,8 @@
     "deep-research",
     "socratic-grilling",
     "socratic-questioning",
+    "brainstorming",
+    "lateral-thinking",
     "fact-checking",
     "red-teaming",
     "citation-validation",
@@ -64,10 +73,31 @@
       "./skills/epistemic_search",
       "./skills/swarm_config",
       "./skills/code_audit",
-      "./skills/oss_scout"
+      "./skills/oss_scout",
+      "./skills/brainstorming"
     ],
     "prompts": [
       "./prompts/*.md"
+    ]
+  },
+  "omp": {
+    "extensions": [
+      "./extensions/pi/index.js"
+    ],
+    "skills": [
+      "./skills/grilling",
+      "./skills/research_cache",
+      "./skills/epistemic_search",
+      "./skills/swarm_config",
+      "./skills/code_audit",
+      "./skills/oss_scout",
+      "./skills/brainstorming"
+    ],
+    "prompts": [
+      "./prompts/*.md"
+    ],
+    "commands": [
+      "./.omp/commands/*.md"
     ]
   },
   "author": "Heretek AI",
@@ -81,6 +111,9 @@
     "runner",
     "extensions",
     "plugins",
+    "scripts",
+    ".agents",
+    ".omp",
     ".claude-plugin",
     "install.sh",
     "README.md",
@@ -92,8 +125,10 @@
   },
   "scripts": {
     "test": "python3 -m unittest discover -s runner/tests",
+    "build:adapters": "python3 scripts/build_adapters.py",
+    "check:adapters": "python3 scripts/build_adapters.py --check",
     "validate:claude": "claude plugin validate --strict .claude-plugin/marketplace.json && claude plugin validate --strict .",
-    "prepack": "python3 -m unittest discover -s runner/tests",
+    "prepack": "python3 scripts/build_adapters.py && python3 -m unittest discover -s runner/tests",
     "install-local": "bash install.sh"
   }
 }

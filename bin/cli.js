@@ -2,7 +2,7 @@
 
 /**
  * IUMBTEMS CLI: I Use My Brain To Express My Self
- * High-Integrity Dialectic Research Harness for Claude Code, Pi, and OpenCode V2.
+ * High-Integrity Dialectic Research Harness for Claude Code, Pi, OMP, OpenCode V2, Gemini CLI, Codex CLI, AntiGravity.
  */
 
 const { spawnSync } = require('child_process');
@@ -17,7 +17,7 @@ function printHelp() {
   console.log(`
 🧠 IUMBTEMS: I Use My Brain To Express My Self
 🌟 Epistemic Swarm: High-Integrity Research Harness
-   Platforms: Claude Code | Pi (pi.dev) | OpenCode V2
+   Platforms: Claude Code | Pi (pi.dev) | OMP (oh-my-pi) | OpenCode V2 | Gemini CLI | Codex CLI | AntiGravity
    Organization: @heretek-ai | Repository: Heretek-AI/IUMBTEMS
 
 Usage:
@@ -29,7 +29,9 @@ Commands:
   audit "<target>"      Run dialectic codebase architectural & security audit
   scout "<feature>"     Scout open-source software, libraries & clean-room blueprints
   run "<objective>"     Run the dialectic multi-agent research swarm
+  brainstorm "<prompt>"  Run lateral brainstorming (feature vectors + spikes)
   grill                 Launch interactive Socratic decision tree framing
+  adapters              Rebuild harness adapter mirrors (skills -> plugins/*, .agents)
   install               Install skills & MCP servers into ~/.claude/
   marketplace           Show Claude Code marketplace catalog & install commands
   test                  Run test suite for hashing, state machine & auditor
@@ -38,13 +40,17 @@ Commands:
 
 Platform Extensions:
   Pi (pi.dev):          pi install npm:@heretek-ai/epistemic-swarm
+  OMP (oh-my-pi):       omp install npm:@heretek-ai/epistemic-swarm
   OpenCode V2:          add "@heretek-ai/epistemic-swarm" to opencode.json plugins
+  Gemini CLI:           gemini extensions install https://github.com/Heretek-AI/IUMBTEMS --path plugins/gemini
+  Codex CLI:            copy plugins/codex/skills/* into .agents/skills/
+  AntiGravity:          agy plugin install https://github.com/Heretek-AI/IUMBTEMS --path plugins/antigravity
   Claude Code:          npx @heretek-ai/epistemic-swarm install
 
 Options:
   --mock-claude         Run swarm with synthetic mock responses (zero API cost)
   --frontier <file>     Path to settled frontier.json from Socratic grilling
-  --mode <mode>         Operating mode (research, audit, scout, hybrid)
+  --mode <mode>         Operating mode (research, audit, scout, hybrid, brainstorm)
   --engine <engine>     Search engine (duckduckgo, brave, firecrawl, searxng)
   --depth <n>           Max dialectic iterations (1-4)
   --dir <path>          Path to .research workspace directory (default: .research)
@@ -54,6 +60,7 @@ Examples:
   iumbtems audit "runner/ and skills/ concurrency & security"
   iumbtems scout "Zero-dependency Raft consensus in Rust"
   iumbtems run "Verify sub-millisecond ZK prover latency"
+  iumbtems brainstorm "Where do we go from here?"
   iumbtems grill --objective "Rollup architecture trade-offs"
   iumbtems doctor
 `);
@@ -122,8 +129,25 @@ switch (command) {
     break;
   }
 
+  case 'brainstorm': {
+    const objective = args[1];
+    if (!objective || objective.startsWith('--')) {
+      console.error('Error: Please provide a brainstorm prompt.');
+      console.error('Example: npx @heretek-ai/epistemic-swarm brainstorm "Where do we go from here?"');
+      process.exit(1);
+    }
+    const forwardArgs = ['--mode', 'brainstorm', '--objective', objective, ...args.slice(2)];
+    runPython('runner/research_swarm.py', forwardArgs);
+    break;
+  }
+
   case 'grill': {
     runPython('skills/grilling/socratic_tree.py', args.slice(1));
+    break;
+  }
+
+  case 'adapters': {
+    runPython('scripts/build_adapters.py', args.slice(1));
     break;
   }
 

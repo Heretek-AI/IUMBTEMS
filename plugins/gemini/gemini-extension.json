@@ -1,0 +1,31 @@
+{
+  "name": "epistemic-swarm",
+  "version": "0.3.0",
+  "description": "IUMBTEMS Epistemic Swarm: dialectic research, code audit, OSS scout, and lateral brainstorming for Gemini CLI.",
+  "mcpServers": {
+    "brave-search": {
+      "command": "python3",
+      "args": ["${extensionPath}/../../config/mcp_launcher.py", "brave-search"],
+      "env": {
+        "BRAVE_SEARCH_API_KEY": "${BRAVE_SEARCH_API_KEY}"
+      }
+    },
+    "firecrawl": {
+      "command": "python3",
+      "args": ["${extensionPath}/../../config/mcp_launcher.py", "firecrawl"],
+      "env": {
+        "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}",
+        "FIRECRAWL_API_URL": "${FIRECRAWL_API_URL:-http://localhost:3002}"
+      }
+    },
+    "searxng": {
+      "command": "python3",
+      "args": ["${extensionPath}/../../config/mcp_launcher.py", "searxng"],
+      "env": {
+        "SEARXNG_URL": "${SEARXNG_URL:-http://localhost:8080}"
+      }
+    }
+  },
+  "contextFileName": "GEMINI.md",
+  "excludeTools": []
+}

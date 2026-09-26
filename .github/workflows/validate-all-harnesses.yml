@@ -1,0 +1,141 @@
+name: Validate All Harnesses
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  parity-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Run Python test suite
+        run: python3 -m unittest discover -s runner/tests -v
+
+      - name: Check adapter mirrors in sync
+        run: python3 scripts/build_adapters.py --check
+
+      - name: Validate JSON manifests
+        run: |
+          python3 - <<'EOF'
+          import json, glob
+          files = [
+            ".claude-plugin/plugin.json",
+            ".claude-plugin/marketplace.json",
+            "package.json",
+            "config/opencode-snippet.json",
+            "config/mcp-research-servers.json",
+            "hooks/hooks.json",
+            "plugins/antigravity/plugin.json",
+            "plugins/antigravity/mcp_config.json",
+            "plugins/antigravity/hooks.json",
+            "plugins/gemini/gemini-extension.json",
+            "plugins/gemini/hooks/hooks.json",
+          ]
+          for f in files:
+              json.load(open(f))
+              print(f"OK {f}")
+          EOF
+
+      - name: Validate Claude Code marketplace (if CLI present)
+        continue-on-error: true
+        run: |
+          npm install -g @anthropic-ai/claude-code || true
+          claude plugin validate --strict .claude-plugin/marketplace.json
+          claude plugin validate --strict .claude-plugin/plugin.json
+          claude plugin validate --strict .
+
+      - name: Smoke test OpenCode plugin tool discovery
+        run: |
+          node --input-type=module -e "
+          import plugin from './plugins/opencode/index.js';
+          import { IUMBEMS_TOOL_NAMES } from './plugins/opencode/index.js';
+          const tools = plugin.server().map(t => t.name);
+          const expected = ['iumbtems_config','iumbtems_code_audit','iumbtems_oss_scout','iumbtems_swarm_research','iumbtems_verify_quote','iumbtems_socratic_frontier','iumbtems_brainstorm'];
+          for (const t of expected) {
+            if (!tools.includes(t)) { console.error('MISSING OpenCode tool: ' + t); process.exit(1); }
+            if (!IUMBEMS_TOOL_NAMES.includes(t)) { console.error('MISSING V2 shim tool: ' + t); process.exit(1); }
+          }
+          console.log('OpenCode tools OK: ' + tools.join(','));
+          "
+
+      - name: Smoke test Pi/OMP extension commands and tools
+        run: |
+          node --input-type=module -e "
+          import initPi from './extensions/pi/index.js';
+          const commands = [];
+          const tools = [];
+          initPi({ registerCommand: (n) => commands.push(n), registerTool: (d) => tools.push(d.name) });
+          for (const c of ['swarm','grill','swarm-config','audit','scout','brainstorming']) {
+            if (!commands.includes(c)) { console.error('MISSING pi/omp command: ' + c); process.exit(1); }
+          }
+          for (const t of ['iumbtems_verify_quote','iumbtems_config','iumbtems_brainstorm']) {
+            if (!tools.includes(t)) { console.error('MISSING pi/omp tool: ' + t); process.exit(1); }
+          }
+          console.log('pi/omp OK: ' + commands.join(',') + ' | ' + tools.join(','));
+          "
+
+      - name: Verify Gemini extension bundle
+        run: |
+          test -f plugins/gemini/gemini-extension.json
+          test -f plugins/gemini/GEMINI.md
+          for c in swarm grill audit scout brainstorming swarm-config; do test -f plugins/gemini/commands/$c.toml || (echo "missing $c.toml" && exit 1); done
+          test -f plugins/gemini/hooks/hooks.json
+          test -f plugins/gemini/skills/brainstorming/SKILL.md
+          echo "Gemini bundle OK"
+          test -f .agents/skills/brainstorming/SKILL.md && echo "Codex repo skills OK"
+
+      - name: Verify AntiGravity bundle
+        run: |
+          test -f plugins/antigravity/plugin.json
+          test -f plugins/antigravity/mcp_config.json
+          test -f plugins/antigravity/hooks.json
+          test -f plugins/antigravity/skills/brainstorming/SKILL.md
+          test -f plugins/antigravity/agents/brainstormer.md
+          test -f plugins/antigravity/rules/epistemic-integrity.md
+          echo "AntiGravity bundle OK"
+
+      - name: Verify OMP bundle
+        run: |
+          for c in swarm grill audit scout brainstorming swarm-config; do test -f .omp/commands/$c.md || (echo "missing .omp/commands/$c.md" && exit 1); done
+          test -f .omp/prompts/swarm.md
+          test -f .omp/prompts/brainstorming.md
+          test -f .omp/SYSTEM.md
+          test -f .omp/hooks/pre/epistemic-redirect.ts
+          test -f .omp/hooks/post/epistemic-audit.ts
+          python3 -c "import json; d=json.load(open('package.json')); assert 'omp' in d and './extensions/pi/index.js' in d['omp']['extensions'], 'omp manifest block missing'; print('OMP manifest OK')"
+          echo "OMP bundle OK"
+
+      - name: Verify Codex bundle
+        run: |
+          test -f plugins/codex/openai.yaml
+          test -f plugins/codex/config.toml.snippet
+          test -f plugins/codex/AGENTS.md.snippet
+          test -f plugins/codex/skills/brainstorming/SKILL.md
+          echo "Codex bundle OK"
+
+      - name: Mock brainstorm swarm end-to-end
+        run: |
+          python3 runner/research_swarm.py --mode brainstorm --objective "Where do we go from here?" --mock-claude --dir /tmp/ci-brainstorm
+          test -f /tmp/ci-brainstorm/brainstorm_report.md
+          grep -q "Lateral Brainstorm" /tmp/ci-brainstorm/brainstorm_report.md
+
+      - name: CLI smoke (brainstorm + adapters help)
+        run: |
+          node bin/cli.js help | grep -q brainstorm
+          node bin/cli.js help | grep -qi antigravity

@@ -1,0 +1,23 @@
+# IUMBTEMS Codex config snippet — merge into ~/.codex/config.toml
+# MCP servers (stdio via mcp_launcher.py; HTTP variants accept bearer_token_env_var)
+
+[mcp_servers.iumbtems-brave-search]
+command = "python3"
+args = ["<IUMBTEMS_ROOT>/config/mcp_launcher.py", "brave-search"]
+
+[mcp_servers.iumbtems-firecrawl]
+command = "python3"
+args = ["<IUMBTEMS_ROOT>/config/mcp_launcher.py", "firecrawl"]
+
+[mcp_servers.iumbtems-searxng]
+command = "python3"
+args = ["<IUMBTEMS_ROOT>/config/mcp_launcher.py", "searxng"]
+
+# Optional: pin skill paths explicitly (repo .agents/skills auto-discovery
+# usually makes this unnecessary). Replace <IUMBTEMS_ROOT> with repo path.
+# [[skills.config]]
+# path = "<IUMBTEMS_ROOT>/plugins/codex/skills/brainstorming/SKILL.md"
+# enabled = true
+
+[features]
+# rm -rf guardrails etc. via exec policy live in ~/.codex/policy/*.codexpolicy

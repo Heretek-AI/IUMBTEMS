@@ -1,0 +1,23 @@
+{
+  "hooks": {
+    "pre_tool": [
+      {
+        "matcher": "WebSearch",
+        "action": "deny",
+        "reason": "Intercepted by epistemic-swarm: use epistemic search (python3 skills/epistemic_search/scripts/search.py \"<query>\") for SHA-256 cached verification."
+      },
+      {
+        "matcher": "WebFetch",
+        "action": "deny",
+        "reason": "Intercepted by epistemic-swarm: use epistemic fetch (python3 skills/epistemic_search/scripts/fetch.py \"<url>\") for content-addressed caching."
+      }
+    ],
+    "post_tool": [
+      {
+        "matcher": "*",
+        "action": "log",
+        "reason": "Epistemic audit trail: verify [VERIFIED:<hash>] quotes against .research/sources/<sha256>.md."
+      }
+    ]
+  }
+}

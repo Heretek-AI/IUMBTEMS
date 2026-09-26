@@ -20,6 +20,7 @@ from runner.state_machine import ResearchStateMachine, SessionStatus, ScopeStatu
 from runner.auditor_engine import EpistemicAuditorEngine
 from runner.research_swarm import SwarmRunner
 
+
 class TestEpistemicSwarm(unittest.TestCase):
     def setUp(self):
         self.test_dir = Path(tempfile.mkdtemp(prefix="epistemic_test_"))
@@ -38,7 +39,7 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
         shash = self.hasher.store_source(
             url="https://arxiv.org/abs/2203.15556",
             content=content,
-            title="Chinchilla Scaling Laws"
+            title="Chinchilla Scaling Laws",
         )
         self.assertTrue(len(shash) == 64)
 
@@ -57,7 +58,8 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
 
         # 3. Fabricated quote rejection
         verified_fake, conf_fake, _ = self.hasher.verify_quote(
-            shash, "the 70B parameter model was trained on 500 quadrillion tokens by aliens."
+            shash,
+            "the 70B parameter model was trained on 500 quadrillion tokens by aliens.",
         )
         self.assertFalse(verified_fake)
         self.assertLess(conf_fake, 0.8)
@@ -68,13 +70,13 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
             {
                 "scope_id": "scope_01_prover",
                 "title": "Prover Benchmarks",
-                "dependencies": []
+                "dependencies": [],
             },
             {
                 "scope_id": "scope_02_recursion",
                 "title": "Recursive Verification",
-                "dependencies": ["scope_01_prover"]
-            }
+                "dependencies": ["scope_01_prover"],
+            },
         ]
         self.state_machine.set_scopes(scopes)
 
@@ -96,7 +98,7 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
         shash = self.hasher.store_source(
             url="https://benchmark.org/zk",
             content="FPGA prover executes Poseidon in 184ms.",
-            title="ZK Benchmarks"
+            title="ZK Benchmarks",
         )
 
         # 2. Initialize scope
@@ -113,17 +115,17 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
                     "tag": "VERIFIED",
                     "statement": "Poseidon prover executes in 184ms",
                     "source_hash": shash,
-                    "verbatim_quote": "FPGA prover executes Poseidon in 184ms."
+                    "verbatim_quote": "FPGA prover executes Poseidon in 184ms.",
                 },
                 {
                     "claim_id": "A2",
                     "tag": "VERIFIED",
                     "statement": "Hallucinated claim that does not exist in source",
                     "source_hash": shash,
-                    "verbatim_quote": "This string does not exist anywhere in the text."
-                }
+                    "verbatim_quote": "This string does not exist anywhere in the text.",
+                },
             ],
-            "negative_knowledge": [{"query": "q1", "finding": "None"}]
+            "negative_knowledge": [{"query": "q1", "finding": "None"}],
         }
 
         # 4. Create Beta Dossier
@@ -134,10 +136,10 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
             "methodological_critiques": [
                 {
                     "target_assertion": "Poseidon prover executes in 184ms",
-                    "critique": "Benchmark excludes PCIe host bus latency"
+                    "critique": "Benchmark excludes PCIe host bus latency",
                 }
             ],
-            "negative_knowledge": []
+            "negative_knowledge": [],
         }
 
         self.state_machine.record_agent_completion("scope_test", "alpha", alpha_dossier)
@@ -189,7 +191,9 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
 
         for ext_path in pkg["pi"].get("extensions", []):
             resolved = (PROJECT_ROOT / ext_path).resolve()
-            self.assertTrue(resolved.exists(), f"Pi extension path not found: {ext_path}")
+            self.assertTrue(
+                resolved.exists(), f"Pi extension path not found: {ext_path}"
+            )
 
         # 2. OpenCode plugin validation
         self.assertIn("opencode", pkg.get("keywords", []))
@@ -203,6 +207,7 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
 
     def test_config_manager_load_and_save(self):
         from skills.swarm_config.configure import load_config, save_config
+
         cfg = load_config(str(self.test_dir))
         self.assertEqual(cfg["search_engine"], "duckduckgo")
         self.assertEqual(cfg["mode"], "research")
@@ -237,8 +242,80 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
             content = f.read()
             self.assertIn("Open-Source Software Discovery", content)
 
+    def test_mock_brainstorm_mode(self):
+        runner = SwarmRunner(base_dir=self.test_dir, mock_mode=True, mode="brainstorm")
+        runner.run_swarm("Where do we go from here?")
+
+        brainstorm_report = self.test_dir / "brainstorm_report.md"
+        self.assertTrue(brainstorm_report.exists())
+        with open(brainstorm_report, "r") as f:
+            content = f.read()
+            self.assertIn("Lateral Brainstorm", content)
+
+    def test_brainstorm_prompt_and_skill_exist(self):
+        prompt = PROJECT_ROOT / "prompts" / "agent_brainstormer.md"
+        skill = PROJECT_ROOT / "skills" / "brainstorming" / "SKILL.md"
+        scaffold = (
+            PROJECT_ROOT / "skills" / "brainstorming" / "scripts" / "brainstorm.py"
+        )
+        self.assertTrue(prompt.exists())
+        self.assertTrue(skill.exists())
+        self.assertTrue(scaffold.exists())
+        text = skill.read_text(encoding="utf-8")
+        self.assertIn("name: brainstorming", text)
+        self.assertIn("HYPOTHESIS", text)
+
+    def test_universal_adapter_bundles_exist(self):
+        # AntiGravity
+        self.assertTrue((PROJECT_ROOT / "plugins/antigravity/plugin.json").exists())
+        self.assertTrue((PROJECT_ROOT / "plugins/antigravity/mcp_config.json").exists())
+        self.assertTrue((PROJECT_ROOT / "plugins/antigravity/hooks.json").exists())
+        self.assertTrue(
+            (
+                PROJECT_ROOT / "plugins/antigravity/skills/brainstorming/SKILL.md"
+            ).exists()
+        )
+        self.assertTrue(
+            (PROJECT_ROOT / "plugins/antigravity/agents/brainstormer.md").exists()
+        )
+        # Gemini
+        self.assertTrue(
+            (PROJECT_ROOT / "plugins/gemini/gemini-extension.json").exists()
+        )
+        self.assertTrue((PROJECT_ROOT / "plugins/gemini/GEMINI.md").exists())
+        self.assertTrue(
+            (PROJECT_ROOT / "plugins/gemini/commands/brainstorming.toml").exists()
+        )
+        self.assertTrue(
+            (PROJECT_ROOT / "plugins/gemini/skills/brainstorming/SKILL.md").exists()
+        )
+        # Codex
+        self.assertTrue((PROJECT_ROOT / "plugins/codex/openai.yaml").exists())
+        self.assertTrue((PROJECT_ROOT / "plugins/codex/config.toml.snippet").exists())
+        self.assertTrue(
+            (PROJECT_ROOT / "plugins/codex/skills/brainstorming/SKILL.md").exists()
+        )
+        self.assertTrue(
+            (PROJECT_ROOT / ".agents/skills/brainstorming/SKILL.md").exists()
+        )
+        # OMP (oh-my-pi)
+        self.assertTrue((PROJECT_ROOT / ".omp/commands/brainstorming.md").exists())
+        self.assertTrue((PROJECT_ROOT / ".omp/prompts/brainstorming.md").exists())
+        self.assertTrue((PROJECT_ROOT / ".omp/SYSTEM.md").exists())
+        self.assertTrue(
+            (PROJECT_ROOT / ".omp/hooks/pre/epistemic-redirect.ts").exists()
+        )
+        # package.json omp block mirrors pi block
+        with open(PROJECT_ROOT / "package.json", "r", encoding="utf-8") as f:
+            pkg = json.load(f)
+        self.assertIn("omp", pkg)
+        self.assertIn("./extensions/pi/index.js", pkg["omp"].get("extensions", []))
+        self.assertIn("./skills/brainstorming", pkg["omp"].get("skills", []))
+        self.assertIn("./skills/brainstorming", pkg["pi"].get("skills", []))
+
     def test_opencode_and_pi_extension_interfaces(self):
         import subprocess
+
         # 1. Test OpenCode Plugin registration
         node_code_oc = """
         import plugin from "./plugins/opencode/index.js";
@@ -250,14 +327,25 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
             ["node", "--input-type=module", "-e", node_code_oc],
             capture_output=True,
             text=True,
-            cwd=str(PROJECT_ROOT)
+            cwd=str(PROJECT_ROOT),
         )
-        self.assertEqual(res_oc.returncode, 0, f"OpenCode plugin test failed: {res_oc.stderr}")
-        lines = [line.strip() for line in res_oc.stdout.strip().split("\n") if line.strip().startswith("[")]
+        self.assertEqual(
+            res_oc.returncode, 0, f"OpenCode plugin test failed: {res_oc.stderr}"
+        )
+        lines = [
+            line.strip()
+            for line in res_oc.stdout.strip().split("\n")
+            if line.strip().startswith("[")
+        ]
         tools = json.loads(lines[-1])
         expected_tools = [
-            "iumbtems_config", "iumbtems_code_audit", "iumbtems_oss_scout",
-            "iumbtems_swarm_research", "iumbtems_verify_quote", "iumbtems_socratic_frontier"
+            "iumbtems_config",
+            "iumbtems_code_audit",
+            "iumbtems_oss_scout",
+            "iumbtems_swarm_research",
+            "iumbtems_verify_quote",
+            "iumbtems_socratic_frontier",
+            "iumbtems_brainstorm",
         ]
         for t in expected_tools:
             self.assertIn(t, tools)
@@ -277,19 +365,22 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
             ["node", "--input-type=module", "-e", node_code_pi],
             capture_output=True,
             text=True,
-            cwd=str(PROJECT_ROOT)
+            cwd=str(PROJECT_ROOT),
         )
-        self.assertEqual(res_pi.returncode, 0, f"Pi extension test failed: {res_pi.stderr}")
-        lines = [line.strip() for line in res_pi.stdout.strip().split("\n") if line.strip().startswith("{")]
+        self.assertEqual(
+            res_pi.returncode, 0, f"Pi extension test failed: {res_pi.stderr}"
+        )
+        lines = [
+            line.strip()
+            for line in res_pi.stdout.strip().split("\n")
+            if line.strip().startswith("{")
+        ]
         data = json.loads(lines[-1])
-        for c in ["swarm", "grill", "swarm-config", "audit", "scout"]:
+        for c in ["swarm", "grill", "swarm-config", "audit", "scout", "brainstorming"]:
             self.assertIn(c, data["commands"])
-        for t in ["iumbtems_verify_quote", "iumbtems_config"]:
+        for t in ["iumbtems_verify_quote", "iumbtems_config", "iumbtems_brainstorm"]:
             self.assertIn(t, data["tools"])
 
 
 if __name__ == "__main__":
     unittest.main()
-
-
-

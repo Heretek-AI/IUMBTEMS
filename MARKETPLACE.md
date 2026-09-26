@@ -74,6 +74,14 @@ claude plugin marketplace list
 
 ---
 
+## 💡 Lateral Brainstorming (`/brainstorming`)
+
+Divergent ideation subagent (Thesis / Radical Antithesis / Synthesis) producing
+Novel Feature Vectors, Lateral Architectural Moves, and falsifiable spike hypotheses.
+Skill: `skills/brainstorming/SKILL.md` (`/brainstorming <prompt>`), system prompt:
+`prompts/agent_brainstormer.md`, runner: `python3 runner/research_swarm.py --mode brainstorm --objective "<prompt>" --mock-claude`.
+Available on all seven harnesses (Claude Code, OpenCode `iumbtems_brainstorm`, Pi/OMP `/brainstorming`, Gemini `/brainstorming`, Codex `$brainstorming`, AntiGravity skill).
+
 ## 🔍 Inspecting Installed Plugins
 
 To view installed plugins and their active components:

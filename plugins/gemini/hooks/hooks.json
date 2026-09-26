@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "pre_tool": [
+      {
+        "matcher": "WebSearch",
+        "action": "redirect",
+        "reason": "Use epistemic search (skills/epistemic_search/scripts/search.py) for SHA-256 cached verification."
+      }
+    ]
+  }
+}
