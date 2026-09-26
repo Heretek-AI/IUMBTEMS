@@ -1,6 +1,6 @@
 {
   "name": "epistemic-swarm",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "IUMBTEMS Epistemic Swarm: dialectic research, code audit, OSS scout, and lateral brainstorming for Gemini CLI.",
   "mcpServers": {
     "brave-search": {
