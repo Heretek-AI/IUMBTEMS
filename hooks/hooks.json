@@ -15,7 +15,28 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"WebFetch intercepted by epistemic-swarm to enforce content-addressed caching. Use epistemic fetch (python3 ${CLAUDE_PLUGIN_ROOT}/skills/epistemic_search/scripts/fetch.py \\\"<url>\\\") which automatically stores documents in .research/sources/<sha256>.md for mathematical auditability.\"}}'"
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/skills/epistemic_search/scripts/webcache.py gate"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/skills/epistemic_search/scripts/webcache.py archive"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/skills/epistemic_search/scripts/webcache.py stats"
           }
         ]
       }
