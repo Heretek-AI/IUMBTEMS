@@ -1,0 +1,53 @@
+{
+  "name": "@heretek-ai/epistemic-swarm",
+  "version": "0.1.0",
+  "description": "Epistemic Swarm: High-Integrity Dialectic Research Agent Harness for Claude Code",
+  "main": "bin/cli.js",
+  "bin": {
+    "epistemic-swarm": "./bin/cli.js",
+    "iumbtems": "./bin/cli.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Heretek-AI/IUMBTEMS.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Heretek-AI/IUMBTEMS/issues"
+  },
+  "homepage": "https://github.com/Heretek-AI/IUMBTEMS#readme",
+  "keywords": [
+    "claude-code",
+    "ai-agents",
+    "dialectic-swarm",
+    "epistemic-integrity",
+    "research-harness",
+    "mcp",
+    "deep-research",
+    "socratic-grilling"
+  ],
+  "author": "Heretek AI",
+  "license": "Apache-2.0",
+  "files": [
+    "bin",
+    "prompts",
+    "skills",
+    "config",
+    "runner",
+    ".claude-plugin",
+    "install.sh",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "test": "python3 -m unittest discover -s runner/tests",
+    "prepack": "python3 -m unittest discover -s runner/tests",
+    "install-local": "bash install.sh"
+  }
+}

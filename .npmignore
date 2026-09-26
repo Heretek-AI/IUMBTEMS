@@ -1,0 +1,12 @@
+.research/
+.git/
+.github/
+docs/
+**/*.pyc
+**/__pycache__/**
+**/__pycache__/
+__pycache__/
+.DS_Store
+*.log
+searxng-data/
+test_*

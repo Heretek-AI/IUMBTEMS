@@ -1,0 +1,260 @@
+# Epistemic Swarm: System Architecture & Technical Specification
+
+## 1. Architectural Mandate & Epistemic Foundations
+
+Modern large language models suffer from severe parametric leakage and sycophancy when executing deep research: models hallucinate nonexistent citations, conflate correlational claims with causal proofs, and smooth over scientific controversies to generate artificially unified prose.
+
+**Epistemic Swarm** is an autonomous research harness built for Claude Code (`~/.claude/` and `~/.claude.json`) designed around one governing constraint: **Evidentiary Primacy over Parametric Intuition**.
+
+### 1.1 Formal Evidentiary Taxonomy
+Every factual assertion, quantitative metric, historical claim, or entity relationship produced by any agent in the harness must carry an explicit, machine-parseable epistemic classification:
+
+| Tag | Formal Definition | Verification Requirement |
+| :--- | :--- | :--- |
+| `[VERIFIED: <SourceID/Hash>]` | Grounded directly in verbatim text retrieved during the active research session. | Content-addressed SHA-256 hash in `.research/sources/<sha256>.md` with exact substring match. |
+| `[INFERRED: <Reasoning Chain>]` | Deductive or inductive conclusion derived logically from one or more verified facts. | Explicit list of parent verified claim IDs ($C_1, C_2 \implies C_{\text{inferred}}$) with step-by-step logic. |
+| `[HYPOTHESIS: <Falsification Metric>]` | Plausible hypothesis, speculative mechanism, or open projection requiring testing. | Defined falsification criterion or empirical test that would disprove it. |
+| `[NEGATIVE_KNOWLEDGE: <Topic/Query>]` | Explicit declaration that indexed search corpuses returned null or contradictory findings. | Record of search queries, parameters, and negative SERP summaries. |
+
+### 1.2 Mathematical Epistemic Scoring Function
+To prevent conversational drift and hallucination, each generated dossier is scored by an Epistemic Auditor using the following objective function:
+
+$$\mathcal{E}(D) = \frac{\alpha \sum_{i=1}^{N_v} \mathcal{V}(c_i) + \beta \sum_{j=1}^{N_n} \mathcal{N}(k_j) - \gamma \sum_{k=1}^{N_u} \mathcal{U}(u_k)}{N_v + N_i + N_h + N_n + N_u}$$
+
+Where:
+- $N_v$: Number of verified assertions with valid source hashes.
+- $\mathcal{V}(c_i)$: Verification weight proportional to source tier (Peer-reviewed DOI = 1.0, Technical Documentation = 0.8, Primary Press/Filings = 0.7, Secondary Media = 0.4).
+- $N_n$: Count of explicit negative knowledge discoveries.
+- $\mathcal{N}(k_j)$: Negative knowledge bonus factor ($\beta = 0.5$).
+- $N_u$: Count of ungrounded or unverified factual claims.
+- $\mathcal{U}(u_k)$: Severe hallucination penalty ($\gamma = 2.5$).
+- $N_i, N_h$: Count of inferred claims and open hypotheses.
+
+Any dossier where $\mathcal{E}(D) < 0.65$ is rejected by the auditor and re-queued for empirical retrieval.
+
+---
+
+## 2. Dialectic Multi-Agent Swarm
+
+The system replaces single-threaded LLM research with a decentralized dialectic swarm executed locally via Claude Code headless sessions (`claude -p`):
+
+```mermaid
+flowchart TD
+    User([User Research Goal]) --> Grilling[Phase 1: Socratic Grilling & Divergent Ideation]
+    Grilling --> SettledFrontier[Settled Problem Frontier & Constraints]
+    SettledFrontier --> Orchestrator[Phase 2: Swarm Orchestrator]
+    
+    Orchestrator -->|Decompose into Scopes| Scope1[Scope 1: Core Technical Mechanism]
+    Orchestrator -->|Decompose into Scopes| Scope2[Scope 2: Economic & Scalability Constraints]
+    Orchestrator -->|Decompose into Scopes| ScopeN[Scope N: Edge-Case Failure Modes]
+    
+    subgraph DialecticPair [Dialectic Execution Loop per Scope]
+        Scope1 --> Alpha["Agent Alpha: The Proponent\n(Corroboration, Proofs, Primary Citations)"]
+        Scope1 --> Beta["Agent Beta: The Adversary\n(Active Falsification, Counter-evidence, Edge Cases)"]
+        
+        Alpha -->|Writes| AlphaDossier[alpha_dossier.json + Cached Sources]
+        Beta -->|Writes| BetaDossier[beta_dossier.json + Cached Sources]
+        
+        AlphaDossier --> Auditor[Phase 3: Epistemic Auditor]
+        BetaDossier --> Auditor
+        
+        Auditor -->|Calculate Divergence & Verify Quotes| DivergenceMatrix[Divergence Matrix & Verification Pass]
+        DivergenceMatrix --> ScopeSynthesis[Scope Synthesis Dossier]
+    end
+    
+    ScopeSynthesis --> FinalSynthesis[Phase 4: Unified Master Synthesis & Executive Brief]
+    FinalSynthesis --> Artifacts[.research/final_synthesis.md]
+```
+
+### 2.1 Swarm Roles & Postures
+1. **Swarm Orchestrator (`orchestrator.md`)**:
+   - Parses the initial problem statement and Socratic frontier.
+   - Decomposes the inquiry into decoupled, orthogonal sub-scopes.
+   - Emits `.research/manifest.json` containing the dependency DAG, sub-scope IDs, required source tiers, and hypothesis lists.
+
+2. **Agent Alpha (The Proponent / Thesis - `agent_alpha_thesis.md`)**:
+   - Posture: Constructive, empirical, affirmative.
+   - Objective: Search for working implementations, benchmark results, mathematical proofs, peer-reviewed validations, and foundational literature.
+   - Mandate: Every affirmative statement must point to an indexed primary source in `.research/sources/<sha256>.md`.
+
+3. **Agent Beta (The Adversary / Antithesis - `agent_beta_antithesis.md`)**:
+   - Posture: Hostile auditor, red-teamer, active falsifier.
+   - Objective: Probe for failure states, retracted papers, replication crises, confounding variables, edge-case regressions, patent/licensing bottlenecks, and vendor lock-in.
+   - Mandate: For every thesis claim in the scope, search deliberately for inverted queries (`"why [claim] fails"`, `"[claim] debunked"`, `"[claim] performance degradation"`).
+
+4. **Epistemic Auditor (The Synthesizer - `epistemic_auditor.md`)**:
+   - Posture: Neutral judge, citation verifier, and mathematical synthesizer.
+   - Objective:
+     1. Read `alpha_dossier.json` and `beta_dossier.json`.
+     2. Query the local cache to verify that all cited quote strings exist verbatim in `.research/sources/<sha256>.md`.
+     3. Calculate the **Divergence Score** $D_{\alpha\beta} \in [0, 1]$.
+     4. Excise any assertion marked `[VERIFIED]` that fails hash verification.
+     5. Synthesize conflicting viewpoints into an unvarnished balance sheet of empirical truths.
+
+---
+
+## 3. Filesystem IPC Protocol & State Machine
+
+The swarm uses a zero-external-dependency filesystem IPC protocol rooted at `.research/` within the repository workspace.
+
+```
+.research/
+├── manifest.json                  # Global session metadata, scope DAG, status
+├── sources/                       # Content-addressed raw document cache
+│   ├── a1b2c3d4...9f.json         # Metadata: URL, title, HTTP headers, timestamp, query
+│   └── a1b2c3d4...9f.md           # Verbatim cleaned Markdown extraction
+├── scratchpads/
+│   ├── scope_01_mechanisms/
+│   │   ├── manifest.json          # Scope status: PENDING | ALPHA_RUNNING | BETA_RUNNING | AUDITING | DONE
+│   │   ├── alpha_dossier.json     # Proponent's structured empirical findings
+│   │   ├── alpha_dossier.md       # Proponent's narrative brief
+│   │   ├── beta_dossier.json      # Adversary's structured counter-evidence
+│   │   ├── beta_dossier.md        # Adversary's narrative red-team report
+│   │   ├── audit_report.json      # Quote verification log, divergence score, trimmed claims
+│   │   └── scope_synthesis.md     # Synthesized consensus for Scope 01
+│   └── scope_02_scalability/
+│       └── ...
+└── final_synthesis.md             # Master synthesized research report with epistemic provenance
+```
+
+### 3.1 State Transitions
+```
+[PENDING]
+    │
+    ▼ (Dispatch worker thread)
+[ALPHA_DISPATCHED] ──┐
+    │                 │ (Concurrent execution)
+    ▼                 ▼
+[ALPHA_RUNNING]    [BETA_DISPATCHED]
+    │                 │
+    ▼                 ▼
+[ALPHA_COMPLETE]   [BETA_RUNNING]
+    │                 │
+    └────────┬────────┘
+             ▼
+      [BETA_COMPLETE]
+             │
+             ▼ (Spawn Epistemic Auditor)
+        [AUDITING]
+             │ (Verify hashes, check quotes, score divergence)
+             ▼
+        [SYNTHESIZING]
+             │
+             ▼
+        [COMPLETE]
+```
+
+### 3.2 Scratchpad Schema Definitions
+
+#### `manifest.json` (Global Session)
+```json
+{
+  "session_id": "epistemic-swarm-2026-09-26-001",
+  "objective": "Evaluate feasibility of sub-millisecond zero-knowledge state updates on L1 rollups",
+  "status": "RUNNING",
+  "created_at": "2026-09-26T12:00:00Z",
+  "scopes": [
+    {
+      "scope_id": "scope_01_prover_latency",
+      "title": "Hardware Prover Latency & Memory Footprint",
+      "dependencies": [],
+      "status": "IN_PROGRESS"
+    },
+    {
+      "scope_id": "scope_02_recursion_overhead",
+      "title": "Recursive SNARK/STARK Verification Overheads",
+      "dependencies": ["scope_01_prover_latency"],
+      "status": "PENDING"
+    }
+  ],
+  "telemetry": {
+    "total_sources_cached": 42,
+    "total_claims_verified": 118,
+    "unverified_claims_pruned": 7
+  }
+}
+```
+
+#### `alpha_dossier.json` / `beta_dossier.json`
+```json
+{
+  "agent": "Agent Alpha (Thesis)",
+  "scope_id": "scope_01_prover_latency",
+  "timestamp": "2026-09-26T12:05:30Z",
+  "claims": [
+    {
+      "claim_id": "C-01-001",
+      "tag": "VERIFIED",
+      "statement": "FPGA-accelerated Poseidon hash provers achieve sub-200ms witness generation on 2^20 constraints.",
+      "source_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_url": "https://arxiv.org/abs/2405.xxxxx",
+      "verbatim_quote": "Our FPGA pipeline executes the Poseidon round constraints in 184ms with a peak memory bandwidth of 45 GB/s."
+    }
+  ],
+  "negative_knowledge": [
+    {
+      "query": "GPU Poseidon provers < 50ms latency memory bandwidth constraints",
+      "finding": "No published benchmark confirms sub-50ms prover latency under consumer PCIe 4.0 bandwidth limitations."
+    }
+  ]
+}
+```
+
+---
+
+## 4. Multi-Tier Search & Content Caching Pipeline
+
+The harness integrates four functional tooling layers:
+
+```mermaid
+flowchart LR
+    subgraph Discovery [Tier 1: Discovery & SERP]
+        SearXNG["SearXNG (Metasearch)"]
+        Brave["Brave Search API"]
+    end
+    
+    subgraph Extraction [Tier 2: Content Extraction]
+        Firecrawl["Firecrawl MCP\n(Clean Markdown, JS Rendering)"]
+        Fetch["Local Fetch & Parser"]
+    end
+    
+    subgraph Domain [Tier 3: Domain Verification]
+        Scholar["arXiv / Semantic Scholar MCP"]
+        DOI["DOI & CrossRef Resolver"]
+    end
+    
+    subgraph Storage [Tier 4: Caching & Audit]
+        Hasher["SHA-256 Hasher\n(.research/sources/<hash>.md)"]
+        Verifier["Quote Substring Matcher"]
+    end
+    
+    Discovery --> Extraction
+    Extraction --> Hasher
+    Domain --> Hasher
+    Hasher --> Verifier
+```
+
+### 4.1 Content-Addressed Caching
+Every web page, paper abstract, or document retrieved is immediately ingested by `skills/research-cache/hasher.py`:
+1. Strips HTML boilerplate and scripts, converting to clean GitHub-Flavored Markdown.
+2. Computes the SHA-256 digest of the normalized text content.
+3. Saves `.research/sources/<sha256>.md` and `.research/sources/<sha256>.json` containing retrieval provenance (timestamp, search query, original URL, response code, and HTTP headers).
+4. The agent is provided with the `<sha256>` hash.
+5. In downstream synthesis, when the agent cites `[VERIFIED: sha256]`, the Epistemic Auditor verifies that `verbatim_quote` is an exact substring within `.research/sources/<sha256>.md`. If substring lookup fails, the claim is rejected.
+
+---
+
+## 5. Socratic Grilling & Divergent-to-Convergent Balance
+
+To prevent prematurely narrowing the scope of research onto biased search terms, the harness implements a mandatory two-phase cognitive workflow:
+
+### Phase 1: Divergent Socratic Exploration (`skills/grilling`)
+Based on Matt Pocock's design tree and frontier methodology:
+1. **Assumption Inversion**: The agent inverts every default assumption (e.g., *"What if low latency is unnecessary if pipelined throughput is infinite?"*).
+2. **Design Tree Mapping**: The inquiry is modeled as a decision DAG where every leaf node is an open prerequisite.
+3. **The Frontier**: Questions whose prerequisites are settled are posed in systematic rounds.
+4. **Factual Delegation**: When a question depends on an unknown empirical fact, the agent dispatches a research subagent to resolve it autonomously without interrogating the user.
+5. **Decisional Resolution**: When a question involves trade-offs or priorities, the agent asks the user and locks the answer into the frontier.
+
+### Phase 2: Convergent Dialectic Falsification
+Once the frontier is resolved, the Orchestrator freezes the problem space and transitions to the dialectic multi-agent swarm for empirical retrieval, falsification, and epistemic auditing.

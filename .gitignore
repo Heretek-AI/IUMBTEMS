@@ -1,0 +1,13 @@
+node_modules/
+.research/scratchpads/
+.research/sources/
+.research/manifest.json
+.research/frontier.json
+.research/final_synthesis.md
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+searxng-data/
+dist/
+*.tgz

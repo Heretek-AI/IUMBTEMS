@@ -1,0 +1,58 @@
+{
+  "name": "epistemic-swarm",
+  "version": "0.1.0",
+  "description": "High-Integrity Dialectic Research Agent Harness for Claude Code enforcing empirical evidence over parametric hallucination.",
+  "author": "Heretek AI",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/Heretek-AI/IUMBTEMS",
+  "mcpServers": {
+    "brave-search": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_SEARCH_API_KEY": "${BRAVE_SEARCH_API_KEY}"
+      }
+    },
+    "firecrawl": {
+      "command": "npx",
+      "args": ["-y", "firecrawl-mcp"],
+      "env": {
+        "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}",
+        "FIRECRAWL_API_URL": "${FIRECRAWL_API_URL:-http://localhost:3002}"
+      }
+    },
+    "searxng": {
+      "command": "python3",
+      "args": ["${PLUGIN_DIR}/config/searxng_mcp.py"],
+      "env": {
+        "SEARXNG_URL": "${SEARXNG_URL:-http://localhost:8080}"
+      }
+    }
+  },
+  "skills": [
+    "./skills/grilling",
+    "./skills/research-cache"
+  ],
+  "configuration": {
+    "SEARXNG_URL": {
+      "type": "string",
+      "description": "SearXNG metasearch instance URL",
+      "default": "http://localhost:8080"
+    },
+    "FIRECRAWL_API_URL": {
+      "type": "string",
+      "description": "Firecrawl API endpoint for JS/Markdown extraction",
+      "default": "http://localhost:3002"
+    },
+    "FIRECRAWL_API_KEY": {
+      "type": "string",
+      "description": "Firecrawl API Key (optional for self-hosted instances)",
+      "default": ""
+    },
+    "BRAVE_SEARCH_API_KEY": {
+      "type": "string",
+      "description": "Brave Search API Key for discovery",
+      "default": ""
+    }
+  }
+}

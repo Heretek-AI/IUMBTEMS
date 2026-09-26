@@ -1,0 +1,14 @@
+{
+  "name": "heretek-official",
+  "owner": "Heretek AI",
+  "description": "Official plugins and agent harnesses from Heretek AI",
+  "plugins": {
+    "epistemic-swarm": {
+      "source": {
+        "source": "github",
+        "repo": "Heretek-AI/IUMBTEMS"
+      },
+      "description": "High-Integrity Dialectic Research Agent Harness for Claude Code"
+    }
+  }
+}
