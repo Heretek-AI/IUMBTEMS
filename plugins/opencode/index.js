@@ -447,6 +447,161 @@ function buildToolMap() {
   );
 }
 
+/**
+ * Phase C retention: session lifecycle hooks.
+ *
+ * Reference pattern: @prevalentware/opencode-goal-plugin subscribes via
+ * `context.event.subscribe({signal})`, detects idle as `session.idle` or an
+ * idle `session.status`, continues via `context.session.prompt`, and preserves
+ * state across compaction with the `experimental.session.compacting` hook.
+ * Every hook here is best-effort and never throws into the host.
+ */
+
+/** Idle detection matching the reference implementation. Exported for tests. */
+export function isIdleEvent(event) {
+  if (!event || typeof event.type !== 'string') return false;
+  if (event.type === 'session.idle') return true;
+  const status = event.properties?.status;
+  return (
+    event.type === 'session.status' &&
+    typeof status === 'object' &&
+    status !== null &&
+    status.type === 'idle'
+  );
+}
+
+function readJsonFile(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf-8'));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Last-write-wins degraded claims + requeue list. Pure fs reads. */
+export function readLedgerDegraded(root) {
+  const out = { stale: [], suspect: [], requeued: [], fingerprint: 'empty' };
+  try {
+    const ledger = readJsonFile(path.join(root, '.research', 'ledger', 'claim_status.json'));
+    if (Array.isArray(ledger)) {
+      const last = new Map();
+      for (const e of ledger) {
+        if (e && typeof e.claim_id === 'string') last.set(e.claim_id, e.to_status);
+      }
+      for (const [id, s] of last) {
+        if (s === 'STALE') out.stale.push(id);
+        else if (s === 'SUSPECT') out.suspect.push(id);
+      }
+      const lastAt = ledger.length > 0 ? ledger[ledger.length - 1]?.at : '';
+      out.fingerprint = `${ledger.length}:${lastAt}`;
+    }
+    const requeue = readJsonFile(path.join(root, '.research', 'requeue.json'));
+    if (Array.isArray(requeue)) {
+      out.requeued = requeue.map((e) => e?.scope_id).filter((s) => typeof s === 'string');
+    }
+  } catch {
+    /* unreadable workspace -> no degraded claims */
+  }
+  return out;
+}
+
+/**
+ * Compaction context preserving .research state. Returns null when there is
+ * no workspace (hook then pushes nothing).
+ */
+export function buildCompactionContext(root) {
+  try {
+    const cfg = readJsonFile(path.join(root, '.research', 'config.json'));
+    if (!cfg || typeof cfg !== 'object') return null;
+    const degraded = readLedgerDegraded(root);
+    const lines = [
+      'IUMBTEMS Epistemic Swarm workspace state (preserved across compaction):',
+      `- mode=${cfg.mode ?? '?'} engine=${cfg.search_engine ?? '?'} depth=${cfg.max_iterations ?? '?'}`,
+      `- degraded claims: ${degraded.stale.length} STALE, ${degraded.suspect.length} SUSPECT`,
+    ];
+    if (degraded.stale.length > 0) {
+      lines.push(`- STALE claim ids: ${degraded.stale.slice(0, 10).join(', ')}`);
+    }
+    if (degraded.requeued.length > 0) {
+      lines.push(`- scopes queued for re-run: ${degraded.requeued.slice(0, 10).join(', ')}`);
+    }
+    lines.push('- Continue with iumbtems_check_staleness when resuming audit work.');
+    return lines.join('\n');
+  } catch {
+    return null;
+  }
+}
+
+const NUDGE_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const activeNudges = new Map();
+
+/**
+ * Handle one subscribed event: nudge once per ledger change when degraded
+ * claims exist. Returns true when a nudge was sent. Exported for tests.
+ */
+export function handleIdleEvent(host, root, state, event) {
+  try {
+    if (!isIdleEvent(event)) return false;
+    const sessionID = event?.properties?.sessionID ?? event?.sessionID;
+    if (typeof sessionID !== 'string' || !sessionID) return false;
+    const now = Date.now();
+    if (now - (state.lastNudgeAt || 0) < NUDGE_MIN_INTERVAL_MS) return false;
+    const degraded = readLedgerDegraded(root);
+    const total = degraded.stale.length + degraded.suspect.length;
+    if (total === 0) return false;
+    if (state.lastFingerprint === degraded.fingerprint) return false;
+    state.lastFingerprint = degraded.fingerprint;
+    state.lastNudgeAt = now;
+    const example = degraded.stale.slice(0, 5).join(', ');
+    Promise.resolve(
+      host.session.prompt({
+        sessionID,
+        text:
+          `IUMBTEMS staleness nudge: ${total} degraded claim(s) ` +
+          `(${degraded.stale.length} STALE, ${degraded.suspect.length} SUSPECT) in .research/ledger/claim_status.json` +
+          (example ? `, e.g. ${example}` : '') +
+          '. Run iumbtems_check_staleness and re-audit affected scopes, or reply that it is already handled.',
+      })
+    ).catch(() => {});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Subscribe to session events for idle nudges. One subscription per root. */
+export function startStalenessNudge(host, root) {
+  try {
+    if (!host || typeof host.event?.subscribe !== 'function') return null;
+    if (typeof host.session?.prompt !== 'function') return null;
+    if (activeNudges.has(root)) return activeNudges.get(root).stop;
+    const abort = new AbortController();
+    const state = { lastFingerprint: null, lastNudgeAt: 0 };
+    const stop = () => {
+      try { abort.abort(); } catch { /* noop */ }
+      activeNudges.delete(root);
+    };
+    activeNudges.set(root, { stop });
+    (async () => {
+      try {
+        const sub = host.event.subscribe({ signal: abort.signal });
+        const it = sub[Symbol.asyncIterator]();
+        while (true) {
+          const { value, done } = await it.next();
+          if (done) break;
+          handleIdleEvent(host, root, state, value);
+        }
+      } catch {
+        /* aborted or host closed the stream */
+      }
+      activeNudges.delete(root);
+    })();
+    return stop;
+  } catch {
+    return null;
+  }
+}
+
 export function createOpenCodePlugin(context = {}) {
   return {
     id: 'heretek.iumbtems.epistemic-swarm',
@@ -461,6 +616,17 @@ export function createOpenCodePlugin(context = {}) {
       config: (cfg) => registerOpenCodeCommands(cfg),
       // Tool map (object form, as in the reference implementation).
       tool: buildToolMap(),
+      // Compaction hook: preserve .research state (best-effort, silent skip
+      // when no workspace is present so compaction never breaks).
+      'experimental.session.compacting': async (input, output) => {
+        try {
+          const root = input?.directory ?? input?.location?.directory ?? process.cwd();
+          const ctx = buildCompactionContext(root);
+          if (ctx && output && Array.isArray(output.context)) output.context.push(ctx);
+        } catch {
+          /* never break compaction */
+        }
+      },
     }),
 
     setup: async (appContext) => {
@@ -476,6 +642,21 @@ export function createOpenCodePlugin(context = {}) {
         if (Object.keys(updates).length > 0) {
           callMcp('iumbtems_config', updates, appContext?.cwd);
         }
+      }
+      // Phase C: idle staleness nudge (opt out with {staleness_nudge: false}).
+      // Subscribes only when the host exposes event/session; one per root.
+      try {
+        if ((opts?.staleness_nudge ?? true)) {
+          const host = {
+            event: appContext?.event || context.event,
+            session: appContext?.session || context.session,
+          };
+          const root =
+            appContext?.location?.directory || context.location?.directory;
+          if (root) startStalenessNudge(host, root);
+        }
+      } catch {
+        /* lifecycle hooks are best-effort */
       }
       return { initialized: true, platform: 'opencode-v2' };
     },

@@ -286,5 +286,108 @@ class TestOpenCodeTui(unittest.TestCase):
             self.assertEqual(data["requeued"], 2)
 
 
+class TestOpenCodeLifecycle(unittest.TestCase):
+    @staticmethod
+    def _fixture(tmp):
+        root = Path(tmp)
+        research = root / ".research"
+        (research / "ledger").mkdir(parents=True)
+        research.joinpath("config.json").write_text(
+            json.dumps(
+                {"mode": "audit", "search_engine": "brave", "max_iterations": 3}
+            ),
+            encoding="utf-8",
+        )
+        research.joinpath("ledger", "claim_status.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "scope_id": "s",
+                        "claim_id": "x1",
+                        "from_status": "VERIFIED",
+                        "to_status": "STALE",
+                        "reason": "retracted",
+                        "at": "t1",
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+        research.joinpath("requeue.json").write_text(
+            json.dumps([{"scope_id": "s9"}]), encoding="utf-8"
+        )
+        return str(root)
+
+    def test_idle_detection(self):
+        res = run_node(
+            """
+            import { isIdleEvent } from "./plugins/opencode/index.js";
+            console.log(JSON.stringify({
+              idle: isIdleEvent({type: "session.idle"}),
+              statusIdle: isIdleEvent({type: "session.status", properties: {status: {type: "idle"}}}),
+              busy: isIdleEvent({type: "session.status", properties: {status: {type: "busy"}}}),
+              other: isIdleEvent({type: "message.updated"}),
+              empty: isIdleEvent(null)
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"idle test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertTrue(data["idle"])
+        self.assertTrue(data["statusIdle"])
+        self.assertFalse(data["busy"])
+        self.assertFalse(data["other"])
+        self.assertFalse(data["empty"])
+
+    def test_compaction_hook_pushes_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._fixture(tmp)
+            res = run_node(
+                f"""
+                import plugin from "./plugins/opencode/index.js";
+                const shell = await plugin.server();
+                const hook = shell["experimental.session.compacting"];
+                const out = {{context: []}};
+                await hook({{directory: {root!r}}}, out);
+                const empty = {{context: []}};
+                await hook({{directory: "/tmp/oc-lifecycle-empty"}}, empty);
+                console.log(JSON.stringify({{hook: typeof hook, pushed: out.context.length, text: out.context[0] || "", skipped: empty.context.length}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"compaction test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertEqual(data["hook"], "function")
+            self.assertEqual(data["pushed"], 1)
+            self.assertIn("mode=audit", data["text"])
+            self.assertIn("x1", data["text"])
+            self.assertIn("s9", data["text"])
+            self.assertEqual(data["skipped"], 0)
+
+    def test_nudge_once_per_ledger_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._fixture(tmp)
+            res = run_node(
+                f"""
+                import {{ handleIdleEvent }} from "./plugins/opencode/index.js";
+                const prompts = [];
+                const host = {{session: {{prompt: async (p) => {{ prompts.push(p); return {{}}; }}}}}};
+                const state = {{}};
+                const evt = {{type: "session.idle", properties: {{sessionID: "ses_1"}}}};
+                const first = handleIdleEvent(host, {root!r}, state, evt);
+                await new Promise(r => setTimeout(r, 20));
+                const second = handleIdleEvent(host, {root!r}, state, evt);
+                const busy = handleIdleEvent(host, {root!r}, state, {{type: "message.updated"}});
+                console.log(JSON.stringify({{first, second, busy, prompts: prompts.length, sid: prompts[0]?.sessionID || null}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"nudge test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["first"])
+            self.assertFalse(data["second"])
+            self.assertFalse(data["busy"])
+            self.assertEqual(data["prompts"], 1)
+            self.assertEqual(data["sid"], "ses_1")
+
+
 if __name__ == "__main__":
     unittest.main()
