@@ -24,6 +24,9 @@ jobs:
         with:
           node-version: '22.x'
 
+      - name: Install JS dependencies
+        run: npm ci --no-audit --no-fund
+
       - name: Run Python test suite
         run: python3 -m unittest discover -s runner/tests -v
 
