@@ -88,6 +88,16 @@ OpenCode V2 automatically registers:
 ## ⚡ CLI Command Reference
 
 ```bash
+# Inspect or update active configuration (search engine, depth, mode)
+iumbtems config
+iumbtems config --engine duckduckgo --depth 3 --mode audit
+
+# Run dialectic codebase architecture & security audit
+iumbtems audit "runner/ and skills/ concurrency and injection security"
+
+# Scout open-source software, mature libraries & clean-room blueprints
+iumbtems scout "Zero-dependency Raft consensus implementations in Rust"
+
 # Run the autonomous dialectic research swarm
 iumbtems run "Sub-millisecond ZK state updates on L1 rollups"
 
@@ -100,6 +110,14 @@ iumbtems doctor
 # Run automated test suite
 iumbtems test
 ```
+
+### Specialized Dialectic Skills & Slash Commands
+- **`/swarm-config`**: Interactive tuning of search engines (DuckDuckGo, Brave, Firecrawl, SearXNG), iteration depth, divergence thresholds, and operating modes.
+- **`/code-audit`**: Dialectic codebase review pairing a Structural Architect (thesis) with a Vulnerability Red-Teamer (antithesis) enforcing line-number proofs (`file:///path#L10-25`).
+- **`/oss-scout`**: Evaluates GitHub repositories, package ecosystems (npm, crates.io, PyPI), license contamination (GPL/AGPL copyleft vs MIT/Apache), and outputs clean-room re-implementation blueprints.
+- **`/grilling`**: Socratic assumption-inversion and Matt Pocock-style design tree frontier discovery.
+- **`epistemic_search`**: Zero-key DuckDuckGo Lite search and content-addressed fetch with automatic SHA-256 caching.
+
 
 ---
 

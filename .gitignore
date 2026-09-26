@@ -1,9 +1,6 @@
 node_modules/
-.research/scratchpads/
-.research/sources/
-.research/manifest.json
-.research/frontier.json
-.research/final_synthesis.md
+.research/
+!.research/.gitkeep
 __pycache__/
 *.py[cod]
 *$py.class

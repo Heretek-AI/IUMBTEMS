@@ -201,7 +201,44 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
         self.assertIn("iumbtems", pkg.get("bin", {}))
         self.assertTrue((PROJECT_ROOT / pkg["bin"]["iumbtems"]).exists())
 
+    def test_config_manager_load_and_save(self):
+        from skills.swarm_config.configure import load_config, save_config
+        cfg = load_config(str(self.test_dir))
+        self.assertEqual(cfg["search_engine"], "duckduckgo")
+        self.assertEqual(cfg["mode"], "research")
+
+        cfg["search_engine"] = "brave"
+        cfg["mode"] = "audit"
+        cfg["max_iterations"] = 3
+        save_config(cfg, str(self.test_dir))
+
+        reloaded = load_config(str(self.test_dir))
+        self.assertEqual(reloaded["search_engine"], "brave")
+        self.assertEqual(reloaded["mode"], "audit")
+        self.assertEqual(reloaded["max_iterations"], 3)
+
+    def test_mock_code_audit_mode(self):
+        runner = SwarmRunner(base_dir=self.test_dir, mock_mode=True, mode="audit")
+        runner.run_swarm("Audit state machine concurrency")
+
+        audit_report = self.test_dir / "code_audit_report.md"
+        self.assertTrue(audit_report.exists())
+        with open(audit_report, "r") as f:
+            content = f.read()
+            self.assertIn("Codebase Architectural & Security Audit", content)
+
+    def test_mock_oss_scout_mode(self):
+        runner = SwarmRunner(base_dir=self.test_dir, mock_mode=True, mode="scout")
+        runner.run_swarm("Scout Raft consensus libraries")
+
+        scout_report = self.test_dir / "oss_scout_report.md"
+        self.assertTrue(scout_report.exists())
+        with open(scout_report, "r") as f:
+            content = f.read()
+            self.assertIn("Open-Source Software Discovery", content)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

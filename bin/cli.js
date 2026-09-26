@@ -25,6 +25,9 @@ Usage:
   npx @heretek-ai/epistemic-swarm <command> [options]
 
 Commands:
+  config [options]      Inspect or modify swarm parameters (engine, depth, mode)
+  audit "<target>"      Run dialectic codebase architectural & security audit
+  scout "<feature>"     Scout open-source software, libraries & clean-room blueprints
   run "<objective>"     Run the dialectic multi-agent research swarm
   grill                 Launch interactive Socratic decision tree framing
   install               Install skills & MCP servers into ~/.claude/
@@ -41,9 +44,15 @@ Platform Extensions:
 Options:
   --mock-claude         Run swarm with synthetic mock responses (zero API cost)
   --frontier <file>     Path to settled frontier.json from Socratic grilling
+  --mode <mode>         Operating mode (research, audit, scout, hybrid)
+  --engine <engine>     Search engine (duckduckgo, brave, firecrawl, searxng)
+  --depth <n>           Max dialectic iterations (1-4)
   --dir <path>          Path to .research workspace directory (default: .research)
 
 Examples:
+  iumbtems config --engine duckduckgo --depth 3
+  iumbtems audit "runner/ and skills/ concurrency & security"
+  iumbtems scout "Zero-dependency Raft consensus in Rust"
   iumbtems run "Verify sub-millisecond ZK prover latency"
   iumbtems grill --objective "Rollup architecture trade-offs"
   iumbtems doctor
@@ -76,6 +85,31 @@ function runBash(scriptRelPath, extraArgs = []) {
 }
 
 switch (command) {
+  case 'config': {
+    runPython('skills/swarm_config/configure.py', args.slice(1));
+    break;
+  }
+
+  case 'audit': {
+    const targetObj = args[1] && !args[1].startsWith('--') ? args[1] : 'Full codebase architectural and security audit';
+    const restArgs = args[1] && !args[1].startsWith('--') ? args.slice(2) : args.slice(1);
+    const forwardArgs = ['--mode', 'audit', '--objective', targetObj, ...restArgs];
+    runPython('runner/research_swarm.py', forwardArgs);
+    break;
+  }
+
+  case 'scout': {
+    const objective = args[1];
+    if (!objective || objective.startsWith('--')) {
+      console.error('Error: Please provide a feature or library to scout.');
+      console.error('Example: npx @heretek-ai/epistemic-swarm scout "Zero-dependency Raft in Rust"');
+      process.exit(1);
+    }
+    const forwardArgs = ['--mode', 'scout', '--objective', objective, ...args.slice(2)];
+    runPython('runner/research_swarm.py', forwardArgs);
+    break;
+  }
+
   case 'run': {
     const objective = args[1];
     if (!objective || objective.startsWith('--')) {

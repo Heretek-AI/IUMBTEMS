@@ -3,6 +3,7 @@
 Epistemic Swarm: Dialectic Multi-Agent Research Runner.
 Executes parallel Claude Code sub-processes (claude -p) for Proponent and Adversary agents,
 monitors filesystem IPC scratchpads, and invokes the Epistemic Auditor.
+Supports multiple modes: research, audit (codebase), scout (OSS), and hybrid.
 """
 
 import os
@@ -23,11 +24,18 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from runner.state_machine import ResearchStateMachine, SessionStatus, ScopeStatus
 from runner.auditor_engine import EpistemicAuditorEngine
 from skills.research_cache.hasher import SourceHasher
+from skills.swarm_config.configure import load_config
 
 class SwarmRunner:
-    def __init__(self, base_dir: Optional[Path] = None, mock_mode: bool = False):
+    def __init__(self, base_dir: Optional[Path] = None, mock_mode: bool = False,
+                 mode: Optional[str] = None, engine: Optional[str] = None,
+                 depth: Optional[int] = None):
         self.base_dir = base_dir or Path(".research")
         self.mock_mode = mock_mode
+        self.config = load_config(str(self.base_dir))
+        self.mode = mode or self.config.get("mode", "research")
+        self.engine = engine or self.config.get("search_engine", "duckduckgo")
+        self.depth = depth or self.config.get("max_iterations", 2)
         self.state_machine = ResearchStateMachine(base_dir=self.base_dir)
         self.auditor = EpistemicAuditorEngine(base_dir=self.base_dir)
         self.hasher = SourceHasher(base_dir=self.base_dir)
@@ -76,8 +84,8 @@ class SwarmRunner:
         return "MOCK_RESPONSE"
 
     def orchestrate_objective(self, objective: str, frontier_file: Optional[Path] = None) -> List[Dict[str, Any]]:
-        """Phase 1: Run Swarm Orchestrator to decompose the research question."""
-        print(f"\n🧠 [Phase 1: Orchestration] Decomposing objective: '{objective}'...")
+        """Phase 1: Run Swarm Orchestrator to decompose the research/audit question."""
+        print(f"\n🧠 [Phase 1: Orchestration] Decomposing objective ({self.mode.upper()} mode): '{objective}'...")
         self.state_machine.init_session(objective)
         self.state_machine.update_session_status(SessionStatus.ORCHESTRATING)
 
@@ -88,8 +96,10 @@ class SwarmRunner:
                 frontier_context = f"\nSETTLED CONSTRAINTS FROM FRONTIER:\n{json.dumps(frontier_data.get('settled_constraints', {}), indent=2)}"
 
         orchestrator_prompt = f"""
-You are the Swarm Orchestrator. Read prompts/orchestrator.md.
+You are the Swarm Orchestrator operating in {self.mode.upper()} mode. Read prompts/orchestrator.md.
 Objective: {objective}
+Engine: {self.engine}
+Max Depth: {self.depth}
 {frontier_context}
 
 Output ONLY valid JSON representing the scope decomposition conforming to prompts/orchestrator.md.
@@ -125,45 +135,90 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         return scopes
 
     def run_agent_alpha(self, scope: Dict[str, Any]):
-        """Executes Agent Alpha (Thesis / Proponent) for a scope."""
+        """Executes Agent Alpha (Thesis / Proponent / Structural Auditor) for a scope."""
         scope_id = scope["scope_id"]
-        print(f"  [Alpha] 🏛️ Starting Agent Alpha (Thesis) on [{scope_id}]...")
+        print(f"  [Alpha] 🏛️ Starting Agent Alpha ({self.mode.upper()} Thesis) on [{scope_id}]...")
 
         if self.mock_mode:
-            # Create synthetic cached source
-            sample_content = "# FPGA Prover Benchmark\nOur FPGA pipeline executes the Poseidon round constraints in 184ms with a peak memory bandwidth of 45 GB/s."
-            shash = self.hasher.store_source("https://arxiv.org/abs/2405.0001", sample_content, "FPGA Benchmark")
-            
-            dossier = {
-                "agent": "Agent Alpha (Thesis)",
-                "scope_id": scope_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "affirmative_claims": [
-                    {
-                        "claim_id": "ALPHA-C01",
-                        "tag": "VERIFIED",
-                        "statement": "FPGA-accelerated Poseidon provers achieve sub-200ms latency on 2^20 constraints.",
-                        "source_hash": shash,
-                        "source_url": "https://arxiv.org/abs/2405.0001",
-                        "verbatim_quote": "Our FPGA pipeline executes the Poseidon round constraints in 184ms with a peak memory bandwidth of 45 GB/s."
-                    }
-                ],
-                "inferred_implications": [
-                    {
-                        "inference_id": "ALPHA-I01",
-                        "tag": "INFERRED",
-                        "statement": "Hardware provers satisfy 1-second block finality bounds.",
-                        "parent_claims": ["ALPHA-C01"],
-                        "deductive_logic": "184ms << 1000ms target."
-                    }
-                ],
-                "negative_knowledge": []
-            }
+            if self.mode == "audit":
+                sample_content = "# System State Machine Architecture\nAtomic state transitions enforce ACID consistency via write-then-rename."
+                shash = self.hasher.store_source("file:///runner/state_machine.py", sample_content, "State Machine")
+                dossier = {
+                    "agent": "Agent Alpha (Code Architect)",
+                    "mode": "code_audit",
+                    "scope_id": scope_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "affirmative_claims": [
+                        {
+                            "claim_id": "ALPHA-A01",
+                            "tag": "VERIFIED",
+                            "statement": "State machine transitions enforce atomic ACID guarantees across scratchpad files.",
+                            "source_hash": shash,
+                            "source_url": "file:///runner/state_machine.py#L45-L65",
+                            "verbatim_quote": "Atomic state transitions enforce ACID consistency via write-then-rename."
+                        }
+                    ],
+                    "inferred_implications": [],
+                    "negative_knowledge": []
+                }
+            elif self.mode == "scout":
+                sample_content = "# High Performance Raft in Rust\nZero-dependency Raft implementation with 150k ops/sec throughput under Apache-2.0."
+                shash = self.hasher.store_source("https://github.com/example/rust-raft", sample_content, "Rust Raft")
+                dossier = {
+                    "agent": "Agent Alpha (OSS Scout)",
+                    "mode": "oss_scout",
+                    "scope_id": scope_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "affirmative_claims": [
+                        {
+                            "claim_id": "ALPHA-S01",
+                            "tag": "VERIFIED",
+                            "statement": "Rust-Raft achieves 150k ops/sec with zero external dependencies.",
+                            "source_hash": shash,
+                            "source_url": "https://github.com/example/rust-raft",
+                            "verbatim_quote": "Zero-dependency Raft implementation with 150k ops/sec throughput under Apache-2.0."
+                        }
+                    ],
+                    "inferred_implications": [],
+                    "negative_knowledge": []
+                }
+            else:
+                sample_content = "# FPGA Prover Benchmark\nOur FPGA pipeline executes the Poseidon round constraints in 184ms with a peak memory bandwidth of 45 GB/s."
+                shash = self.hasher.store_source("https://arxiv.org/abs/2405.0001", sample_content, "FPGA Benchmark")
+                dossier = {
+                    "agent": "Agent Alpha (Thesis)",
+                    "scope_id": scope_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "affirmative_claims": [
+                        {
+                            "claim_id": "ALPHA-C01",
+                            "tag": "VERIFIED",
+                            "statement": "FPGA-accelerated Poseidon provers achieve sub-200ms latency on 2^20 constraints.",
+                            "source_hash": shash,
+                            "source_url": "https://arxiv.org/abs/2405.0001",
+                            "verbatim_quote": "Our FPGA pipeline executes the Poseidon round constraints in 184ms with a peak memory bandwidth of 45 GB/s."
+                        }
+                    ],
+                    "inferred_implications": [
+                        {
+                            "inference_id": "ALPHA-I01",
+                            "tag": "INFERRED",
+                            "statement": "Hardware provers satisfy 1-second block finality bounds.",
+                            "parent_claims": ["ALPHA-C01"],
+                            "deductive_logic": "184ms << 1000ms target."
+                        }
+                    ],
+                    "negative_knowledge": []
+                }
         else:
-            prompt = f"Run Agent Alpha for scope: {json.dumps(scope)}. Save findings to {scope_id} scratchpad."
-            system_prompt = self.prompts_dir / "agent_alpha_thesis.md"
+            prompt = f"Run Agent Alpha ({self.mode} mode) for scope: {json.dumps(scope)}. Engine: {self.engine}. Depth: {self.depth}. Save findings to {scope_id} scratchpad."
+            if self.mode == "audit":
+                system_prompt = self.prompts_dir / "agent_code_auditor.md"
+            elif self.mode == "scout":
+                system_prompt = self.prompts_dir / "agent_oss_scout.md"
+            else:
+                system_prompt = self.prompts_dir / "agent_alpha_thesis.md"
             self.run_claude_process(prompt, system_prompt_file=system_prompt)
-            # Read created dossier from scratchpad
             dossier_path = self.state_machine.get_scope_dir(scope_id) / "alpha_dossier.json"
             with open(dossier_path, "r", encoding="utf-8") as f:
                 dossier = json.load(f)
@@ -174,43 +229,105 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
     def run_agent_beta(self, scope: Dict[str, Any]):
         """Executes Agent Beta (Antithesis / Red Team) for a scope."""
         scope_id = scope["scope_id"]
-        print(f"  [Beta] 🎯 Starting Agent Beta (Red Team) on [{scope_id}]...")
+        print(f"  [Beta] 🎯 Starting Agent Beta ({self.mode.upper()} Red Team) on [{scope_id}]...")
 
         if self.mock_mode:
-            sample_content = "# PCIe Bus Saturation Study\nIn continuous batch streaming, PCIe 4.0 transfers introduce a 650ms delay, yielding total latency > 800ms."
-            shash = self.hasher.store_source("https://arxiv.org/abs/2406.9999", sample_content, "PCIe Bottlenecks")
+            if self.mode == "audit":
+                sample_content = "# Concurrency Analysis\nSubprocess writes may conflict if file descriptors are left open across parallel threads."
+                shash = self.hasher.store_source("file:///runner/state_machine.py#race", sample_content, "Concurrency Check")
+                dossier = {
+                    "agent": "Agent Beta (Code Red Team)",
+                    "mode": "code_audit",
+                    "scope_id": scope_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "falsification_claims": [
+                        {
+                            "claim_id": "BETA-A01",
+                            "tag": "VERIFIED",
+                            "statement": "Subprocess writes may conflict if file descriptors are left open across parallel threads.",
+                            "source_hash": shash,
+                            "source_url": "file:///runner/state_machine.py#race",
+                            "verbatim_quote": "Subprocess writes may conflict if file descriptors are left open across parallel threads.",
+                            "severity": "MEDIUM"
+                        }
+                    ],
+                    "methodological_critiques": [
+                        {
+                            "target_assertion": "State machine transitions enforce atomic ACID guarantees across scratchpad files.",
+                            "critique": "Unprotected open(..., 'w') creates race condition window between concurrent agents.",
+                            "evidence_hash": shash
+                        }
+                    ],
+                    "negative_knowledge": []
+                }
+            elif self.mode == "scout":
+                sample_content = "# High Performance Raft in Rust\nZero-dependency Raft implementation with 150k ops/sec throughput under Apache-2.0."
+                shash = self.hasher.store_source("https://github.com/example/rust-raft", sample_content, "Rust Raft")
+                dossier = {
+                    "agent": "Agent Beta (OSS Red Team)",
+                    "mode": "oss_scout",
+                    "scope_id": scope_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "falsification_claims": [
+                        {
+                            "claim_id": "BETA-S01",
+                            "tag": "VERIFIED",
+                            "statement": "Candidate repository has single maintainer with 9-month lull in commit history.",
+                            "source_hash": shash,
+                            "source_url": "https://github.com/example/rust-raft",
+                            "verbatim_quote": "Zero-dependency Raft implementation with 150k ops/sec throughput under Apache-2.0.",
+                            "severity": "LOW"
+                        }
+                    ],
+                    "methodological_critiques": [
+                        {
+                            "target_assertion": "Rust-Raft achieves 150k ops/sec with zero external dependencies.",
+                            "critique": "Throughput degrades during log compaction due to unbuffered disk sync.",
+                            "evidence_hash": shash
+                        }
+                    ],
+                    "negative_knowledge": []
+                }
+            else:
+                sample_content = "# PCIe Bus Saturation Study\nIn continuous batch streaming, PCIe 4.0 transfers introduce a 650ms delay, yielding total latency > 800ms."
+                shash = self.hasher.store_source("https://arxiv.org/abs/2406.9999", sample_content, "PCIe Bottlenecks")
 
-            dossier = {
-                "agent": "Agent Beta (Red Team)",
-                "scope_id": scope_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "falsification_claims": [
-                    {
-                        "claim_id": "BETA-C01",
-                        "tag": "VERIFIED",
-                        "statement": "Batch streaming incurs a 650ms PCIe transfer delay under production loads.",
-                        "source_hash": shash,
-                        "source_url": "https://arxiv.org/abs/2406.9999",
-                        "verbatim_quote": "In continuous batch streaming, PCIe 4.0 transfers introduce a 650ms delay, yielding total latency > 800ms."
-                    }
-                ],
-                "methodological_critiques": [
-                    {
-                        "target_assertion": "FPGA-accelerated Poseidon provers achieve sub-200ms latency on 2^20 constraints.",
-                        "critique": "Benchmark isolates compute kernel and ignores host-to-device PCIe latency in pipelined batches.",
-                        "evidence_hash": shash
-                    }
-                ],
-                "negative_knowledge": [
-                    {
-                        "query": "Zero-latency PCIe streaming ZK provers",
-                        "finding": "No architecture eliminates bus transfer overhead without on-chip memory > 128GB."
-                    }
-                ]
-            }
+                dossier = {
+                    "agent": "Agent Beta (Red Team)",
+                    "scope_id": scope_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "falsification_claims": [
+                        {
+                            "claim_id": "BETA-C01",
+                            "tag": "VERIFIED",
+                            "statement": "Batch streaming incurs a 650ms PCIe transfer delay under production loads.",
+                            "source_hash": shash,
+                            "source_url": "https://arxiv.org/abs/2406.9999",
+                            "verbatim_quote": "In continuous batch streaming, PCIe 4.0 transfers introduce a 650ms delay, yielding total latency > 800ms."
+                        }
+                    ],
+                    "methodological_critiques": [
+                        {
+                            "target_assertion": "FPGA-accelerated Poseidon provers achieve sub-200ms latency on 2^20 constraints.",
+                            "critique": "Benchmark isolates compute kernel and ignores host-to-device PCIe latency in pipelined batches.",
+                            "evidence_hash": shash
+                        }
+                    ],
+                    "negative_knowledge": [
+                        {
+                            "query": "Zero-latency PCIe streaming ZK provers",
+                            "finding": "No architecture eliminates bus transfer overhead without on-chip memory > 128GB."
+                        }
+                    ]
+                }
         else:
-            prompt = f"Run Agent Beta for scope: {json.dumps(scope)}. Save findings to {scope_id} scratchpad."
-            system_prompt = self.prompts_dir / "agent_beta_antithesis.md"
+            prompt = f"Run Agent Beta ({self.mode} mode) for scope: {json.dumps(scope)}. Engine: {self.engine}. Depth: {self.depth}. Save findings to {scope_id} scratchpad."
+            if self.mode == "audit":
+                system_prompt = self.prompts_dir / "agent_code_auditor.md"
+            elif self.mode == "scout":
+                system_prompt = self.prompts_dir / "agent_oss_scout.md"
+            else:
+                system_prompt = self.prompts_dir / "agent_beta_antithesis.md"
             self.run_claude_process(prompt, system_prompt_file=system_prompt)
             dossier_path = self.state_machine.get_scope_dir(scope_id) / "beta_dossier.json"
             with open(dossier_path, "r", encoding="utf-8") as f:
@@ -243,7 +360,8 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         """Full end-to-end execution loop."""
         start_time = datetime.now(timezone.utc)
         print("=" * 70)
-        print("🌟 EPISTEMIC SWARM: HIGH-INTEGRITY RESEARCH HARNESS")
+        print(f"🌟 EPISTEMIC SWARM: HIGH-INTEGRITY RESEARCH HARNESS [{self.mode.upper()} MODE]")
+        print(f"   Engine: {self.engine.upper()} | Depth: {self.depth} | Dir: {self.base_dir}")
         print("=" * 70)
 
         # 1. Orchestrate
@@ -270,20 +388,28 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 self.execute_scope_dialectic(scope)
 
         # 3. Master Synthesis Compilation
-        print("\n📜 [Phase 5: Master Synthesis] Aggregating scope dossiers...")
-        self._compile_master_synthesis(objective)
+        print(f"\n📜 [Phase 5: Master Synthesis] Aggregating {self.mode.upper()} dossiers...")
+        report_path = self._compile_master_synthesis(objective)
         self.state_machine.update_session_status(SessionStatus.COMPLETED)
         
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-        print(f"\n🎉 Research swarm completed in {duration:.1f}s. Report: .research/final_synthesis.md")
+        print(f"\n🎉 Swarm run completed in {duration:.1f}s. Report: {report_path}")
 
-    def _compile_master_synthesis(self, objective: str):
+    def _compile_master_synthesis(self, objective: str) -> Path:
         manifest = self.state_machine.load_global_manifest()
+        mode_titles = {
+            "audit": "Codebase Architectural & Security Audit",
+            "scout": "Open-Source Software Discovery & Clean-Room Blueprint",
+            "hybrid": "Hybrid Codebase & Literature Epistemic Report",
+            "research": "Master Epistemic Research Report"
+        }
+        title = mode_titles.get(self.mode, "Master Epistemic Research Report")
+
         synthesis_lines = [
-            f"# Master Epistemic Research Report: {objective}\n",
-            f"**Session ID**: `{manifest['session_id']}` | **Generated**: `{manifest['updated_at']}`\n",
+            f"# {title}: {objective}\n",
+            f"**Session ID**: `{manifest['session_id']}` | **Mode**: `{self.mode.upper()}` | **Engine**: `{self.engine}` | **Generated**: `{manifest['updated_at']}`\n",
             "## Executive Summary",
-            "This report was compiled using the Epistemic Swarm dialectic harness. Every factual statement carries an empirical verification pointer backed by a content-addressed raw document cache.\n",
+            f"This brief was compiled using the Epistemic Swarm dialectic harness ({self.mode} mode). Every factual statement carries an empirical verification pointer backed by a content-addressed raw document cache.\n",
             "## Scope Findings & Dialectic Balance Sheets\n"
         ]
 
@@ -319,6 +445,20 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         with open(final_path, "w", encoding="utf-8") as f:
             f.write("\n".join(synthesis_lines))
 
+        # Also write specialized report files for audit and scout modes
+        if self.mode == "audit":
+            audit_path = self.base_dir / "code_audit_report.md"
+            with open(audit_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(synthesis_lines))
+            return audit_path
+        elif self.mode == "scout":
+            scout_path = self.base_dir / "oss_scout_report.md"
+            with open(scout_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(synthesis_lines))
+            return scout_path
+
+        return final_path
+
 
 def main():
     parser = argparse.ArgumentParser(description="Epistemic Swarm Dialectic Research Runner")
@@ -326,10 +466,19 @@ def main():
     parser.add_argument("--frontier", type=str, help="Path to settled frontier.json from /grilling")
     parser.add_argument("--mock-claude", action="store_true", help="Run with synthetic test data without invoking Claude Code")
     parser.add_argument("--dir", default=".research", help="Path to .research workspace")
+    parser.add_argument("--mode", choices=["research", "audit", "scout", "hybrid"], default=None, help="Operating mode")
+    parser.add_argument("--engine", choices=["duckduckgo", "brave", "firecrawl", "searxng"], default=None, help="Search engine")
+    parser.add_argument("--depth", "--iterations", type=int, default=None, help="Max dialectic depth / iterations")
 
     args = parser.parse_args()
     frontier_path = Path(args.frontier) if args.frontier else None
-    runner = SwarmRunner(base_dir=Path(args.dir), mock_mode=args.mock_claude)
+    runner = SwarmRunner(
+        base_dir=Path(args.dir),
+        mock_mode=args.mock_claude,
+        mode=args.mode,
+        engine=args.engine,
+        depth=args.depth
+    )
     runner.run_swarm(args.objective, frontier_file=frontier_path)
 
 
