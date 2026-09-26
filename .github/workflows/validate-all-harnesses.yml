@@ -109,7 +109,8 @@ jobs:
           echo "MCP canonical tools: $EXPECTED"
           node --input-type=module -e "
           import plugin, { IUMBTEMS_TOOL_NAMES, IUMBEMS_TOOL_NAMES } from './plugins/opencode/index.js';
-          const tools = plugin.server().map(t => t.name);
+          const shell = await plugin.server();
+          const tools = Object.values(shell.tool).map(t => t.name);
           const expected = process.argv[1].split(',');
           for (const t of expected) {
             if (!tools.includes(t)) { console.error('MISSING OpenCode tool: ' + t); process.exit(1); }

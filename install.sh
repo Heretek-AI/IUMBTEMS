@@ -109,10 +109,98 @@ except Exception as e:
 EOF
 fi
 
+# 5. OpenCode V2 integration (plugin tuple, agents, MCP server — merge only)
+OPENCODE_JSON="$HOME/.config/opencode/opencode.json"
+echo "🔧 Merging OpenCode V2 configuration into $OPENCODE_JSON..."
+python3 - <<EOF
+import json
+from pathlib import Path
+
+repo = Path("$REPO_DIR")
+oc_path = Path("$OPENCODE_JSON")
+PKG = "@heretek-ai/epistemic-swarm"
+OPTION_KEYS = {"search_engine", "max_iterations", "mode", "divergence_threshold"}
+
+oc_path.parent.mkdir(parents=True, exist_ok=True)
+cfg = json.loads(oc_path.read_text(encoding="utf-8")) if oc_path.exists() else {}
+
+# --- plugin entry: tuple form [package, options]; repair bare-object form ---
+plugins = cfg.get("plugin", [])
+if not isinstance(plugins, list):
+    print("   ⚠️ 'plugin' is not a list; leaving untouched")
+    plugins = cfg.get("plugin", [])
+else:
+    repaired = []
+    i = 0
+    changed = False
+    while i < len(plugins):
+        item = plugins[i]
+        # Bare options object following our package string (or standalone):
+        # fold into a tuple instead of leaving an invalid entry.
+        if isinstance(item, dict) and set(item) & OPTION_KEYS:
+            prev_is_pkg = repaired and repaired[-1] == PKG
+            prev_is_tuple = (
+                repaired and isinstance(repaired[-1], list)
+                and repaired[-1] and repaired[-1][0] == PKG
+            )
+            if prev_is_pkg:
+                repaired[-1] = [PKG, item]
+                changed = True
+                print("   ~ Repaired bare options object into tuple entry")
+            elif prev_is_tuple:
+                merged = {**(repaired[-1][1] if len(repaired[-1]) > 1 else {}), **item}
+                repaired[-1] = [PKG, merged]
+                changed = True
+                print("   ~ Folded stray options into existing tuple entry")
+            else:
+                repaired.append([PKG, item])
+                changed = True
+                print("   ~ Attached stray options object to new tuple entry")
+        else:
+            repaired.append(item)
+        i += 1
+    if not any((p == PKG or (isinstance(p, list) and p and p[0] == PKG)) for p in repaired):
+        repaired.append([PKG, {"search_engine": "duckduckgo", "max_iterations": 2, "mode": "research"}])
+        changed = True
+        print(f"   + Added plugin entry: {PKG}")
+    else:
+        print(f"   ℹ️ Plugin entry already configured: {PKG}")
+    cfg["plugin"] = repaired
+
+# --- agents: merge snippet definitions, never overwrite user agents ---
+try:
+    snippet = json.loads((repo / "config" / "opencode-snippet.json").read_text(encoding="utf-8"))
+    agents = cfg.setdefault("agent", {})
+    for name, definition in snippet.get("agent", {}).items():
+        if name not in agents:
+            agents[name] = definition
+            print(f"   + Added agent: {name}")
+        else:
+            print(f"   ℹ️ Agent already configured: {name}")
+except Exception as e:
+    print(f"   ⚠️ Non-critical warning merging agents: {e}")
+
+# --- MCP server: absolute runner path (relative paths only work at repo root) ---
+mcp = cfg.setdefault("mcp", {})
+if "iumbtems" not in mcp:
+    mcp["iumbtems"] = {
+        "type": "local",
+        "command": ["python3", str(repo / "runner" / "mcp_server.py")],
+        "enabled": True,
+    }
+    print("   + Added MCP server: iumbtems")
+else:
+    print("   ℹ️ MCP server already configured: iumbtems")
+
+oc_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+print("✅ OpenCode configuration updated.")
+EOF
+
 echo ""
 echo "🎉 Epistemic Swarm installation complete!"
 echo "   - Interactive Grilling: run /grilling inside Claude Code"
 echo "   - Lateral Brainstorming: run /brainstorming inside Claude Code (skills/brainstorming)"
+echo "   - OpenCode V2: /swarm /grill /audit /scout /brainstorming via plugin commands"
 echo "   - Rebuild harness adapters: python3 scripts/build_adapters.py"
 echo "   - Headless Research Swarm: npx @heretek-ai/epistemic-swarm run \"<objective>\""
 echo "========================================================"

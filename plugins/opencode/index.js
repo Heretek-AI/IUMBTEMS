@@ -234,7 +234,7 @@ const TOOL_CATALOG = [
       properties: {
         base_dir: {
           type: 'string',
-          description: 'Path to .research workspace',
+          description: 'Path to .research workspace (default: current directory)',
         },
       },
     },
@@ -249,7 +249,7 @@ const TOOL_CATALOG = [
         hash: { type: 'string', description: 'Content-addressed SHA-256 of the affected source' },
         event: { type: 'string', enum: ['RETRACTED', 'REVISED'] },
         note: { type: 'string', description: 'Why the source was retracted/revised' },
-        base_dir: { type: 'string' },
+        base_dir: { type: 'string', description: 'Path to .research workspace (default: current directory)' },
       },
       required: ['hash', 'event'],
     },
@@ -261,7 +261,7 @@ const TOOL_CATALOG = [
     input: {
       type: 'object',
       properties: {
-        base_dir: { type: 'string' },
+        base_dir: { type: 'string', description: 'Path to .research workspace (default: current directory)' },
         scope_ids: {
           type: 'array',
           items: { type: 'string' },
@@ -278,7 +278,7 @@ const TOOL_CATALOG = [
       type: 'object',
       properties: {
         pack: { type: 'string', description: 'Pack id: biopharma | quant | legal (or a path)' },
-        base_dir: { type: 'string' },
+        base_dir: { type: 'string', description: 'Path to .research workspace (default: current directory)' },
       },
       required: ['pack'],
     },
@@ -290,11 +290,11 @@ const TOOL_CATALOG = [
     input: {
       type: 'object',
       properties: {
-        base_dir: { type: 'string' },
+        base_dir: { type: 'string', description: 'Path to .research workspace (default: current directory)' },
         out: { type: 'string', description: 'Output path (default <base_dir>/brief.pcrb.json)' },
-        objective: { type: 'string' },
+        objective: { type: 'string', description: 'Research objective the brief must cover' },
         key: { type: 'string', description: 'HMAC key (prefer key_file or env IUMBTEMS_PCRB_KEY)' },
-        key_file: { type: 'string' },
+        key_file: { type: 'string', description: 'Path to file containing the HMAC key' },
       },
     },
   },
@@ -306,8 +306,8 @@ const TOOL_CATALOG = [
       type: 'object',
       properties: {
         brief: { type: 'string', description: 'Path to brief.pcrb.json' },
-        key: { type: 'string' },
-        key_file: { type: 'string' },
+        key: { type: 'string', description: 'HMAC key (prefer key_file or env IUMBTEMS_PCRB_KEY)' },
+        key_file: { type: 'string', description: 'Path to file containing the HMAC key' },
       },
       required: ['brief'],
     },
@@ -337,6 +337,116 @@ function normalizeArgs(tool, args = {}) {
   return a;
 }
 
+/**
+ * OpenCode slash-command catalog (Phase A discoverability).
+ *
+ * Mirrors the Pi/OMP/Gemini command surface. Each entry registers into
+ * `config.command[name] = {description, template}` via the server `config`
+ * hook (same pattern as @prevalentware/opencode-goal-plugin). `$ARGUMENTS`
+ * is the raw text after the slash command. Templates instruct the agent to
+ * call the corresponding canonical `iumbtems_*` tool — commands never
+ * reimplement tool logic.
+ */
+export const OPENCODE_COMMANDS = [
+  {
+    name: 'swarm',
+    description: 'Run IUMBTEMS dialectic research swarm on an objective',
+    template: [
+      'Run an IUMBTEMS dialectic research swarm.',
+      'Objective: $ARGUMENTS',
+      '1. If the objective is ambiguous, frame it first via iumbtems_socratic_frontier.',
+      '2. Execute iumbtems_swarm_research with {"objective": "<objective>"} (pass "mock_mode": true only for dry runs).',
+      '3. Summarize .research/final_synthesis.md, preserving [VERIFIED:<hash>] pointers.',
+    ].join('\n'),
+  },
+  {
+    name: 'grill',
+    description: 'Launch Socratic grilling and decision tree frontier exploration',
+    template: [
+      'Launch Socratic grilling on the decision frontier.',
+      'Objective: $ARGUMENTS (may be empty to inspect the current frontier)',
+      'Call iumbtems_socratic_frontier with {"objective": "<objective>", "file": ".research/frontier.json"}; omit "objective" to inspect.',
+      'Challenge premises, invert assumptions, and report open frontier nodes.',
+    ].join('\n'),
+  },
+  {
+    name: 'swarm-config',
+    description: 'Inspect or update Epistemic Swarm parameters (engine, depth, mode)',
+    template: [
+      'Inspect or update the Epistemic Swarm configuration.',
+      'Arguments: $ARGUMENTS (may be empty to inspect current settings)',
+      'Call iumbtems_config; map --engine/--depth/--mode/--show style flags to search_engine/max_iterations/mode, or pass through no arguments to inspect.',
+    ].join('\n'),
+  },
+  {
+    name: 'audit',
+    description: 'Run dialectic codebase architectural and security audit with line-level proof',
+    template: [
+      'Run an IUMBTEMS dialectic codebase audit (structural architect vs adversarial red-teamer).',
+      'Target: $ARGUMENTS (path, component, or empty for full-repository architecture and vulnerability audit)',
+      '1. Execute iumbtems_code_audit with {"target": "<target>"} (pass "mock_mode": true only for dry runs).',
+      '2. Summarize .research/code_audit_report.md with line-level proof pointers.',
+    ].join('\n'),
+  },
+  {
+    name: 'scout',
+    description: 'Scout open-source libraries, audit copyleft licenses, generate clean-room blueprints',
+    template: [
+      'Scout open-source solutions for the requested capability.',
+      'Feature: $ARGUMENTS',
+      '1. Execute iumbtems_oss_scout with {"feature": "<feature>"} (pass "mock_mode": true only for dry runs).',
+      '2. Report mature candidates, GPL/AGPL copyleft risks, and the clean-room blueprint in .research/oss_scout_report.md.',
+    ].join('\n'),
+  },
+  {
+    name: 'brainstorming',
+    description: 'Lateral brainstorming: novel feature vectors, paradigm inversions, falsifiable spikes',
+    template: [
+      'Run lateral brainstorming (divergent what-if ideation, never bug-fix lists).',
+      'Prompt: $ARGUMENTS (defaults to "Where do we go from here?" when empty)',
+      '1. Execute iumbtems_brainstorm with {"objective": "<prompt>"} (pass "mock_mode": true only for dry runs).',
+      '2. Report novel feature vectors, paradigm inversions, and falsifiable spikes from .research/brainstorm_report.md.',
+    ].join('\n'),
+  },
+  {
+    name: 'brainstorm',
+    description: 'Alias for /brainstorming',
+    template: [
+      'Alias for /brainstorming: run lateral brainstorming (divergent what-if ideation, never bug-fix lists).',
+      'Prompt: $ARGUMENTS (defaults to "Where do we go from here?" when empty)',
+      'Execute iumbtems_brainstorm with {"objective": "<prompt>"} and report feature vectors, paradigm inversions, and falsifiable spikes.',
+    ].join('\n'),
+  },
+];
+
+/**
+ * Register the command catalog into an OpenCode config object without
+ * overwriting user-defined commands of the same name. Exported for tests.
+ */
+export function registerOpenCodeCommands(cfg = {}) {
+  cfg.command ??= {};
+  for (const cmd of OPENCODE_COMMANDS) {
+    if (cfg.command[cmd.name]) continue;
+    cfg.command[cmd.name] = { description: cmd.description, template: cmd.template };
+  }
+  return cfg;
+}
+
+/** Tool map (object form) for the server hook; array catalog stays canonical. */
+function buildToolMap() {
+  return Object.fromEntries(
+    TOOL_CATALOG.map((tool) => [
+      tool.name,
+      {
+        ...tool,
+        options: { codemode: false },
+        execute: async (args = {}, toolContext) =>
+          callMcp(tool.name, normalizeArgs(tool.name, args), toolContext?.cwd),
+      },
+    ])
+  );
+}
+
 export function createOpenCodePlugin(context = {}) {
   return {
     id: 'heretek.iumbtems.epistemic-swarm',
@@ -345,13 +455,13 @@ export function createOpenCodePlugin(context = {}) {
     description:
       'I Use My Brain To Express My Self: High-integrity dialectic research, code audits, and open-source scouting',
 
-    server: (toolContext) =>
-      TOOL_CATALOG.map((tool) => ({
-        ...tool,
-        options: { codemode: false },
-        execute: async (args = {}) =>
-          callMcp(tool.name, normalizeArgs(tool.name, args), toolContext?.cwd),
-      })),
+    server: async () => ({
+      // Config hook: slash-command catalog (mirrors the goal plugin's
+      // registerDesktopCommands pattern; never overwrites user commands).
+      config: (cfg) => registerOpenCodeCommands(cfg),
+      // Tool map (object form, as in the reference implementation).
+      tool: buildToolMap(),
+    }),
 
     setup: async (appContext) => {
       const opts = context.options || appContext?.options;

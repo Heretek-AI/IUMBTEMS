@@ -318,15 +318,20 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
 
         # 1. Test OpenCode Plugin registration (A2b: thin forwarders + both
         #    name exports — canonical IUMBTEMS_TOOL_NAMES and the deprecated
-        #    IUMBEMS_TOOL_NAMES alias).
+        #    IUMBEMS_TOOL_NAMES alias). Object form: server() resolves to
+        #    {config, tool} with the tool map keyed by name.
         node_code_oc = """
         import plugin, { IUMBTEMS_TOOL_NAMES, IUMBEMS_TOOL_NAMES } from "./plugins/opencode/index.js";
-        const tools = plugin.server();
+        const shell = await plugin.server();
+        const tools = Object.values(shell.tool);
         const names = tools.map(t => t.name);
+        const cfg = {};
+        shell.config(cfg);
         console.log(JSON.stringify({
           names,
           canonical: IUMBTEMS_TOOL_NAMES,
-          alias: IUMBEMS_TOOL_NAMES
+          alias: IUMBEMS_TOOL_NAMES,
+          commands: Object.keys(cfg.command || {})
         }));
         """
         res_oc = subprocess.run(
@@ -365,6 +370,17 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
         ]
         for t in expected_tools:
             self.assertIn(t, tools)
+        # Slash-command catalog registered via the server config hook.
+        for c in [
+            "swarm",
+            "grill",
+            "swarm-config",
+            "audit",
+            "scout",
+            "brainstorming",
+            "brainstorm",
+        ]:
+            self.assertIn(c, data_oc["commands"])
 
         # 2. Test Pi Extension registration
         node_code_pi = """
