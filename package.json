@@ -26,17 +26,30 @@
   "homepage": "https://github.com/Heretek-AI/IUMBTEMS#readme",
   "keywords": [
     "iumbtems",
+    "i-use-my-brain-to-express-my-self",
     "pi-package",
     "opencode",
     "opencode-plugin",
     "claude-code",
     "ai-agents",
+    "autonomous-agents",
+    "multi-agent-systems",
     "dialectic-swarm",
+    "dialectic",
     "epistemic-integrity",
     "research-harness",
+    "research-agent",
     "mcp",
+    "model-context-protocol",
+    "mcp-servers",
     "deep-research",
-    "socratic-grilling"
+    "socratic-grilling",
+    "socratic-questioning",
+    "fact-checking",
+    "red-teaming",
+    "citation-validation",
+    "hallucination-prevention",
+    "swarm-intelligence"
   ],
   "pi": {
     "extensions": [
