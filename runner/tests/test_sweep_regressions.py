@@ -369,5 +369,52 @@ class TestKeyFileFailsLoudly(unittest.TestCase):
         self.assertIsNone(_resolve_key(None, None))
 
 
+class TestNoStaleV1PluginSurface(unittest.TestCase):
+    """Nothing outside the plugin may reference the removed V1 opencode surface.
+
+    Dropping `plugin.server()` broke the Python tests *and* a Node snippet
+    embedded in .github/workflows/validate-all-harnesses.yml that nobody
+    thought of as "test code". Grep every non-node_modules file so a V1
+    reference cannot hide in a workflow, a script, or a doc.
+    """
+
+    # Patterns that only make sense against the V1 plugin factory / config key.
+    V1_PATTERNS = (
+        "plugin.server()",
+        "registerOpenCodeCommands",
+        "experimental.session.compacting",
+    )
+    SCAN_DIRS = (".github", "scripts", "bin", "config", "runner", "extensions", "docs", "skills")
+    SCAN_SUFFIXES = (".yml", ".yaml", ".js", ".ts", ".py", ".sh", ".json", ".md")
+
+    def test_no_v1_surface_references(self):
+        offenders = []
+        for scan_dir in self.SCAN_DIRS:
+            root = PROJECT_ROOT / scan_dir
+            if not root.is_dir():
+                continue
+            for path in root.rglob("*"):
+                if not path.is_file() or path.suffix not in self.SCAN_SUFFIXES:
+                    continue
+                if "node_modules" in path.parts or "__pycache__" in path.parts:
+                    continue
+                # Tests legitimately discuss the removed surface (that is what
+                # they regression-check), so they are not offenders.
+                if "tests" in path.parts:
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                for pattern in self.V1_PATTERNS:
+                    if pattern in text:
+                        offenders.append(f"{path.relative_to(PROJECT_ROOT)}: {pattern}")
+        self.assertEqual(
+            offenders, [],
+            "references to the removed V1 opencode plugin surface "
+            "(these broke CI when `server()` was dropped): " + "; ".join(offenders),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

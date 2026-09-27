@@ -114,10 +114,22 @@ jobs:
           EOF
           )
           echo "MCP canonical tools: $EXPECTED"
+          # V2 surface: tools are registered through `tool.transform` inside
+          # setup(), not via the V1 server factory that 0.4.8 removed.
           node --input-type=module -e "
           import plugin, { IUMBTEMS_TOOL_NAMES, IUMBEMS_TOOL_NAMES } from './plugins/opencode/index.js';
-          const shell = await plugin.server();
-          const tools = Object.values(shell.tool).map(t => t.name);
+          const toolMap = {};
+          const host = {
+            options: {},
+            command: {list: async () => ({data: []}), transform: async () => ({dispose: async () => {}}), reload: async () => {}},
+            tool: {
+              transform: async (fn) => { fn({add: (t) => { toolMap[t.name] = t; }}); return {dispose: async () => {}}; },
+              reload: async () => {}
+            },
+            session: {prompt: async () => ({})}
+          };
+          await plugin.setup(host);
+          const tools = Object.values(toolMap).map(t => t.name);
           const expected = process.argv[1].split(',');
           for (const t of expected) {
             if (!tools.includes(t)) { console.error('MISSING OpenCode tool: ' + t); process.exit(1); }
