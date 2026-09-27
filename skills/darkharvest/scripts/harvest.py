@@ -59,6 +59,13 @@ TEXT_EXTS = {".md", ".json", ".toml", ".yaml", ".yml", ".txt", ".py", ".js", ".t
 DEFAULT_MAX_FILES = 120
 DEFAULT_MAX_BYTES = 400_000
 DEFAULT_TIMEOUT = 120
+DEFAULT_BASE_DIR = ".research"
+MAX_SCAN_DEPTH = 3
+MAX_SINGLE_FILE_BYTES = 100_000
+SNIPPET_CHARS = 4000
+
+PERMISSIVE_SPDX = frozenset({"MIT", "Apache-2.0", "BSD-3-Clause", "ISC"})
+COPYLEFT_SPDX = frozenset({"GPL", "AGPL"})
 
 SPDX_MAP = {
     "mit": "MIT",
@@ -97,43 +104,74 @@ def detect_license(text):
 
 
 def scan_tree(root, max_files=DEFAULT_MAX_FILES, max_bytes=DEFAULT_MAX_BYTES):
-    entries = []
-    total_bytes = 0
-    manifests = {}
-    license_text = ""
-    readme_head = ""
+    root = Path(root)
+    state = _ScanState()
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         rel = Path(dirpath).relative_to(root)
-        depth = len(rel.parts) if str(rel) != "." else 0
-        if depth > 3:
+        if (len(rel.parts) if str(rel) != "." else 0) > MAX_SCAN_DEPTH:
             dirnames[:] = []
             continue
+        prefix = "" if str(rel) == "." else str(rel) + os.sep
         for f in sorted(filenames):
-            if len(entries) >= max_files or total_bytes >= max_bytes:
-                return entries, manifests, license_text, readme_head, True
-            fp = Path(dirpath) / f
-            try:
-                size = fp.stat().st_size
-            except OSError:
-                continue
-            if size > 100_000:
-                continue
-            rel_p = str(rel / f) if str(rel) != "." else f
-            entries.append(rel_p)
-            if f in MANIFEST_FILES or Path(f).suffix in TEXT_EXTS:
-                try:
-                    content = fp.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    continue
-                total_bytes += len(content.encode("utf-8", errors="replace"))
-                if f in MANIFEST_FILES and f not in manifests:
-                    manifests[f] = content[:4000]
-                if f.lower().startswith("license") and not license_text:
-                    license_text = content[:4000]
-                if f.lower() == "readme.md" and not readme_head:
-                    readme_head = content[:4000]
-    return entries, manifests, license_text, readme_head, False
+            if state.capped(max_files, max_bytes):
+                return state.finish(truncated=True)
+            _scan_file(dirpath, prefix + f, state)
+    return state.finish(truncated=False)
+
+
+class _ScanState:
+    """Mutable accumulator for one scan_tree pass (keeps helpers small)."""
+
+    def __init__(self):
+        self.entries = []
+        self.total_bytes = 0
+        self.manifests = {}
+        self.license_text = ""
+        self.readme_head = ""
+
+    def capped(self, max_files, max_bytes):
+        return len(self.entries) >= max_files or self.total_bytes >= max_bytes
+
+    def finish(self, truncated):
+        return (
+            self.entries,
+            self.manifests,
+            self.license_text,
+            self.readme_head,
+            truncated,
+        )
+
+
+def _scan_file(dirpath, rel_entry, state):
+    filename = os.path.basename(rel_entry)
+    try:
+        size = (Path(dirpath) / filename).stat().st_size
+    except OSError:
+        return
+    if size > MAX_SINGLE_FILE_BYTES:
+        return
+    state.entries.append(rel_entry)
+    if filename in MANIFEST_FILES or Path(filename).suffix in TEXT_EXTS:
+        _capture_text(dirpath, filename, state)
+
+
+def _capture_text(dirpath, filename, state):
+    try:
+        content = (Path(dirpath) / filename).read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return
+    state.total_bytes += len(content.encode("utf-8", errors="replace"))
+    snippet = content[:SNIPPET_CHARS]
+    if filename in MANIFEST_FILES and filename not in state.manifests:
+        state.manifests[filename] = snippet
+    lowered = filename.lower()
+    if lowered.startswith("license") and not state.license_text:
+        state.license_text = snippet
+    if lowered == "readme.md" and not state.readme_head:
+        state.readme_head = snippet
 
 
 def harvest_repo(
@@ -141,7 +179,7 @@ def harvest_repo(
     max_files=DEFAULT_MAX_FILES,
     max_bytes=DEFAULT_MAX_BYTES,
     timeout=DEFAULT_TIMEOUT,
-    base_dir=".research",
+    base_dir=DEFAULT_BASE_DIR,
 ):
     started = datetime.now(timezone.utc).isoformat()
     tmp = tempfile.mkdtemp(prefix="darkharvest-")
@@ -162,9 +200,7 @@ def harvest_repo(
         )
         spdx = detect_license(license_text + manifests.get("package.json", ""))
         harvestable = (
-            "depend-or-vendor"
-            if spdx in ("MIT", "Apache-2.0", "BSD-3-Clause", "ISC")
-            else "clean-room-rebuild-only"
+            "depend-or-vendor" if spdx in PERMISSIVE_SPDX else "clean-room-rebuild-only"
         )
         hasher = SourceHasher(Path(base_dir))
         cache_blob = (
@@ -174,7 +210,7 @@ def harvest_repo(
         )
         source_hash = hasher.store_source(url, cache_blob, f"Darkharvest {url}")
         warnings = []
-        if spdx in ("GPL", "AGPL"):
+        if spdx in COPYLEFT_SPDX:
             warnings.append(
                 "⚠️ LICENSE: strong copyleft — spec rebuild only, never vendor"
             )
@@ -209,7 +245,7 @@ def main():
     ap.add_argument("--max-files", type=int, default=DEFAULT_MAX_FILES)
     ap.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
-    ap.add_argument("--dir", default=".research")
+    ap.add_argument("--dir", default=DEFAULT_BASE_DIR)
     args = ap.parse_args()
 
     if not re.match(r"^https?://", args.repo):

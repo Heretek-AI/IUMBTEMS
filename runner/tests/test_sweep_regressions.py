@@ -64,11 +64,9 @@ class TestBuildAdaptersImportable(unittest.TestCase):
         # Python 3.14 (PEP 649) defers annotation evaluation, so the NameError
         # only surfaces when something actually resolves the annotations. We
         # force that resolution with get_type_hints() so the test reproduces
-        # the CI failure on every interpreter.
-        try:
-            module = _load_module("scripts/build_adapters.py", "iumbtems_build_adapters")
-        except NameError as e:
-            self.fail(f"scripts/build_adapters.py fails to import on eager-annotation Python: {e}")
+        # the CI failure on every interpreter. An import-time NameError
+        # propagates uncaught (red test) — no wrapper, per S8714.
+        module = _load_module("scripts/build_adapters.py", "iumbtems_build_adapters")
 
         unresolved = []
         for attr_name, attr in list(vars(module).items()):
@@ -86,19 +84,26 @@ class TestBuildAdaptersImportable(unittest.TestCase):
                 # an annotation defect.
                 continue
         self.assertEqual(
-            unresolved, [],
+            unresolved,
+            [],
             "annotations reference undefined names (this is the Python 3.11 "
             f"import-time NameError): {unresolved}",
         )
 
     def test_check_mode_exits_zero(self):
         res = subprocess.run(
-            [sys.executable, str(PROJECT_ROOT / "scripts" / "build_adapters.py"), "--check"],
+            [
+                sys.executable,
+                str(PROJECT_ROOT / "scripts" / "build_adapters.py"),
+                "--check",
+            ],
             capture_output=True,
             text=True,
             cwd=str(PROJECT_ROOT),
         )
-        self.assertEqual(res.returncode, 0, f"--check failed:\n{res.stdout}\n{res.stderr}")
+        self.assertEqual(
+            res.returncode, 0, f"--check failed:\n{res.stdout}\n{res.stderr}"
+        )
 
 
 class TestSearchParserRegression(unittest.TestCase):
@@ -124,7 +129,7 @@ class TestSearchParserRegression(unittest.TestCase):
         and zip(links, snippets) produced nothing.
         """
         html = (
-            '<table><tr>'
+            "<table><tr>"
             '<td><a class="result-link" href="https://a.example/x">Title</a></td>'
             '<td class="result-snippet">See '
             '<a href="/l/?uddg=https%3A%2F%2Fy.example" class="result-link">this</a> page'
@@ -167,17 +172,17 @@ class TestSearchParserRegression(unittest.TestCase):
         A bare `&` from `&amp;` (or from a URL query string) makes the
         <search_results> document malformed.
         """
-        xml_text = self.search.format_xml([
-            {
-                "title": "Q&A",
-                "url": "https://x.example/?a=1&b=2",
-                "snippet": "A & B and C++ <tips>",
-            }
-        ])
-        try:
-            xml.dom.minidom.parseString(xml_text)
-        except Exception as e:  # pragma: no cover - failure path
-            self.fail(f"format_xml produced malformed XML: {e}\n{xml_text}")
+        xml_text = self.search.format_xml(
+            [
+                {
+                    "title": "Q&A",
+                    "url": "https://x.example/?a=1&b=2",
+                    "snippet": "A & B and C++ <tips>",
+                }
+            ]
+        )
+        # Malformed output raises here (red test) — no wrapper, per S8714.
+        xml.dom.minidom.parseString(xml_text)
         self.assertIn("&amp;", xml_text)
         self.assertIn("&lt;tips&gt;", xml_text)
 
@@ -192,11 +197,15 @@ class TestSearchParserRegression(unittest.TestCase):
         results = self._parse(html)
         self.assertEqual(results[0]["title"], "Q&A")
         self.assertEqual(results[0]["snippet"], "A & B")
-        xml_text = self.search.format_xml([{
-            "title": results[0]["title"],
-            "url": "https://a.example/x",
-            "snippet": results[0]["snippet"],
-        }])
+        xml_text = self.search.format_xml(
+            [
+                {
+                    "title": results[0]["title"],
+                    "url": "https://a.example/x",
+                    "snippet": results[0]["snippet"],
+                }
+            ]
+        )
         xml.dom.minidom.parseString(xml_text)  # raises if malformed
         self.assertIn("<title>Q&amp;A</title>", xml_text)
         self.assertIn("<snippet>A &amp; B</snippet>", xml_text)
@@ -222,7 +231,9 @@ class TestDivergenceAggregation(unittest.TestCase):
     def test_single_scope_is_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            self._write_audits(base, {"scope_a": {"divergence_score": 0.5, "verified_passed": True}})
+            self._write_audits(
+                base, {"scope_a": {"divergence_score": 0.5, "verified_passed": True}}
+            )
             score, verified = self.div._extract_audit_divergence(base)
         self.assertAlmostEqual(score, 0.5)
         self.assertTrue(verified)
@@ -231,11 +242,14 @@ class TestDivergenceAggregation(unittest.TestCase):
         """The rule is the mean — independent of scope-name sort order."""
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            self._write_audits(base, {
-                "aaa_first": {"divergence_score": 0.0, "verified_passed": True},
-                "mmm_mid": {"divergence_score": 0.5, "verified_passed": True},
-                "zzz_last": {"divergence_score": 1.0, "verified_passed": False},
-            })
+            self._write_audits(
+                base,
+                {
+                    "aaa_first": {"divergence_score": 0.0, "verified_passed": True},
+                    "mmm_mid": {"divergence_score": 0.5, "verified_passed": True},
+                    "zzz_last": {"divergence_score": 1.0, "verified_passed": False},
+                },
+            )
             score, verified = self.div._extract_audit_divergence(base)
         self.assertAlmostEqual(score, 0.5)
         # Not the first scope's 0.0, not the last scope's 1.0.
@@ -247,10 +261,13 @@ class TestDivergenceAggregation(unittest.TestCase):
     def test_unscored_audits_are_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            self._write_audits(base, {
-                "aaa": {"verified_passed": True},              # no score
-                "bbb": {"divergence_score": 0.25, "verified_passed": True},
-            })
+            self._write_audits(
+                base,
+                {
+                    "aaa": {"verified_passed": True},  # no score
+                    "bbb": {"divergence_score": 0.25, "verified_passed": True},
+                },
+            )
             score, verified = self.div._extract_audit_divergence(base)
         self.assertAlmostEqual(score, 0.25)
         self.assertTrue(verified)
@@ -294,7 +311,9 @@ class TestBackendValidation(unittest.TestCase):
 
     def test_bad_backend_becomes_runtime_error_not_propagated_valueerror(self):
         """A bad backend must surface as a run failure, not abort the swarm."""
-        runner = self.swarm.SwarmRunner(mock_mode=False, base_dir=Path(tempfile.mkdtemp()))
+        runner = self.swarm.SwarmRunner(
+            mock_mode=False, base_dir=Path(tempfile.mkdtemp())
+        )
         original = runner.build_agent_cmd
         runner.build_agent_cmd = lambda *a, **k: ["definitely-not-a-real-binary-xyz"]
         try:
@@ -348,17 +367,20 @@ class TestKeyFileFailsLoudly(unittest.TestCase):
 
     def test_pcrb_resolve_key_rejects_missing_file(self):
         from runner.pcrb import _resolve_key
+
         with self.assertRaises(ValueError):
             _resolve_key(None, Path("/definitely/not/a/real/key/file"))
 
     def test_pcrb_resolve_key_rejects_directory(self):
         from runner.pcrb import _resolve_key
+
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
                 _resolve_key(None, Path(tmp))
 
     def test_pcrb_resolve_key_reads_valid_file(self):
         from runner.pcrb import _resolve_key
+
         with tempfile.TemporaryDirectory() as tmp:
             kf = Path(tmp) / "key.txt"
             kf.write_text("secret\n", encoding="utf-8")
@@ -366,6 +388,7 @@ class TestKeyFileFailsLoudly(unittest.TestCase):
 
     def test_pcrb_resolve_key_absent_returns_none(self):
         from runner.pcrb import _resolve_key
+
         self.assertIsNone(_resolve_key(None, None))
 
 
@@ -384,7 +407,16 @@ class TestNoStaleV1PluginSurface(unittest.TestCase):
         "registerOpenCodeCommands",
         "experimental.session.compacting",
     )
-    SCAN_DIRS = (".github", "scripts", "bin", "config", "runner", "extensions", "docs", "skills")
+    SCAN_DIRS = (
+        ".github",
+        "scripts",
+        "bin",
+        "config",
+        "runner",
+        "extensions",
+        "docs",
+        "skills",
+    )
     SCAN_SUFFIXES = (".yml", ".yaml", ".js", ".ts", ".py", ".sh", ".json", ".md")
 
     def test_no_v1_surface_references(self):
@@ -410,7 +442,8 @@ class TestNoStaleV1PluginSurface(unittest.TestCase):
                     if pattern in text:
                         offenders.append(f"{path.relative_to(PROJECT_ROOT)}: {pattern}")
         self.assertEqual(
-            offenders, [],
+            offenders,
+            [],
             "references to the removed V1 opencode plugin surface "
             "(these broke CI when `server()` was dropped): " + "; ".join(offenders),
         )

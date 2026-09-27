@@ -40,6 +40,9 @@ KNOWN_BACKEND_BINARIES = {"claude", "opencode", "python", "python3", "node"}
 # the default follows the host; explicit flags/env/config always win.
 OPENCODE_RUN_BASE = ["opencode", "run"]
 
+# Fenced JSON block marker shared by orchestrator/dossier stdout parsers.
+_JSON_FENCE = "```json"
+
 # Swarm mode -> OpenCode agent carrying the equivalent system prompt
 # (`opencode run` has no --system-prompt flag; the prompt rides on --agent).
 MODE_OPENCODE_AGENT = {
@@ -352,19 +355,14 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             orchestrator_prompt, system_prompt_file=system_prompt
         )
 
-        # Parse JSON
-        try:
-            # Handle potential markdown fence blocks
-            clean_json = raw_output
-            if "```json" in clean_json:
-                clean_json = clean_json.split("```json")[1].split("```")[0]
-            elif "```" in clean_json:
-                clean_json = clean_json.split("```")[1].split("```")[0]
-            manifest_data = json.loads(clean_json.strip())
+        # Parse JSON (fence-aware; falls back to a single-scope decomposition)
+        manifest_data = self._parse_json_block(raw_output, require_key="scopes")
+        if manifest_data is not None:
             scopes = manifest_data.get("scopes", [])
-        except Exception as e:
+        else:
             print(
-                f"[WARN] Failed to parse JSON from orchestrator output: {e}. Using fallback decomposition."
+                "[WARN] Failed to parse JSON from orchestrator output. "
+                "Using fallback decomposition."
             )
             scopes = [
                 {
@@ -384,13 +382,15 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         return scopes
 
     @staticmethod
-    def _parse_dossier_json(text: str) -> Optional[Dict[str, Any]]:
-        """Extract a dossier dict from free-form agent stdout (fence-aware)."""
+    def _parse_json_block(
+        text: str, require_key: str = "scope_id"
+    ) -> Optional[Dict[str, Any]]:
+        """Extract a JSON object from free-form agent stdout (fence-aware)."""
         if not text or not text.strip():
             return None
         candidates = [text]
-        if "```json" in text:
-            candidates.append(text.split("```json", 1)[1].split("```")[0])
+        if _JSON_FENCE in text:
+            candidates.append(text.split(_JSON_FENCE, 1)[1].split("```")[0])
         elif "```" in text:
             candidates.append(text.split("```", 1)[1].split("```")[0])
         start = text.find("{")
@@ -402,9 +402,14 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 obj = json.loads(candidate.strip())
             except (ValueError, TypeError):
                 continue
-            if isinstance(obj, dict) and obj.get("scope_id"):
+            if isinstance(obj, dict) and obj.get(require_key):
                 return obj
         return None
+
+    @staticmethod
+    def _parse_dossier_json(text: str) -> Optional[Dict[str, Any]]:
+        """Extract a dossier dict from free-form agent stdout (fence-aware)."""
+        return SwarmRunner._parse_json_block(text, require_key="scope_id")
 
     def _load_agent_dossier(
         self,

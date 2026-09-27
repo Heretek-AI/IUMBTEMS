@@ -150,7 +150,7 @@ def cmd_expansion(args):
     state["expansion"]["loops_planned"] = n
     save_state(args.run, state)
     done = 0
-    for i in range(1, n + 1):
+    for _ in range(1, n + 1):
         if stop_requested(args.run):
             print(f"🛑 STOP file present — halting after {done}/{n} loops.")
             break

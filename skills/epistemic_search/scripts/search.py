@@ -79,11 +79,9 @@ class DDGLiteParser(HTMLParser):
             self._row_snippet = []
 
     def handle_endtag(self, tag: str):
-        if self._capture == "title" and tag == "a":
-            self._depth -= 1
-            if self._depth <= 0:
-                self._capture = None
-        elif self._capture == "snippet" and tag == "td":
+        if (self._capture == "title" and tag == "a") or (
+            self._capture == "snippet" and tag == "td"
+        ):
             self._depth -= 1
             if self._depth <= 0:
                 self._capture = None
@@ -99,11 +97,13 @@ class DDGLiteParser(HTMLParser):
     def flush(self):
         """Emit the in-progress row, if any. Call after ``feed()`` completes."""
         if self._row_href is not None:
-            self.results.append({
-                "href": self._row_href,
-                "title": "".join(self._row_title).strip(),
-                "snippet": "".join(self._row_snippet).strip(),
-            })
+            self.results.append(
+                {
+                    "href": self._row_href,
+                    "title": "".join(self._row_title).strip(),
+                    "snippet": "".join(self._row_snippet).strip(),
+                }
+            )
         self._row_href = None
         self._row_title = []
         self._row_snippet = []
@@ -138,7 +138,9 @@ def _fetch_ddg_html(effective_query: str) -> str:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except Exception as e:
-        sys.stderr.write(f"[epistemic-search] Network error fetching search results: {e}\n")
+        sys.stderr.write(
+            f"[epistemic-search] Network error fetching search results: {e}\n"
+        )
         return ""
 
 
@@ -154,9 +156,13 @@ def _is_domain_allowed(
     allowed_domains: Optional[List[str]] = None,
     blocked_domains: Optional[List[str]] = None,
 ) -> bool:
-    if allowed_domains and not any(hostname == d or hostname.endswith("." + d) for d in allowed_domains):
+    if allowed_domains and not any(
+        hostname == d or hostname.endswith("." + d) for d in allowed_domains
+    ):
         return False
-    if blocked_domains and any(hostname == d or hostname.endswith("." + d) for d in blocked_domains):
+    if blocked_domains and any(
+        hostname == d or hostname.endswith("." + d) for d in blocked_domains
+    ):
         return False
     return True
 
@@ -188,11 +194,13 @@ def search_duckduckgo(
         if not _is_domain_allowed(hostname, allowed_domains, blocked_domains):
             continue
 
-        results.append({
-            "title": row["title"],
-            "url": clean_url,
-            "snippet": row["snippet"],
-        })
+        results.append(
+            {
+                "title": row["title"],
+                "url": clean_url,
+                "snippet": row["snippet"],
+            }
+        )
         if len(results) >= max_results:
             break
 
@@ -272,7 +280,9 @@ def main():
     )
 
     if not query:
-        sys.stderr.write("Usage: search.py [options] <query>\nOr pipe JSON: echo '{\"query\":\"...\"}' | search.py\n")
+        sys.stderr.write(
+            'Usage: search.py [options] <query>\nOr pipe JSON: echo \'{"query":"..."}\' | search.py\n'
+        )
         sys.exit(1)
 
     results = search_duckduckgo(
