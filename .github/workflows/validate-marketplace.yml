@@ -20,10 +20,23 @@ jobs:
           node-version: '22.x'
 
       - name: Install Claude Code CLI
-        # Pinned for S6505/S8543 (supply-chain: no floating tag, no lifecycle scripts).
-        # Must stay >= the version that ships `plugin validate --strict` — 0.2.29 predates
-        # the flag and failed the step with `error: unknown option '--strict'`.
-        run: npm install -g --ignore-scripts @anthropic-ai/claude-code@2.1.274
+        # Pinned for S6505/S8543 (supply-chain: no floating tag, no implicit
+        # lifecycle scripts from the dependency tree).
+        #
+        # Two constraints fight here:
+        #   * the pin must be >= the version that ships `plugin validate --strict`
+        #     (0.2.29 predates the flag and died with `unknown option '--strict'`)
+        #   * claude-code 2.x links its platform-native binary in postinstall, so
+        #     `--ignore-scripts` alone leaves `claude native binary not installed`.
+        #
+        # Resolution: install with scripts suppressed, then run the vendor's own
+        # postinstall explicitly. That way exactly one audited script runs rather
+        # than every lifecycle hook in the tree. The path is stable because the
+        # version is pinned.
+        run: |
+          npm install -g --ignore-scripts @anthropic-ai/claude-code@2.1.274
+          node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs"
+          claude --version
 
       - name: Validate Claude Code Marketplace & Plugins
         run: |

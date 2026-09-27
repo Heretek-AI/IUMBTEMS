@@ -59,6 +59,10 @@ jobs:
         continue-on-error: true
         run: |
           npm install -g --ignore-scripts @anthropic-ai/claude-code@2.1.274 || true
+          # --ignore-scripts skips the postinstall that links claude-code's
+          # platform-native binary; run that one script explicitly (see
+          # validate-marketplace.yml for the full rationale).
+          node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs" || true
           claude plugin validate --strict .claude-plugin/marketplace.json
           claude plugin validate --strict .claude-plugin/plugin.json
           claude plugin validate --strict .
