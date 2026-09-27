@@ -66,6 +66,23 @@ def _backend_family(backend: List[str]) -> str:
     return Path(backend[0]).name if backend else "claude"
 
 
+def _agent_cwd(project_root: Path) -> str:
+    """Working directory for spawned agent processes.
+
+    The canonical agent prompts name evidence paths RELATIVELY (`.research/...`)
+    and the runner reads dossiers from `<base_dir>/scratchpads/...`. Spawning in
+    the package root made those writes land inside node_modules (denied). Spawn
+    in the project root instead so `.research/` means the operator's evidence
+    tree. Override with IUMBTEMS_AGENT_CWD=package|project|<absolute path>.
+    """
+    override = os.environ.get("IUMBTEMS_AGENT_CWD", "").strip()
+    if override == "package":
+        return str(PROJECT_ROOT)
+    if override and override != "project":
+        return override
+    return str(project_root)
+
+
 def _build_opencode_cmd(
     backend: List[str],
     prompt: str,
@@ -190,6 +207,13 @@ class SwarmRunner:
         domain_pack: Optional[str] = None,
     ):
         self.base_dir = base_dir or Path(".research")
+        # Project root = the directory containing the evidence dir. Agents are
+        # spawned here so the relative `.research/...` paths named by the
+        # canonical prompts resolve to the RUNNER's evidence tree. Spawning in
+        # PROJECT_ROOT (the installed package) sent those writes into
+        # node_modules, where they were denied and no agent-authored dossier
+        # ever landed — runs survived only on the stdout-recovery fallback.
+        self.project_root = Path(os.path.realpath(str(self.base_dir))).parent
         self.mock_mode = mock_mode
         self.config = load_config(str(self.base_dir))
         cfg = self.config
@@ -233,7 +257,45 @@ class SwarmRunner:
             or _default_backend_cmd(self.config.get("backend"))
         )
         model = override.get("model") or env_model or role_cfg.get("model")
+        self._warn_backend_host_mismatch(role, backend)
         return list(backend), model
+
+    @staticmethod
+    def _warn_backend_host_mismatch(role: str, backend: List[str]) -> None:
+        """Surface a config pin that silently defeats the host-native default.
+
+        Observed live: a pre-0.7.6 config pin of ["claude", "-p"] beat
+        IUMBTEMS_HOST=opencode, so an OpenCode host spawned Claude with no
+        signal. Warn loudly instead of failing silently.
+        """
+        host = os.environ.get("IUMBTEMS_HOST", "").strip().lower()
+        if host not in ("claude", "opencode"):
+            return
+        family = _backend_family(backend)
+        if family == host:
+            return
+        sys.stderr.write(
+            f"[swarm] WARNING: role={role} resolved backend={family!r} from an "
+            f"explicit pin/override, but IUMBTEMS_HOST={host!r}. The explicit pin "
+            f"wins. Set backend: {host!r}, agents.{role}.backend: null, or "
+            f"IUMBTEMS_BACKEND_{role.upper()}={host} to follow the host.\n"
+        )
+
+    def _scope_prompt(self, role: str, scope: Dict[str, Any], scope_id: str) -> str:
+        """Prompt for a dialectic agent, naming the absolute scratchpad dir.
+
+        The canonical prompts describe evidence paths RELATIVELY, so a bare
+        scope id left the agent guessing which `.research` tree to write to.
+        Naming the absolute directory removes the ambiguity even when the
+        spawn cwd is overridden.
+        """
+        return (
+            f"Run Agent {role} ({self.mode} mode) for scope: {json.dumps(scope)}. "
+            f"Engine: {self.engine}. Depth: {self.depth}. "
+            f"Save findings to the scratchpad directory "
+            f"{self.state_machine.get_scope_dir(scope_id)} (scope {scope_id}); "
+            f"write the dossier files there and nowhere else."
+        )
 
     def _resolve_opencode_agent(self, role: str) -> Optional[str]:
         """Explicitly configured OpenCode agent for this role, else None.
@@ -310,7 +372,7 @@ class SwarmRunner:
                 capture_output=True,
                 text=True,
                 check=True,
-                cwd=str(PROJECT_ROOT),
+                cwd=_agent_cwd(self.project_root),
                 # stdin MUST be DEVNULL: `opencode run` reads piped stdin to
                 # EOF before starting, and the MCP server's inherited stdin
                 # pipe is held open by the harness — every agent hung forever
@@ -619,7 +681,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                     "negative_knowledge": [],
                 }
         else:
-            prompt = f"Run Agent Alpha ({self.mode} mode) for scope: {json.dumps(scope)}. Engine: {self.engine}. Depth: {self.depth}. Save findings to {scope_id} scratchpad."
+            prompt = self._scope_prompt("Alpha", scope, scope_id)
             if self.mode == "audit":
                 system_prompt = self.prompts_dir / "agent_code_auditor.md"
             elif self.mode == "scout":
@@ -814,7 +876,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                     ],
                 }
         else:
-            prompt = f"Run Agent Beta ({self.mode} mode) for scope: {json.dumps(scope)}. Engine: {self.engine}. Depth: {self.depth}. Save findings to {scope_id} scratchpad."
+            prompt = self._scope_prompt("Beta", scope, scope_id)
             if self.mode == "audit":
                 system_prompt = self.prompts_dir / "agent_code_auditor.md"
             elif self.mode == "scout":

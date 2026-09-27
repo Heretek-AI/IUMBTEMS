@@ -84,12 +84,16 @@ def _handle_config(args: Dict[str, Any]) -> str:
     """Inspect or modify swarm parameters in .research/config.json."""
     from skills.swarm_config.configure import (
         display_config,
+        heal_config,
         load_config,
         save_config,
     )
 
     base_dir = str(_resolve_base_dir(args))
     cfg = load_config(base_dir)
+    # Persist a legacy ["claude", "-p"] agent pin migration so an OpenCode host
+    # stops silently spawning Claude on every run.
+    healed = heal_config(base_dir)
 
     updates = {}
     for key in (
@@ -99,6 +103,8 @@ def _handle_config(args: Dict[str, Any]) -> str:
         "depth",
         "mode",
         "divergence_threshold",
+        "backend",
+        "agents",
     ):
         if key in args and args[key] is not None:
             canon = {
@@ -119,7 +125,7 @@ def _handle_config(args: Dict[str, Any]) -> str:
             }
         )
 
-    return _tool_text({"status": "current", "config": cfg})
+    return _tool_text({"status": "current", "config": cfg, "migrated": healed})
 
 
 def _run_swarm_mode(mode: Optional[str], args: Dict[str, Any]) -> str:
