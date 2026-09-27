@@ -99,6 +99,13 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   darkharvest) cannot clobber each other's scope DAG. Writes use unique temp
   names plus an `fcntl` advisory lock at `.research/.manifest.lock`; readers must
   not assume `manifest.json` — use `state_machine.find_any_manifest`.
+- Role dossier contract: each agent is told the **exact** dossier path in its
+  prompt (`alpha_dossier.json` / `beta_dossier.json`) and must not write the
+  runner-owned `manifest.json`. Scope completion is **derived from those files on
+  disk** (`reconcile_scope_status`), never from stored booleans, so an agent
+  editing the manifest cannot forge `DOSSIERS_READY`. The loader tolerates a
+  bounded set of mode aliases (`brainstorm_dossier.json`) and the manifest
+  `outputs` list, normalizing any hit to the canonical filename.
 
 ## Releases
 - Bump `package.json` (+ lockfile sync) **and `.claude-plugin/plugin.json`**

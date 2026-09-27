@@ -81,10 +81,11 @@ Write `.research/brainstorm_<slug>.md`:
 <what you deliberately did NOT propose: bug fixes, chores, refactors>
 ```
 
-Also write `alpha_dossier.json`-compatible brainstorm dossier when running
-under `runner/research_swarm.py --mode brainstorm` (claims use tag
-`HYPOTHESIS` with `falsification` field; `VERIFIED` only for ingested
-workspace facts with `file://` pointers and verbatim snippets).
+Also write your **role dossier** as JSON, to the exact path the runner names in
+your task (Agent Alpha → `alpha_dossier.json`, Agent Beta → `beta_dossier.json`).
+It must be dossier-shaped and `scope_id`-keyed; claims use `HYPOTHESIS` with a
+`falsification` field, and `VERIFIED` only for ingested workspace facts with
+`file://` pointers plus verbatim snippets.
 
 ## 4. HARD BANS
 
@@ -95,3 +96,5 @@ workspace facts with `file://` pointers and verbatim snippets).
    `[HYPOTHESIS]` or `[INFERRED: <parents>]`.
 4. No writes outside `.research/`.
 5. No scope creep past 2 dialectic iterations without user confirmation.
+6. Do NOT create or modify `manifest.json` in the scratchpad — it is
+   runner-owned. Emit only your role dossier (and the mode's `.md` artifact).

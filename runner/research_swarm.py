@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Sequence, Tuple
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -44,6 +44,13 @@ KNOWN_BACKEND_BINARIES = {"claude", "opencode", "python", "python3", "node"}
 # OpenCode plugin exports IUMBTEMS_HOST=opencode into every MCP dispatch so
 # the default follows the host; explicit flags/env/config always win.
 OPENCODE_RUN_BASE = ["opencode", "run"]
+
+# Dossier filenames the loader and auditor require, per dialectic role.
+ROLE_DOSSIER_FILENAMES = {"Alpha": "alpha_dossier.json", "Beta": "beta_dossier.json"}
+
+# Additional filenames an agent may emit for a role in a given mode. Kept small
+# and mode-scoped: a complete run must not die on a filename drift.
+MODE_DOSSIER_ALIASES = {"brainstorm": ("brainstorm_dossier.json",)}
 
 # Fenced JSON block marker shared by orchestrator/dossier stdout parsers.
 _JSON_FENCE = "```json"
@@ -312,19 +319,22 @@ class SwarmRunner:
         )
 
     def _scope_prompt(self, role: str, scope: Dict[str, Any], scope_id: str) -> str:
-        """Prompt for a dialectic agent, naming the absolute scratchpad dir.
+        """Prompt for a dialectic agent, naming its exact output contract.
 
-        The canonical prompts describe evidence paths RELATIVELY, so a bare
-        scope id left the agent guessing which `.research` tree to write to.
-        Naming the absolute directory removes the ambiguity even when the
-        spawn cwd is overridden.
+        The canonical prompts describe evidence paths RELATIVELY, so a bare scope
+        id left the agent guessing which `.research` tree to write to — and, in
+        brainstorm mode, which dossier filename to emit. Name the absolute
+        scratchpad dir AND the role's dossier file, and forbid writing the
+        runner-owned manifest.
         """
+        scope_dir = self.state_machine.get_scope_dir(scope_id)
+        dossier = ROLE_DOSSIER_FILENAMES.get(role, f"{role.lower()}_dossier.json")
         return (
             f"Run Agent {role} ({self.mode} mode) for scope: {json.dumps(scope)}. "
             f"Engine: {self.engine}. Depth: {self.depth}. "
-            f"Save findings to the scratchpad directory "
-            f"{self.state_machine.get_scope_dir(scope_id)} (scope {scope_id}); "
-            f"write the dossier files there and nowhere else."
+            f"Write your role dossier to {scope_dir / dossier} (scope {scope_id}) "
+            f"and no other dossier file. Do NOT create or modify manifest.json in "
+            f"{scope_dir} — it is runner-owned."
         )
 
     def _resolve_opencode_agent(self, role: str) -> Optional[str]:
@@ -569,24 +579,78 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         """Extract a dossier dict from free-form agent stdout (fence-aware)."""
         return SwarmRunner._parse_json_block(text, require_key="scope_id")
 
+    @staticmethod
+    def _load_dossier_file(path: Path) -> Optional[Dict[str, Any]]:
+        """Load a path as a dossier dict, or None when it is not one."""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) and data.get("scope_id") else None
+
+    def _dossier_candidates(
+        self, dossier_path: Path, aliases: Sequence[str]
+    ) -> List[Path]:
+        """Candidate dossier paths: canonical, mode aliases, then manifest outputs.
+
+        Agents in some modes emit a differently named artifact (brainstorm writes
+        `brainstorm_dossier.json`), and the scope manifest may record an `outputs`
+        list. Accepting those keeps a complete run from dying on a filename drift.
+        """
+        scope_dir = dossier_path.parent
+        candidates = [dossier_path]
+        candidates.extend(scope_dir / alias for alias in aliases)
+        manifest_p = scope_dir / "manifest.json"
+        if manifest_p.exists():
+            try:
+                outputs = (
+                    json.loads(manifest_p.read_text(encoding="utf-8")).get("outputs")
+                    or []
+                )
+            except (OSError, ValueError):
+                outputs = []
+            for name in outputs:
+                if isinstance(name, str) and name.endswith(".json"):
+                    candidate = scope_dir / Path(name).name
+                    if candidate.name not in ("manifest.json", "domain_model.json"):
+                        candidates.append(candidate)
+        seen: set = set()
+        unique: List[Path] = []
+        for candidate in candidates:
+            if candidate not in seen:
+                seen.add(candidate)
+                unique.append(candidate)
+        return unique
+
     def _load_agent_dossier(
         self,
         dossier_path: Path,
         scope_id: str,
         role: str,
         transcript: Optional[str] = None,
+        aliases: Sequence[str] = (),
     ) -> Dict[str, Any]:
-        """Load an agent dossier from disk, falling back to stdout parsing.
+        """Load an agent dossier from disk, tolerating mode-specific filenames.
 
-        Headless agents sometimes answer in chat instead of writing the
-        dossier file; without this fallback the whole scope dies on
-        FileNotFoundError (observed live: 10+ minute runs, zero dossiers).
-        Parsed stdout dossiers are tagged so the auditor treats them as
-        recovered, not natively filed.
+        Tries the canonical path, then mode aliases, then the scope manifest's
+        `outputs`. A hit under an alias is normalized to the canonical filename so
+        the auditor and claim index stay consistent. Falls back to parsing the
+        agent's stdout, then raises a diagnostic error naming where it looked.
         """
-        if dossier_path.exists():
-            with open(dossier_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+        for candidate in self._dossier_candidates(dossier_path, aliases):
+            data = self._load_dossier_file(candidate)
+            if data is None:
+                continue
+            if candidate != dossier_path:
+                data.setdefault("renamed_from", candidate.name)
+                dossier_path.parent.mkdir(parents=True, exist_ok=True)
+                _atomic_write_json(dossier_path, data)
+                print(
+                    f"  [{role}] ⚠️ Dossier found as {candidate.name}; "
+                    f"normalized to {dossier_path.name}."
+                )
+            return data
         recovered = self._parse_dossier_json(transcript or "")
         if recovered is not None:
             recovered.setdefault("recovered_from_stdout", True)
@@ -595,18 +659,18 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             print(f"  [{role}] ⚠️ Dossier file missing; recovered from stdout.")
             return recovered
         raise FileNotFoundError(
-            self._dossier_missing_message(dossier_path, scope_id, role)
+            self._dossier_missing_message(dossier_path, scope_id, role, aliases)
         )
 
     def _dossier_missing_message(
-        self, dossier_path: Path, scope_id: str, role: str
+        self, dossier_path: Path, scope_id: str, role: str, aliases: Sequence[str] = ()
     ) -> str:
         """Diagnostic message naming the searched path and any stray copy.
 
         The recurring failure mode is a workspace mismatch: the agent writes the
         dossier to a different `.research` tree than the runner reads. Reporting
         only the searched path made that invisible, so scan the plausible
-        alternates and say where the dossier actually is.
+        alternates — scoped to THIS scope id — and say where the dossier is.
         """
         lines = [
             f"{role} dossier not found at {dossier_path} and no dossier JSON "
@@ -615,10 +679,15 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             f"  spawn cwd/PWD    : {_agent_cwd(self.project_root)}",
             f"  IUMBTEMS_PROJECT_DIR: {os.environ.get('IUMBTEMS_PROJECT_DIR', '(unset)')}",
         ]
-        elsewhere = self._locate_dossier_elsewhere(dossier_path.name)
-        if elsewhere:
+        names = [dossier_path.name, *aliases]
+        found = None
+        for name in names:
+            found = self._locate_dossier_elsewhere(scope_id, name)
+            if found:
+                break
+        if found:
             lines.append(
-                f"  FOUND A COPY ELSEWHERE: {elsewhere} — the spawned agent wrote "
+                f"  FOUND A COPY ELSEWHERE: {found} — the spawned agent wrote "
                 f"to a different workspace than the runner reads"
             )
         else:
@@ -627,8 +696,12 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             )
         return "\n".join(lines)
 
-    def _locate_dossier_elsewhere(self, filename: str) -> Optional[Path]:
-        """Best-effort scan for the dossier in workspaces the agent might have used."""
+    def _locate_dossier_elsewhere(self, scope_id: str, filename: str) -> Optional[Path]:
+        """Find this scope's dossier in a workspace the agent might have used.
+
+        Scoped to `<root>/.research/scratchpads/<scope_id>/` so an unrelated older
+        scope holding a same-named file is never reported as a match.
+        """
         roots: List[Path] = []
         pwd = os.environ.get("PWD", "").strip()
         if pwd:
@@ -654,10 +727,9 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         except (OSError, subprocess.SubprocessError):
             pass
         for root in roots:
-            candidate = root / ".research" / "scratchpads"
-            if candidate.is_dir():
-                for hit in candidate.glob(f"*/{filename}"):
-                    return hit
+            candidate = root / ".research" / "scratchpads" / scope_id / filename
+            if candidate.exists():
+                return candidate
         return None
 
     def run_agent_alpha(self, scope: Dict[str, Any]):
@@ -822,7 +894,11 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 self.state_machine.get_scope_dir(scope_id) / "alpha_dossier.json"
             )
             dossier = self._load_agent_dossier(
-                dossier_path, scope_id, "alpha", transcript
+                dossier_path,
+                scope_id,
+                "alpha",
+                transcript,
+                aliases=MODE_DOSSIER_ALIASES.get(self.mode, ()),
             )
 
         self.state_machine.record_agent_completion(scope_id, "alpha", dossier)
@@ -1017,7 +1093,11 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 self.state_machine.get_scope_dir(scope_id) / "beta_dossier.json"
             )
             dossier = self._load_agent_dossier(
-                dossier_path, scope_id, "beta", transcript
+                dossier_path,
+                scope_id,
+                "beta",
+                transcript,
+                aliases=MODE_DOSSIER_ALIASES.get(self.mode, ()),
             )
 
         self.state_machine.record_agent_completion(scope_id, "beta", dossier)
@@ -1108,7 +1188,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
 
     def _all_scopes_complete(self, manifest: Dict[str, Any]) -> bool:
         return all(
-            self.state_machine.load_scope_manifest(s["scope_id"]).get("status")
+            self.state_machine.reconcile_scope_status(s["scope_id"]).get("status")
             == ScopeStatus.COMPLETE.value
             for s in manifest["scopes"]
         )

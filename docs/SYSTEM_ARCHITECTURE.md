@@ -307,6 +307,12 @@ Three defenses:
 
 `.research/manifest.json` is written by multiple tools/processes. It is now per mode (`manifest.<mode>.json`; the default/research flow keeps `manifest.json`) so concurrent `brainstorm` and `darkharvest` runs cannot clobber each other's scope DAG. Every manifest write uses a **unique** temp file plus `os.replace`, under an `fcntl` advisory lock at `.research/.manifest.lock`, and read-modify-write helpers (`update_session_status`, `set_scopes`, `record_agent_completion`, `update_scope_status`) hold that lock across the whole operation so concurrent writers cannot lose updates. Mode-agnostic readers resolve with `state_machine.find_any_manifest`.
 
+### 6.2.3 Dossier Contract and Derived Status
+
+Each dialectic agent is given an explicit output contract in its prompt: the absolute path of **its** dossier (`alpha_dossier.json` / `beta_dossier.json`), and an instruction never to write the runner-owned `manifest.json`. The loader (`_load_agent_dossier`) resolves the canonical path first, then a bounded set of mode aliases (`brainstorm` → `brainstorm_dossier.json`) and the scope manifest's `outputs` list, normalizing any hit to the canonical filename (tagged `renamed_from`).
+
+Scope completion is **derived from artifacts on disk** (`ResearchStateMachine.reconcile_scope_status`): `alpha_completed`/`beta_completed` reflect whether the dossier files exist, and the status is recomputed from them. Because agents can write anywhere in the workspace, a stored boolean is not trusted — a hand-edited or agent-written `manifest.json` claiming `DOSSIERS_READY` is corrected on the next reconcile.
+
 ### 6.3 Configuration Merge & Migration
 
 `load_config` deep-merges the `agents` block one role/key at a time over `DEFAULT_CONFIG`. Configs written before 0.7.6 that pinned `agents.<role>.backend = ["claude", "-p"]` are migrated to `null` on load (unless the top-level `backend` is an explicit `"claude"`), and the migration is persisted by the CLI and `iumbtems_config`.

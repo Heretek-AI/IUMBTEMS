@@ -251,32 +251,50 @@ class ResearchStateMachine:
 
         if agent_type.lower() in ["alpha", "thesis", "proponent"]:
             filename = "alpha_dossier.json"
-            is_alpha = True
         elif agent_type.lower() in ["beta", "antithesis", "adversary", "red_team"]:
             filename = "beta_dossier.json"
-            is_alpha = False
         else:
             raise ValueError(f"Unknown agent type: {agent_type}")
 
         _atomic_write_json(scope_dir / filename, dossier_data)
+        self.reconcile_scope_status(scope_id)
 
-        # Alpha and Beta complete concurrently in separate threads: hold the lock
-        # across the read-modify-write so neither loses the other's flag.
+    def _artifacts_complete(self, scope_id: str) -> tuple:
+        """(alpha, beta) dossier presence, derived from disk — never from stored flags."""
+        scope_dir = self.get_scope_dir(scope_id)
+        return (
+            (scope_dir / "alpha_dossier.json").exists(),
+            (scope_dir / "beta_dossier.json").exists(),
+        )
+
+    def reconcile_scope_status(self, scope_id: str) -> Dict[str, Any]:
+        """Recompute completion flags + status from dossier artifacts on disk.
+
+        The scope manifest is runner-owned, but agents can write to the workspace
+        and have forged `beta_completed: true` / `DOSSIERS_READY` without emitting
+        the dossier. Deriving from files means stored booleans can never disagree
+        with reality.
+        """
+        alpha, beta = self._artifacts_complete(scope_id)
         with self._lock, _file_lock(self._lock_file):
             sm = self._read_scope_unlocked(scope_id)
-            if is_alpha:
-                sm["alpha_completed"] = True
-            else:
-                sm["beta_completed"] = True
-
-            if sm.get("alpha_completed") and sm.get("beta_completed"):
+            sm["alpha_completed"] = alpha
+            sm["beta_completed"] = beta
+            if sm.get("audit_completed"):
+                sm["status"] = ScopeStatus.COMPLETE.value
+            elif alpha and beta:
                 sm["status"] = ScopeStatus.DOSSIERS_READY.value
-            elif sm.get("alpha_completed"):
+            elif alpha:
                 sm["status"] = ScopeStatus.ALPHA_COMPLETE.value
-            elif sm.get("beta_completed"):
+            elif beta:
                 sm["status"] = ScopeStatus.BETA_COMPLETE.value
-
+            elif sm.get("status") not in (
+                ScopeStatus.RUNNING_PARALLEL.value,
+                ScopeStatus.AUDITING.value,
+            ):
+                sm["status"] = ScopeStatus.PENDING.value
             self._write_scope_unlocked(scope_id, sm)
+        return sm
 
     def get_ready_scopes(self) -> List[Dict[str, Any]]:
         """Return scopes whose dependencies are completed and status is PENDING."""
