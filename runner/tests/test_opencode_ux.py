@@ -565,6 +565,36 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
         data = last_json_object(res.stdout)
         self.assertEqual(data["cleanupFn"], True)
 
+    def test_options_applied_to_location_dir_after_transforms(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                f"""
+                import plugin from "./plugins/opencode/index.js";
+                const added = [];
+                const host = {{
+                  options: {{mode: "audit"}},
+                  location: {{directory: {tmp!r}}},
+                  command: {{
+                    list: async () => ({{data: []}}),
+                    transform: async (fn) => {{ fn({{add: (d) => added.push(d.name)}}); }}
+                  }},
+                  tool: {{transform: async () => {{}}}}
+                }};
+                await plugin.setup(host);
+                console.log(JSON.stringify({{commands: added}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"options test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            # Transforms registered despite the slow MCP options write.
+            self.assertIn("swarm", data["commands"])
+            cfg = json.loads(
+                Path(tmp, ".research", "config.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(cfg.get("mode"), "audit")
+
     def test_setup_cleanup_aborts_nudge_streams(self):
         res = run_node(
             """

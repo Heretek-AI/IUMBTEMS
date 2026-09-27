@@ -665,39 +665,9 @@ export function createOpenCodePlugin(context = {}) {
     setup: async (appContext) => {
       const host = appContext || {};
       const opts = context.options || host.options;
-      if (opts && typeof opts === 'object') {
-        const updates = {};
-        if (opts.search_engine) updates.search_engine = opts.search_engine;
-        if (opts.max_iterations) updates.max_iterations = opts.max_iterations;
-        if (opts.mode) updates.mode = opts.mode;
-        if (opts.divergence_threshold !== undefined) {
-          updates.divergence_threshold = opts.divergence_threshold;
-        }
-        if (Object.keys(updates).length > 0) {
-          await callMcp('iumbtems_config', updates, host.cwd);
-        }
-      }
-      // Phase C: idle staleness nudge (opt out with {staleness_nudge: false}).
-      // Subscribes only when the host exposes event/session; one per root.
-      try {
-        if ((opts?.staleness_nudge ?? true)) {
-          const nudgeHost = {
-            event: host.event || context.event,
-            session: host.session || context.session,
-          };
-          const root =
-            host.location?.directory || context.location?.directory;
-          if (root) {
-            const stop = startStalenessNudge(nudgeHost, root);
-            if (typeof stop === 'function') setupCleanups.add(stop);
-          }
-        }
-      } catch {
-        /* lifecycle hooks are best-effort */
-      }
-      // V2 host transforms (official dual-package pattern: V1 calls server(),
-      // V2 calls setup()). Registers slash commands + tools via the owning
-      // domains; each guarded so V1 hosts and partial V2 hosts keep working.
+      // V2 host transforms FIRST (official dual-package pattern: V1 calls
+      // server(), V2 calls setup()). Registration must precede any slow
+      // work: the host may not wait out subprocess calls before reconciling.
       try {
         if (host.command && typeof host.command.transform === 'function') {
           let existing = new Set();
@@ -750,6 +720,46 @@ export function createOpenCodePlugin(context = {}) {
         }
       } catch {
         /* tool transform is best-effort */
+      }
+      // Slow work AFTER registration: apply tuple options via MCP config
+      // write, scoped to the plugin location (never the service cwd).
+      try {
+        if (opts && typeof opts === 'object') {
+          const updates = {};
+          if (opts.search_engine) updates.search_engine = opts.search_engine;
+          if (opts.max_iterations) updates.max_iterations = opts.max_iterations;
+          if (opts.mode) updates.mode = opts.mode;
+          if (opts.divergence_threshold !== undefined) {
+            updates.divergence_threshold = opts.divergence_threshold;
+          }
+          if (Object.keys(updates).length > 0) {
+            await callMcp(
+              'iumbtems_config',
+              updates,
+              host.location?.directory || context.location?.directory || host.cwd
+            );
+          }
+        }
+      } catch {
+        /* options apply is best-effort */
+      }
+      // Phase C: idle staleness nudge (opt out with {staleness_nudge: false}).
+      // Subscribes only when the host exposes event/session; one per root.
+      try {
+        if ((opts?.staleness_nudge ?? true)) {
+          const nudgeHost = {
+            event: host.event || context.event,
+            session: host.session || context.session,
+          };
+          const root =
+            host.location?.directory || context.location?.directory;
+          if (root) {
+            const stop = startStalenessNudge(nudgeHost, root);
+            if (typeof stop === 'function') setupCleanups.add(stop);
+          }
+        }
+      } catch {
+        /* lifecycle hooks are best-effort */
       }
       // Disposer: the host calls setup's return value as a cleanup function
       // on unload/reload. It MUST be a function (returning a plain object
