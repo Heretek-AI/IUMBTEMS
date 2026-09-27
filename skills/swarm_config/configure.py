@@ -147,50 +147,71 @@ def run_interactive(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return cfg
 
 
+def _set_engine(cfg, value):
+    if value.lower() in ("duckduckgo", "brave", "firecrawl", "searxng"):
+        cfg["search_engine"] = value.lower()
+        return True
+    return False
+
+
+def _set_depth(cfg, value):
+    try:
+        cfg["max_iterations"] = int(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _set_mode(cfg, value):
+    if value.lower() in (
+        "research",
+        "audit",
+        "scout",
+        "hybrid",
+        "brainstorm",
+        "darkharvest",
+    ):
+        cfg["mode"] = value.lower()
+        return True
+    return False
+
+
+def _set_divergence(cfg, value):
+    try:
+        cfg["divergence_threshold"] = float(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _set_backend(cfg, value):
+    if value.lower() in ("auto", "claude", "opencode"):
+        cfg["backend"] = value.lower()
+        return True
+    return False
+
+
+# flag spellings -> setter; each setter returns True when it changed config.
+_CLI_HANDLERS = [
+    (("--engine", "-e"), _set_engine),
+    (("--depth", "-d", "--iterations"), _set_depth),
+    (("--mode", "-m"), _set_mode),
+    (("--divergence",), _set_divergence),
+    (("--backend",), _set_backend),
+]
+
+
 def _parse_cli_updates(args: list, cfg: Dict[str, Any]) -> bool:
-    idx = 0
     modified = False
+    idx = 0
     while idx < len(args):
-        arg = args[idx]
-        if arg in ("--engine", "-e") and idx + 1 < len(args):
-            engine = args[idx + 1].lower()
-            if engine in ("duckduckgo", "brave", "firecrawl", "searxng"):
-                cfg["search_engine"] = engine
-                modified = True
-            idx += 1
-        elif arg in ("--depth", "-d", "--iterations") and idx + 1 < len(args):
-            try:
-                cfg["max_iterations"] = int(args[idx + 1])
-                modified = True
-            except ValueError:
-                pass
-            idx += 1
-        elif arg in ("--mode", "-m") and idx + 1 < len(args):
-            mode = args[idx + 1].lower()
-            if mode in (
-                "research",
-                "audit",
-                "scout",
-                "hybrid",
-                "brainstorm",
-                "darkharvest",
-            ):
-                cfg["mode"] = mode
-                modified = True
-            idx += 1
-        elif arg == "--divergence" and idx + 1 < len(args):
-            try:
-                cfg["divergence_threshold"] = float(args[idx + 1])
-                modified = True
-            except ValueError:
-                pass
-            idx += 1
-        elif arg == "--backend" and idx + 1 < len(args):
-            backend = args[idx + 1].lower()
-            if backend in ("auto", "claude", "opencode"):
-                cfg["backend"] = backend
-                modified = True
-            idx += 1
+        value = args[idx + 1] if idx + 1 < len(args) else None
+        for flags, handler in _CLI_HANDLERS:
+            if args[idx] in flags:
+                if value is not None and handler(cfg, value):
+                    modified = True
+                idx += 1
+                break
         idx += 1
     return modified
 

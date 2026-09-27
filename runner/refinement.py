@@ -52,9 +52,7 @@ class Constitution:
     """Scoring + enforcement policy. Defaults == legacy auditor behavior."""
 
     # Per-verified-claim weight. Flat 1.0 reproduces legacy E(D).
-    tier_weights: Dict[str, float] = field(
-        default_factory=lambda: {"__default__": 1.0}
-    )
+    tier_weights: Dict[str, float] = field(default_factory=lambda: {"__default__": 1.0})
     neg_bonus: float = 0.5
     reject_penalty: float = 2.5
     accept_threshold: float = 0.65
@@ -144,7 +142,10 @@ def claim_verdict(
         reasons.append(
             f"ZERO_TOLERANCE_RETRACTION: source {claim.source_hash} was retracted"
         )
-    if claim.status in (STATUS_STALE, STATUS_SUSPECT) and constitution.retraction_policy == "zero_tolerance":
+    if (
+        claim.status in (STATUS_STALE, STATUS_SUSPECT)
+        and constitution.retraction_policy == "zero_tolerance"
+    ):
         if not any(r.startswith("ZERO_TOLERANCE_RETRACTION") for r in reasons):
             reasons.append(f"ZERO_TOLERANCE_RETRACTION: claim status {claim.status}")
 
@@ -155,33 +156,65 @@ def claim_verdict(
     }
 
 
-def _check_verified_and_inferred(c: ClaimWitness, hasher: Any, out: List[Violation]) -> None:
+def _check_verified_claim(c: ClaimWitness, hasher: Any, out: List[Violation]) -> None:
+    """Verified/claim-kind gates: hash, quote, then live witness check."""
+    if not c.source_hash:
+        out.append(
+            Violation(c.claim_id, "VERIFIED_REQUIRES_HASH", "source_hash missing")
+        )
+    if not c.verbatim_quote:
+        out.append(
+            Violation(c.claim_id, "VERIFIED_REQUIRES_QUOTE", "verbatim_quote missing")
+        )
+    if hasher is None or not (c.source_hash and c.verbatim_quote):
+        return
+    passed, _conf, msg = witness_check(c, hasher)
+    if not passed:
+        out.append(
+            Violation(c.claim_id, "WITNESS_CHECK_FAILED", msg or "quote not in source")
+        )
+
+
+def _check_verified_and_inferred(
+    c: ClaimWitness, hasher: Any, out: List[Violation]
+) -> None:
     if c.tag == TAG_VERIFIED or c.kind == KIND_CLAIM:
-        if not c.source_hash:
-            out.append(Violation(c.claim_id, "VERIFIED_REQUIRES_HASH", "source_hash missing"))
-        if not c.verbatim_quote:
-            out.append(Violation(c.claim_id, "VERIFIED_REQUIRES_QUOTE", "verbatim_quote missing"))
-        if hasher is not None and c.source_hash and c.verbatim_quote:
-            passed, _conf, msg = witness_check(c, hasher)
-            if not passed:
-                out.append(Violation(c.claim_id, "WITNESS_CHECK_FAILED", msg or "quote not in source"))
+        _check_verified_claim(c, hasher, out)
 
     if c.tag == TAG_INFERRED or c.kind == KIND_INFERENCE:
         if not c.parent_claims:
-            out.append(Violation(c.claim_id, "INFERRED_REQUIRES_PARENTS", "parent_claims empty"))
+            out.append(
+                Violation(
+                    c.claim_id, "INFERRED_REQUIRES_PARENTS", "parent_claims empty"
+                )
+            )
         if not c.deductive_logic:
-            out.append(Violation(c.claim_id, "INFERRED_REQUIRES_LOGIC", "deductive_logic missing"))
+            out.append(
+                Violation(
+                    c.claim_id, "INFERRED_REQUIRES_LOGIC", "deductive_logic missing"
+                )
+            )
 
 
 def _check_hypotheses_and_neg_knowledge(c: ClaimWitness, out: List[Violation]) -> None:
     if (c.tag == TAG_HYPOTHESIS or c.kind == KIND_HYPOTHESIS) and not c.falsification:
-        out.append(Violation(c.claim_id, "HYPOTHESIS_REQUIRES_FALSIFICATION", "falsification missing"))
+        out.append(
+            Violation(
+                c.claim_id, "HYPOTHESIS_REQUIRES_FALSIFICATION", "falsification missing"
+            )
+        )
 
     if c.tag == TAG_NEGATIVE_KNOWLEDGE or c.kind == KIND_NEGATIVE_KNOWLEDGE:
         if not c.query:
-            out.append(Violation(c.claim_id, "NEG_KNOWLEDGE_REQUIRES_QUERY", "query missing"))
+            out.append(
+                Violation(c.claim_id, "NEG_KNOWLEDGE_REQUIRES_QUERY", "query missing")
+            )
         if not c.finding:
-            out.append(Violation(c.claim_id, "NEG_KNOWLEDGE_REQUIRES_FINDING", "finding missing"))
+            out.append(
+                Violation(
+                    c.claim_id, "NEG_KNOWLEDGE_REQUIRES_FINDING", "finding missing"
+                )
+            )
 
 
 def _check_constitution_and_parents(
@@ -193,7 +226,11 @@ def _check_constitution_and_parents(
     for parent in c.parent_claims:
         if parent not in known_ids:
             out.append(
-                Violation(c.claim_id, "PARENT_UNRESOLVED", f"parent_claims '{parent}' not in dossier set")
+                Violation(
+                    c.claim_id,
+                    "PARENT_UNRESOLVED",
+                    f"parent_claims '{parent}' not in dossier set",
+                )
             )
 
     if constitution.mandatory_tags and not c.tag:
@@ -204,7 +241,11 @@ def _check_constitution_and_parents(
         for dom in constitution.banned_domains:
             if dom.lower() in src_lower:
                 out.append(
-                    Violation(c.claim_id, "BANNED_DOMAIN", f"source_url on banned domain '{dom}'")
+                    Violation(
+                        c.claim_id,
+                        "BANNED_DOMAIN",
+                        f"source_url on banned domain '{dom}'",
+                    )
                 )
 
 
@@ -261,9 +302,7 @@ def compute_epistemic_score(
     # tier. A Domain Pack may override tier_weights; then each verified claim
     # would need its tier looked up — that path is exercised by Stream G's
     # `compute_epistemic_score_from_claims`, not here.
-    verified_weight = (
-        constitution.weight_for(None) * total_verified
-    )
+    verified_weight = constitution.weight_for(None) * total_verified
 
     total_assertions = max(
         1, total_verified + total_inferred + total_hypotheses + total_rejected
@@ -308,7 +347,8 @@ def compute_epistemic_score_from_claims(
     }
     weight_sum = 0.0
     tier_weighted = any(
-        not math.isclose(w, 1.0, rel_tol=1e-7) for w in constitution.tier_weights.values()
+        not math.isclose(w, 1.0, rel_tol=1e-7)
+        for w in constitution.tier_weights.values()
     )
 
     for c in claims:
@@ -326,7 +366,10 @@ def compute_epistemic_score_from_claims(
 
     total_assertions = max(
         1,
-        counts["verified"] + counts["inferred"] + counts["hypotheses"] + counts["rejected"],
+        counts["verified"]
+        + counts["inferred"]
+        + counts["hypotheses"]
+        + counts["rejected"],
     )
     raw_score = (
         weight_sum

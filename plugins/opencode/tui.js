@@ -48,6 +48,68 @@ function readJson(file) {
   }
 }
 
+/** Config-derived status fields; nulls when config is absent/invalid. */
+function configFields(research) {
+  const out = { mode: null, searchEngine: null, maxIterations: null };
+  const cfg = readJson(path.join(research, 'config.json'));
+  if (cfg && typeof cfg === 'object') {
+    out.mode = cfg.mode ?? null;
+    out.searchEngine = cfg.search_engine ?? null;
+    out.maxIterations = cfg.max_iterations ?? null;
+  }
+  return out;
+}
+
+const REPORT_NAMES = [
+  'final_synthesis.md',
+  'brainstorm_report.md',
+  'code_audit_report.md',
+  'oss_scout_report.md',
+];
+
+/** Report files present in the workspace, with mtimes. */
+function presentReports(research) {
+  const reports = [];
+  for (const name of REPORT_NAMES) {
+    try {
+      const st = statSync(path.join(research, name));
+      reports.push({ name, mtimeMs: st.mtimeMs });
+    } catch {
+      /* absent report */
+    }
+  }
+  return reports;
+}
+
+/** Count of frontier nodes not yet settled/closed, or null when absent. */
+function openFrontierCount(research) {
+  const frontier = readJson(path.join(research, 'frontier.json'));
+  if (!frontier || typeof frontier !== 'object') return null;
+  const nodes = Array.isArray(frontier.nodes)
+    ? frontier.nodes
+    : Object.values(frontier.nodes || {});
+  return nodes.filter((n) => n && n.status !== 'settled' && n.status !== 'closed').length;
+}
+
+/** Degraded-claim counts from the ledger + requeue sidecar. */
+function degradedCounts(research) {
+  const out = { stale: 0, suspect: 0, requeued: 0 };
+  const ledger = readJson(path.join(research, 'ledger', 'claim_status.json'));
+  if (Array.isArray(ledger)) {
+    const last = new Map();
+    for (const e of ledger) {
+      if (e && typeof e.claim_id === 'string') last.set(e.claim_id, e.to_status);
+    }
+    for (const s of last.values()) {
+      if (s === 'STALE') out.stale += 1;
+      else if (s === 'SUSPECT') out.suspect += 1;
+    }
+  }
+  const requeue = readJson(path.join(research, 'requeue.json'));
+  if (Array.isArray(requeue)) out.requeued = requeue.length;
+  return out;
+}
+
 /**
  * Snapshot the workspace status. Pure fs reads; safe on missing workspace.
  * Exported for tests.
@@ -71,44 +133,10 @@ export function readSwarmStatus(root) {
   } catch {
     return status;
   }
-  const cfg = readJson(path.join(research, 'config.json'));
-  if (cfg && typeof cfg === 'object') {
-    status.mode = cfg.mode ?? null;
-    status.searchEngine = cfg.search_engine ?? null;
-    status.maxIterations = cfg.max_iterations ?? null;
-  }
-  for (const name of [
-    'final_synthesis.md',
-    'brainstorm_report.md',
-    'code_audit_report.md',
-    'oss_scout_report.md',
-  ]) {
-    try {
-      const st = statSync(path.join(research, name));
-      status.reports.push({ name, mtimeMs: st.mtimeMs });
-    } catch {
-      /* absent report */
-    }
-  }
-  const frontier = readJson(path.join(research, 'frontier.json'));
-  if (frontier && typeof frontier === 'object') {
-    const nodes = Array.isArray(frontier.nodes) ? frontier.nodes : Object.values(frontier.nodes || {});
-    const open = nodes.filter((n) => n && n.status !== 'settled' && n.status !== 'closed');
-    status.frontierOpen = open.length;
-  }
-  const ledger = readJson(path.join(research, 'ledger', 'claim_status.json'));
-  if (Array.isArray(ledger)) {
-    const last = new Map();
-    for (const e of ledger) {
-      if (e && typeof e.claim_id === 'string') last.set(e.claim_id, e.to_status);
-    }
-    for (const s of last.values()) {
-      if (s === 'STALE') status.stale += 1;
-      else if (s === 'SUSPECT') status.suspect += 1;
-    }
-  }
-  const requeue = readJson(path.join(research, 'requeue.json'));
-  if (Array.isArray(requeue)) status.requeued = requeue.length;
+  Object.assign(status, configFields(research));
+  status.reports = presentReports(research);
+  status.frontierOpen = openFrontierCount(research);
+  Object.assign(status, degradedCounts(research));
   return status;
 }
 

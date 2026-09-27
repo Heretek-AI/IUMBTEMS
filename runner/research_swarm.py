@@ -94,6 +94,22 @@ def _build_opencode_cmd(
     return cmd
 
 
+_TEXT_EVENT_KEYS = ("text", "content", "message", "output", "result")
+_TEXT_EVENT_MARKERS = ("message", "text", "result", "output", "content")
+
+
+def _event_text(obj: Dict[str, Any]) -> Optional[str]:
+    """Text payload of one parsed event line, or None."""
+    kind = str(obj.get("type", "")).lower()
+    if kind and not any(m in kind for m in _TEXT_EVENT_MARKERS):
+        return None
+    for key in _TEXT_EVENT_KEYS:
+        val = obj.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    return None
+
+
 def _extract_opencode_text(raw: str) -> str:
     """Best-effort final text from `opencode run --format json` event stream.
 
@@ -110,24 +126,10 @@ def _extract_opencode_text(raw: str) -> str:
             obj = json.loads(line)
         except (ValueError, TypeError):
             continue
-        if not isinstance(obj, dict):
-            continue
-        kind = str(obj.get("type", "")).lower()
-        for key in ("text", "content", "message", "output", "result"):
-            val = obj.get(key)
-            if (
-                isinstance(val, str)
-                and val.strip()
-                and (
-                    "message" in kind
-                    or "text" in kind
-                    or "result" in kind
-                    or "output" in kind
-                    or "content" in kind
-                    or not kind
-                )
-            ):
-                texts.append(val)
+        if isinstance(obj, dict):
+            text = _event_text(obj)
+            if text:
+                texts.append(text)
     return "\n".join(texts).strip() if texts else (raw or "").strip()
 
 
@@ -168,6 +170,14 @@ def _validate_backend(backend: List[str]) -> List[str]:
     return list(backend)
 
 
+def _first(*values):
+    """First truthy value (keeps config-precedence chains flat for S3776)."""
+    for v in values:
+        if v:
+            return v
+    return None
+
+
 class SwarmRunner:
     def __init__(
         self,
@@ -183,14 +193,15 @@ class SwarmRunner:
         self.base_dir = base_dir or Path(".research")
         self.mock_mode = mock_mode
         self.config = load_config(str(self.base_dir))
-        self.mode = mode or self.config.get("mode", "research")
-        self.engine = engine or self.config.get("search_engine", "duckduckgo")
-        self.depth = depth or self.config.get("max_iterations", 2)
+        cfg = self.config
+        self.mode = _first(mode, cfg.get("mode"), "research")
+        self.engine = _first(engine, cfg.get("search_engine"), "duckduckgo")
+        self.depth = _first(depth, cfg.get("max_iterations"), 2)
         # Stream F: "dag" (legacy default) or "auction" (Frontier Markets).
-        self.allocation = allocation or self.config.get("allocation", "dag")
+        self.allocation = _first(allocation, cfg.get("allocation"), "dag")
         # Stream G: optional Domain Pack (constitution) for the auditor.
         self.domain_pack = (
-            domain_pack if domain_pack is not None else self.config.get("domain_pack")
+            domain_pack if domain_pack is not None else cfg.get("domain_pack")
         )
         # Per-agent backend/model overrides (CLI > env > config > default).
         # Keys are role names ("alpha", "beta"); values are {"backend": [...],
@@ -249,6 +260,15 @@ class SwarmRunner:
         Claude keeps the legacy shape; opencode builds `opencode run` argv.
         """
         backend, model = self._resolve_agent_backend(role)
+        # S8701 residual: argv-list + shell=False already blocks shell
+        # injection, but a prompt beginning with "-" would be parsed as a
+        # CLI flag by the backend. Agent prompts are generated text and never
+        # legitimately start with a dash.
+        if prompt.startswith("-"):
+            raise ValueError(
+                "Refusing to pass a prompt starting with '-' to the agent "
+                "backend (CLI flag injection)"
+            )
         if _backend_family(backend) == "opencode":
             return _build_opencode_cmd(
                 backend, prompt, model, self._resolve_opencode_agent(role)
@@ -917,6 +937,36 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         print(f"\n🎉 Swarm run completed in {duration:.1f}s. Report: {report_path}")
 
+    def _collect_scope_totals(
+        self, manifest: Dict[str, Any], synthesis_lines: List[str]
+    ) -> Tuple[int, int, List[float]]:
+        """Fold per-scope audit/synthesis artifacts into running totals."""
+        total_verified = 0
+        total_rejected = 0
+        all_divergences: List[float] = []
+        for scope in manifest["scopes"]:
+            sid = scope["scope_id"]
+            scope_dir = self.state_machine.get_scope_dir(sid)
+            audit_file = scope_dir / "audit_report.json"
+            synth_file = scope_dir / "scope_synthesis.md"
+
+            if audit_file.exists():
+                ar = json.loads(audit_file.read_text(encoding="utf-8"))
+                summary = ar["summary"]
+                total_verified += summary["verified_passed"]
+                total_rejected += summary["unverified_rejected"]
+                all_divergences.append(summary["divergence_score"])
+
+            if synth_file.exists():
+                synthesis_lines.append(synth_file.read_text(encoding="utf-8"))
+                synthesis_lines.append("\n---\n")
+        return total_verified, total_rejected, all_divergences
+
+    def _write_report(self, filename: str, lines: List[str]) -> Path:
+        path = self.base_dir / filename
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return path
+
     def _compile_master_synthesis(self, objective: str) -> Path:
         manifest = self.state_machine.load_global_manifest()
         mode_titles = {
@@ -937,27 +987,9 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             "## Scope Findings & Dialectic Balance Sheets\n",
         ]
 
-        total_verified = 0
-        total_rejected = 0
-        all_divergences = []
-
-        for scope in manifest["scopes"]:
-            sid = scope["scope_id"]
-            scope_dir = self.state_machine.get_scope_dir(sid)
-            audit_file = scope_dir / "audit_report.json"
-            synth_file = scope_dir / "scope_synthesis.md"
-
-            if audit_file.exists():
-                with open(audit_file, "r", encoding="utf-8") as f:
-                    ar = json.load(f)
-                    total_verified += ar["summary"]["verified_passed"]
-                    total_rejected += ar["summary"]["unverified_rejected"]
-                    all_divergences.append(ar["summary"]["divergence_score"])
-
-            if synth_file.exists():
-                with open(synth_file, "r", encoding="utf-8") as f:
-                    synthesis_lines.append(f.read())
-                    synthesis_lines.append("\n---\n")
+        total_verified, total_rejected, all_divergences = self._collect_scope_totals(
+            manifest, synthesis_lines
+        )
 
         avg_div = round(sum(all_divergences) / max(1, len(all_divergences)), 2)
         synthesis_lines.append("\n## Swarm Epistemic Audit Totals\n")
@@ -969,32 +1001,17 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         )
         synthesis_lines.append(f"- **Mean Swarm Divergence Score**: `{avg_div}`")
 
-        final_path = self.base_dir / "final_synthesis.md"
-        with open(final_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(synthesis_lines))
+        final_path = self._write_report("final_synthesis.md", synthesis_lines)
 
-        # Also write specialized report files for audit and scout modes
-        if self.mode == "audit":
-            audit_path = self.base_dir / "code_audit_report.md"
-            with open(audit_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(synthesis_lines))
-            return audit_path
-        elif self.mode == "scout":
-            scout_path = self.base_dir / "oss_scout_report.md"
-            with open(scout_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(synthesis_lines))
-            return scout_path
-        elif self.mode == "brainstorm":
-            brainstorm_path = self.base_dir / "brainstorm_report.md"
-            with open(brainstorm_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(synthesis_lines))
-            return brainstorm_path
-        elif self.mode == "darkharvest":
-            darkharvest_path = self.base_dir / "darkharvest_report.md"
-            with open(darkharvest_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(synthesis_lines))
-            return darkharvest_path
-
+        # Also write specialized report files for audit/scout/brainstorm/darkharvest.
+        specialized = {
+            "audit": "code_audit_report.md",
+            "scout": "oss_scout_report.md",
+            "brainstorm": "brainstorm_report.md",
+            "darkharvest": "darkharvest_report.md",
+        }.get(self.mode)
+        if specialized:
+            return self._write_report(specialized, synthesis_lines)
         return final_path
 
 

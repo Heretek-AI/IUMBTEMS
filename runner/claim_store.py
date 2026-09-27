@@ -52,9 +52,15 @@ def _has_fts5(conn: sqlite3.Connection) -> bool:
 class ClaimStore:
     def __init__(self, base_dir: Path, db_path: Optional[Path] = None):
         self.base_dir = Path(os.path.realpath(str(base_dir)))
-        self.db_path = Path(os.path.realpath(str(db_path))) if db_path else (self.base_dir / "claims.sqlite")
+        self.db_path = (
+            Path(os.path.realpath(str(db_path)))
+            if db_path
+            else (self.base_dir / "claims.sqlite")
+        )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path))
+        # uri=False is explicit: a plain filesystem path must never be
+        # interpreted as a SQLite URI connection string (S8706).
+        self.conn = sqlite3.connect(str(self.db_path), uri=False)
         self.conn.row_factory = sqlite3.Row
         self.fts5 = _has_fts5(self.conn)
         self._create_schema()
@@ -115,7 +121,10 @@ class ClaimStore:
             );
             """
         )
-        cur.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
+        cur.execute(
+            "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)",
+            (str(SCHEMA_VERSION),),
+        )
         if self.fts5:
             cur.execute(
                 """
@@ -338,7 +347,9 @@ def reindex(base_dir: Path, store: Optional[ClaimStore] = None) -> Dict[str, Any
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="IUMBTEMS derived claim index")
-    parser.add_argument("--dir", default=".research", help="Path to .research workspace")
+    parser.add_argument(
+        "--dir", default=".research", help="Path to .research workspace"
+    )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("reindex", help="Rebuild claims.sqlite from flat files")
     search_p = sub.add_parser("search", help="Search claim statements")

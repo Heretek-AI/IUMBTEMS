@@ -83,10 +83,14 @@ def _resolve_key(key: Optional[str], key_path: Optional[Path]) -> Optional[bytes
     return None
 
 
-def sign_manifest(manifest: Dict[str, Any], key: Optional[bytes], key_id: str = "local") -> Dict[str, Any]:
+def sign_manifest(
+    manifest: Dict[str, Any], key: Optional[bytes], key_id: str = "local"
+) -> Dict[str, Any]:
     if not key:
         return {"alg": "none", "key_id": None, "sig": None}
-    sig = hmac.new(key, canonical_json(manifest).encode("utf-8"), hashlib.sha256).hexdigest()
+    sig = hmac.new(
+        key, canonical_json(manifest).encode("utf-8"), hashlib.sha256
+    ).hexdigest()
     return {"alg": "hmac-sha256", "key_id": key_id, "sig": sig}
 
 
@@ -98,35 +102,47 @@ def _resolve_synthesis(base_dir: Path) -> str:
     return "\n\n---\n\n".join(p.read_text(encoding="utf-8") for p in parts)
 
 
-def _collect_claims(
-    scope_dirs: List[Path], hasher: Any
-) -> Tuple[List[Dict[str, Any]], set]:
-    claim_records: List[Dict[str, Any]] = []
-    needed_hashes = set()
+def _witness_for(c, hasher: Any, needed_hashes: set) -> Dict[str, Any]:
+    """Build one claim's witness record and track hashes worth bundling."""
+    witness: Dict[str, Any] = {
+        "quote": c.verbatim_quote,
+        "source_hash": c.source_hash,
+        "confidence": None,
+        "verified_at": None,
+    }
+    if not c.source_hash:
+        return witness
+    if c.verbatim_quote:
+        passed, conf, _msg = hasher.verify_quote(c.source_hash, c.verbatim_quote)
+        witness["confidence"] = float(conf)
+        witness["verified_at"] = datetime.now(timezone.utc).isoformat()
+        if passed:
+            needed_hashes.add(c.source_hash)
+    else:
+        needed_hashes.add(c.source_hash)
+    return witness
+
+
+def _iter_dossier_claims(scope_dirs: List[Path]):
+    """Yield claim witnesses from every alpha/beta dossier under scopes."""
     for scope_dir in scope_dirs:
         for dossier_name in ("alpha_dossier.json", "beta_dossier.json"):
             dpath = scope_dir / dossier_name
             if not dpath.exists():
                 continue
-            dossier = load_dossier(dpath)
-            for c in claims_from_dossier(dossier):
-                rec = c.to_dict()
-                witness: Dict[str, Any] = {
-                    "quote": c.verbatim_quote,
-                    "source_hash": c.source_hash,
-                    "confidence": None,
-                    "verified_at": None,
-                }
-                if c.source_hash and c.verbatim_quote:
-                    passed, conf, _msg = hasher.verify_quote(c.source_hash, c.verbatim_quote)
-                    witness["confidence"] = float(conf)
-                    witness["verified_at"] = datetime.now(timezone.utc).isoformat()
-                    if passed and c.source_hash:
-                        needed_hashes.add(c.source_hash)
-                elif c.source_hash:
-                    needed_hashes.add(c.source_hash)
-                rec["witness"] = witness
-                claim_records.append(rec)
+            for c in claims_from_dossier(load_dossier(dpath)):
+                yield c
+
+
+def _collect_claims(
+    scope_dirs: List[Path], hasher: Any
+) -> Tuple[List[Dict[str, Any]], set]:
+    claim_records: List[Dict[str, Any]] = []
+    needed_hashes: set = set()
+    for c in _iter_dossier_claims(scope_dirs):
+        rec = c.to_dict()
+        rec["witness"] = _witness_for(c, hasher, needed_hashes)
+        claim_records.append(rec)
     return claim_records, needed_hashes
 
 
@@ -203,7 +219,11 @@ def export_brief(
         "signature": signature,
     }
 
-    out = Path(os.path.realpath(str(out_path))) if out_path else (base_dir / "brief.pcrb.json")
+    out = (
+        Path(os.path.realpath(str(out_path)))
+        if out_path
+        else (base_dir / "brief.pcrb.json")
+    )
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
         json.dump(bundle, f, indent=2)
@@ -213,7 +233,9 @@ def export_brief(
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Export a proof-carrying research brief")
+    parser = argparse.ArgumentParser(
+        description="Export a proof-carrying research brief"
+    )
     parser.add_argument("--dir", default=".research")
     parser.add_argument("--out", default=None)
     parser.add_argument("--scope", action="append", dest="scope_ids")
@@ -224,7 +246,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     canonical_dir = Path(os.path.realpath(str(args.dir)))
     canonical_out = Path(os.path.realpath(str(args.out))) if args.out else None
-    canonical_key = Path(os.path.realpath(str(args.key_file))) if args.key_file else None
+    canonical_key = (
+        Path(os.path.realpath(str(args.key_file))) if args.key_file else None
+    )
     path = export_brief(
         canonical_dir,
         out_path=canonical_out,

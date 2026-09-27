@@ -208,7 +208,9 @@ def append_ledger(base_dir: Path, events: List[StatusEvent]) -> Path:
     return path
 
 
-def queue_requeue(base_dir: Path, scope_id: str, reason: str = "claim degradation") -> Path:
+def queue_requeue(
+    base_dir: Path, scope_id: str, reason: str = "claim degradation"
+) -> Path:
     """Record that a scope needs a re-run on the next swarm pass."""
     path = Path(base_dir) / "requeue.json"
     entries: List[Dict[str, Any]] = []
@@ -248,7 +250,52 @@ def load_requeue(base_dir: Path) -> List[Dict[str, Any]]:
 # ---- one-pass staleness check (the probe's unit of work) ----------------
 
 
-def check_staleness(base_dir: Path, scope_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+def _scope_dirs_for(scratch: Path, scope_ids: Optional[List[str]]):
+    """Scope dirs to fold; None means the workspace has no scratchpad yet."""
+    if scope_ids is not None:
+        return [scratch / s for s in scope_ids]
+    if not scratch.exists():
+        return None
+    return sorted(p for p in scratch.iterdir() if p.is_dir())
+
+
+def _fold_scope(scope_dir: Path, retractions) -> Tuple[List[StatusEvent], int, bool]:
+    """Fold one scope's dossiers: (events, claim_sets, degraded)."""
+    from runner.claim_witness import claims_from_dossier, load_dossier
+
+    events: List[StatusEvent] = []
+    claim_sets = 0
+    for dossier_name in ("alpha_dossier.json", "beta_dossier.json"):
+        dpath = scope_dir / dossier_name
+        if not dpath.exists():
+            continue
+        claim_sets += 1
+        claims = claims_from_dossier(load_dossier(dpath))
+        _, scope_events = apply_degradation(
+            claims, retractions, scope_id=scope_dir.name
+        )
+        events.extend(scope_events)
+    return events, claim_sets, bool(events)
+
+
+def _mirror_events(base_dir: Path, events: List[StatusEvent]) -> None:
+    """Best-effort mirror into the derived claim store (never fatal)."""
+    try:
+        from runner.claim_store import ClaimStore
+
+        store = ClaimStore(base_dir)
+        for e in events:
+            store.record_status_event(
+                e.scope_id, e.claim_id, e.from_status, e.to_status, e.reason, e.at
+            )
+        store.close()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[living-dossiers] claim store mirror skipped: {exc}", file=sys.stderr)
+
+
+def check_staleness(
+    base_dir: Path, scope_ids: Optional[List[str]] = None
+) -> Dict[str, Any]:
     """Run one degradation pass over scope dossiers.
 
     For each scope with alpha/beta dossiers, fold claims, join against
@@ -258,83 +305,54 @@ def check_staleness(base_dir: Path, scope_ids: Optional[List[str]] = None) -> Di
 
     Returns a summary dict suitable for JSON tool output.
     """
-    from runner.claim_witness import claims_from_dossier, load_dossier
-
     base_dir = Path(base_dir)
     retractions = load_retractions(base_dir)
     scratch = base_dir / "scratchpads"
 
-    if scope_ids is None:
-        if not scratch.exists():
-            return {
-                "scopes": [],
-                "retractions": len(retractions),
-                "degraded": 0,
-                # Keep the early return shape identical to the normal one so
-                # callers can key off `degraded_scopes` unconditionally.
-                "degraded_scopes": [],
-            }
-        scope_dirs = sorted(p for p in scratch.iterdir() if p.is_dir())
-    else:
-        scope_dirs = [scratch / s for s in scope_ids]
+    scope_dirs = _scope_dirs_for(scratch, scope_ids)
+    if scope_dirs is None:
+        return {
+            "scopes": [],
+            "retractions": len(retractions),
+            "degraded": 0,
+            # Keep the early return shape identical to the normal one so
+            # callers can key off `degraded_scopes` unconditionally.
+            "degraded_scopes": [],
+        }
 
     all_events: List[StatusEvent] = []
     per_scope: List[Dict[str, Any]] = []
-    degraded_scopes = set()
 
     for scope_dir in scope_dirs:
         if not scope_dir.is_dir():
             continue
-        scope_id = scope_dir.name
-        scope_event_count = 0
-        claim_sets = 0
-
-        for dossier_name in ("alpha_dossier.json", "beta_dossier.json"):
-            dpath = scope_dir / dossier_name
-            if not dpath.exists():
-                continue
-            claim_sets += 1
-            dossier = load_dossier(dpath)
-            claims = claims_from_dossier(dossier)
-            _, events = apply_degradation(
-                claims, retractions, scope_id=scope_id
-            )
-            all_events.extend(events)
-            scope_event_count += len(events)
-            if events:
-                degraded_scopes.add(scope_id)
-
+        events, claim_sets, degraded = _fold_scope(scope_dir, retractions)
+        all_events.extend(events)
         per_scope.append(
             {
-                "scope_id": scope_id,
+                "scope_id": scope_dir.name,
                 "claim_sets": claim_sets,
-                "status_events": scope_event_count,
-                "degraded": scope_id in degraded_scopes,
+                "status_events": len(events),
+                "degraded": degraded,
             }
         )
 
     if all_events:
         append_ledger(base_dir, all_events)
-        # Mirror into the derived claim store (best-effort; never fatal).
-        try:
-            from runner.claim_store import ClaimStore
+        _mirror_events(base_dir, all_events)
 
-            store = ClaimStore(base_dir)
-            for e in all_events:
-                store.record_status_event(
-                    e.scope_id, e.claim_id, e.from_status, e.to_status, e.reason, e.at
-                )
-            store.close()
-        except Exception as exc:  # noqa: BLE001
-            print(f"[living-dossiers] claim store mirror skipped: {exc}", file=sys.stderr)
-
-    for scope_id in sorted(degraded_scopes):
-        queue_requeue(base_dir, scope_id, reason="claim degradation (retraction event)")
+    for scope_dir in per_scope:
+        if scope_dir["degraded"]:
+            queue_requeue(
+                base_dir,
+                scope_dir["scope_id"],
+                reason="claim degradation (retraction event)",
+            )
 
     return {
         "retractions": len(retractions),
         "scopes": per_scope,
-        "degraded_scopes": sorted(degraded_scopes),
+        "degraded_scopes": sorted(s["scope_id"] for s in per_scope if s["degraded"]),
         "status_events": len(all_events),
     }
 

@@ -149,17 +149,21 @@ def build():
     return 0
 
 
+def _collect_files(root: Path) -> dict:
+    """Relative-path -> Path map for an existing tree (no __pycache__)."""
+    if not root.exists():
+        return {}
+    return {
+        p.relative_to(root): p
+        for p in sorted(root.rglob("*"))
+        if p.is_file() and "__pycache__" not in p.parts
+    }
+
+
 def _iter_modular_files(src: Path, dst: Path):
     """Yield (relpath, src_bytes|None, dst_bytes|None) for sync/check."""
-    src_files = {}
-    for p in sorted(src.rglob("*")):
-        if p.is_file() and "__pycache__" not in p.parts:
-            src_files[p.relative_to(src)] = p
-    dst_files = {}
-    if dst.exists():
-        for p in sorted(dst.rglob("*")):
-            if p.is_file() and "__pycache__" not in p.parts:
-                dst_files[p.relative_to(dst)] = p
+    src_files = _collect_files(src)
+    dst_files = _collect_files(dst)
     for rel in sorted(set(src_files) | set(dst_files)):
         s = src_files.get(rel)
         d = dst_files.get(rel)
@@ -221,20 +225,25 @@ def _check_skill_stub(target_rel: str, skill: str) -> List[str]:
     return errors
 
 
+def _check_manifest_path(rel: str, key: str, kind: str) -> List[str]:
+    """Validate one pi/omp manifest path or glob entry."""
+    if "*" in rel:
+        if list(PROJECT_ROOT.glob(rel.lstrip("./"))):
+            return []
+        return [f"package.json {key}.{kind} glob matches nothing: {rel}"]
+    if (PROJECT_ROOT / rel.lstrip("./")).exists():
+        return []
+    return [f"package.json {key}.{kind} missing: {rel}"]
+
+
 def _check_package_json() -> List[str]:
-    errors = []
     pkg = json.loads((PROJECT_ROOT / "package.json").read_text())
+    errors: List[str] = []
     for key in ("pi", "omp"):
         block = pkg.get(key, {})
         for kind in ("skills", "extensions", "prompts"):
-            for p in block.get(kind, []):
-                if "*" in p:
-                    if not list(PROJECT_ROOT.glob(p.lstrip("./"))):
-                        errors.append(
-                            f"package.json {key}.{kind} glob matches nothing: {p}"
-                        )
-                elif not (PROJECT_ROOT / p.lstrip("./")).exists():
-                    errors.append(f"package.json {key}.{kind} missing: {p}")
+            for rel in block.get(kind, []):
+                errors.extend(_check_manifest_path(rel, key, kind))
     return errors
 
 

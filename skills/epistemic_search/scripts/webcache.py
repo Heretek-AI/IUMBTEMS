@@ -60,7 +60,9 @@ def canonical_url(url):
         query = urllib.parse.urlencode(
             sorted(urllib.parse.parse_qsl(p.query, keep_blank_values=True))
         )
-        return urllib.parse.urlunsplit((p.scheme or "https", netloc, p.path or "/", query, ""))
+        return urllib.parse.urlunsplit(
+            (p.scheme or "https", netloc, p.path or "/", query, "")
+        )
     except Exception:
         return None
 
@@ -142,7 +144,9 @@ def cmd_gate(stdin_data):
         return None  # miss -> allow, PostToolUse archives
     md_path, meta = found
     if not is_fresh(meta, url):
-        log(f"stale entry for {domain_of(url)} ({meta.get('cached_at')}); allowing live fetch")
+        log(
+            f"stale entry for {domain_of(url)} ({meta.get('cached_at')}); allowing live fetch"
+        )
         return None  # stale -> allow, PostToolUse refreshes
     try:
         content = md_path.read_text(encoding="utf-8")
@@ -174,24 +178,32 @@ def cmd_gate(stdin_data):
     }
 
 
+def _text_from_value(val):
+    """Recursively pull the first non-empty text out of a response value."""
+    if isinstance(val, str) and val.strip():
+        return val
+    if isinstance(val, dict):
+        for sub in ("text", "content", "output"):
+            got = _text_from_value(val.get(sub))
+            if got:
+                return got
+    if isinstance(val, list):
+        parts = [
+            p.get("text", "")
+            for p in val
+            if isinstance(p, dict) and isinstance(p.get("text"), str)
+        ]
+        if parts:
+            return "\n".join(parts)
+    return ""
+
+
 def extract_response_text(stdin_data):
     """Defensively locate the tool response text across field-name variants."""
     for key in ("tool_response", "response", "tool_result", "result", "output"):
-        val = stdin_data.get(key)
-        if isinstance(val, str) and val.strip():
-            return val
-        if isinstance(val, dict):
-            for sub in ("text", "content", "output"):
-                inner = val.get(sub)
-                if isinstance(inner, str) and inner.strip():
-                    return inner
-                if isinstance(inner, list):
-                    parts = [
-                        p.get("text", "") for p in inner
-                        if isinstance(p, dict) and isinstance(p.get("text"), str)
-                    ]
-                    if parts:
-                        return "\n".join(parts)
+        got = _text_from_value(stdin_data.get(key))
+        if got:
+            return got
     return ""
 
 

@@ -64,13 +64,14 @@ MAX_SCAN_DEPTH = 3
 MAX_SINGLE_FILE_BYTES = 100_000
 SNIPPET_CHARS = 4000
 
-PERMISSIVE_SPDX = frozenset({"MIT", "Apache-2.0", "BSD-3-Clause", "ISC"})
+SPDX_APACHE2 = "Apache-2.0"
+PERMISSIVE_SPDX = frozenset({"MIT", SPDX_APACHE2, "BSD-3-Clause", "ISC"})
 COPYLEFT_SPDX = frozenset({"GPL", "AGPL"})
 
 SPDX_MAP = {
     "mit": "MIT",
-    "apache-2.0": "Apache-2.0",
-    "apache 2.0": "Apache-2.0",
+    "apache-2.0": SPDX_APACHE2,
+    "apache 2.0": SPDX_APACHE2,
     "bsd-3-clause": "BSD-3-Clause",
     "bsd 3-clause": "BSD-3-Clause",
     "isc": "ISC",
