@@ -210,8 +210,7 @@ export default function initPiExtension(pi) {
     } catch { /* alias is best-effort across pi/omp versions */ }
 
     // /darkharvest: Product competitor teardown with harvest verdicts
-    pi.registerCommand('darkharvest', {
-      description: 'Product competitor teardown: seed inspirations, expand to adjacents, emit harvest verdicts',
+    pi.registerCommand('darkharvest', {      description: 'Product competitor teardown: seed inspirations, expand to adjacents, emit harvest verdicts',
       usage: '/darkharvest <product-arena> [--seeds <urls>]',
       handler: async (args, ctx) => {
         const objective = args.trim();
@@ -313,6 +312,33 @@ export default function initPiExtension(pi) {
           maxRepos: args.maxRepos,
           mock_claude: Boolean(args.mock_mode)
         }, {});
+        return { content: [{ type: 'text', text: r.text }] };
+      }
+    });
+
+    // Tool: iumbtems_factory (run-state helper, no script paths)
+    pi.registerTool({
+      name: 'iumbtems_factory',
+      description: 'Drive factory run state: init / phase-add / qa-record / expansion / stop',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', enum: ['init', 'phase-add', 'qa-record', 'expansion', 'stop'] },
+          run: { type: 'string', description: 'Factory run name' },
+          phase: { type: 'string' },
+          goal: { type: 'string' },
+          accept: { type: 'string' },
+          seat: { type: 'string' },
+          verdict: { type: 'string', enum: ['pass', 'fail', 'conditional'] },
+          reason: { type: 'string' },
+          loops: { type: 'integer' },
+          max_loops: { type: 'integer' },
+          project_dir: { type: 'string' }
+        },
+        required: ['command']
+      },
+      execute: async (args = {}) => {
+        const r = callMcp('iumbtems_factory', args, {});
         return { content: [{ type: 'text', text: r.text }] };
       }
     });

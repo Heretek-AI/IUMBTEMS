@@ -13,6 +13,16 @@ description: Coding-factory Manager loop. Use when user invokes /factory or /dom
 - **qa-a / qa-b** (subagents): same model, DIVERGED prompts (functional-correctness vs adversarial edge-case). Read-only plus test execution; never edit.
 - **researcher** = existing `iumbtems_brainstorm` + `iumbtems_darkharvest` swarms (no new profile).
 
+## 1b. Driving run state (no filesystem paths)
+
+Use the **`iumbtems_factory` MCP tool** for all run-state changes — never a
+relative `skills/factory/scripts/factory.py` path (the toolchain lives in the
+npm cache in consuming projects, and relative paths broke live: the manager
+agent ran `find / -name factory.py`). The tool wraps the same helper and
+resolves the project via `project_dir` argument, `IUMBTEMS_PROJECT_DIR`, or
+the session cwd. It supports `init`, `phase-add`, `qa-record`, `expansion`,
+`stop`, and returns `status: escalated` (exit 2) on the 3rd QA failure.
+
 ## 2. Gate protocol (max 5 swarm cycles per gate)
 
 1. Grill until `.factory/frontier.json` settled (grilling skill).

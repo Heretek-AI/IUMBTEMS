@@ -192,6 +192,87 @@ def _handle_darkharvest(args: Dict[str, Any]) -> str:
     return _run_swarm_mode("darkharvest", args)
 
 
+def _handle_factory(args: Dict[str, Any]) -> str:
+    """Drive factory run state (init / phase-add / qa-record / expansion / stop).
+
+    Wraps skills/factory/scripts/factory.py so agents never need a filesystem
+    path to the helper: the npm-installed toolchain lives outside the project,
+    and relative `skills/...` paths broke in consuming projects (observed
+    live: the manager agent ran `find / -name factory.py`).
+    """
+    import subprocess
+
+    command = str(args.get("command") or "").strip()
+    if command not in ("init", "phase-add", "qa-record", "expansion", "stop"):
+        raise ValueError(
+            "command must be one of: init, phase-add, qa-record, expansion, stop"
+        )
+    script = Path(PROJECT_ROOT) / "skills" / "factory" / "scripts" / "factory.py"
+    if not script.is_file():
+        raise FileNotFoundError(f"factory helper not found at {script}")
+
+    project = (
+        args.get("project_dir") or os.environ.get("IUMBTEMS_PROJECT_DIR") or os.getcwd()
+    )
+    cmd = [sys.executable, str(script), command, "--project-dir", str(project)]
+    if command == "init":
+        cmd += ["--run", str(args.get("run") or "")]
+    elif command == "phase-add":
+        cmd += [
+            "--run",
+            str(args.get("run") or ""),
+            "--phase",
+            str(args.get("phase") or ""),
+            "--goal",
+            str(args.get("goal") or ""),
+            "--accept",
+            str(args.get("accept") or ""),
+        ]
+    elif command == "qa-record":
+        cmd += [
+            "--run",
+            str(args.get("run") or ""),
+            "--phase",
+            str(args.get("phase") or ""),
+            "--seat",
+            str(args.get("seat") or ""),
+            "--verdict",
+            str(args.get("verdict") or ""),
+        ]
+        if args.get("reason"):
+            cmd += ["--reason", str(args["reason"])]
+    elif command == "expansion":
+        cmd += [
+            "--run",
+            str(args.get("run") or ""),
+            "--loops",
+            str(int(args.get("loops") or 1)),
+        ]
+        if args.get("max_loops"):
+            cmd += ["--max-loops", str(int(args["max_loops"]))]
+    elif command == "stop":
+        cmd += ["--run", str(args.get("run") or "")]
+
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        shell=False,
+        stdin=subprocess.DEVNULL,
+        cwd=str(project),
+    )
+    payload = {
+        "status": "ok" if proc.returncode == 0 else "error",
+        "command": command,
+        "returncode": proc.returncode,
+        "project_dir": str(project),
+        "output": (proc.stdout or proc.stderr or "").strip()[-4000:],
+    }
+    if proc.returncode == 2:
+        payload["status"] = "escalated"
+    return _tool_text(payload)
+
+
 def _handle_verify_quote(args: Dict[str, Any]) -> str:
     """Verify a verbatim quote against the content-addressed source cache."""
     from skills.research_cache.hasher import SourceHasher
@@ -540,6 +621,46 @@ def build_tools() -> List[ToolSpec]:
                 "required": ["objective"],
             },
             handler=_handle_darkharvest,
+        ),
+        ToolSpec(
+            name="iumbtems_factory",
+            description="Drive factory run state: init / phase-add / qa-record / expansion / stop. State goes to <project>/.factory and <project>/.roadmap; no filesystem path to helper scripts required.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "enum": ["init", "phase-add", "qa-record", "expansion", "stop"],
+                    },
+                    "run": {"type": "string", "description": "Factory run name"},
+                    "phase": {
+                        "type": "string",
+                        "description": "Phase id (e.g. 01-auth)",
+                    },
+                    "goal": {"type": "string"},
+                    "accept": {
+                        "type": "string",
+                        "description": "Semicolon-separated acceptance criteria",
+                    },
+                    "seat": {"type": "string", "description": "QA seat (qa-a | qa-b)"},
+                    "verdict": {
+                        "type": "string",
+                        "enum": ["pass", "fail", "conditional"],
+                    },
+                    "reason": {"type": "string"},
+                    "loops": {
+                        "type": "integer",
+                        "description": "Expansion loop count (1-10)",
+                    },
+                    "max_loops": {"type": "integer"},
+                    "project_dir": {
+                        "type": "string",
+                        "description": "Project root (default: IUMBTEMS_PROJECT_DIR or cwd)",
+                    },
+                },
+                "required": ["command"],
+            },
+            handler=_handle_factory,
         ),
         ToolSpec(
             name="iumbtems_verify_quote",

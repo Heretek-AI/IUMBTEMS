@@ -381,6 +381,7 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
             "iumbtems_oss_scout",
             "iumbtems_brainstorm",
             "iumbtems_darkharvest",
+            "iumbtems_factory",
             "iumbtems_verify_quote",
             "iumbtems_socratic_frontier",
             "iumbtems_reindex_claims",

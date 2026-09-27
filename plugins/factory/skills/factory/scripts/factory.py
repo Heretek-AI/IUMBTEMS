@@ -2,8 +2,13 @@
 """
 Factory run-state helper: phase dossiers, QA retry bounds, expansion loop guard.
 
-All state lives under .factory/ (gitignored runtime state). Phase output goes
-to .roadmap/<phase>/. Evidence stays in .research/. Read-only w.r.t. repo code.
+All state lives under <project>/.factory/ (gitignored runtime state). Phase
+output goes to <project>/.roadmap/<phase>/. Evidence stays in <project>/
+.research/. Read-only w.r.t. repo code.
+
+Project directory resolution: --project-dir > IUMBTEMS_PROJECT_DIR env > the
+toolchain repo root (local-dev default). A consuming project must never leak
+state into the IUMBTEMS checkout.
 
 Usage:
   python3 skills/factory/scripts/factory.py init --run <name>
@@ -15,13 +20,25 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-FACTORY_DIR = PROJECT_ROOT / ".factory"
-ROADMAP_DIR = PROJECT_ROOT / ".roadmap"
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+
+def resolve_project_root(cli_value=None):
+    """--project-dir > IUMBTEMS_PROJECT_DIR > repo root (local-dev default)."""
+    for candidate in (cli_value, os.environ.get("IUMBTEMS_PROJECT_DIR")):
+        if candidate and Path(candidate).is_dir():
+            return Path(candidate).resolve()
+    return REPO_ROOT
+
+
+PROJECT_DIR = resolve_project_root()
+FACTORY_DIR = PROJECT_DIR / ".factory"
+ROADMAP_DIR = PROJECT_DIR / ".roadmap"
 
 MAX_QA_RETRIES = 3
 MAX_EXPANSION_LOOPS = 10
@@ -173,31 +190,48 @@ def cmd_stop(args):
     print(f"🛑 STOP file written for run '{args.run}'.")
 
 
+def _add_common(parser):
+    parser.add_argument(
+        "--project-dir",
+        default=None,
+        help="Project the factory state belongs to (default: IUMBTEMS_PROJECT_DIR env, else repo root)",
+    )
+
+
 def main():
+    global FACTORY_DIR, ROADMAP_DIR
     ap = argparse.ArgumentParser(description="Factory run-state helper")
     sub = ap.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("init")
     p.add_argument("--run", required=True)
+    _add_common(p)
     p = sub.add_parser("phase-add")
     p.add_argument("--run", required=True)
     p.add_argument("--phase", required=True)
     p.add_argument("--goal", required=True)
     p.add_argument("--accept", default="")
+    _add_common(p)
     p = sub.add_parser("qa-record")
     p.add_argument("--run", required=True)
     p.add_argument("--phase", required=True)
     p.add_argument("--seat", required=True)
     p.add_argument("--verdict", required=True)
     p.add_argument("--reason", default="")
+    _add_common(p)
     p = sub.add_parser("expansion")
     p.add_argument("--run", required=True)
     p.add_argument("--loops", type=int, required=True)
     p.add_argument("--max-loops", type=int, default=MAX_EXPANSION_LOOPS)
+    _add_common(p)
     p = sub.add_parser("stop")
     p.add_argument("--run", required=True)
+    _add_common(p)
 
     args = ap.parse_args()
+    root = resolve_project_root(args.project_dir)
+    FACTORY_DIR = root / ".factory"
+    ROADMAP_DIR = root / ".roadmap"
     code = {
         "init": cmd_init,
         "phase-add": cmd_phase_add,

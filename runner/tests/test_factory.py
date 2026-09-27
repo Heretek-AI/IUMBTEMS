@@ -2,6 +2,7 @@
 """Tests for the factory loop: run-state helper, QA retry bounds, plugin surface."""
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -163,6 +164,52 @@ class TestFactoryHelper(unittest.TestCase):
             pkg = json.load(f)
         self.assertIn("./skills/factory", pkg["pi"]["skills"])
         self.assertIn("./skills/factory", pkg["omp"]["skills"])
+
+    def test_project_dir_env_resolution(self):
+        """Factory state must land in the target project, never the checkout."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ, IUMBTEMS_PROJECT_DIR=tmp)
+            r = subprocess.run(
+                [
+                    sys.executable,
+                    "skills/factory/scripts/factory.py",
+                    "init",
+                    "--run",
+                    "env-run",
+                ],
+                capture_output=True,
+                text=True,
+                cwd=str(PROJECT_ROOT),
+                env=env,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertTrue(
+                (Path(tmp) / ".factory" / "env-run" / "state.json").exists()
+            )
+
+    def test_mcp_factory_tool_project_dir(self):
+        """iumbtems_factory drives state in the given project (no script path)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            r = subprocess.run(
+                [
+                    sys.executable,
+                    "runner/mcp_server.py",
+                    "call",
+                    "iumbtems_factory",
+                    json.dumps(
+                        {"command": "init", "run": "mcp-run", "project_dir": tmp}
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                cwd=str(PROJECT_ROOT),
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            payload = json.loads(r.stdout)
+            self.assertEqual(payload["status"], "ok")
+            self.assertTrue(
+                (Path(tmp) / ".factory" / "mcp-run" / "state.json").exists()
+            )
 
     def test_snippet_factory_roster(self):
         with open(PROJECT_ROOT / "config" / "opencode-snippet.json") as f:
