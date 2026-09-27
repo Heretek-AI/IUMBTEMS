@@ -34,12 +34,15 @@ class ScopeStatus(str, Enum):
     COMPLETE = "COMPLETE"
     FAILED = "FAILED"
 
+MANIFEST_FILENAME = "manifest.json"
+
+
 class ResearchStateMachine:
     def __init__(self, base_dir: Optional[Path] = None):
-        self.base_dir = base_dir or Path(".research")
+        self.base_dir = Path(os.path.realpath(str(base_dir or ".research")))
         self.scratchpads_dir = self.base_dir / "scratchpads"
         self.sources_dir = self.base_dir / "sources"
-        self.manifest_file = self.base_dir / "manifest.json"
+        self.manifest_file = self.base_dir / MANIFEST_FILENAME
         self._lock = threading.Lock()
         
         # Ensure directories exist
@@ -112,17 +115,17 @@ class ResearchStateMachine:
                 "audit_completed": False,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
-            temp_scope_file = (scope_dir / "manifest.json").with_suffix(".tmp")
+            temp_scope_file = (scope_dir / MANIFEST_FILENAME).with_suffix(".tmp")
             with open(temp_scope_file, "w", encoding="utf-8") as f:
                 json.dump(scope_manifest, f, indent=2)
-            os.replace(temp_scope_file, scope_dir / "manifest.json")
+            os.replace(temp_scope_file, scope_dir / MANIFEST_FILENAME)
 
     def get_scope_dir(self, scope_id: str) -> Path:
         return self.scratchpads_dir / scope_id
 
     def load_scope_manifest(self, scope_id: str) -> Dict[str, Any]:
         with self._lock:
-            scope_manifest_file = self.get_scope_dir(scope_id) / "manifest.json"
+            scope_manifest_file = self.get_scope_dir(scope_id) / MANIFEST_FILENAME
             if not scope_manifest_file.exists():
                 raise FileNotFoundError(f"Scope manifest not found for {scope_id}")
             with open(scope_manifest_file, "r", encoding="utf-8") as f:
@@ -130,7 +133,7 @@ class ResearchStateMachine:
 
     def save_scope_manifest(self, scope_id: str, manifest: Dict[str, Any]):
         with self._lock:
-            scope_manifest_file = self.get_scope_dir(scope_id) / "manifest.json"
+            scope_manifest_file = self.get_scope_dir(scope_id) / MANIFEST_FILENAME
             temp_path = scope_manifest_file.with_suffix(".tmp")
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(manifest, f, indent=2)

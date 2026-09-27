@@ -503,7 +503,7 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
         )
         self.assertEqual(res.returncode, 0, f"v2 transform test failed: {res.stderr}")
         data = last_json_object(res.stdout)
-        self.assertEqual(data["cleanupFn"], True)
+        self.assertTrue(data["cleanupFn"])
         for c in [
             "swarm",
             "grill",
@@ -563,7 +563,7 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
         )
         self.assertEqual(res.returncode, 0, f"bare setup test failed: {res.stderr}")
         data = last_json_object(res.stdout)
-        self.assertEqual(data["cleanupFn"], True)
+        self.assertTrue(data["cleanupFn"])
 
     def test_options_applied_to_location_dir_after_transforms(self):
         import tempfile

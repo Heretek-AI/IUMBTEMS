@@ -18,6 +18,7 @@ V(c_i) has never been what the runtime computes. Tier weighting becomes an
 opt-in constitution — nothing flips without an explicit pack.
 """
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -154,6 +155,59 @@ def claim_verdict(
     }
 
 
+def _check_verified_and_inferred(c: ClaimWitness, hasher: Any, out: List[Violation]) -> None:
+    if c.tag == TAG_VERIFIED or c.kind == KIND_CLAIM:
+        if not c.source_hash:
+            out.append(Violation(c.claim_id, "VERIFIED_REQUIRES_HASH", "source_hash missing"))
+        if not c.verbatim_quote:
+            out.append(Violation(c.claim_id, "VERIFIED_REQUIRES_QUOTE", "verbatim_quote missing"))
+        if hasher is not None and c.source_hash and c.verbatim_quote:
+            passed, _conf, msg = witness_check(c, hasher)
+            if not passed:
+                out.append(Violation(c.claim_id, "WITNESS_CHECK_FAILED", msg or "quote not in source"))
+
+    if c.tag == TAG_INFERRED or c.kind == KIND_INFERENCE:
+        if not c.parent_claims:
+            out.append(Violation(c.claim_id, "INFERRED_REQUIRES_PARENTS", "parent_claims empty"))
+        if not c.deductive_logic:
+            out.append(Violation(c.claim_id, "INFERRED_REQUIRES_LOGIC", "deductive_logic missing"))
+
+
+def _check_hypotheses_and_neg_knowledge(c: ClaimWitness, out: List[Violation]) -> None:
+    if (c.tag == TAG_HYPOTHESIS or c.kind == KIND_HYPOTHESIS) and not c.falsification:
+        out.append(Violation(c.claim_id, "HYPOTHESIS_REQUIRES_FALSIFICATION", "falsification missing"))
+
+    if c.tag == TAG_NEGATIVE_KNOWLEDGE or c.kind == KIND_NEGATIVE_KNOWLEDGE:
+        if not c.query:
+            out.append(Violation(c.claim_id, "NEG_KNOWLEDGE_REQUIRES_QUERY", "query missing"))
+        if not c.finding:
+            out.append(Violation(c.claim_id, "NEG_KNOWLEDGE_REQUIRES_FINDING", "finding missing"))
+
+
+def _check_constitution_and_parents(
+    c: ClaimWitness,
+    known_ids: set,
+    constitution: Constitution,
+    out: List[Violation],
+) -> None:
+    for parent in c.parent_claims:
+        if parent not in known_ids:
+            out.append(
+                Violation(c.claim_id, "PARENT_UNRESOLVED", f"parent_claims '{parent}' not in dossier set")
+            )
+
+    if constitution.mandatory_tags and not c.tag:
+        out.append(Violation(c.claim_id, "MISSING_TAG", "tag required by constitution"))
+
+    if constitution.banned_domains and c.source_url:
+        src_lower = c.source_url.lower()
+        for dom in constitution.banned_domains:
+            if dom.lower() in src_lower:
+                out.append(
+                    Violation(c.claim_id, "BANNED_DOMAIN", f"source_url on banned domain '{dom}'")
+                )
+
+
 def check_invariants(
     claims: Iterable[ClaimWitness],
     hasher: Any = None,
@@ -165,54 +219,14 @@ def check_invariants(
     VERIFIED claims; without it, only structural rules are enforced.
     """
     constitution = constitution or LEGACY_CONSTITUTION
-    claims = list(claims)
-    known_ids = {c.claim_id for c in claims}
+    claim_list = list(claims)
+    known_ids = {c.claim_id for c in claim_list}
     out: List[Violation] = []
 
-    for c in claims:
-        # --- tag/kind-specific structural rules ---
-        if c.tag == TAG_VERIFIED or c.kind == KIND_CLAIM:
-            if not c.source_hash:
-                out.append(Violation(c.claim_id, "VERIFIED_REQUIRES_HASH", "source_hash missing"))
-            if not c.verbatim_quote:
-                out.append(Violation(c.claim_id, "VERIFIED_REQUIRES_QUOTE", "verbatim_quote missing"))
-            if hasher is not None and c.source_hash and c.verbatim_quote:
-                passed, _conf, msg = witness_check(c, hasher)
-                if not passed:
-                    out.append(Violation(c.claim_id, "WITNESS_CHECK_FAILED", msg or "quote not in source"))
-
-        if c.tag == TAG_INFERRED or c.kind == KIND_INFERENCE:
-            if not c.parent_claims:
-                out.append(Violation(c.claim_id, "INFERRED_REQUIRES_PARENTS", "parent_claims empty"))
-            if not c.deductive_logic:
-                out.append(Violation(c.claim_id, "INFERRED_REQUIRES_LOGIC", "deductive_logic missing"))
-
-        if c.tag == TAG_HYPOTHESIS or c.kind == KIND_HYPOTHESIS:
-            if not c.falsification:
-                out.append(Violation(c.claim_id, "HYPOTHESIS_REQUIRES_FALSIFICATION", "falsification missing"))
-
-        if c.tag == TAG_NEGATIVE_KNOWLEDGE or c.kind == KIND_NEGATIVE_KNOWLEDGE:
-            if not c.query:
-                out.append(Violation(c.claim_id, "NEG_KNOWLEDGE_REQUIRES_QUERY", "query missing"))
-            if not c.finding:
-                out.append(Violation(c.claim_id, "NEG_KNOWLEDGE_REQUIRES_FINDING", "finding missing"))
-
-        # --- cross-reference resolution ---
-        for parent in c.parent_claims:
-            if parent not in known_ids:
-                out.append(
-                    Violation(c.claim_id, "PARENT_UNRESOLVED", f"parent_claims '{parent}' not in dossier set")
-                )
-
-        # --- domain-pack rules ---
-        if constitution.mandatory_tags and not c.tag:
-            out.append(Violation(c.claim_id, "MISSING_TAG", "tag required by constitution"))
-        if constitution.banned_domains and c.source_url:
-            for dom in constitution.banned_domains:
-                if dom.lower() in c.source_url.lower():
-                    out.append(
-                        Violation(c.claim_id, "BANNED_DOMAIN", f"source_url on banned domain '{dom}'")
-                    )
+    for c in claim_list:
+        _check_verified_and_inferred(c, hasher, out)
+        _check_hypotheses_and_neg_knowledge(c, out)
+        _check_constitution_and_parents(c, known_ids, constitution, out)
 
     return out
 
@@ -294,7 +308,7 @@ def compute_epistemic_score_from_claims(
     }
     weight_sum = 0.0
     tier_weighted = any(
-        w != 1.0 for w in constitution.tier_weights.values()
+        not math.isclose(w, 1.0, rel_tol=1e-7) for w in constitution.tier_weights.values()
     )
 
     for c in claims:

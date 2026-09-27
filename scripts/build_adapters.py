@@ -85,6 +85,9 @@ Epistemic rules apply regardless of harness: tag claims as
 """
 
 
+SKILL_FILENAME = "SKILL.md"
+
+
 def render_stub(skill: str) -> str:
     tools = ", ".join(f"`{t}`" for t in SKILL_TOOLS.get(skill, []))
     return STUB_TEMPLATE.format(
@@ -94,62 +97,73 @@ def render_stub(skill: str) -> str:
     )
 
 
+def _build_skill_stub(target_base: Path, skill: str) -> bool:
+    src = PROJECT_ROOT / "skills" / skill
+    if not src.exists():
+        print(f"[WARN] canonical skill missing: skills/{skill}", file=sys.stderr)
+        return False
+    if not (src / SKILL_FILENAME).exists():
+        print(f"[WARN] skills/{skill}/{SKILL_FILENAME} missing", file=sys.stderr)
+        return False
+    dst = target_base / skill
+    if dst.exists():
+        shutil.rmtree(dst)
+    dst.mkdir(parents=True, exist_ok=True)
+    (dst / SKILL_FILENAME).write_text(render_stub(skill), encoding="utf-8")
+    return True
+
+
 def build():
     count = 0
-    for target_rel, mode in TARGETS:
+    for target_rel, _mode in TARGETS:
         target_base = PROJECT_ROOT / target_rel
         target_base.mkdir(parents=True, exist_ok=True)
         for skill in CANONICAL_SKILLS:
-            src = PROJECT_ROOT / "skills" / skill
-            if not src.exists():
-                print(f"[WARN] canonical skill missing: skills/{skill}", file=sys.stderr)
-                continue
-            if not (src / "SKILL.md").exists():
-                print(f"[WARN] skills/{skill}/SKILL.md missing", file=sys.stderr)
-                continue
-            dst = target_base / skill
-            if dst.exists():
-                shutil.rmtree(dst)
-            dst.mkdir(parents=True, exist_ok=True)
-            (dst / "SKILL.md").write_text(render_stub(skill), encoding="utf-8")
-            count += 1
+            if _build_skill_stub(target_base, skill):
+                count += 1
     print(f"✅ Built {count} thin skill stubs across {len(TARGETS)} targets.")
     return 0
 
 
-def check():
-    """Verify stubs match the generated template (not the skill bodies)."""
+def _check_skill_stub(target_rel: str, skill: str) -> List[str]:
     errors = []
-    for target_rel, mode in TARGETS:
-        for skill in CANONICAL_SKILLS:
-            dst = PROJECT_ROOT / target_rel / skill / "SKILL.md"
-            if not dst.exists():
-                errors.append(f"MISSING stub: {target_rel}/{skill}/SKILL.md")
-                continue
-            if dst.read_text(encoding="utf-8") != render_stub(skill):
-                errors.append(f"OUT OF SYNC: {target_rel}/{skill}/SKILL.md")
-            # Stubs must not drag code bodies back in.
-            stray = [
-                p.name
-                for p in (PROJECT_ROOT / target_rel / skill).iterdir()
-                if p.name != "SKILL.md"
-            ]
-            if stray:
-                errors.append(f"STRAY FILES in {target_rel}/{skill}: {sorted(stray)}")
-    # Validate package.json pi/omp blocks resolve
+    dst = PROJECT_ROOT / target_rel / skill / SKILL_FILENAME
+    if not dst.exists():
+        return [f"MISSING stub: {target_rel}/{skill}/{SKILL_FILENAME}"]
+    if dst.read_text(encoding="utf-8") != render_stub(skill):
+        errors.append(f"OUT OF SYNC: {target_rel}/{skill}/{SKILL_FILENAME}")
+    stray = [
+        p.name
+        for p in (PROJECT_ROOT / target_rel / skill).iterdir()
+        if p.name != SKILL_FILENAME
+    ]
+    if stray:
+        errors.append(f"STRAY FILES in {target_rel}/{skill}: {sorted(stray)}")
+    return errors
+
+
+def _check_package_json() -> List[str]:
+    errors = []
     pkg = json.loads((PROJECT_ROOT / "package.json").read_text())
     for key in ("pi", "omp"):
         block = pkg.get(key, {})
         for kind in ("skills", "extensions", "prompts"):
             for p in block.get(kind, []):
-                # glob patterns allowed in prompts
                 if "*" in p:
                     if not list(PROJECT_ROOT.glob(p.lstrip("./"))):
-                        errors.append(
-                            f"package.json {key}.{kind} glob matches nothing: {p}"
-                        )
+                        errors.append(f"package.json {key}.{kind} glob matches nothing: {p}")
                 elif not (PROJECT_ROOT / p.lstrip("./")).exists():
                     errors.append(f"package.json {key}.{kind} missing: {p}")
+    return errors
+
+
+def check():
+    """Verify stubs match the generated template (not the skill bodies)."""
+    errors = []
+    for target_rel, _mode in TARGETS:
+        for skill in CANONICAL_SKILLS:
+            errors.extend(_check_skill_stub(target_rel, skill))
+    errors.extend(_check_package_json())
     if errors:
         print("❌ Adapter check failed:")
         for e in errors:

@@ -5,9 +5,25 @@
  * High-Integrity Dialectic Research Harness for Claude Code, Pi, OMP, OpenCode V2, Gemini CLI, Codex CLI, AntiGravity.
  */
 
-const { spawnSync } = require('child_process');
-const path = require('path');
-const fs = require('fs');
+const { spawnSync } = require('node:child_process');
+const path = require('node:path');
+const fs = require('node:fs');
+
+function resolveBinary(name) {
+  const pathDirs = (process.env.PATH || '').split(path.delimiter);
+  for (const dir of pathDirs) {
+    if (!dir || dir === '.' || dir.startsWith('./') || dir.startsWith('../')) continue;
+    const full = path.join(dir, name);
+    try {
+      if (fs.existsSync(full)) {
+        return fs.realpathSync(full);
+      }
+    } catch {
+      /* ignore access errors */
+    }
+  }
+  return name;
+}
 
 const PKG_ROOT = path.resolve(__dirname, '..');
 const args = process.argv.slice(2);
@@ -74,7 +90,7 @@ function runPython(scriptRelPath, extraArgs = []) {
     const scriptPath = path.join(PKG_ROOT, scriptRelPath);
     finalArgs = [scriptPath, ...extraArgs];
   }
-  const result = spawnSync('python3', finalArgs, {
+  const result = spawnSync(resolveBinary('python3'), finalArgs, {
     stdio: 'inherit',
     cwd: process.cwd(),
     env: { ...process.env, PYTHONPATH: PKG_ROOT }
@@ -84,7 +100,7 @@ function runPython(scriptRelPath, extraArgs = []) {
 
 function runBash(scriptRelPath, extraArgs = []) {
   const scriptPath = path.join(PKG_ROOT, scriptRelPath);
-  const result = spawnSync('bash', [scriptPath, ...extraArgs], {
+  const result = spawnSync(resolveBinary('bash'), [scriptPath, ...extraArgs], {
     stdio: 'inherit',
     cwd: process.cwd()
   });
@@ -186,14 +202,14 @@ switch (command) {
 
   case 'doctor': {
     console.log('🔍 Checking Epistemic Swarm Environment:\n');
-    const claudeCheck = spawnSync('claude', ['--version'], { encoding: 'utf-8' });
+    const claudeCheck = spawnSync(resolveBinary('claude'), ['--version'], { encoding: 'utf-8' });
     if (claudeCheck.status === 0) {
       console.log(`✅ Claude Code: ${claudeCheck.stdout.trim()}`);
     } else {
       console.log('⚠️ Claude Code CLI not found in PATH (Install via npm i -g @anthropic-ai/claude-code)');
     }
 
-    const pyCheck = spawnSync('python3', ['--version'], { encoding: 'utf-8' });
+    const pyCheck = spawnSync(resolveBinary('python3'), ['--version'], { encoding: 'utf-8' });
     console.log(`✅ Python: ${pyCheck.stdout ? pyCheck.stdout.trim() : 'python3 missing'}`);
 
     console.log(`✅ Node.js: ${process.version}`);

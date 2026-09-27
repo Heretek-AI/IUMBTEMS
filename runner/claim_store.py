@@ -22,6 +22,7 @@ need an API call and are out of this phase's scope).
 import argparse
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -50,8 +51,8 @@ def _has_fts5(conn: sqlite3.Connection) -> bool:
 
 class ClaimStore:
     def __init__(self, base_dir: Path, db_path: Optional[Path] = None):
-        self.base_dir = Path(base_dir)
-        self.db_path = db_path or (self.base_dir / "claims.sqlite")
+        self.base_dir = Path(os.path.realpath(str(base_dir)))
+        self.db_path = Path(os.path.realpath(str(db_path))) if db_path else (self.base_dir / "claims.sqlite")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.row_factory = sqlite3.Row
@@ -344,7 +345,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     search_p.add_argument("text")
     args = parser.parse_args(argv)
 
-    base = Path(args.dir)
+    base = Path(os.path.realpath(str(args.dir)))
     if args.command == "reindex" or args.command is None:
         print(json.dumps(reindex(base), indent=2))
         return 0
@@ -354,7 +355,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         store.close()
         print(json.dumps(rows, indent=2, default=str))
         return 0
-    return 0
+    return 1
 
 
 if __name__ == "__main__":

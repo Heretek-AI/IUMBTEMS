@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Dict, Any
 
+DEFAULT_RESEARCH_DIR = ".research"
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "search_engine": "duckduckgo",
     "max_iterations": 2,
@@ -17,7 +19,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "mode": "research",  # "research", "audit", "scout", "hybrid", "brainstorm"
     "cache_raw_markdown": True,
     "license_whitelist": ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC"],
-    "output_dir": ".research",
+    "output_dir": DEFAULT_RESEARCH_DIR,
     # Scope allocation policy (Stream F): "dag" = legacy dependency-first
     # order; "auction" = Frontier Markets (highest expected-information-gain
     # bid first). Default "dag" preserves existing behavior exactly.
@@ -37,11 +39,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 
-def get_config_path(base_dir: str = ".research") -> Path:
+def get_config_path(base_dir: str = DEFAULT_RESEARCH_DIR) -> Path:
     return Path(base_dir) / "config.json"
 
 
-def load_config(base_dir: str = ".research") -> Dict[str, Any]:
+def load_config(base_dir: str = DEFAULT_RESEARCH_DIR) -> Dict[str, Any]:
     cfg_file = get_config_path(base_dir)
     if not cfg_file.exists():
         return dict(DEFAULT_CONFIG)
@@ -58,7 +60,7 @@ def load_config(base_dir: str = ".research") -> Dict[str, Any]:
         return dict(DEFAULT_CONFIG)
 
 
-def save_config(cfg: Dict[str, Any], base_dir: str = ".research") -> Path:
+def save_config(cfg: Dict[str, Any], base_dir: str = DEFAULT_RESEARCH_DIR) -> Path:
     target_dir = Path(base_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     cfg_file = target_dir / "config.json"
@@ -136,27 +138,7 @@ def run_interactive(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return cfg
 
 
-def main():
-    cfg = load_config()
-    args = sys.argv[1:]
-
-    if not args or "--show" in args:
-        display_config(cfg)
-        if not args:
-            print("To edit settings, run:")
-            print("  python3 skills/swarm_config/configure.py --interactive")
-            print(
-                "  python3 skills/swarm_config/configure.py --engine duckduckgo --depth 3 --mode audit\n"
-            )
-        return
-
-    if "--interactive" in args or "-i" in args:
-        cfg = run_interactive(cfg)
-        cfg_path = save_config(cfg)
-        print(f"✅ Configuration saved to {cfg_path}")
-        display_config(cfg)
-        return
-
+def _parse_cli_updates(args: list, cfg: Dict[str, Any]) -> bool:
     idx = 0
     modified = False
     while idx < len(args):
@@ -188,13 +170,35 @@ def main():
                 pass
             idx += 1
         idx += 1
+    return modified
 
+
+def main():
+    cfg = load_config()
+    args = sys.argv[1:]
+
+    if not args or "--show" in args:
+        display_config(cfg)
+        if not args:
+            print("To edit settings, run:")
+            print("  python3 skills/swarm_config/configure.py --interactive")
+            print(
+                "  python3 skills/swarm_config/configure.py --engine duckduckgo --depth 3 --mode audit\n"
+            )
+        return
+
+    if "--interactive" in args or "-i" in args:
+        cfg = run_interactive(cfg)
+        cfg_path = save_config(cfg)
+        print(f"✅ Configuration saved to {cfg_path}")
+        display_config(cfg)
+        return
+
+    modified = _parse_cli_updates(args, cfg)
     if modified:
         cfg_path = save_config(cfg)
         print(f"✅ Configuration updated and saved to {cfg_path}")
-        display_config(cfg)
-    else:
-        display_config(cfg)
+    display_config(cfg)
 
 
 if __name__ == "__main__":

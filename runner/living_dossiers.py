@@ -21,6 +21,7 @@ Degradation rules (applied after quote verification):
 
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -83,6 +84,8 @@ def write_retraction(
     """Record a RETRACTED/REVISED event for a cached source."""
     if event not in VALID_EVENTS:
         raise ValueError(f"event must be one of {VALID_EVENTS}, got {event!r}")
+    if not re.match(r"^[a-zA-Z0-9_\-\.]+$", source_hash):
+        raise ValueError(f"Invalid source hash: {source_hash!r}")
     retr_dir = Path(base_dir) / "retractions"
     retr_dir.mkdir(parents=True, exist_ok=True)
     payload = RetractionEvent(
@@ -281,7 +284,7 @@ def check_staleness(base_dir: Path, scope_ids: Optional[List[str]] = None) -> Di
             claim_sets += 1
             dossier = load_dossier(dpath)
             claims = claims_from_dossier(dossier)
-            degraded, events = apply_degradation(
+            _, events = apply_degradation(
                 claims, retractions, scope_id=scope_id
             )
             all_events.extend(events)
@@ -339,16 +342,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     sub.add_parser("check", help="Run one staleness/degradation pass")
     args = parser.parse_args(argv)
 
-    base = Path(args.dir)
+    base = Path(os.path.realpath(str(args.dir)))
     if args.command == "report":
         path = write_retraction(base, args.hash, args.event, note=args.note)
         print(json.dumps({"status": "recorded", "path": str(path)}))
         return 0
-    if args.command == "check":
-        print(json.dumps(check_staleness(base), indent=2))
-        return 0
-    print(json.dumps(check_staleness(base), indent=2))
-    return 0
+    if args.command == "check" or args.command is None:
+        res = check_staleness(base)
+        print(json.dumps(res, indent=2))
+        return 1 if res.get("degraded_scopes") else 0
+    return 1
 
 
 if __name__ == "__main__":

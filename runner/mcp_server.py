@@ -63,6 +63,13 @@ def _capture_stdout(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> str:
 # tool handlers
 # ---------------------------------------------------------------------------
 
+DEFAULT_RESEARCH_DIR = ".research"
+
+
+def _resolve_base_dir(args: Dict[str, Any]) -> Path:
+    raw = args.get("base_dir") or args.get("dir") or DEFAULT_RESEARCH_DIR
+    return Path(os.path.realpath(str(raw)))
+
 def _handle_config(args: Dict[str, Any]) -> str:
     """Inspect or modify swarm parameters in .research/config.json."""
     from skills.swarm_config.configure import (
@@ -71,7 +78,7 @@ def _handle_config(args: Dict[str, Any]) -> str:
         save_config,
     )
 
-    base_dir = args.get("base_dir") or args.get("dir") or ".research"
+    base_dir = str(_resolve_base_dir(args))
     cfg = load_config(base_dir)
 
     updates = {}
@@ -102,7 +109,7 @@ def _run_swarm_mode(mode: Optional[str], args: Dict[str, Any]) -> str:
 
     frontier = args.get("frontier") or args.get("frontier_file")
     runner = SwarmRunner(
-        base_dir=Path(args.get("base_dir") or args.get("dir") or ".research"),
+        base_dir=_resolve_base_dir(args),
         mock_mode=bool(args.get("mock_claude") or args.get("mock_mode")),
         mode=mode or args.get("mode"),
         engine=args.get("engine"),
@@ -155,7 +162,7 @@ def _handle_verify_quote(args: Dict[str, Any]) -> str:
     if not content_hash or quote is None:
         raise ValueError("hash and quote are required")
 
-    hasher = SourceHasher(Path(args.get("base_dir") or args.get("dir") or ".research"))
+    hasher = SourceHasher(_resolve_base_dir(args))
     is_verified, confidence, message = hasher.verify_quote(content_hash, quote)
     return _tool_text({
         "verified": bool(is_verified),
@@ -173,7 +180,7 @@ def _handle_report_retraction(args: Dict[str, Any]) -> str:
     event = args.get("event")
     if not source_hash or not event:
         raise ValueError("hash and event are required")
-    base_dir = Path(args.get("base_dir") or args.get("dir") or ".research")
+    base_dir = _resolve_base_dir(args)
     path = write_retraction(
         base_dir,
         source_hash,
@@ -188,7 +195,7 @@ def _handle_check_staleness(args: Dict[str, Any]) -> str:
     """Run one claim-degradation pass (retractions -> STALE/SUSPECT + requeue)."""
     from runner.living_dossiers import check_staleness
 
-    base_dir = Path(args.get("base_dir") or args.get("dir") or ".research")
+    base_dir = _resolve_base_dir(args)
     scope_ids = args.get("scope_ids")
     return _tool_text(check_staleness(base_dir, scope_ids=scope_ids))
 
@@ -202,7 +209,7 @@ def _handle_set_domain_pack(args: Dict[str, Any]) -> str:
     if not pack:
         raise ValueError("pack is required")
     constitution = load_domain_pack(pack)  # raises if unknown — fail loudly
-    base_dir = args.get("base_dir") or args.get("dir") or ".research"
+    base_dir = str(_resolve_base_dir(args))
     cfg = load_config(base_dir)
     cfg["domain_pack"] = pack
     save_config(cfg, base_dir)
@@ -219,7 +226,7 @@ def _handle_export_brief(args: Dict[str, Any]) -> str:
     """Export a proof-carrying research brief (signed, self-contained bundle)."""
     from runner.pcrb import export_brief
 
-    base_dir = Path(args.get("base_dir") or args.get("dir") or ".research")
+    base_dir = _resolve_base_dir(args)
     key = args.get("key")
     key_path = Path(args["key_file"]) if args.get("key_file") else None
     path = export_brief(
@@ -244,7 +251,7 @@ def _handle_verify_brief(args: Dict[str, Any]) -> str:
     brief = args.get("brief") or args.get("path")
     if not brief:
         raise ValueError("brief path is required")
-    p = Path(brief)
+    p = Path(os.path.realpath(str(brief)))
     if not p.exists():
         raise FileNotFoundError(f"no such brief: {p}")
     bundle = json.loads(p.read_text(encoding="utf-8"))
@@ -252,8 +259,10 @@ def _handle_verify_brief(args: Dict[str, Any]) -> str:
     key = None
     if args.get("key"):
         key = args["key"].encode("utf-8")
-    elif args.get("key_file") and Path(args["key_file"]).exists():
-        key = Path(args["key_file"]).read_bytes().strip()
+    elif args.get("key_file"):
+        kf = Path(os.path.realpath(str(args["key_file"])))
+        if kf.is_file():
+            key = kf.read_bytes().strip()
     elif os.environ.get(ENV_KEY):
         key = os.environ[ENV_KEY].encode("utf-8")
 
@@ -264,7 +273,7 @@ def _handle_reindex_claims(args: Dict[str, Any]) -> str:
     """Rebuild the derived claims.sqlite index from .research flat files."""
     from runner.claim_store import reindex
 
-    base_dir = Path(args.get("base_dir") or args.get("dir") or ".research")
+    base_dir = _resolve_base_dir(args)
     return _tool_text(reindex(base_dir))
 
 

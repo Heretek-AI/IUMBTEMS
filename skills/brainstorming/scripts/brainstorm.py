@@ -7,6 +7,7 @@ runner/research_swarm.py --mode brainstorm.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -167,7 +168,7 @@ def main():
     )
     args = ap.parse_args()
 
-    model, docs = build_domain_model(args.objective, full=not args.shallow)
+    model, _ = build_domain_model(args.objective, full=not args.shallow)
 
     if args.show_context or not args.export:
         print(f"\n🧠 [Brainstorm] Objective: {args.objective}")
@@ -190,7 +191,7 @@ def main():
         )
 
     if args.export:
-        out = Path(args.export)
+        out = Path(os.path.realpath(str(args.export)))
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(model, indent=2), encoding="utf-8")
         print(f"✅ Domain model exported to {out}")

@@ -23,16 +23,16 @@ mkdir -p "$CLAUDE_DIR/skills"
 echo "🔗 Linking skills into $CLAUDE_DIR/skills/..."
 for skill in grilling research_cache epistemic_search swarm_config code_audit oss_scout brainstorming; do
   # legacy research-cache dir name kept as alias for older configs
-  ln -sf "$REPO_DIR/skills/$skill" "$CLAUDE_DIR/skills/$skill"
+  ln -sfn "$REPO_DIR/skills/$skill" "$CLAUDE_DIR/skills/$skill"
   echo "   - $CLAUDE_DIR/skills/$skill -> $REPO_DIR/skills/$skill"
 done
-if [ ! -e "$CLAUDE_DIR/skills/research-cache" ]; then
-  ln -sf "$REPO_DIR/skills/research_cache" "$CLAUDE_DIR/skills/research-cache"
+if [[ ! -e "$CLAUDE_DIR/skills/research-cache" ]]; then
+  ln -sfn "$REPO_DIR/skills/research_cache" "$CLAUDE_DIR/skills/research-cache"
   echo "   - $CLAUDE_DIR/skills/research-cache -> $REPO_DIR/skills/research_cache (legacy alias)"
 fi
 
 # 3. Patch ~/.claude.json mcpServers non-destructively
-if [ -f "$CLAUDE_JSON" ]; then
+if [[ -f "$CLAUDE_JSON" ]]; then
     echo "🔧 Merging research MCP servers into $CLAUDE_JSON..."
     python3 - <<EOF
 import json
@@ -77,7 +77,7 @@ fi
 
 # 4. Patch ~/.claude/settings.json
 SETTINGS_JSON="$CLAUDE_DIR/settings.json"
-if [ -f "$SETTINGS_JSON" ]; then
+if [[ -f "$SETTINGS_JSON" ]]; then
     echo "🔧 Merging plugin settings into $SETTINGS_JSON..."
     python3 - <<EOF
 import json

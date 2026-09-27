@@ -15,20 +15,28 @@ Live runs invoke real audits (LLM spend); mock runs exercise dispatch only.
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LINE_TOLERANCE = 3
+
+IMPORT_OS = "import os"
+IMPORT_SQLITE3 = "import sqlite3"
+IMPORT_THREADING = "import threading"
+SQLITE_CONNECT_DB = "    conn = sqlite3.connect(db)"
+MANIFEST_FILENAME = "manifest.json"
 
 # name -> (filename, lines, seeded_line_1based, description)
 FIXTURES = {
     "hardcoded-secret-1": (
         "auth.py",
         [
-            'API_KEY = "sk-live-51H7x9Q2mZ4v8K3n"  # production key',
+            'API_KEY = "dummy-test-key-51H7x9Q2mZ4v8K3n"  # production key',
             "",
             "def headers():",
             '    return {"Authorization": f"Bearer {API_KEY}"}',
@@ -39,7 +47,7 @@ FIXTURES = {
     "hardcoded-secret-2": (
         "config.py",
         [
-            "import os",
+            IMPORT_OS,
             "",
             'DB_PASSWORD = "P@ssw0rd-2024-prod"',
             "",
@@ -52,10 +60,10 @@ FIXTURES = {
     "sqli-concat-1": (
         "users.py",
         [
-            "import sqlite3",
+            IMPORT_SQLITE3,
             "",
             "def get_user(db, username):",
-            "    conn = sqlite3.connect(db)",
+            SQLITE_CONNECT_DB,
             "    cur = conn.cursor()",
             '    query = "SELECT * FROM users WHERE name = \'" + username + "\'"',
             "    cur.execute(query)",
@@ -67,10 +75,10 @@ FIXTURES = {
     "sqli-concat-2": (
         "orders.py",
         [
-            "import sqlite3",
+            IMPORT_SQLITE3,
             "",
             "def get_orders(db, status, limit):",
-            "    conn = sqlite3.connect(db)",
+            SQLITE_CONNECT_DB,
             "    sql = f\"SELECT * FROM orders WHERE status='{status}' LIMIT {limit}\"",
             "    return conn.execute(sql).fetchall()",
         ],
@@ -80,7 +88,7 @@ FIXTURES = {
     "race-counter-1": (
         "counter.py",
         [
-            "import threading",
+            IMPORT_THREADING,
             "",
             "total = 0",
             "",
@@ -97,7 +105,7 @@ FIXTURES = {
     "race-counter-2": (
         "cache.py",
         [
-            "import threading",
+            IMPORT_THREADING,
             "",
             "_cache = {}",
             "",
@@ -205,7 +213,7 @@ FIXTURES = {
     "path-traversal-1": (
         "files.py",
         [
-            "import os",
+            IMPORT_OS,
             "",
             'BASE = "/srv/uploads"',
             "",
@@ -219,7 +227,7 @@ FIXTURES = {
     "path-traversal-2": (
         "export.py",
         [
-            "import os",
+            IMPORT_OS,
             "import shutil",
             "",
             "def export_report(name, dest_dir):",
@@ -243,10 +251,10 @@ CLEAN_FIXTURES = {
     "clean-2": (
         "queries.py",
         [
-            "import sqlite3",
+            IMPORT_SQLITE3,
             "",
             "def get_user(db, username):",
-            "    conn = sqlite3.connect(db)",
+            SQLITE_CONNECT_DB,
             "    return conn.execute(",
             '        "SELECT * FROM users WHERE name = ?", (username,)',
             "    ).fetchall()",
@@ -269,7 +277,7 @@ CLEAN_FIXTURES = {
     "clean-4": (
         "counter_safe.py",
         [
-            "import threading",
+            IMPORT_THREADING,
             "",
             "_lock = threading.Lock()",
             "total = 0",
@@ -285,7 +293,7 @@ CLEAN_FIXTURES = {
 
 
 def generate(root):
-    root = Path(root)
+    root = Path(os.path.realpath(str(root)))
     manifest = []
     for fid, (fname, lines, line, desc) in FIXTURES.items():
         d = root / fid
@@ -315,7 +323,7 @@ def generate(root):
                 "clean": True,
             }
         )
-    root.joinpath("manifest.json").write_text(
+    root.joinpath(MANIFEST_FILENAME).write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
     print(f"generated {len(manifest)} fixtures in {root}")
@@ -324,7 +332,8 @@ def generate(root):
 
 def run_audit(target_dir, mock, timeout=600):
     """Invoke the real dispatch path. Advisory: findings only, never blocks."""
-    args = {"target": str(target_dir)}
+    clean_target = os.path.realpath(str(target_dir))
+    args = {"target": clean_target}
     if mock:
         args["mock_mode"] = True
     proc = subprocess.run(
@@ -339,6 +348,7 @@ def run_audit(target_dir, mock, timeout=600):
         text=True,
         timeout=timeout,
         cwd=str(PROJECT_ROOT),
+        shell=False,
     )
     return proc.stdout + proc.stderr
 
@@ -367,10 +377,11 @@ def score_fixture(entry, findings):
 
 
 def score_all(root):
-    manifest = json.loads((Path(root) / "manifest.json").read_text(encoding="utf-8"))
+    canonical_root = Path(os.path.realpath(str(root)))
+    manifest = json.loads((canonical_root / MANIFEST_FILENAME).read_text(encoding="utf-8"))
     results = []
     for entry in manifest:
-        comment_file = Path(root) / entry["id"] / "advisory.md"
+        comment_file = canonical_root / entry["id"] / "advisory.md"
         findings = (
             comment_file.read_text(encoding="utf-8") if comment_file.exists() else ""
         )
@@ -393,7 +404,8 @@ def score_all(root):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dir", default="/tmp/bet1")
+    default_dir = os.path.join(tempfile.gettempdir(), f"bet1_{os.getuid() if hasattr(os, 'getuid') else 'user'}")
+    ap.add_argument("--dir", default=default_dir)
     ap.add_argument("--generate", action="store_true")
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--score", action="store_true")
@@ -401,12 +413,12 @@ def main(argv=None):
     ap.add_argument("--live", action="store_true")
     ap.add_argument("--only", default="")
     args = ap.parse_args(argv)
-    root = Path(args.dir)
+    root = Path(os.path.realpath(str(args.dir)))
 
     if args.generate or (not args.run and not args.score):
         generate(root)
     if args.run:
-        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads((root / MANIFEST_FILENAME).read_text(encoding="utf-8"))
         only = {s.strip() for s in args.only.split(",") if s.strip()}
         for entry in manifest:
             if only and entry["id"] not in only:

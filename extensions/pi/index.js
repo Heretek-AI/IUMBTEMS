@@ -12,19 +12,36 @@
  * not a duplicate tool implementation.
  */
 
-import { spawnSync } from 'child_process';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PKG_ROOT = path.resolve(__dirname, '../..');
 const MCP_SERVER = path.join(PKG_ROOT, 'runner', 'mcp_server.py');
 
+function resolveBinary(name) {
+  const pathDirs = (process.env.PATH || '').split(path.delimiter);
+  for (const dir of pathDirs) {
+    if (!dir || dir === '.' || dir.startsWith('./') || dir.startsWith('../')) continue;
+    const full = path.join(dir, name);
+    try {
+      if (fs.existsSync(full)) {
+        return fs.realpathSync(full);
+      }
+    } catch {
+      /* ignore access errors */
+    }
+  }
+  return name;
+}
+
 /** Uniform dispatch: one-shot MCP call. Returns {ok, text}. */
 function callMcp(tool, args = {}, ctx = {}) {
   const res = spawnSync(
-    'python3',
+    resolveBinary('python3'),
     [MCP_SERVER, 'call', tool, JSON.stringify(args || {})],
     {
       encoding: 'utf-8',
@@ -154,7 +171,7 @@ export default function initPiExtension(pi) {
         ctx.output?.(`💡 [IUMBTEMS Brainstorm] Diverging on: "${objective}"...`);
         // Skill-local context scaffold (not a tool duplicate) -> then canonical tool.
         const scaffold = path.join(PKG_ROOT, 'skills/brainstorming/scripts/brainstorm.py');
-        const pre = spawnSync('python3', [scaffold, '--objective', objective, '--show-context'], {
+        const pre = spawnSync(resolveBinary('python3'), [scaffold, '--objective', objective, '--show-context'], {
           encoding: 'utf-8',
           cwd: ctx.cwd || process.cwd()
         });

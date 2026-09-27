@@ -11,8 +11,8 @@
  * `keymap.layer` (inside a component scope), `api.theme`.
  */
 
-import { readFileSync, readdirSync, statSync } from 'fs';
-import path from 'path';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { createElement, insert, setProp } from '@opentui/solid';
 import { createEffect, createSignal, onCleanup } from 'solid-js';
 import { OPENCODE_COMMANDS } from './index.js';
@@ -65,9 +65,8 @@ export function readSwarmStatus(root) {
     suspect: 0,
     requeued: 0,
   };
-  let entries = [];
   try {
-    entries = readdirSync(research);
+    readdirSync(research);
     status.workspace = true;
   } catch {
     return status;
@@ -149,7 +148,7 @@ function summarize(status) {
   return `IUMBTEMS: ${bits.join(' · ')}`;
 }
 
-function SwarmSidebar(api, root, sessionID) {
+function SwarmSidebar(api, root) {
   const colors = themeFg(api?.theme);
   const [snapshot, setSnapshot] = createSignal(readSwarmStatus(root));
   createEffect(() => {
@@ -162,7 +161,6 @@ function SwarmSidebar(api, root, sessionID) {
     }, REFRESH_MS);
     onCleanup(() => clearInterval(timer));
   });
-  void sessionID;
   return box({}, [
     () => {
       const s = snapshot();
@@ -196,7 +194,7 @@ function SwarmKeymapLayer(api) {
   // Every slash command gets a palette entry (usage toast; the host has no
   // programmatic slash-invoke API, so discovery + usage guidance is the win).
   for (const cmd of OPENCODE_COMMANDS || []) {
-    if (!cmd || !cmd.name) continue;
+    if (!cmd?.name) continue;
     commands.push({
       id: `iumbtems.command.${cmd.name}`,
       title: `/${cmd.name}`,
@@ -247,8 +245,8 @@ function registerSlot(api, name, render) {
 export function setupTui(api) {
   try {
     const root = resolveRoot(api);
-    const offSidebar = registerSlot(api, 'sidebar.content', (props) =>
-      SwarmSidebar(api, root, props?.sessionID)
+    const offSidebar = registerSlot(api, 'sidebar.content', () =>
+      SwarmSidebar(api, root)
     );
     const offApp = registerSlot(api, 'app', () => SwarmKeymapLayer(api));
     return () => {

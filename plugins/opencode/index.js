@@ -11,15 +11,31 @@
  * catalog. Schemas mirror runner/mcp_server.py build_tools() — keep in sync.
  */
 
-import { spawn } from 'child_process';
-import { readFileSync } from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { spawn } from 'node:child_process';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PKG_ROOT = path.resolve(__dirname, '../..');
 const MCP_SERVER = path.join(PKG_ROOT, 'runner', 'mcp_server.py');
+
+function resolveBinary(name) {
+  const pathDirs = (process.env.PATH || '').split(path.delimiter);
+  for (const dir of pathDirs) {
+    if (!dir || dir === '.' || dir.startsWith('./') || dir.startsWith('../')) continue;
+    const full = path.join(dir, name);
+    try {
+      if (existsSync(full)) {
+        return realpathSync(full);
+      }
+    } catch {
+      /* ignore access errors */
+    }
+  }
+  return name;
+}
 
 /** Plugin version tracks package.json so it cannot drift across releases. */
 let PKG_VERSION = '0.0.0';
@@ -35,7 +51,7 @@ try {
  * Async (non-blocking spawn) so long swarms/audits never freeze the host
  * event loop; cancellation remains the host's prerogative.
  */
-function callMcp(tool, args = {}, cwd) {
+function callMcp(tool, args = {}, cwd = undefined) {
   return new Promise((resolve) => {
     let stdout = '';
     let stderr = '';
@@ -48,7 +64,7 @@ function callMcp(tool, args = {}, cwd) {
     let child;
     try {
       child = spawn(
-        'python3',
+        resolveBinary('python3'),
         [MCP_SERVER, 'call', tool, JSON.stringify(args || {})],
         {
           cwd: cwd || process.cwd(),
@@ -56,12 +72,12 @@ function callMcp(tool, args = {}, cwd) {
         }
       );
     } catch (err) {
-      done(String((err && err.message) || err), 'error');
+      done(String(err?.message || err), 'error');
       return;
     }
     child.stdout.on('data', (d) => { stdout += String(d); });
     child.stderr.on('data', (d) => { stderr += String(d); });
-    child.on('error', (err) => done(String((err && err.message) || err), 'error'));
+    child.on('error', (err) => done(String(err?.message || err), 'error'));
     child.on('close', (code) => done(stdout || stderr, code === 0 ? 'success' : 'error'));
   });
 }
@@ -469,7 +485,7 @@ function buildToolMap() {
       {
         ...tool,
         options: { codemode: false },
-        execute: async (args = {}, toolContext) =>
+        execute: async (args = {}, toolContext = undefined) =>
           callMcp(tool.name, normalizeArgs(tool.name, args), toolContext?.cwd),
       },
     ])
@@ -507,22 +523,31 @@ function readJsonFile(file) {
   }
 }
 
+function parseLedgerEntries(ledger) {
+  const stale = [];
+  const suspect = [];
+  const last = new Map();
+  for (const e of ledger) {
+    if (typeof e?.claim_id === 'string') last.set(e.claim_id, e.to_status);
+  }
+  for (const [id, s] of last) {
+    if (s === 'STALE') stale.push(id);
+    else if (s === 'SUSPECT') suspect.push(id);
+  }
+  const lastAt = ledger.at(-1)?.at ?? '';
+  return { stale, suspect, fingerprint: `${ledger.length}:${lastAt}` };
+}
+
 /** Last-write-wins degraded claims + requeue list. Pure fs reads. */
 export function readLedgerDegraded(root) {
   const out = { stale: [], suspect: [], requeued: [], fingerprint: 'empty' };
   try {
     const ledger = readJsonFile(path.join(root, '.research', 'ledger', 'claim_status.json'));
     if (Array.isArray(ledger)) {
-      const last = new Map();
-      for (const e of ledger) {
-        if (e && typeof e.claim_id === 'string') last.set(e.claim_id, e.to_status);
-      }
-      for (const [id, s] of last) {
-        if (s === 'STALE') out.stale.push(id);
-        else if (s === 'SUSPECT') out.suspect.push(id);
-      }
-      const lastAt = ledger.length > 0 ? ledger[ledger.length - 1]?.at : '';
-      out.fingerprint = `${ledger.length}:${lastAt}`;
+      const parsed = parseLedgerEntries(ledger);
+      out.stale = parsed.stale;
+      out.suspect = parsed.suspect;
+      out.fingerprint = parsed.fingerprint;
     }
     const requeue = readJsonFile(path.join(root, '.research', 'requeue.json'));
     if (Array.isArray(requeue)) {
@@ -635,6 +660,86 @@ export function startStalenessNudge(host, root) {
   }
 }
 
+async function registerHostCommands(host) {
+  if (typeof host?.command?.transform !== 'function') return;
+  let existing = new Set();
+  try {
+    const listed = await host.command.list();
+    existing = new Set((listed?.data || []).map((c) => c?.name));
+  } catch {
+    /* treat as empty */
+  }
+  await host.command.transform((draft) => {
+    for (const cmd of OPENCODE_COMMANDS) {
+      if (!cmd?.name || existing.has(cmd.name)) continue;
+      existing.add(cmd.name);
+      draft.add({
+        name: cmd.name,
+        description: cmd.description,
+        execute: async (input) => {
+          const args = input?.prompt?.text || '';
+          const prompt = (typeof input?.prompt === 'object' && input?.prompt !== null) ? input.prompt : {};
+          await host.session.prompt({
+            ...prompt,
+            sessionID: input?.sessionID,
+            text: cmd.template.split('$ARGUMENTS').join(String(args).trim()),
+            delivery: input?.delivery,
+          });
+        },
+      });
+    }
+  });
+}
+
+async function registerHostTools(host) {
+  if (typeof host?.tool?.transform !== 'function') return;
+  await host.tool.transform((draft) => {
+    for (const [name, spec] of Object.entries(buildToolMap())) {
+      draft.add({
+        name,
+        description: spec.description,
+        input: spec.input,
+        options: { codemode: false },
+        execute: async (args = {}, toolContext = undefined) => {
+          const r = await callMcp(name, normalizeArgs(name, args), toolContext?.cwd);
+          return { content: r.content };
+        },
+      });
+    }
+  });
+}
+
+async function applyConfigOptions(host, opts, context) {
+  if (!opts || typeof opts !== 'object') return;
+  const updates = {};
+  if (opts.search_engine) updates.search_engine = opts.search_engine;
+  if (opts.max_iterations) updates.max_iterations = opts.max_iterations;
+  if (opts.mode) updates.mode = opts.mode;
+  if (opts.divergence_threshold !== undefined) {
+    updates.divergence_threshold = opts.divergence_threshold;
+  }
+  if (Object.keys(updates).length > 0) {
+    await callMcp(
+      'iumbtems_config',
+      updates,
+      host.location?.directory || context.location?.directory || host.cwd
+    );
+  }
+}
+
+function startNudgeSubscription(host, opts, context, cleanups) {
+  if (!(opts?.staleness_nudge ?? true)) return;
+  const nudgeHost = {
+    event: host.event || context.event,
+    session: host.session || context.session,
+  };
+  const root = host.location?.directory || context.location?.directory;
+  if (root) {
+    const stop = startStalenessNudge(nudgeHost, root);
+    if (typeof stop === 'function') cleanups.add(stop);
+  }
+}
+
 export function createOpenCodePlugin(context = {}) {
   return {
     id: 'heretek.iumbtems.epistemic-swarm',
@@ -665,115 +770,35 @@ export function createOpenCodePlugin(context = {}) {
     setup: async (appContext) => {
       const host = appContext || {};
       const opts = context.options || host.options;
-      // V2 host transforms FIRST (official dual-package pattern: V1 calls
-      // server(), V2 calls setup()). Registration must precede any slow
-      // work: the host may not wait out subprocess calls before reconciling.
       try {
-        if (host.command && typeof host.command.transform === 'function') {
-          let existing = new Set();
-          try {
-            const listed = await host.command.list();
-            existing = new Set(((listed && listed.data) || []).map((c) => c && c.name));
-          } catch {
-            /* treat as empty */
-          }
-          await host.command.transform((draft) => {
-            for (const cmd of OPENCODE_COMMANDS) {
-              if (!cmd || !cmd.name || existing.has(cmd.name)) continue;
-              existing.add(cmd.name);
-              draft.add({
-                name: cmd.name,
-                description: cmd.description,
-                execute: async (input) => {
-                  const args = (input && input.prompt && input.prompt.text) || '';
-                  const prompt = (input && input.prompt && typeof input.prompt === 'object') ? input.prompt : {};
-                  await host.session.prompt({
-                    ...prompt,
-                    sessionID: input && input.sessionID,
-                    text: cmd.template.split('$ARGUMENTS').join(String(args).trim()),
-                    delivery: input && input.delivery,
-                  });
-                },
-              });
-            }
-          });
-        }
+        await registerHostCommands(host);
       } catch {
         /* command transform is best-effort */
       }
       try {
-        if (host.tool && typeof host.tool.transform === 'function') {
-          await host.tool.transform((draft) => {
-            for (const [name, spec] of Object.entries(buildToolMap())) {
-              draft.add({
-                name,
-                description: spec.description,
-                input: spec.input,
-                options: { codemode: false },
-                execute: async (args = {}, toolContext) => {
-                  const r = await callMcp(name, normalizeArgs(name, args), toolContext?.cwd);
-                  return { content: r.content };
-                },
-              });
-            }
-          });
-        }
+        await registerHostTools(host);
       } catch {
         /* tool transform is best-effort */
       }
-      // Slow work AFTER registration: apply tuple options via MCP config
-      // write, scoped to the plugin location (never the service cwd).
       try {
-        if (opts && typeof opts === 'object') {
-          const updates = {};
-          if (opts.search_engine) updates.search_engine = opts.search_engine;
-          if (opts.max_iterations) updates.max_iterations = opts.max_iterations;
-          if (opts.mode) updates.mode = opts.mode;
-          if (opts.divergence_threshold !== undefined) {
-            updates.divergence_threshold = opts.divergence_threshold;
-          }
-          if (Object.keys(updates).length > 0) {
-            await callMcp(
-              'iumbtems_config',
-              updates,
-              host.location?.directory || context.location?.directory || host.cwd
-            );
-          }
-        }
+        await applyConfigOptions(host, opts, context);
       } catch {
         /* options apply is best-effort */
       }
-      // Phase C: idle staleness nudge (opt out with {staleness_nudge: false}).
-      // Subscribes only when the host exposes event/session; one per root.
       try {
-        if ((opts?.staleness_nudge ?? true)) {
-          const nudgeHost = {
-            event: host.event || context.event,
-            session: host.session || context.session,
-          };
-          const root =
-            host.location?.directory || context.location?.directory;
-          if (root) {
-            const stop = startStalenessNudge(nudgeHost, root);
-            if (typeof stop === 'function') setupCleanups.add(stop);
-          }
-        }
+        startNudgeSubscription(host, opts, context, setupCleanups);
       } catch {
         /* lifecycle hooks are best-effort */
       }
-      // Disposer: the host calls setup's return value as a cleanup function
-      // on unload/reload. It MUST be a function (returning a plain object
-      // crashes host reload with "not a function"). Aborts nudge streams so
-      // reloads never stack duplicate subscriptions.
       return () => {
-        for (const stop of [...setupCleanups]) {
-          setupCleanups.delete(stop);
+        for (const stop of setupCleanups) {
           try {
             stop();
           } catch {
             /* cleanup is best-effort */
           }
         }
+        setupCleanups.clear();
       };
     },
   };

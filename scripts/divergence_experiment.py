@@ -23,11 +23,12 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -40,7 +41,8 @@ GATE_BAR = 0.15
 
 
 def load_objectives(path: Path = FIXTURE) -> List[Dict[str, Any]]:
-    with open(path, "r", encoding="utf-8") as f:
+    canonical_path = Path(os.path.realpath(str(path)))
+    with open(canonical_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return data["objectives"]
 
@@ -50,31 +52,7 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def run_one(
-    objective: str,
-    base_dir: Path,
-    agent_overrides: Optional[Dict[str, Dict[str, Any]]],
-    mock: bool,
-) -> Dict[str, Any]:
-    """Run one swarm under one config and pull divergence out of the audit."""
-    runner = SwarmRunner(
-        base_dir=base_dir,
-        mock_mode=mock,
-        mode="research",
-        agent_overrides=agent_overrides,
-    )
-    started = time.perf_counter()
-    # Suppress the swarm's chatty stdout; the artifact is what matters.
-    import contextlib, io
-
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        runner.run_swarm(objective)
-    elapsed = time.perf_counter() - started
-
-    report_path = base_dir / "final_synthesis.md"
-    divergence = None
-    verified = None
+def _extract_audit_divergence(base_dir: Path) -> Tuple[Optional[float], Optional[int]]:
     audit_paths = sorted((base_dir / "scratchpads").glob("*/audit_report.json"))
     for ap in audit_paths:
         try:
@@ -82,19 +60,56 @@ def run_one(
                 audit = json.load(f)
             summary = audit.get("summary", {})
             if summary.get("divergence_score") is not None:
-                divergence = summary["divergence_score"]
-                verified = summary.get("verified_passed")
+                return summary["divergence_score"], summary.get("verified_passed")
         except (OSError, json.JSONDecodeError):
             continue
+    return None, None
 
+
+def run_one(
+    objective: str,
+    base_dir: Path,
+    agent_overrides: Optional[Dict[str, Dict[str, Any]]],
+    mock: bool,
+) -> Dict[str, Any]:
+    """Run one swarm under one config and pull divergence out of the audit."""
+    import contextlib, io
+
+    runner = SwarmRunner(
+        base_dir=base_dir,
+        mock_mode=mock,
+        mode="research",
+        agent_overrides=agent_overrides,
+    )
+    started = time.perf_counter()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        runner.run_swarm(objective)
+    elapsed = time.perf_counter() - started
+
+    report_path = base_dir / "final_synthesis.md"
+    divergence, verified = _extract_audit_divergence(base_dir)
     log = buf.getvalue()
     return {
         "divergence_score": divergence,
         "verified_passed": verified,
         "wall_clock_s": round(elapsed, 3),
-        "tokens_estimate": estimate_tokens(log),  # FLAGGED APPROXIMATION
+        "tokens_estimate": estimate_tokens(log),
         "report": str(report_path) if report_path.exists() else None,
     }
+
+
+def _build_overrides(args: argparse.Namespace) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    same_family: Dict[str, Dict[str, Any]] = {}
+    cross_family: Dict[str, Dict[str, Any]] = {}
+    if args.model_alpha:
+        same_family.setdefault("alpha", {})["model"] = args.model_alpha
+        same_family.setdefault("beta", {})["model"] = args.model_alpha
+    if args.model_beta:
+        cross_family.setdefault("beta", {})["model"] = args.model_beta
+    if args.beta_backend:
+        cross_family.setdefault("beta", {})["backend"] = args.beta_backend
+    return same_family, cross_family
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -107,19 +122,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--fixture", default=str(FIXTURE))
     args = parser.parse_args(argv)
 
-    objectives = load_objectives(Path(args.fixture))
-    out_dir = Path(args.out_dir) if args.out_dir else (PROJECT_ROOT / ".research" / "experiments")
+    canonical_fixture = Path(os.path.realpath(str(args.fixture)))
+    objectives = load_objectives(canonical_fixture)
+    out_dir = Path(os.path.realpath(str(args.out_dir))) if args.out_dir else (PROJECT_ROOT / ".research" / "experiments")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    same_family: Dict[str, Dict[str, Any]] = {}
-    cross_family: Dict[str, Dict[str, Any]] = {}
-    if args.model_alpha:
-        same_family.setdefault("alpha", {})["model"] = args.model_alpha
-        same_family.setdefault("beta", {})["model"] = args.model_alpha
-    if args.model_beta:
-        cross_family.setdefault("beta", {})["model"] = args.model_beta
-    if args.beta_backend:
-        cross_family.setdefault("beta", {})["backend"] = args.beta_backend
+    same_family, cross_family = _build_overrides(args)
 
     results = []
     for obj in objectives:

@@ -17,6 +17,68 @@ from skills.research_cache.hasher import SourceHasher
 from runner.state_machine import ResearchStateMachine, ScopeStatus
 from runner.refinement import compute_epistemic_score
 
+def _compute_scope_epistemic_score(
+    constitution: Any,
+    alpha_dossier: Dict[str, Any],
+    beta_dossier: Dict[str, Any],
+    alpha_results: list,
+    beta_results: list,
+    counts: Dict[str, int],
+) -> float:
+    from runner.refinement import LEGACY_CONSTITUTION
+
+    if constitution is not LEGACY_CONSTITUTION:
+        from runner.claim_witness import STATUS_REJECTED, claims_from_dossier
+        from runner.refinement import compute_epistemic_score_from_claims
+
+        results_by_id = {r["claim_id"]: r for r in (alpha_results + beta_results)}
+        score_claims = claims_from_dossier(alpha_dossier) + claims_from_dossier(beta_dossier)
+        for c in score_claims:
+            r = results_by_id.get(c.claim_id)
+            if r is not None and r.get("audited_tag") == "UNVERIFIED_REJECTED":
+                c.tag = "UNVERIFIED_REJECTED"
+                c.status = STATUS_REJECTED
+        epistemic_score, _breakdown = compute_epistemic_score_from_claims(
+            score_claims, constitution=constitution
+        )
+        return epistemic_score
+
+    epistemic_score, _breakdown = compute_epistemic_score(counts)
+    return epistemic_score
+
+
+def _apply_living_dossiers_degradation(
+    base_dir: Path,
+    scope_id: str,
+    alpha_dossier: Dict[str, Any],
+    beta_dossier: Dict[str, Any],
+) -> Dict[str, Any]:
+    degradation = {"events": [], "degraded_scopes": []}
+    try:
+        from runner.living_dossiers import (
+            apply_degradation,
+            append_ledger,
+            load_retractions,
+            queue_requeue,
+        )
+        from runner.claim_witness import claims_from_dossier
+
+        retractions = load_retractions(base_dir)
+        if retractions:
+            all_claims = claims_from_dossier(alpha_dossier) + claims_from_dossier(beta_dossier)
+            _degraded, events = apply_degradation(all_claims, retractions, scope_id=scope_id)
+            if events:
+                append_ledger(base_dir, events)
+                queue_requeue(base_dir, scope_id, reason="claim degradation (retraction event)")
+            degradation = {
+                "events": [e.to_dict() for e in events],
+                "degraded_scopes": [scope_id] if events else [],
+            }
+    except Exception as exc:  # noqa: BLE001 - degradation must not break audit
+        print(f"[auditor] living-dossiers pass skipped: {exc}", file=sys.stderr)
+    return degradation
+
+
 class EpistemicAuditorEngine:
     def __init__(self, base_dir: Optional[Path] = None):
         self.base_dir = base_dir or Path(".research")
@@ -59,82 +121,24 @@ class EpistemicAuditorEngine:
             beta_dossier.get("falsification_claims", []), constitution=constitution
         )
 
-        total_verified = alpha_verified + beta_verified
-        total_rejected = alpha_rejected + beta_rejected
-
-        # Negative knowledge counts
-        neg_knowledge_alpha = len(alpha_dossier.get("negative_knowledge", []))
-        neg_knowledge_beta = len(beta_dossier.get("negative_knowledge", []))
-        total_neg_knowledge = neg_knowledge_alpha + neg_knowledge_beta
-
-        total_inferred = len(alpha_dossier.get("inferred_implications", []))
-        total_hypotheses = len(beta_dossier.get("hypotheses", []))
+        counts = {
+            "verified": alpha_verified + beta_verified,
+            "rejected": alpha_rejected + beta_rejected,
+            "inferred": len(alpha_dossier.get("inferred_implications", [])),
+            "hypotheses": len(beta_dossier.get("hypotheses", [])),
+            "neg_knowledge": len(alpha_dossier.get("negative_knowledge", [])) + len(beta_dossier.get("negative_knowledge", [])),
+        }
 
         # 3. Calculate Epistemic Score via the pure refinement function.
-        #    NOTE (docs/impl mismatch, deliberate): docs/SYSTEM_ARCHITECTURE.md
-        #    §1.2 publishes tier-weighted V(c_i); the runtime has always scored
-        #    flat 1.0 per verified claim. LEGACY_CONSTITUTION preserves that;
-        #    tier weighting is opt-in via Domain Packs (Stream G).
-        if constitution is not LEGACY_CONSTITUTION:
-            from runner.claim_witness import STATUS_REJECTED, claims_from_dossier
-            from runner.refinement import compute_epistemic_score_from_claims
-
-            results_by_id = {
-                r["claim_id"]: r for r in (alpha_results + beta_results)
-            }
-            score_claims = claims_from_dossier(alpha_dossier) + claims_from_dossier(beta_dossier)
-            for c in score_claims:
-                r = results_by_id.get(c.claim_id)
-                if r is not None and r.get("audited_tag") == "UNVERIFIED_REJECTED":
-                    # Reflect the auditor's verdict, not the dossier's claim.
-                    c.tag = "UNVERIFIED_REJECTED"
-                    c.status = STATUS_REJECTED
-            epistemic_score, _breakdown = compute_epistemic_score_from_claims(
-                score_claims, constitution=constitution
-            )
-        else:
-            epistemic_score, _breakdown = compute_epistemic_score({
-                "verified": total_verified,
-                "rejected": total_rejected,
-                "inferred": total_inferred,
-                "hypotheses": total_hypotheses,
-                "neg_knowledge": total_neg_knowledge,
-            })
+        epistemic_score = _compute_scope_epistemic_score(
+            constitution, alpha_dossier, beta_dossier, alpha_results, beta_results, counts
+        )
         accept_threshold = constitution.accept_threshold
 
-        # 3b. Living Dossiers (Stream C): a VERIFIED claim is a time-bounded
-        #     loan against its source. Join against retraction events —
-        #     RETRACTED => STALE even when the quote still matches locally.
-        degradation = {"events": [], "degraded_scopes": []}
-        try:
-            from runner.living_dossiers import (
-                apply_degradation,
-                append_ledger,
-                load_retractions,
-                queue_requeue,
-            )
-            from runner.claim_witness import claims_from_dossier
-
-            retractions = load_retractions(self.base_dir)
-            if retractions:
-                all_claims = (
-                    claims_from_dossier(alpha_dossier)
-                    + claims_from_dossier(beta_dossier)
-                )
-                _degraded, events = apply_degradation(
-                    all_claims, retractions, scope_id=scope_id
-                )
-                if events:
-                    append_ledger(self.base_dir, events)
-                    queue_requeue(
-                        self.base_dir, scope_id, reason="claim degradation (retraction event)"
-                    )
-                degradation = {
-                    "events": [e.to_dict() for e in events],
-                    "degraded_scopes": [scope_id] if events else [],
-                }
-        except Exception as exc:  # noqa: BLE001 - degradation must not break audit
-            print(f"[auditor] living-dossiers pass skipped: {exc}", file=sys.stderr)
+        # 3b. Living Dossiers (Stream C): check degradation against retraction events
+        degradation = _apply_living_dossiers_degradation(
+            self.base_dir, scope_id, alpha_dossier, beta_dossier
+        )
 
         # 4. Calculate Divergence Score
         divergence_score, divergence_matrix = self._compute_divergence(alpha_dossier, beta_dossier)
@@ -146,9 +150,9 @@ class EpistemicAuditorEngine:
             "audited_at": datetime.now(timezone.utc).isoformat(),
             "summary": {
                 "total_claims_audited": len(alpha_results) + len(beta_results),
-                "verified_passed": total_verified,
-                "unverified_rejected": total_rejected,
-                "negative_knowledge_count": total_neg_knowledge,
+                "verified_passed": counts["verified"],
+                "unverified_rejected": counts["rejected"],
+                "negative_knowledge_count": counts["neg_knowledge"],
                 "epistemic_score": epistemic_score,
                 "divergence_score": divergence_score,
                 "verdict": "CERTIFIED" if epistemic_score >= accept_threshold else "WARNING_LOW_GROUNDING"
@@ -294,44 +298,60 @@ class EpistemicAuditorEngine:
         divergence = round(min(1.0, (contradictions * 2) / total_claims), 2)
         return divergence, matrix
 
-    def _generate_synthesis_markdown(self, scope_id: str, alpha: Dict[str, Any], 
-                                     beta: Dict[str, Any], audit: Dict[str, Any]) -> str:
-        summary = audit["summary"]
-        md = []
-        md.append(f"# Epistemic Synthesis: Scope {scope_id}\n")
-        md.append(f"**Audit Verdict**: `{summary['verdict']}` | **Epistemic Score**: `{summary['epistemic_score']}/1.0` | **Divergence Index**: `{summary['divergence_score']}`\n")
-        
-        md.append("## 1. Verified Empirical Grounding")
-        for claim in audit["alpha_claims_audit"]:
+    @staticmethod
+    def _render_verified_section(alpha_audit: list, beta_audit: list) -> List[str]:
+        lines = ["## 1. Verified Empirical Grounding"]
+        for claim in alpha_audit:
             if claim["audited_tag"] == "VERIFIED":
-                md.append(f"- `[VERIFIED: {claim['source_hash'][:8]}]` {claim['statement']}")
-        for claim in audit["beta_claims_audit"]:
+                lines.append(f"- `[VERIFIED: {claim['source_hash'][:8]}]` {claim['statement']}")
+        for claim in beta_audit:
             if claim["audited_tag"] == "VERIFIED":
-                md.append(f"- `[VERIFIED: {claim['source_hash'][:8]}]` (Counter-Evidence) {claim['statement']}")
-        
-        md.append("\n## 2. Dialectic Tensions & Falsification Audit")
-        if audit["divergence_matrix"]:
-            for item in audit["divergence_matrix"]:
-                md.append(f"### Tension: {item['tension_type']}")
-                md.append(f"- **Thesis Assertion**: {item['proponent_claim']}")
-                md.append(f"- **Adversarial Critique**: {item['adversary_critique']}")
-        else:
-            md.append("No active contradictions identified between primary literature and red-team findings.")
+                lines.append(f"- `[VERIFIED: {claim['source_hash'][:8]}]` (Counter-Evidence) {claim['statement']}")
+        return lines
 
-        md.append("\n## 3. Rejected & Unverified Assertions")
-        rejected = [c for c in audit["alpha_claims_audit"] + audit["beta_claims_audit"] if c["audited_tag"] == "UNVERIFIED_REJECTED"]
+    @staticmethod
+    def _render_tensions_section(matrix: list) -> List[str]:
+        lines = ["\n## 2. Dialectic Tensions & Falsification Audit"]
+        if matrix:
+            for item in matrix:
+                lines.append(f"### Tension: {item['tension_type']}")
+                lines.append(f"- **Thesis Assertion**: {item['proponent_claim']}")
+                lines.append(f"- **Adversarial Critique**: {item['adversary_critique']}")
+        else:
+            lines.append("No active contradictions identified between primary literature and red-team findings.")
+        return lines
+
+    @staticmethod
+    def _render_rejected_section(claims: list) -> List[str]:
+        lines = ["\n## 3. Rejected & Unverified Assertions"]
+        rejected = [c for c in claims if c["audited_tag"] == "UNVERIFIED_REJECTED"]
         if rejected:
             for r in rejected:
-                md.append(f"- ⚠️ **PURGED**: \"{r['statement']}\" — *Reason: {r['reason']}*")
+                lines.append(f"- ⚠️ **PURGED**: \"{r['statement']}\" — *Reason: {r['reason']}*")
         else:
-            md.append("Zero claims rejected. 100% of cited assertions verified against source cache.")
+            lines.append("Zero claims rejected. 100% of cited assertions verified against source cache.")
+        return lines
 
-        md.append("\n## 4. Negative Knowledge Catalog")
+    @staticmethod
+    def _render_negative_knowledge_section(alpha: Dict[str, Any], beta: Dict[str, Any]) -> List[str]:
+        lines = ["\n## 4. Negative Knowledge Catalog"]
         all_neg = alpha.get("negative_knowledge", []) + beta.get("negative_knowledge", [])
         if all_neg:
             for n in all_neg:
-                md.append(f"- `[NEGATIVE_KNOWLEDGE: {n['query']}]` {n['finding']}")
+                lines.append(f"- `[NEGATIVE_KNOWLEDGE: {n['query']}]` {n['finding']}")
         else:
-            md.append("No negative knowledge declarations logged.")
+            lines.append("No negative knowledge declarations logged.")
+        return lines
 
+    def _generate_synthesis_markdown(self, scope_id: str, alpha: Dict[str, Any], 
+                                     beta: Dict[str, Any], audit: Dict[str, Any]) -> str:
+        summary = audit["summary"]
+        md = [
+            f"# Epistemic Synthesis: Scope {scope_id}\n",
+            f"**Audit Verdict**: `{summary['verdict']}` | **Epistemic Score**: `{summary['epistemic_score']}/1.0` | **Divergence Index**: `{summary['divergence_score']}`\n",
+        ]
+        md.extend(self._render_verified_section(audit["alpha_claims_audit"], audit["beta_claims_audit"]))
+        md.extend(self._render_tensions_section(audit.get("divergence_matrix", [])))
+        md.extend(self._render_rejected_section(audit["alpha_claims_audit"] + audit["beta_claims_audit"]))
+        md.extend(self._render_negative_knowledge_section(alpha, beta))
         return "\n".join(md)

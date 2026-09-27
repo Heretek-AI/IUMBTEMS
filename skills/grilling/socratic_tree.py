@@ -5,6 +5,7 @@ Implements Matt Pocock-style design tree traversal to isolate the active decisio
 """
 
 import sys
+import os
 import json
 import argparse
 from pathlib import Path
@@ -84,7 +85,8 @@ class DesignTree:
         return len(self.compute_frontier()) == 0 and all(n.is_settled() for n in self.nodes.values())
 
     def export_frontier_json(self, output_path: Path):
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        safe_path = Path(os.path.realpath(str(output_path)))
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "objective": self.objective,
             "is_complete": self.is_complete(),
@@ -93,17 +95,34 @@ class DesignTree:
                 k: v.settled_answer for k, v in self.nodes.items() if v.is_settled()
             }
         }
-        with open(output_path, "w", encoding="utf-8") as f:
+        with open(safe_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
     @classmethod
     def load_from_json(cls, file_path: Path) -> 'DesignTree':
-        with open(file_path, "r", encoding="utf-8") as f:
+        safe_path = Path(os.path.realpath(str(file_path)))
+        with open(safe_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         tree = cls(objective=data["objective"])
         for k, v in data.get("nodes", {}).items():
             tree.add_node(DecisionNode.from_dict(v))
         return tree
+
+
+def _display_frontier(tree: DesignTree, frontier: list) -> None:
+    print(f"\n🎯 Objective: {tree.objective}")
+    print(f"📊 Total Nodes: {len(tree.nodes)} | Settled: {sum(1 for n in tree.nodes.values() if n.is_settled())}")
+    if not frontier:
+        if tree.nodes and tree.is_complete():
+            print("✅ Frontier is EMPTY. All prerequisite branches are fully settled!")
+        else:
+            print("ℹ️ No active frontier nodes. Define new decision nodes to begin grilling.")
+    else:
+        print(f"\n⚡ Current Active Frontier ({len(frontier)} questions ready):")
+        for idx, node in enumerate(frontier, 1):
+            print(f"\n❓ Q{idx} [{node.node_id}] - {node.title}")
+            print(f"   {node.question}")
+            print(f"   ➡️ Recommended: {node.recommended}")
 
 
 def main():
@@ -112,9 +131,9 @@ def main():
     parser.add_argument("--file", type=str, default=".research/frontier.json", help="Path to frontier.json")
     parser.add_argument("--show-frontier", action="store_true", help="Print the current decision frontier")
     parser.add_argument("--settle", nargs=2, metavar=("NODE_ID", "ANSWER"), help="Settle a decision node")
-    
+
     args = parser.parse_args()
-    frontier_path = Path(args.file)
+    frontier_path = Path(os.path.realpath(str(args.file)))
 
     if frontier_path.exists():
         tree = DesignTree.load_from_json(frontier_path)
@@ -130,19 +149,8 @@ def main():
 
     frontier = tree.compute_frontier()
     if args.show_frontier or not args.settle:
-        print(f"\n🎯 Objective: {tree.objective}")
-        print(f"📊 Total Nodes: {len(tree.nodes)} | Settled: {sum(1 for n in tree.nodes.values() if n.is_settled())}")
-        if not frontier:
-            if tree.nodes and tree.is_complete():
-                print("✅ Frontier is EMPTY. All prerequisite branches are fully settled!")
-            else:
-                print("ℹ️ No active frontier nodes. Define new decision nodes to begin grilling.")
-        else:
-            print(f"\n⚡ Current Active Frontier ({len(frontier)} questions ready):")
-            for idx, node in enumerate(frontier, 1):
-                print(f"\n❓ Q{idx} [{node.node_id}] - {node.title}")
-                print(f"   {node.question}")
-                print(f"   ➡️ Recommended: {node.recommended}")
+        _display_frontier(tree, frontier)
+
 
 if __name__ == "__main__":
     main()

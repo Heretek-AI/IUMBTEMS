@@ -277,7 +277,7 @@ def main(argv):
     handler = {"gate": cmd_gate, "archive": cmd_archive, "stats": cmd_stats}.get(mode)
     if handler is None:
         log(f"unknown mode: {mode}")
-        return 0
+        return 1
     try:
         out = handler(stdin_data)
     except Exception as e:

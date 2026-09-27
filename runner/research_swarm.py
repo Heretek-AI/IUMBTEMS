@@ -26,6 +26,18 @@ from runner.auditor_engine import EpistemicAuditorEngine
 from skills.research_cache.hasher import SourceHasher
 from skills.swarm_config.configure import load_config
 
+EXAMPLE_RUST_RAFT_URL = "https://github.com/example/rust-raft"
+ALLOWED_BACKEND_BINARIES = {"claude", "opencode", "python", "python3", "node"}
+
+
+def _validate_backend(backend: List[str]) -> List[str]:
+    if not backend:
+        return ["claude", "-p"]
+    bin_name = Path(backend[0]).name
+    if bin_name not in ALLOWED_BACKEND_BINARIES and not Path(backend[0]).is_file():
+        raise ValueError(f"Disallowed backend binary: {backend[0]}")
+    return list(backend)
+
 
 class SwarmRunner:
     def __init__(
@@ -113,10 +125,17 @@ class SwarmRunner:
             return self._mock_claude_response(prompt)
 
         cmd = self.build_agent_cmd(prompt, system_prompt_file, tools, role=role)
+        if cmd:
+            _validate_backend([cmd[0]])
 
         try:
             res = subprocess.run(
-                cmd, capture_output=True, text=True, check=True, cwd=str(PROJECT_ROOT)
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=str(PROJECT_ROOT),
+                shell=False,
             )
             return res.stdout.strip()
         except subprocess.CalledProcessError as e:
@@ -243,7 +262,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             elif self.mode == "scout":
                 sample_content = "# High Performance Raft in Rust\nZero-dependency Raft implementation with 150k ops/sec throughput under Apache-2.0."
                 shash = self.hasher.store_source(
-                    "https://github.com/example/rust-raft", sample_content, "Rust Raft"
+                    EXAMPLE_RUST_RAFT_URL, sample_content, "Rust Raft"
                 )
                 dossier = {
                     "agent": "Agent Alpha (OSS Scout)",
@@ -256,7 +275,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                             "tag": "VERIFIED",
                             "statement": "Rust-Raft achieves 150k ops/sec with zero external dependencies.",
                             "source_hash": shash,
-                            "source_url": "https://github.com/example/rust-raft",
+                            "source_url": EXAMPLE_RUST_RAFT_URL,
                             "verbatim_quote": "Zero-dependency Raft implementation with 150k ops/sec throughput under Apache-2.0.",
                         }
                     ],
@@ -390,7 +409,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             elif self.mode == "scout":
                 sample_content = "# High Performance Raft in Rust\nZero-dependency Raft implementation with 150k ops/sec throughput under Apache-2.0."
                 shash = self.hasher.store_source(
-                    "https://github.com/example/rust-raft", sample_content, "Rust Raft"
+                    EXAMPLE_RUST_RAFT_URL, sample_content, "Rust Raft"
                 )
                 dossier = {
                     "agent": "Agent Beta (OSS Red Team)",
@@ -403,7 +422,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                             "tag": "VERIFIED",
                             "statement": "Candidate repository has single maintainer with 9-month lull in commit history.",
                             "source_hash": shash,
-                            "source_url": "https://github.com/example/rust-raft",
+                            "source_url": EXAMPLE_RUST_RAFT_URL,
                             "verbatim_quote": "Zero-dependency Raft implementation with 150k ops/sec throughput under Apache-2.0.",
                             "severity": "LOW",
                         }
@@ -550,7 +569,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         print("=" * 70)
 
         # 1. Orchestrate
-        scopes = self.orchestrate_objective(objective, frontier_file)
+        self.orchestrate_objective(objective, frontier_file)
 
         # 2. Execute scopes according to DAG
         while True:
@@ -659,7 +678,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                     synthesis_lines.append("\n---\n")
 
         avg_div = round(sum(all_divergences) / max(1, len(all_divergences)), 2)
-        synthesis_lines.append(f"\n## Swarm Epistemic Audit Totals\n")
+        synthesis_lines.append("\n## Swarm Epistemic Audit Totals\n")
         synthesis_lines.append(
             f"- **Total Verified Primary Citations**: `{total_verified}`"
         )

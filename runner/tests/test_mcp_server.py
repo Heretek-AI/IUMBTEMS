@@ -97,7 +97,6 @@ class TestMcpServerTools(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             # Seed a source so verify_quote has something real to check.
-            sys.path.insert(0, str(PROJECT_ROOT))
             from skills.research_cache.hasher import SourceHasher
 
             hasher = SourceHasher(tmp_path)

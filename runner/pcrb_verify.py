@@ -25,6 +25,7 @@ import argparse
 import hashlib
 import hmac
 import json
+import os
 import sys
 import tempfile
 import time
@@ -45,21 +46,8 @@ from runner.pcrb import (  # noqa: E402
 )
 
 
-def verify_brief(
-    bundle: Dict[str, Any],
-    key: Optional[bytes] = None,
-) -> Dict[str, Any]:
-    """Run all checks. Returns a structured report dict."""
-    import os
-    started = time.perf_counter()
-    failures: List[Dict[str, str]] = []
-
-    manifest = bundle.get("manifest") or {}
-    signature = bundle.get("signature") or {}
-    claims = bundle.get("claims") or []
-    sources = bundle.get("sources") or {}
-
-    # --- 1. source identity ---
+def _check_source_identity(sources: Dict[str, Any]) -> List[Dict[str, str]]:
+    failures = []
     for src_hash, meta in sources.items():
         content = meta.get("content") or ""
         actual = sha256_text(content)
@@ -69,8 +57,16 @@ def verify_brief(
                 "member": src_hash,
                 "message": f"bundled source content hashes to {actual}, not its key {src_hash}",
             })
+    return failures
 
-    # --- 2. manifest integrity ---
+
+def _check_manifest_integrity(
+    bundle: Dict[str, Any],
+    manifest: Dict[str, Any],
+    claims: List[Dict[str, Any]],
+    sources: Dict[str, Any],
+) -> List[Dict[str, str]]:
+    failures = []
     synth_hash = sha256_text(bundle.get("synthesis_markdown") or "")
     if manifest.get("synthesis_markdown") != synth_hash:
         failures.append({
@@ -79,9 +75,10 @@ def verify_brief(
             "message": "synthesis_markdown does not match its manifest hash",
         })
 
+    manifest_claims = manifest.get("claims") or {}
     for rec in claims:
         cid = rec.get("claim_id", "UNKNOWN")
-        expected = (manifest.get("claims") or {}).get(cid)
+        expected = manifest_claims.get(cid)
         actual = member_hash(rec)
         if expected is None:
             failures.append({"check": "manifest_integrity", "member": cid, "message": "claim missing from manifest"})
@@ -92,8 +89,9 @@ def verify_brief(
                 "message": f"claim hash mismatch (manifest {expected[:16]}… vs actual {actual[:16]}…)",
             })
 
+    manifest_sources = manifest.get("sources") or {}
     for src_hash, meta in sources.items():
-        expected = (manifest.get("sources") or {}).get(src_hash)
+        expected = manifest_sources.get(src_hash)
         actual = sha256_text(meta.get("content") or "")
         if expected is None:
             failures.append({"check": "manifest_integrity", "member": src_hash, "message": "source missing from manifest"})
@@ -103,42 +101,49 @@ def verify_brief(
                 "member": src_hash,
                 "message": "source content does not match its manifest hash",
             })
+    return failures
 
-    # --- 3. signature ---
+
+def _check_signature(
+    signature: Dict[str, Any],
+    manifest: Dict[str, Any],
+    key: Optional[bytes],
+) -> Tuple[str, List[Dict[str, str]]]:
     alg = signature.get("alg") or "none"
-    sig_status = "unsigned"
-    if alg == "hmac-sha256":
-        if not key:
-            sig_status = "unverifiable"
-            failures.append({
-                "check": "signature",
-                "member": "manifest",
-                "message": "brief is HMAC-signed but no key was provided (env IUMBTEMS_PCRB_KEY or --key-file)",
-            })
-        else:
-            expected_sig = hmac.new(key, canonical_json(manifest).encode("utf-8"), hashlib.sha256).hexdigest()
-            provided = signature.get("sig") or ""
-            if not hmac.compare_digest(expected_sig, provided):
-                sig_status = "invalid"
-                failures.append({
-                    "check": "signature",
-                    "member": "manifest",
-                    "message": "HMAC signature does not match manifest (manifest was rewritten or key differs)",
-                })
-            else:
-                sig_status = "valid"
-    # alg == "none": integrity-only mode — coordinated rewrites are NOT
-    # detectable without a key. Reported, not failed.
+    failures = []
+    if alg != "hmac-sha256":
+        return "unsigned", failures
+    if not key:
+        failures.append({
+            "check": "signature",
+            "member": "manifest",
+            "message": "brief is HMAC-signed but no key was provided (env IUMBTEMS_PCRB_KEY or --key-file)",
+        })
+        return "unverifiable", failures
 
-    # --- 4. quotes against BUNDLED sources (single verification stack) ---
+    expected_sig = hmac.new(key, canonical_json(manifest).encode("utf-8"), hashlib.sha256).hexdigest()
+    provided = signature.get("sig") or ""
+    if not hmac.compare_digest(expected_sig, provided):
+        failures.append({
+            "check": "signature",
+            "member": "manifest",
+            "message": "HMAC signature does not match manifest (manifest was rewritten or key differs)",
+        })
+        return "invalid", failures
+    return "valid", failures
+
+
+def _check_quotes(
+    claims: List[Dict[str, Any]],
+    sources: Dict[str, Any],
+) -> Tuple[int, int, List[Dict[str, str]]]:
     quotes_verified = 0
     quotes_failed = 0
+    failures = []
     with tempfile.TemporaryDirectory(prefix="pcrb_verify_") as tmp:
         from skills.research_cache.hasher import SourceHasher
 
         hasher = SourceHasher(Path(tmp))
-        # Materialize bundled sources into the throwaway cache under their
-        # claimed hashes so verify_quote runs its exact/normalized/fuzzy ladder.
         for src_hash, meta in sources.items():
             content = meta.get("content") or ""
             md_path = Path(tmp) / "sources" / f"{src_hash}.md"
@@ -151,7 +156,7 @@ def verify_brief(
             src_hash = witness.get("source_hash") or rec.get("source_hash")
             quote = witness.get("quote") or rec.get("verbatim_quote")
             if not src_hash or not quote:
-                continue  # structural rules live in refinement.check_invariants
+                continue
             if src_hash not in sources:
                 quotes_failed += 1
                 failures.append({
@@ -170,6 +175,27 @@ def verify_brief(
                     "member": cid,
                     "message": f"quote not found in bundled source (conf={conf}): {msg}",
                 })
+    return quotes_verified, quotes_failed, failures
+
+
+def verify_brief(
+    bundle: Dict[str, Any],
+    key: Optional[bytes] = None,
+) -> Dict[str, Any]:
+    """Run all checks. Returns a structured report dict."""
+    started = time.perf_counter()
+    manifest = bundle.get("manifest") or {}
+    signature = bundle.get("signature") or {}
+    claims = bundle.get("claims") or []
+    sources = bundle.get("sources") or {}
+
+    failures: List[Dict[str, str]] = []
+    failures.extend(_check_source_identity(sources))
+    failures.extend(_check_manifest_integrity(bundle, manifest, claims, sources))
+    sig_status, sig_failures = _check_signature(signature, manifest, key)
+    failures.extend(sig_failures)
+    quotes_verified, quotes_failed, quote_failures = _check_quotes(claims, sources)
+    failures.extend(quote_failures)
 
     elapsed = time.perf_counter() - started
     return {
@@ -198,8 +224,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--key-file", default=None)
     args = parser.parse_args(argv)
 
-    path = Path(args.brief)
-    if not path.exists():
+    path = Path(os.path.realpath(str(args.brief)))
+    if not path.is_file():
         print(f"error: no such brief: {path}", file=sys.stderr)
         return 2
     try:
@@ -208,11 +234,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"error: unreadable brief: {exc}", file=sys.stderr)
         return 2
 
-    import os
-
     key = None
-    if args.key_file and Path(args.key_file).exists():
-        key = Path(args.key_file).read_bytes().strip()
+    if args.key_file:
+        key_file_path = Path(os.path.realpath(str(args.key_file)))
+        if key_file_path.is_file():
+            key = key_file_path.read_bytes().strip()
     elif os.environ.get(ENV_KEY):
         key = os.environ[ENV_KEY].encode("utf-8")
 

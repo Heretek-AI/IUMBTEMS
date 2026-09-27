@@ -140,7 +140,7 @@ class StdioJsonRpcServer:
             return self._error(req_id, -32601, f"Tool {tool_name} not found")
         try:
             text = spec.handler(args)
-        except Exception as exc:  # noqa: BLE001 - surface, do not kill the server
+        except Exception as exc:  # noqa: BLE001  # surface, do not kill the server
             return self._error(req_id, -32603, f"{type(exc).__name__}: {exc}")
         return self._reply(
             req_id, {"content": [{"type": "text", "text": text}]}

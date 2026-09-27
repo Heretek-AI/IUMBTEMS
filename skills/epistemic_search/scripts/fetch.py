@@ -79,7 +79,6 @@ def fetch_and_cache(url: str, research_dir: str = ".research") -> str:
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
-            content_type = resp.headers.get("Content-Type", "")
             raw_bytes = resp.read()
             html = raw_bytes.decode("utf-8", errors="replace")
     except Exception as e:

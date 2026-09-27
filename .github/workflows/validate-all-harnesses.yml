@@ -25,7 +25,7 @@ jobs:
           node-version: '22.x'
 
       - name: Install JS dependencies
-        run: npm ci --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Run Python test suite
         run: python3 -m unittest discover -s runner/tests -v
@@ -58,7 +58,7 @@ jobs:
       - name: Validate Claude Code marketplace (if CLI present)
         continue-on-error: true
         run: |
-          npm install -g @anthropic-ai/claude-code || true
+          npm install -g --ignore-scripts @anthropic-ai/claude-code@0.2.29 || true
           claude plugin validate --strict .claude-plugin/marketplace.json
           claude plugin validate --strict .claude-plugin/plugin.json
           claude plugin validate --strict .

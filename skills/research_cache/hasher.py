@@ -14,10 +14,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
+DEFAULT_RESEARCH_DIR = ".research"
+BASE_DIR_HELP = "Base .research directory"
+
 class SourceHasher:
     def __init__(self, base_dir: Optional[Path] = None):
-        self.base_dir = base_dir or Path(".research")
-        self.sources_dir = self.base_dir / "sources"
+        target = base_dir or Path(DEFAULT_RESEARCH_DIR)
+        self.base_dir = Path(os.path.realpath(str(target)))
+        self.sources_dir = Path(os.path.realpath(str(self.base_dir / "sources")))
         self.sources_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -71,14 +75,20 @@ class SourceHasher:
 
     def _resolve_hash_file(self, hash_prefix: str, extension: str) -> Optional[Path]:
         """Resolves exact or prefix hash to disk path."""
-        exact_path = self.sources_dir / f"{hash_prefix}{extension}"
+        if not re.match(r"^[a-fA-F0-9]+$", hash_prefix):
+            return None
+        exact_path = Path(os.path.realpath(str(self.sources_dir / f"{hash_prefix}{extension}")))
+        if exact_path.parent != self.sources_dir:
+            return None
         if exact_path.exists():
             return exact_path
 
         # If prefix match
         matches = list(self.sources_dir.glob(f"{hash_prefix}*{extension}"))
         if len(matches) == 1:
-            return matches[0]
+            candidate = Path(os.path.realpath(str(matches[0])))
+            if candidate.parent == self.sources_dir:
+                return candidate
         return None
 
     @staticmethod
@@ -143,20 +153,21 @@ def main():
     cache_parser.add_argument("--title", default="Untitled", help="Document Title")
     cache_parser.add_argument("--tier", default="WEB_DOCUMENT", help="Source tier")
     cache_parser.add_argument("--content", help="Raw text content (or read from stdin)")
-    cache_parser.add_argument("--dir", default=".research", help="Base .research directory")
+    cache_parser.add_argument("--dir", default=DEFAULT_RESEARCH_DIR, help=BASE_DIR_HELP)
 
     # Verify command
     verify_parser = subparsers.add_parser("verify", help="Verify a verbatim quote")
     verify_parser.add_argument("--hash", required=True, help="Document SHA-256 hash")
     verify_parser.add_argument("--quote", required=True, help="Verbatim quote to check")
-    verify_parser.add_argument("--dir", default=".research", help="Base .research directory")
+    verify_parser.add_argument("--dir", default=DEFAULT_RESEARCH_DIR, help=BASE_DIR_HELP)
 
     # List command
     list_parser = subparsers.add_parser("list", help="List cached sources")
-    list_parser.add_argument("--dir", default=".research", help="Base .research directory")
+    list_parser.add_argument("--dir", default=DEFAULT_RESEARCH_DIR, help=BASE_DIR_HELP)
 
     args = parser.parse_args()
-    hasher = SourceHasher(base_dir=Path(args.dir if hasattr(args, "dir") else ".research"))
+    dir_val = getattr(args, "dir", DEFAULT_RESEARCH_DIR) or DEFAULT_RESEARCH_DIR
+    hasher = SourceHasher(base_dir=Path(os.path.realpath(str(dir_val))))
 
     if args.command == "cache":
         content = args.content

@@ -41,7 +41,7 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
             content=content,
             title="Chinchilla Scaling Laws",
         )
-        self.assertTrue(len(shash) == 64)
+        self.assertEqual(len(shash), 64)
 
         # 1. Exact quote match
         verified, conf, msg = self.hasher.verify_quote(
