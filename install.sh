@@ -177,6 +177,31 @@ try:
             print(f"   + Added agent: {name}")
         else:
             print(f"   ℹ️ Agent already configured: {name}")
+
+    # Skills: snippet paths are repo-relative ("./skills/x") which breaks
+    # from ~/.config — merge as absolute paths, repairing relative entries.
+    import os as _os
+    wanted = []
+    for sp in snippet.get("skills", {}).get("paths", []):
+        wanted.append(sp if _os.path.isabs(sp) else str(repo / sp.lstrip("./")))
+    skills_cfg = cfg.setdefault("skills", {})
+    paths = skills_cfg.setdefault("paths", [])
+    # Repair repo-relative entries in place, then append missing absolutes.
+    for i, existing in enumerate(list(paths)):
+        for abs_sp in wanted:
+            if existing == abs_sp:
+                break
+            rel = "./" + str(Path(abs_sp).relative_to(repo)) if str(abs_sp).startswith(str(repo)) else None
+            if rel and existing == rel:
+                paths[i] = abs_sp
+                print(f"   ~ Repaired relative skill path: {rel} -> {abs_sp}")
+                break
+    for abs_sp in wanted:
+        if abs_sp not in paths:
+            paths.append(abs_sp)
+            print(f"   + Added skill path: {abs_sp}")
+        else:
+            print(f"   ℹ️ Skill path already configured: {abs_sp}")
 except Exception as e:
     print(f"   ⚠️ Non-critical warning merging agents: {e}")
 

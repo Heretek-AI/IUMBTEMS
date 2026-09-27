@@ -15,6 +15,7 @@ import { readFileSync, readdirSync, statSync } from 'fs';
 import path from 'path';
 import { createElement, insert, setProp } from '@opentui/solid';
 import { createEffect, createSignal, onCleanup } from 'solid-js';
+import { OPENCODE_COMMANDS } from './index.js';
 
 const PLUGIN_ID = 'heretek.iumbtems.epistemic-swarm.tui';
 const REFRESH_MS = 5000;
@@ -172,26 +173,47 @@ function SwarmSidebar(api, root, sessionID) {
 }
 
 function SwarmKeymapLayer(api) {
+  const toast = (title, message) => {
+    try {
+      api.ui.toast.show({ title, message, variant: 'info', duration: 4000 });
+    } catch {
+      /* toast is best-effort */
+    }
+  };
+  const commands = [
+    {
+      id: 'iumbtems.swarm-status',
+      title: 'Swarm status',
+      description: 'Show IUMBTEMS workspace status (mode, reports, frontier, STALE claims)',
+      group: 'IUMBTEMS',
+      palette: true,
+      run: () => {
+        const root = resolveRoot(api);
+        toast('IUMBTEMS', summarize(readSwarmStatus(root)));
+      },
+    },
+  ];
+  // Every slash command gets a palette entry (usage toast; the host has no
+  // programmatic slash-invoke API, so discovery + usage guidance is the win).
+  for (const cmd of OPENCODE_COMMANDS || []) {
+    if (!cmd || !cmd.name) continue;
+    commands.push({
+      id: `iumbtems.command.${cmd.name}`,
+      title: `/${cmd.name}`,
+      description: cmd.description || cmd.name,
+      group: 'IUMBTEMS',
+      palette: true,
+      run: () => {
+        toast(
+          `IUMBTEMS /${cmd.name}`,
+          `${cmd.usage || cmd.description || ''} — type /${cmd.name} in the prompt to run.`
+        );
+      },
+    });
+  }
   api.keymap.layer(() => ({
     mode: 'global',
-    commands: [
-      {
-        id: 'iumbtems.swarm-status',
-        title: 'Swarm status',
-        description: 'Show IUMBTEMS workspace status (mode, reports, frontier, STALE claims)',
-        group: 'IUMBTEMS',
-        palette: true,
-        run: () => {
-          const root = resolveRoot(api);
-          api.ui.toast.show({
-            title: 'IUMBTEMS',
-            message: summarize(readSwarmStatus(root)),
-            variant: 'info',
-            duration: 4000,
-          });
-        },
-      },
-    ],
+    commands,
   }));
   return null;
 }

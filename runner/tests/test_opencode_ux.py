@@ -75,6 +75,39 @@ class TestOpenCodeCommandCatalog(unittest.TestCase):
             self.assertIn(c, data["registered"])
             self.assertTrue(data["templates"][c])
 
+    def test_empty_arg_guards(self):
+        res = run_node(
+            """
+            import { OPENCODE_COMMANDS } from "./plugins/opencode/index.js";
+            const guarded = OPENCODE_COMMANDS.filter(c => /empty/i.test(c.template) && /ask the user/i.test(c.template)).map(c => c.name);
+            const withUsage = OPENCODE_COMMANDS.filter(c => !!c.usage).map(c => c.name);
+            console.log(JSON.stringify({guarded, withUsage, total: OPENCODE_COMMANDS.length}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"guard test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        for c in ["swarm", "scout", "audit"]:
+            self.assertIn(c, data["guarded"])
+        self.assertEqual(len(data["withUsage"]), data["total"])
+
+    def test_async_execute_resolves(self):
+        res = run_node(
+            """
+            import plugin from "./plugins/opencode/index.js";
+            const shell = await plugin.server();
+            let ticked = false;
+            const timer = setInterval(() => { ticked = true; }, 5);
+            const r = await shell.tool.iumbtems_config.execute({});
+            clearInterval(timer);
+            console.log(JSON.stringify({status: r.status, hasContent: typeof r.content === "string" && r.content.length > 0, loopAlive: ticked}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"async execute test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertEqual(data["status"], "success")
+        self.assertTrue(data["hasContent"])
+        self.assertTrue(data["loopAlive"])
+
     def test_registration_never_overwrites(self):
         res = run_node(
             """
@@ -180,6 +213,13 @@ class TestInstallOpenCode(unittest.TestCase):
             cmd = cfg["mcp"]["iumbtems"]["command"]
             self.assertTrue(Path(cmd[-1]).is_absolute())
             self.assertEqual(cmd[-1], str(PROJECT_ROOT / "runner" / "mcp_server.py"))
+            # Skills merged as absolute repo paths (relative entries repaired).
+            skill_paths = cfg.get("skills", {}).get("paths", [])
+            self.assertTrue(skill_paths)
+            for sp in skill_paths:
+                self.assertTrue(Path(sp).is_absolute(), f"relative skill path: {sp}")
+            self.assertIn(str(PROJECT_ROOT / "skills" / "grilling"), skill_paths)
+            self.assertFalse(any(not Path(sp).is_absolute() for sp in skill_paths))
             # Second run changes nothing.
             before = oc_path.read_bytes()
             second = self._run_install(home)
@@ -284,6 +324,42 @@ class TestOpenCodeTui(unittest.TestCase):
             self.assertEqual(data["stale"], 1)
             self.assertEqual(data["suspect"], 1)
             self.assertEqual(data["requeued"], 2)
+
+    def test_palette_entries_for_all_commands(self):
+        res = run_node(
+            """
+            import { setupTui } from "./plugins/opencode/tui.js";
+            import { OPENCODE_COMMANDS } from "./plugins/opencode/index.js";
+            const renders = [];
+            let factory = null;
+            const toasts = [];
+            const mock = {
+              theme: {}, directory: process.cwd(),
+              ui: { slot: (arg) => { renders.push(arg); return () => {}; }, toast: { show: (t) => toasts.push(t) }, router: { current: () => ({type: "other"}) } },
+              keymap: { layer: (fn) => { factory = fn; } }
+            };
+            setupTui(mock);
+            const appSlot = renders.find(r => r && r.append === "app");
+            if (!appSlot) throw new Error("app slot not registered");
+            appSlot.render();
+            const spec = factory();
+            const palette = spec.commands.filter(c => c.palette);
+            for (const c of palette) c.run();
+            console.log(JSON.stringify({
+              total: spec.commands.length,
+              palette: palette.length,
+              groups: [...new Set(palette.map(c => c.group))],
+              toasts: toasts.length,
+              expected: OPENCODE_COMMANDS.length + 1
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"palette test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertEqual(data["total"], data["expected"])
+        self.assertEqual(data["palette"], data["expected"])
+        self.assertEqual(data["groups"], ["IUMBTEMS"])
+        self.assertEqual(data["toasts"], data["expected"])
 
 
 class TestOpenCodeLifecycle(unittest.TestCase):

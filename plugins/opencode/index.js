@@ -11,7 +11,7 @@
  * catalog. Schemas mirror runner/mcp_server.py build_tools() — keep in sync.
  */
 
-import { spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -30,21 +30,40 @@ try {
   // keep fallback; version is informational only
 }
 
-/** Uniform dispatch: one-shot MCP call, return OpenCode's {content, status}. */
+/**
+ * Uniform dispatch: one-shot MCP call, return OpenCode's {content, status}.
+ * Async (non-blocking spawn) so long swarms/audits never freeze the host
+ * event loop; cancellation remains the host's prerogative.
+ */
 function callMcp(tool, args = {}, cwd) {
-  const res = spawnSync(
-    'python3',
-    [MCP_SERVER, 'call', tool, JSON.stringify(args || {})],
-    {
-      encoding: 'utf-8',
-      cwd: cwd || process.cwd(),
-      env: { ...process.env, PYTHONPATH: PKG_ROOT },
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const done = (content, status) => {
+      if (settled) return;
+      settled = true;
+      resolve({ content, status });
+    };
+    let child;
+    try {
+      child = spawn(
+        'python3',
+        [MCP_SERVER, 'call', tool, JSON.stringify(args || {})],
+        {
+          cwd: cwd || process.cwd(),
+          env: { ...process.env, PYTHONPATH: PKG_ROOT },
+        }
+      );
+    } catch (err) {
+      done(String((err && err.message) || err), 'error');
+      return;
     }
-  );
-  return {
-    content: res.stdout || res.stderr,
-    status: res.status === 0 ? 'success' : 'error',
-  };
+    child.stdout.on('data', (d) => { stdout += String(d); });
+    child.stderr.on('data', (d) => { stderr += String(d); });
+    child.on('error', (err) => done(String((err && err.message) || err), 'error'));
+    child.on('close', (code) => done(stdout || stderr, code === 0 ? 'success' : 'error'));
+  });
 }
 
 /** Catalog mirrors runner/mcp_server.py build_tools(). */
@@ -351,9 +370,11 @@ export const OPENCODE_COMMANDS = [
   {
     name: 'swarm',
     description: 'Run IUMBTEMS dialectic research swarm on an objective',
+    usage: '/swarm <objective>',
     template: [
       'Run an IUMBTEMS dialectic research swarm.',
       'Objective: $ARGUMENTS',
+      'If $ARGUMENTS is empty, ask the user for the research objective first; never call the tool with placeholder, empty, or literal "<objective>" arguments.',
       '1. If the objective is ambiguous, frame it first via iumbtems_socratic_frontier.',
       '2. Execute iumbtems_swarm_research with {"objective": "<objective>"} (pass "mock_mode": true only for dry runs).',
       '3. Summarize .research/final_synthesis.md, preserving [VERIFIED:<hash>] pointers.',
@@ -362,6 +383,7 @@ export const OPENCODE_COMMANDS = [
   {
     name: 'grill',
     description: 'Launch Socratic grilling and decision tree frontier exploration',
+    usage: '/grill [--objective <text>]',
     template: [
       'Launch Socratic grilling on the decision frontier.',
       'Objective: $ARGUMENTS (may be empty to inspect the current frontier)',
@@ -372,6 +394,7 @@ export const OPENCODE_COMMANDS = [
   {
     name: 'swarm-config',
     description: 'Inspect or update Epistemic Swarm parameters (engine, depth, mode)',
+    usage: '/swarm-config [--engine <e>] [--depth <d>] [--mode <m>] [--show]',
     template: [
       'Inspect or update the Epistemic Swarm configuration.',
       'Arguments: $ARGUMENTS (may be empty to inspect current settings)',
@@ -381,9 +404,11 @@ export const OPENCODE_COMMANDS = [
   {
     name: 'audit',
     description: 'Run dialectic codebase architectural and security audit with line-level proof',
+    usage: '/audit <target_path_or_scope>',
     template: [
       'Run an IUMBTEMS dialectic codebase audit (structural architect vs adversarial red-teamer).',
       'Target: $ARGUMENTS (path, component, or empty for full-repository architecture and vulnerability audit)',
+      'If $ARGUMENTS names a path that does not exist, ask the user to clarify the target first; never audit a placeholder path.',
       '1. Execute iumbtems_code_audit with {"target": "<target>"} (pass "mock_mode": true only for dry runs).',
       '2. Summarize .research/code_audit_report.md with line-level proof pointers.',
     ].join('\n'),
@@ -391,9 +416,11 @@ export const OPENCODE_COMMANDS = [
   {
     name: 'scout',
     description: 'Scout open-source libraries, audit copyleft licenses, generate clean-room blueprints',
+    usage: '/scout <feature_or_algorithm>',
     template: [
       'Scout open-source solutions for the requested capability.',
       'Feature: $ARGUMENTS',
+      'If $ARGUMENTS is empty, ask the user for the feature or algorithm first; never call the tool with placeholder, empty, or literal "<feature>" arguments.',
       '1. Execute iumbtems_oss_scout with {"feature": "<feature>"} (pass "mock_mode": true only for dry runs).',
       '2. Report mature candidates, GPL/AGPL copyleft risks, and the clean-room blueprint in .research/oss_scout_report.md.',
     ].join('\n'),
@@ -401,6 +428,7 @@ export const OPENCODE_COMMANDS = [
   {
     name: 'brainstorming',
     description: 'Lateral brainstorming: novel feature vectors, paradigm inversions, falsifiable spikes',
+    usage: '/brainstorming <ambiguous-prompt>',
     template: [
       'Run lateral brainstorming (divergent what-if ideation, never bug-fix lists).',
       'Prompt: $ARGUMENTS (defaults to "Where do we go from here?" when empty)',
@@ -411,6 +439,7 @@ export const OPENCODE_COMMANDS = [
   {
     name: 'brainstorm',
     description: 'Alias for /brainstorming',
+    usage: '/brainstorm <ambiguous-prompt>',
     template: [
       'Alias for /brainstorming: run lateral brainstorming (divergent what-if ideation, never bug-fix lists).',
       'Prompt: $ARGUMENTS (defaults to "Where do we go from here?" when empty)',
@@ -640,7 +669,7 @@ export function createOpenCodePlugin(context = {}) {
           updates.divergence_threshold = opts.divergence_threshold;
         }
         if (Object.keys(updates).length > 0) {
-          callMcp('iumbtems_config', updates, appContext?.cwd);
+          await callMcp('iumbtems_config', updates, appContext?.cwd);
         }
       }
       // Phase C: idle staleness nudge (opt out with {staleness_nudge: false}).
