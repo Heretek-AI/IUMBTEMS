@@ -74,6 +74,7 @@ Options:
   --mode <mode>         Operating mode (research, audit, scout, hybrid, brainstorm)
   --engine <engine>     Search engine (duckduckgo, brave, firecrawl, searxng)
   --depth <n>           Max dialectic iterations (1-4)
+  --backend <b>         Agent runtime: auto (host-native), claude, opencode
   --dir <path>          Path to .research workspace directory (default: .research)
 
 Examples:

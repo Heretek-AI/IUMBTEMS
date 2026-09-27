@@ -45,6 +45,13 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   `config/opencode-snippet.json` and `plugins/opencode/index.js`
   (`OPENCODE_COMMANDS`, `commandCatalog()`); commands may pin `agent:` and
   `subtask:` per https://opencode.ai/docs/commands/.
+- Agent runtime backend is host-native by default (`claude -p` on Claude Code,
+  `opencode run` on OpenCode via `IUMBTEMS_HOST`). Override with
+  `--backend {auto,claude,opencode}`, `IUMBTEMS_BACKEND_<ROLE>`,
+  `IUMBTEMS_MODEL_<ROLE>`, or `.research/config.json` (`backend`,
+  `agents.<role>.backend/model/opencode_agent`). The OpenCode plugin cannot
+  intercept host webfetch/websearch (no pre-execution hook in its API shape) —
+  accepted asymmetry; steering lives in command templates.
 
 ## Releases
 - Bump `package.json` (+ lockfile sync), commit, push to `main`, then

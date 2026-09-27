@@ -71,7 +71,9 @@ function callMcp(tool, args = {}, cwd = undefined) {
         [MCP_SERVER, 'call', tool, JSON.stringify(args || {})],
         {
           cwd: cwd || process.cwd(),
-          env: { ...process.env, PYTHONPATH: PKG_ROOT },
+          // Host hint: the runner defaults to the host-native backend
+          // (opencode run here), unless the caller passes backend explicitly.
+          env: { ...process.env, PYTHONPATH: PKG_ROOT, IUMBTEMS_HOST: 'opencode' },
         }
       );
     } catch (err) {
@@ -160,6 +162,11 @@ const TOOL_CATALOG = [
           description: 'Run in mock/dry-run mode without external API charges',
           default: false,
         },
+        backend: {
+          type: 'string',
+          enum: ['auto', 'claude', 'opencode'],
+          description: 'Agent runtime backend (default auto = host-native)',
+        },
       },
       required: ['objective'],
     },
@@ -179,6 +186,11 @@ const TOOL_CATALOG = [
           type: 'boolean',
           description: 'Run in mock mode without invoking LLM tokens',
           default: false,
+        },
+        backend: {
+          type: 'string',
+          enum: ['auto', 'claude', 'opencode'],
+          description: 'Agent runtime backend (default auto = host-native)',
         },
       },
       required: ['target'],
@@ -200,6 +212,11 @@ const TOOL_CATALOG = [
           description: 'Run in mock mode without invoking LLM tokens',
           default: false,
         },
+        backend: {
+          type: 'string',
+          enum: ['auto', 'claude', 'opencode'],
+          description: 'Agent runtime backend (default auto = host-native)',
+        },
       },
       required: ['feature'],
     },
@@ -219,6 +236,11 @@ const TOOL_CATALOG = [
           type: 'boolean',
           description: 'Run in mock/dry-run mode without external API charges',
           default: false,
+        },
+        backend: {
+          type: 'string',
+          enum: ['auto', 'claude', 'opencode'],
+          description: 'Agent runtime backend (default auto = host-native)',
         },
       },
       required: ['objective'],
@@ -252,6 +274,11 @@ const TOOL_CATALOG = [
           type: 'boolean',
           description: 'Run in mock mode without invoking LLM tokens',
           default: false,
+        },
+        backend: {
+          type: 'string',
+          enum: ['auto', 'claude', 'opencode'],
+          description: 'Agent runtime backend (default auto = host-native)',
         },
       },
       required: ['objective'],
@@ -852,6 +879,12 @@ async function registerHostCommands(host) {
 
 async function registerHostTools(host) {
   if (typeof host?.tool?.transform !== 'function') return [];
+  // Accepted asymmetry (parity spec section 5): this plugin shape
+  // (command/tool transform + session hooks + event subscriptions) has no
+  // tool.execute.before registration point, so host webfetch/websearch calls
+  // cannot be intercepted the way Claude Code's hooks/hooks.json does.
+  // Steering lives in command templates (epistemic search first); a host API
+  // for pre-execution guards would close this for real.
   const registration = await host.tool.transform((draft) => {
     for (const [name, spec] of Object.entries(buildToolMap())) {
       draft.add({

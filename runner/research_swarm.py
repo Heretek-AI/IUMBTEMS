@@ -34,6 +34,99 @@ EXAMPLE_RUST_RAFT_URL = "https://github.com/example/rust-raft"
 # run_claude_process already enforces; injection is not possible here.
 KNOWN_BACKEND_BINARIES = {"claude", "opencode", "python", "python3", "node"}
 
+# Host-native default backends (parity spec section 8). Claude Code spawns
+# `claude -p`; OpenCode spawns `opencode run` (opencode.ai/docs/cli). The
+# OpenCode plugin exports IUMBTEMS_HOST=opencode into every MCP dispatch so
+# the default follows the host; explicit flags/env/config always win.
+OPENCODE_RUN_BASE = ["opencode", "run"]
+
+# Swarm mode -> OpenCode agent carrying the equivalent system prompt
+# (`opencode run` has no --system-prompt flag; the prompt rides on --agent).
+MODE_OPENCODE_AGENT = {
+    "research": "alpha-thesis",
+    "audit": "code-auditor",
+    "scout": "oss-scout",
+    "hybrid": "alpha-thesis",
+    "brainstorm": "brainstormer",
+    "darkharvest": "darkharvester",
+}
+
+
+def _default_backend_cmd(config_host: Optional[str] = None) -> List[str]:
+    """Host-native default backend argv.
+
+    Precedence: explicit config_host ("claude"/"opencode") > IUMBTEMS_HOST env
+    > binary probe (opencode when claude is absent) > legacy ["claude", "-p"].
+    """
+    host = (config_host or "").strip().lower()
+    if host in ("", "auto"):
+        host = os.environ.get("IUMBTEMS_HOST", "").strip().lower()
+    if host == "opencode":
+        return list(OPENCODE_RUN_BASE)
+    if host == "claude":
+        return ["claude", "-p"]
+    if shutil.which("opencode") and not shutil.which("claude"):
+        return list(OPENCODE_RUN_BASE)
+    return ["claude", "-p"]
+
+
+def _backend_family(backend: List[str]) -> str:
+    return Path(backend[0]).name if backend else "claude"
+
+
+def _build_opencode_cmd(
+    backend: List[str],
+    prompt: str,
+    model: Optional[str],
+    agent: Optional[str],
+) -> List[str]:
+    """Argv for `opencode run` (docs: positional prompt, -m provider/model,
+    --agent <name>, --format json). No --tools/--system-prompt flags exist."""
+    cmd = list(backend) + [prompt]
+    if agent:
+        cmd.extend(["--agent", str(agent)])
+    if model:
+        cmd.extend(["-m", str(model)])
+    cmd.extend(["--format", "json"])
+    return cmd
+
+
+def _extract_opencode_text(raw: str) -> str:
+    """Best-effort final text from `opencode run --format json` event stream.
+
+    Tolerant by design: collects text fields from message/result/output style
+    events and falls back to the raw stream when nothing parses, so unknown
+    event shapes degrade to unparsed text rather than empty dossiers.
+    """
+    texts: List[str] = []
+    for line in (raw or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        kind = str(obj.get("type", "")).lower()
+        for key in ("text", "content", "message", "output", "result"):
+            val = obj.get(key)
+            if (
+                isinstance(val, str)
+                and val.strip()
+                and (
+                    "message" in kind
+                    or "text" in kind
+                    or "result" in kind
+                    or "output" in kind
+                    or "content" in kind
+                    or not kind
+                )
+            ):
+                texts.append(val)
+    return "\n".join(texts).strip() if texts else (raw or "").strip()
+
 
 def _validate_backend(backend: List[str]) -> List[str]:
     """Resolve-check a backend argv. Raises ValueError only if nothing can run it.
@@ -108,9 +201,10 @@ class SwarmRunner:
     def _resolve_agent_backend(self, role: str) -> Tuple[List[str], Optional[str]]:
         """Resolve (backend_cmd, model) for an agent role.
 
-        Precedence (Stream E): explicit override (set by CLI flags) > env >
-        config > default. Returns (["claude", "-p"], None) when nothing is
-        configured, preserving prior behavior byte-for-byte.
+        Precedence: explicit override (set by CLI flags) > env >
+        config > host-native default. Returns the legacy ["claude", "-p"]
+        only when nothing else selects opencode, preserving prior behavior
+        byte-for-byte on Claude Code hosts.
         """
         override = self.agent_overrides.get(role) or {}
         env_backend = os.environ.get(f"IUMBTEMS_BACKEND_{role.upper()}")
@@ -123,10 +217,20 @@ class SwarmRunner:
             override.get("backend")
             or (env_backend.split() if env_backend else None)
             or role_cfg.get("backend")
-            or ["claude", "-p"]
+            or _default_backend_cmd(self.config.get("backend"))
         )
         model = override.get("model") or env_model or role_cfg.get("model")
         return list(backend), model
+
+    def _resolve_opencode_agent(self, role: str) -> Optional[str]:
+        """OpenCode agent carrying the system prompt for this mode/role."""
+        agents_cfg = self.config.get("agents") or {}
+        role_cfg = agents_cfg.get(role) or {}
+        if role_cfg.get("opencode_agent"):
+            return role_cfg["opencode_agent"]
+        if self.mode == "research" and role == "beta":
+            return "beta-redteam"
+        return MODE_OPENCODE_AGENT.get(self.mode)
 
     def build_agent_cmd(
         self,
@@ -139,8 +243,13 @@ class SwarmRunner:
 
         Exposed separately so tests can assert argv shape (e.g. `--model`
         present when configured, absent in mock/default) without spawning.
+        Claude keeps the legacy shape; opencode builds `opencode run` argv.
         """
         backend, model = self._resolve_agent_backend(role)
+        if _backend_family(backend) == "opencode":
+            return _build_opencode_cmd(
+                backend, prompt, model, self._resolve_opencode_agent(role)
+            )
         cmd = list(backend) + [prompt, "--tools", tools]
         if model:
             cmd.extend(["--model", str(model)])
@@ -160,6 +269,7 @@ class SwarmRunner:
             return self._mock_claude_response(prompt)
 
         cmd = self.build_agent_cmd(prompt, system_prompt_file, tools, role=role)
+        family = _backend_family(cmd)
 
         try:
             if cmd:
@@ -172,10 +282,14 @@ class SwarmRunner:
                 cwd=str(PROJECT_ROOT),
                 shell=False,
             )
+            if family == "opencode":
+                return _extract_opencode_text(res.stdout)
             return res.stdout.strip()
         except subprocess.CalledProcessError as e:
-            print(f"[ERROR] Claude process failed: {e.stderr}", file=sys.stderr)
-            raise RuntimeError(f"Claude execution failed: {e.stderr}")
+            print(
+                f"[ERROR] {family} backend process failed: {e.stderr}", file=sys.stderr
+            )
+            raise RuntimeError(f"{family} backend execution failed: {e.stderr}")
         except ValueError as e:
             # Bad backend config: report it as a run failure, not an abort of the
             # whole swarm. Matches the pre-allowlist behavior of surfacing the
@@ -917,11 +1031,21 @@ def main():
         default=None,
         help="Regulated Domain Pack id (config/domain_packs/<id>.json), e.g. biopharma",
     )
+    parser.add_argument(
+        "--backend",
+        choices=["auto", "claude", "opencode"],
+        default=None,
+        help="Agent runtime backend for both roles (default: auto = host-native; explicit beats env/config)",
+    )
 
     args = parser.parse_args()
     frontier_path = Path(args.frontier) if args.frontier else None
 
     agent_overrides: Dict[str, Dict[str, Any]] = {}
+    if args.backend and args.backend != "auto":
+        argv = ["claude", "-p"] if args.backend == "claude" else ["opencode", "run"]
+        agent_overrides.setdefault("alpha", {})["backend"] = argv
+        agent_overrides.setdefault("beta", {})["backend"] = argv
     if args.model_alpha:
         agent_overrides.setdefault("alpha", {})["model"] = args.model_alpha
     if args.model_beta:

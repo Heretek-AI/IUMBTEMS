@@ -123,6 +123,11 @@ def _run_swarm_mode(mode: Optional[str], args: Dict[str, Any]) -> str:
         raise ValueError("objective is required")
 
     frontier = args.get("frontier") or args.get("frontier_file")
+    overrides = None
+    backend = (args.get("backend") or "").strip().lower()
+    if backend in ("claude", "opencode"):
+        argv = ["claude", "-p"] if backend == "claude" else ["opencode", "run"]
+        overrides = {"alpha": {"backend": argv}, "beta": {"backend": argv}}
     runner = SwarmRunner(
         base_dir=_resolve_base_dir(args),
         mock_mode=bool(args.get("mock_claude") or args.get("mock_mode")),
@@ -130,6 +135,7 @@ def _run_swarm_mode(mode: Optional[str], args: Dict[str, Any]) -> str:
         engine=args.get("engine"),
         depth=args.get("depth"),
         domain_pack=args.get("domain_pack"),
+        agent_overrides=overrides,
     )
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -423,6 +429,11 @@ def build_tools() -> List[ToolSpec]:
                         "type": "boolean",
                         "description": "Synthetic run, zero API cost",
                     },
+                    "backend": {
+                        "type": "string",
+                        "enum": ["auto", "claude", "opencode"],
+                        "description": "Agent runtime backend (default auto = host-native)",
+                    },
                 },
                 "required": ["objective"],
             },
@@ -440,6 +451,10 @@ def build_tools() -> List[ToolSpec]:
                     },
                     "base_dir": {"type": "string"},
                     "mock_claude": {"type": "boolean"},
+                    "backend": {
+                        "type": "string",
+                        "enum": ["auto", "claude", "opencode"],
+                    },
                 },
                 "required": ["target"],
             },
@@ -457,6 +472,10 @@ def build_tools() -> List[ToolSpec]:
                     },
                     "base_dir": {"type": "string"},
                     "mock_claude": {"type": "boolean"},
+                    "backend": {
+                        "type": "string",
+                        "enum": ["auto", "claude", "opencode"],
+                    },
                 },
                 "required": ["feature"],
             },
@@ -474,6 +493,10 @@ def build_tools() -> List[ToolSpec]:
                     },
                     "base_dir": {"type": "string"},
                     "mock_claude": {"type": "boolean"},
+                    "backend": {
+                        "type": "string",
+                        "enum": ["auto", "claude", "opencode"],
+                    },
                 },
                 "required": ["objective"],
             },
@@ -501,6 +524,10 @@ def build_tools() -> List[ToolSpec]:
                     "depth": {"type": "integer", "description": "Dialectic depth 1-4"},
                     "base_dir": {"type": "string"},
                     "mock_claude": {"type": "boolean"},
+                    "backend": {
+                        "type": "string",
+                        "enum": ["auto", "claude", "opencode"],
+                    },
                 },
                 "required": ["objective"],
             },

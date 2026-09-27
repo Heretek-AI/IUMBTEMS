@@ -17,6 +17,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "max_iterations": 2,
     "divergence_threshold": 0.75,
     "mode": "research",  # "research", "audit", "scout", "hybrid", "brainstorm", "darkharvest"
+    "backend": "auto",  # "auto" (host-native) | "claude" | "opencode"
     "cache_raw_markdown": True,
     "license_whitelist": ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC"],
     "output_dir": DEFAULT_RESEARCH_DIR,
@@ -31,10 +32,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # different model families/weights probe divergence that prompt-level
     # red-teaming cannot reach. `backend` is a command list, not just a model
     # string, because cross-FAMILY means non-Claude processes.
+    # None means "fall through to the host-native default" (claude -p on
+    # Claude Code, opencode run on OpenCode) — explicit values still win.
     # mock mode never builds or spawns these commands.
     "agents": {
-        "alpha": {"backend": ["claude", "-p"], "model": None},
-        "beta": {"backend": ["claude", "-p"], "model": None},
+        "alpha": {"backend": None, "model": None},
+        "beta": {"backend": None, "model": None},
     },
 }
 
@@ -78,6 +81,9 @@ def display_config(cfg: Dict[str, Any]):
     print(f"  🔄 Max Iterations (Depth): {cfg.get('max_iterations', 2)}")
     print(f"  ⚖️  Divergence Threshold:  {cfg.get('divergence_threshold', 0.75)}")
     print(f"  🎯 Operating Mode:         {cfg.get('mode', 'research').upper()}")
+    print(
+        f"  🖥️  Agent Backend:         {cfg.get('backend', 'auto').upper()} (auto = host-native)"
+    )
     print(
         f"  💾 Raw Markdown Caching:   {'ENABLED' if cfg.get('cache_raw_markdown', True) else 'DISABLED'}"
     )
@@ -178,6 +184,12 @@ def _parse_cli_updates(args: list, cfg: Dict[str, Any]) -> bool:
                 modified = True
             except ValueError:
                 pass
+            idx += 1
+        elif arg == "--backend" and idx + 1 < len(args):
+            backend = args[idx + 1].lower()
+            if backend in ("auto", "claude", "opencode"):
+                cfg["backend"] = backend
+                modified = True
             idx += 1
         idx += 1
     return modified
