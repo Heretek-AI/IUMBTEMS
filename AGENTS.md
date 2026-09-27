@@ -64,7 +64,9 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   command templates.
 
 ## Releases
-- Bump `package.json` (+ lockfile sync), commit, push to `main`, then
+- Bump `package.json` (+ lockfile sync) **and `.claude-plugin/plugin.json`**
+  (0.7.5 shipped with a stale plugin manifest — keep all three in lockstep),
+  commit, push to `main`, then
   `gh release create vX.Y.Z`. The `Publish to npm` workflow (OIDC trusted
   publishing) runs on release-published. Verify with
   `curl https://registry.npmjs.org/@heretek-ai%2Fepistemic-swarm`
