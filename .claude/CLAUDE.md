@@ -1,6 +1,6 @@
-# Epistemic Swarm: Project Workspace Rules
+# IUMBTEMS (Epistemic Swarm): Project Workspace Rules
 
-This repository operates under the **Epistemic Swarm Research Protocol**. All Claude Code sessions within this directory are bound by strict evidentiary integrity rules.
+This repository operates under the **IUMBTEMS Epistemic Integrity Protocol**. All Claude Code sessions within this directory are bound by strict evidentiary integrity rules.
 
 ## Core Rules for This Workspace
 1. **Epistemic Invariant Enforcement**:
@@ -14,7 +14,7 @@ This repository operates under the **Epistemic Swarm Research Protocol**. All Cl
 3. **Multi-Agent Dialectic Swarm**:
    - When running deep research, use the runner script:
      ```bash
-     python3 runner/research_swarm.py --objective "<Research Question>"
+     python3 runner/research_swarm.py --mode <research|audit|scout|hybrid|brainstorm|darkharvest> --objective "<Research Question>"
      ```
    - For preliminary planning and assumption inversion, trigger the Socratic grilling skill via `/grilling`.
 

@@ -40,7 +40,8 @@ claude plugin marketplace list
 ### 1. `epistemic-swarm` (Flagship Harness)
 - **Manifest**: [`.claude-plugin/plugin.json`](file:///.claude-plugin/plugin.json)
 - **Components**:
-  - **Skills**: `skills/grilling`, `skills/research_cache`, `skills/epistemic_search`
+  - **Skills** (9): `skills/grilling`, `skills/research_cache`, `skills/epistemic_search`, `skills/swarm_config`, `skills/code_audit`, `skills/oss_scout`, `skills/brainstorming`, `skills/darkharvest`, `skills/factory`
+  - **Agent Tools** (MCP): `iumbtems_swarm_research`, `iumbtems_code_audit`, `iumbtems_oss_scout`, `iumbtems_brainstorm`, `iumbtems_darkharvest`, `iumbtems_factory`, `iumbtems_config`, `iumbtems_verify_quote`, `iumbtems_socratic_frontier`, plus the brief/ledger/domain-pack tools (`export_brief`, `verify_brief`, `reindex_claims`, `report_retraction`, `check_staleness`, `set_domain_pack`)
   - **Hooks**: `hooks/hooks.json` (`PreToolUse` hook intercepting ungrounded `WebSearch` and `WebFetch` to enforce verifiable SHA-256 caching)
   - **Zero-Key Search**: DuckDuckGo Lite search and automated content-addressed document caching out of the box (zero API key required).
   - **Safe MCP Servers & Accelerators**:
@@ -68,7 +69,7 @@ claude plugin marketplace list
 ### 3. `research-cache` (Modular Tool)
 - **Manifest**: [`plugins/research-cache/.claude-plugin/plugin.json`](file:///plugins/research-cache/.claude-plugin/plugin.json)
 - **Components**:
-  - **Skill & Engine**: `skills/research-cache` (Content-addressed SHA256 raw source storage and quote validation).
+  - **Skill & Engine**: `skills/research_cache` (published under the plugin id `research-cache`) — content-addressed SHA-256 raw source storage and verbatim quote validation.
 - **Install**:
   ```bash
   claude plugin install research-cache@heretek-official

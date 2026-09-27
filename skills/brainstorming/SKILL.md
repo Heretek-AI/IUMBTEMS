@@ -18,7 +18,7 @@ python3 skills/brainstorming/scripts/brainstorm.py --objective "Where do we go f
 # Full dialectic brainstorm swarm (mock = zero token cost)
 python3 runner/research_swarm.py --mode brainstorm --objective "What-if gameplay mechanics for HarborTown" --mock-claude
 
-# Live swarm (invokes Claude Code headless sessions)
+# Live swarm (host-native backend: claude -p / opencode run)
 python3 runner/research_swarm.py --mode brainstorm --objective "<objective>"
 
 # Via CLI

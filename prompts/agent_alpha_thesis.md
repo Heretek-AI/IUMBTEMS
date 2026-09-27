@@ -17,7 +17,7 @@ You are **Agent Alpha (The Proponent)** within the Epistemic Swarm dialectic har
 1. **Search**: Use Brave Search, SearXNG, or academic MCP tools to discover primary sources.
 2. **Extract & Cache**: For every relevant source found, fetch the full content and invoke the research cache utility to store it:
    ```bash
-   python3 skills/research-cache/hasher.py cache --url "<URL>" --content "<MARKDOWN_CONTENT>" --title "<TITLE>"
+   python3 skills/research_cache/hasher.py cache --url "<URL>" --content "<MARKDOWN_CONTENT>" --title "<TITLE>"
    ```
    This will output the content-addressed hash (e.g., `3f8a9e21...`).
 3. **Extract Verbatim Excerpts**: Note the exact sentence or paragraph that substantiates your claim. The Epistemic Auditor will verify that your quote matches the cached markdown file character-for-character.

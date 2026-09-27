@@ -64,11 +64,7 @@ SKILL_TOOLS = {
     "oss_scout": ["iumbtems_oss_scout"],
     "brainstorming": ["iumbtems_brainstorm"],
     "darkharvest": ["iumbtems_darkharvest"],
-    "factory": [
-        "iumbtems_brainstorm",
-        "iumbtems_darkharvest",
-        "iumbtems_socratic_frontier",
-    ],
+    "factory": ["iumbtems_factory"],
 }
 
 SKILL_TITLES = {

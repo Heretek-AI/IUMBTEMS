@@ -10,7 +10,7 @@ Codex auto-discovers `.agents/skills/*` from CWD up to repo root.
 This repo ships generated mirrors there (see `scripts/build_adapters.py`):
 
 ```
-.agents/skills/{grilling,research_cache,epistemic_search,swarm_config,code_audit,oss_scout,brainstorming}/SKILL.md
+.agents/skills/{grilling,research_cache,epistemic_search,swarm_config,code_audit,oss_scout,brainstorming,darkharvest,factory}/SKILL.md
 ```
 
 Invoke: `$brainstorming Where do we go from here?` or let Codex pick

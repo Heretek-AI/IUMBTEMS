@@ -12,7 +12,8 @@ gemini extensions list
 
 Contents: `gemini-extension.json` (manifest + MCP servers), `GEMINI.md`
 (context loader), `commands/*.toml` (`/swarm`, `/grill`, `/audit`,
-`/scout`, `/brainstorming`, `/swarm-config`), `hooks/hooks.json`,
+`/scout`, `/brainstorming`, `/darkharvest`, `/factory`, `/domainexpansion`,
+`/swarm-config`), `hooks/hooks.json`,
 `skills/` (generated copies of canonical `skills/` — run
 `scripts/build_adapters.py`). Secrets via env:
 `BRAVE_SEARCH_API_KEY`, `FIRECRAWL_API_KEY`, `FIRECRAWL_API_URL`,

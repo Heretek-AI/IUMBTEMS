@@ -22,7 +22,7 @@ plugins/antigravity/
 └── rules/           # workspace rules (epistemic integrity invariant)
 ```
 
-Skills auto-promote to slash commands (`/grilling`, `/brainstorming`, ...).
+Skills auto-promote to slash commands (`/grilling`, `/brainstorming`, `/darkharvest`, `/factory`, ...).
 Set optional secrets via workspace settings / env:
 `BRAVE_SEARCH_API_KEY`, `FIRECRAWL_API_KEY`, `FIRECRAWL_API_URL`, `SEARXNG_URL`.
 Zero-key DuckDuckGo + readability fallback works with no keys.

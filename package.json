@@ -1,7 +1,7 @@
 {
   "name": "@heretek-ai/epistemic-swarm",
   "version": "0.7.9",
-  "description": "IUMBTEMS: I Use My Brain To Express My Self — High-Integrity Dialectic Research Agent Harness for Claude Code, OpenCode V2, Pi, OMP (oh-my-pi), Gemini CLI, Codex CLI, and AntiGravity",
+  "description": "IUMBTEMS (Epistemic Swarm) — High-Integrity Dialectic Research Agent Harness for Claude Code, OpenCode V2, Pi (pi.dev), OMP (oh-my-pi), Gemini CLI, Codex CLI, and AntiGravity",
   "main": "bin/cli.js",
   "bin": {
     "iumbtems": "bin/cli.js",
@@ -32,6 +32,7 @@
   "homepage": "https://github.com/Heretek-AI/IUMBTEMS#readme",
   "keywords": [
     "iumbtems",
+    "epistemic-swarm",
     "i-use-my-brain-to-express-my-self",
     "pi-package",
     "omp-package",
@@ -66,7 +67,9 @@
     "swarm-intelligence",
     "code-audit",
     "oss-scout",
-    "clean-room-engineering"
+    "clean-room-engineering",
+    "proof-carrying-briefs",
+    "living-dossiers"
   ],
   "pi": {
     "extensions": [

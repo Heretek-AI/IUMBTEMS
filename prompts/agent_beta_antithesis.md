@@ -27,7 +27,7 @@ Execute inverted and adversarial queries across Brave Search, SearXNG, and acade
 1. When you discover counter-evidence, fetch the full content.
 2. Cache the source immediately using the research cache utility:
    ```bash
-   python3 skills/research-cache/hasher.py cache --url "<URL>" --content "<MARKDOWN_CONTENT>" --title "<TITLE>"
+   python3 skills/research_cache/hasher.py cache --url "<URL>" --content "<MARKDOWN_CONTENT>" --title "<TITLE>"
    ```
 3. Extract exact verbatim quotes showing the contradiction, flaw, or boundary condition.
 

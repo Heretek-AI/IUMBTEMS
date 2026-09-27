@@ -11,13 +11,23 @@
 
 ---
 
+## 🏷️ Naming
+
+Two names appear throughout this project, and they are not interchangeable:
+
+| Name | What it is |
+| :--- | :--- |
+| **IUMBTEMS** | The project and brand ("I Use My Brain To Express My Self"). Repo: [`Heretek-AI/IUMBTEMS`](https://github.com/Heretek-AI/IUMBTEMS). |
+| **Epistemic Swarm** | The technical/product name of the harness. Ships as the npm package [`@heretek-ai/epistemic-swarm`](https://www.npmjs.com/package/@heretek-ai/epistemic-swarm), the Claude Code plugin `epistemic-swarm@heretek-official`, and the `iumbtems` / `epistemic-swarm` binaries. |
+
 ## 💡 The Philosophy of IUMBTEMS
 
-**IUMBTEMS** (**I Use My Brain To Express My Self**) is grounded in a singular design mandate: **Epistemic Sovereignty**.
+**IUMBTEMS** is grounded in a singular design mandate: **Epistemic Sovereignty**.
 
 Modern LLMs suffer from parametric hallucination, sycophancy, and premature narrative consensus. They invent citations, smooth over technical contradictions, and extrapolate beyond empirical bounds.
 
-**IUMBTEMS** restores rigorous empirical grounding by pairing an unconstrained divergent exploration phase (Matt Pocock-style Socratic grilling and assumption inversion) with a multi-agent dialectic swarm:
+**IUMBTEMS** restores rigorous empirical grounding by pairing an unconstrained divergent exploration phase (Socratic grilling and assumption inversion) with a multi-agent dialectic swarm:
+
 1. **Agent Alpha (The Proponent / Thesis)**: Gathers corroborating primary sources, empirical proofs, and implementation benchmarks.
 2. **Agent Beta (The Adversary / Antithesis / Red Team)**: Hunts for counter-arguments, retracted data, methodology flaws, and edge-case failures.
 3. **Epistemic Auditor**: Verifies cited quotes verbatim against content-addressed raw markdown caches (`.research/sources/<sha256>.md`), prunes ungrounded assertions, and scores dialectic divergence.
@@ -26,8 +36,7 @@ Modern LLMs suffer from parametric hallucination, sycophancy, and premature narr
 
 ## 🌐 Universal Multi-Platform Support
 
-IUMBTEMS is packaged as a single universal npm package (`@heretek-ai/epistemic-swarm` with `iumbtems` binary) that runs across seven major autonomous agent harnesses.
-Single source of truth: `skills/*` + `prompts/*`. The canonical programmatic surface is the first-party MCP server (`python3 runner/mcp_server.py`), which exposes the `iumbtems_*` tools in-process. Harness targets register that server and carry only thin skill stubs generated with `python3 scripts/build_adapters.py` (`iumbtems adapters`) into `plugins/*`, `.agents/skills` — stubs point at the canonical `skills/*` prose instead of copying code.
+IUMBTEMS is packaged as a single universal npm package that runs across seven autonomous agent harnesses. Single source of truth: `skills/*` + `prompts/*`. The canonical programmatic surface is the first-party MCP server (`python3 runner/mcp_server.py`), which exposes the `iumbtems_*` tools. Harness targets register that server and carry only thin skill stubs generated with `python3 scripts/build_adapters.py` (`iumbtems adapters`) into `plugins/*` and `.agents/skills`.
 
 ### 1. Claude Code (Native Marketplace & Overlay)
 
@@ -44,6 +53,8 @@ claude plugin install epistemic-swarm@heretek-official
 # Or install standalone modular plugins:
 claude plugin install socratic-grilling@heretek-official
 claude plugin install research-cache@heretek-official
+claude plugin install darkharvest@heretek-official
+claude plugin install factory@heretek-official
 ```
 See [MARKETPLACE.md](MARKETPLACE.md) for full component specifications.
 
@@ -51,7 +62,7 @@ See [MARKETPLACE.md](MARKETPLACE.md) for full component specifications.
 Install skills and MCP servers directly into `~/.claude/` and `~/.claude.json`:
 ```bash
 npx @heretek-ai/epistemic-swarm install
-# or from local repo:
+# or from a local clone:
 npm run install-local
 ```
 - Run `/grilling` inside any interactive Claude Code session.
@@ -61,22 +72,14 @@ npm run install-local
   ```
 
 ### 2. Pi (`pi.dev`)
-Install directly into Pi via its native package manager:
 ```bash
 pi install npm:@heretek-ai/epistemic-swarm
 ```
-- **Slash Commands**:
-  - `/swarm <objective>`: Run autonomous dialectic research swarm
-  - `/grill`: Launch Socratic assumption-inversion and decision trees
-  - `/swarm-config`: Inspect or tune search engine, depth (1-4), and mode
-  - `/audit <target>`: Run dialectic codebase architecture and security audit
-  - `/scout <feature>`: Scout open-source software and clean-room blueprints
-- **Agent Tools**: `iumbtems_config`, `iumbtems_verify_quote`, `iumbtems_brainstorm`.
-- OMP (`omp.sh`, oh-my-pi) shares the same entry point: `omp install npm:@heretek-ai/epistemic-swarm`, project commands in `.omp/commands/` (`/swarm`, `/grill`, `/audit`, `/scout`, `/brainstorming`, `/swarm-config`), prompts in `.omp/prompts/`, hooks in `.omp/hooks/pre|post/`.
-- All commands automatically respect `.research/config.json`.
+- **Slash Commands**: `/swarm`, `/grill`, `/swarm-config`, `/audit`, `/scout`, `/brainstorming`, `/darkharvest`, `/factory`, `/domainexpansion`.
+- **Agent Tools**: the full `iumbtems_*` MCP surface (see [MCP Tool Reference](#-mcp-tool-reference)).
 
 ### 3. OpenCode V2 ([opencode.ai/v2/docs](https://opencode.ai/v2/docs))
-Enable IUMBTEMS in your `~/.config/opencode/opencode.jsonc` or project `opencode.jsonc`. You can configure settings declaratively using native OpenCode V2 syntax:
+Enable IUMBTEMS in `~/.config/opencode/opencode.jsonc` or a project `opencode.jsonc`:
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
@@ -92,26 +95,21 @@ Enable IUMBTEMS in your `~/.config/opencode/opencode.jsonc` or project `opencode
   ]
 }
 ```
-OpenCode V2 automatically registers the full tool suite:
-- `iumbtems_config`: Inspect or dynamically adjust active parameters in `.research/config.json`.
-- `iumbtems_code_audit`: Dispatches dialectic codebase review (structural architect vs. red-team).
-- `iumbtems_oss_scout`: Scouts open-source libraries, audits licenses, and builds clean-room blueprints.
-- `iumbtems_swarm_research`: Dispatches dialectic researcher pairs (Thesis vs. Antithesis).
-- `iumbtems_verify_quote`: Audits verbatim citations against the SHA-256 source cache.
-- `iumbtems_socratic_frontier`: Advances the Socratic decision tree frontier.
-- `iumbtems_brainstorm`: Lateral ideation portfolio (feature vectors + paradigm moves + falsifiable spikes).
+The plugin registers through OpenCode V2's transform domains at setup — `tool.transform` and `command.transform` (catalog), `agent.transform` (the shipped role profiles), and `skill.transform` (bundled `skills/*/SKILL.md`) — so no config-snippet install step is required. Agent profiles are registered with `AgentEditor.update` (V2 has no `add()`).
 
-*(See [config/opencode-snippet.json](config/opencode-snippet.json) for custom agent definitions).*
+Slash commands: `/swarm`, `/grill`, `/swarm-config`, `/audit`, `/scout`, `/brainstorming` (alias `/brainstorm`), `/darkharvest`, `/factory`, `/domainexpansion`.
+
+*(See [config/opencode-snippet.json](config/opencode-snippet.json) for the agent definitions.)*
 
 ### 4. Gemini CLI
 ```bash
 gemini extensions install https://github.com/Heretek-AI/IUMBTEMS --path plugins/gemini
 # local dev: gemini extensions link ./plugins/gemini
 ```
-Bundle: `plugins/gemini/gemini-extension.json` (MCP servers, incl. the canonical `iumbtems` server), `GEMINI.md` (context), `commands/*.toml` (`/swarm`, `/grill`, `/audit`, `/scout`, `/brainstorming`, `/swarm-config`), `hooks/hooks.json`, `skills/` thin stubs.
+Bundle: `plugins/gemini/gemini-extension.json` (manifest + MCP servers), `GEMINI.md` (context), `commands/*.toml` (`/swarm`, `/grill`, `/audit`, `/scout`, `/brainstorming`, `/darkharvest`, `/factory`, `/domainexpansion`, `/swarm-config`), `hooks/hooks.json`, `skills/` thin stubs.
 
 ### 5. Codex CLI
-Codex reads repo-local `.agents/skills/*` (already generated in this repo) — `$brainstorming <prompt>` or implicit activation. Distributable pack in `plugins/codex/` (`openai.yaml`, `config.toml.snippet` for `[mcp_servers.*]`, `AGENTS.md.snippet`). Legacy `~/.codex/prompts/*.md` (`/prompts:<name>`) is deprecated; use skills.
+Codex reads repo-local `.agents/skills/*` (generated in this repo) — `$brainstorming <prompt>` or implicit activation. Distributable pack in `plugins/codex/` (`openai.yaml`, `config.toml.snippet` for `[mcp_servers.*]`, `AGENTS.md.snippet`). Legacy `~/.codex/prompts/*.md` (`/prompts:<name>`) is deprecated; use skills.
 
 ### 6. Google AntiGravity (`agy`)
 ```bash
@@ -124,14 +122,49 @@ Bundle: `plugins/antigravity/plugin.json`, `mcp_config.json`, `hooks.json`, `ski
 ```bash
 omp install npm:@heretek-ai/epistemic-swarm
 ```
-Shares the pi extension entry point (`package.json: {omp, pi}` blocks). Project-local slash commands (`.omp/commands/*.md`), prompt templates (`.omp/prompts/*.md`), hooks (`.omp/hooks/pre|post/*.ts`), system override (`.omp/SYSTEM.md`).
+Shares the Pi extension entry point (`package.json: {omp, pi}` blocks). Project-local slash commands (`.omp/commands/*.md`), prompt templates (`.omp/prompts/*.md`), hooks (`.omp/hooks/pre|post/*.ts`), system override (`.omp/SYSTEM.md`).
+
+---
+
+## 🔌 Agent Runtime Backends
+
+Agent work runs on whichever harness invoked it — **host-native by default**:
+
+| Host | Default backend |
+| :--- | :--- |
+| Claude Code | `claude -p` |
+| OpenCode V2 | `opencode run` (selected via `IUMBTEMS_HOST=opencode`) |
+| Manual CLI run | `claude -p`, or `opencode run` when `claude` is absent from `PATH` |
+
+Override, highest precedence first:
+
+1. `--backend {auto,claude,opencode}` (CLI) / `backend` argument (MCP tools)
+2. `IUMBTEMS_BACKEND_ALPHA` / `IUMBTEMS_BACKEND_BETA` (and `IUMBTEMS_MODEL_<ROLE>`)
+3. `.research/config.json` → `agents.<role>.backend` / `agents.<role>.model`
+4. Host-native default
+
+Related environment variables:
+
+| Variable | Purpose |
+| :--- | :--- |
+| `IUMBTEMS_HOST` | Host hint (`claude` / `opencode`); set automatically by the OpenCode plugin. |
+| `IUMBTEMS_BACKEND_<ROLE>` / `IUMBTEMS_MODEL_<ROLE>` | Per-role backend argv / model override (e.g. `IUMBTEMS_BACKEND_BETA=opencode`). |
+| `IUMBTEMS_AGENT_CWD` | Working directory for spawned agents: `project` (default), `package`, or an absolute path. |
+| `IUMBTEMS_PROJECT_DIR` | Project root used to resolve the `.research/` workspace (set by the OpenCode plugin; wins over the process cwd). |
+| `IUMBTEMS_PCRB_KEY` | HMAC key for proof-carrying brief signing/verification. |
+| `IUMBTEMS_FETCH_TTL_DAYS` / `IUMBTEMS_FETCH_MAX_INLINE` | Fetch-cache TTL and inline size cap (bytes). |
+| `IUMBTEMS_TOOL_NAMES` | Override the projected tool-name list. |
+
+Spawned agents inherit `PWD` set to their working directory, so harnesses that resolve their project root from `$PWD` (OpenCode) land in the same tree the runner reads from.
+
+> **Legacy config migration:** configs written before 0.7.6 could pin `agents.<role>.backend = ["claude", "-p"]`, which silently overrode the host-native default. That pin is now migrated to `null` on load (only when the top-level `backend` is not an explicit `"claude"`), and the migration is persisted by `iumbtems config`. To deliberately keep Claude on an OpenCode host, set `"backend": "claude"`.
 
 ---
 
 ## ⚡ CLI Command Reference
 
 ```bash
-# Inspect or update active configuration (search engine, depth, mode)
+# Inspect or update active configuration (search engine, depth, mode, backend)
 iumbtems config
 iumbtems config --engine duckduckgo --depth 3 --mode audit
 
@@ -148,82 +181,175 @@ iumbtems run "Sub-millisecond ZK state updates on L1 rollups"
 iumbtems brainstorm "Where do we go from here?"
 
 # Product competitor teardown with per-feature harvest verdicts
-iumbtems darkharvest "Paseo-class agent harness competitor" --seeds https://github.com/a/b,https://github.com/c/d --max-repos 6 --mock-claude
+iumbtems darkharvest "Paseo-class agent harness competitor" --seeds https://github.com/a/b,https://github.com/c/d --max-repos 6
 
-# Coding-factory run-state helper (init, phase-add, qa-record, expansion, stop)
+# Coding-factory run-state helper
 iumbtems factory init --run arena
 iumbtems factory phase-add --run arena --phase 01-handoff --goal "Session handoff" --accept "round-trips;STOP kills loop"
-iumbtems factory expansion --run arena --loops 10
+iumbtems factory qa-record --run arena --phase 01-handoff --seat qa-a --verdict pass
+iumbtems factory expansion --run arena --loops 10 --max-loops 10
+iumbtems factory stop --run arena          # writes .factory/STOP kill-file
 
-# OpenCode slash commands (also Pi/OMP/Gemini): /factory, /domainexpansion, /darkharvest, /scout, /audit, /grill, /swarm
-
-# Run Socratic grilling and decision frontier calculation
+# Socratic grilling and decision-frontier calculation
 iumbtems grill --objective "L1 vs L2 state verification trade-offs"
 
-# Environment diagnostics (Claude Code, Node, Python)
-iumbtems doctor
+# Rebuild harness adapter mirrors (skills -> plugins/*, .agents/skills)
+iumbtems adapters
 
-# Run automated test suite
-iumbtems test
+# Other utility commands
+iumbtems install      # install skills & MCP servers into ~/.claude/
+iumbtems marketplace  # print the Claude Code marketplace catalog
+iumbtems doctor       # check environment requirements
+iumbtems test         # run the automated test suite
+iumbtems help         # full usage text
 ```
 
-### Specialized Dialectic Skills & Slash Commands
-- **`/swarm-config`**: Interactive tuning of search engines (DuckDuckGo, Brave, Firecrawl, SearXNG), iteration depth, divergence thresholds, and operating modes.
-- **`/code-audit`**: Dialectic codebase review pairing a Structural Architect (thesis) with a Vulnerability Red-Teamer (antithesis) enforcing line-number proofs (`file:///path#L10-25`).
-- **`/oss-scout`**: Evaluates GitHub repositories, package ecosystems (npm, crates.io, PyPI), license contamination (GPL/AGPL copyleft vs MIT/Apache), and outputs clean-room re-implementation blueprints.
+Common options: `--mock-claude` (synthetic responses, zero API cost), `--frontier <file>` (settled `frontier.json`), `--mode <research|audit|scout|hybrid|brainstorm|darkharvest>`, `--engine <duckduckgo|brave|firecrawl|searxng>`, `--depth <1-4>`, `--backend <auto|claude|opencode>`, `--dir <path>`.
+
+The `epistemic-swarm` binary is an alias of `iumbtems`.
+
+---
+
+## 🧰 MCP Tool Reference
+
+The canonical MCP server (`python3 runner/mcp_server.py`, stdio) exposes these tools to every harness:
+
+| Tool | Purpose |
+| :--- | :--- |
+| `iumbtems_config` | Inspect or adjust active parameters in `.research/config.json` (search engine, depth, mode, backend, per-agent backends). |
+| `iumbtems_swarm_research` | Dispatch the dialectic researcher pair (Alpha thesis vs Beta antithesis) with epistemic auditing. Long-running; blocks until complete. |
+| `iumbtems_code_audit` | Dialectic codebase review: structural architect vs vulnerability red-team. |
+| `iumbtems_oss_scout` | Scout open-source libraries, audit licenses, and build clean-room blueprints. |
+| `iumbtems_brainstorm` | Lateral ideation portfolio: feature vectors, paradigm moves, falsifiable spikes. Never bug fixes. |
+| `iumbtems_darkharvest` | Product competitor teardown with per-feature `depend\|vendor\|clean-room\|skip` verdicts and SPDX attribution. |
+| `iumbtems_factory` | Drive factory run state: `init` / `phase-add` / `qa-record` / `expansion` / `stop`. State in `<project>/.factory` and `.roadmap`. |
+| `iumbtems_verify_quote` | Audit a verbatim citation against the SHA-256 source cache (`.research/sources/<hash>.md`). |
+| `iumbtems_socratic_frontier` | Inspect or advance the Socratic decision-tree frontier (`.research/frontier.json`). |
+| `iumbtems_export_brief` | Export a proof-carrying research brief (PCRB): a self-contained signed bundle of synthesis, claims, quote witnesses, and full source texts. |
+| `iumbtems_verify_brief` | Verify a PCRB against its bundled sources: manifest integrity, HMAC signature, and every quote re-checked. Exit-fail semantics — no trust in the producing LLM. |
+| `iumbtems_reindex_claims` | Rebuild the derived `claims.sqlite` index from `.research` flat files (idempotent; flat files are the source of truth). |
+| `iumbtems_report_retraction` | Record a RETRACTED/REVISED event for a cached source; dependent `VERIFIED` claims degrade to STALE/SUSPECT on the next audit. |
+| `iumbtems_check_staleness` | One claim-degradation pass: join claims against retraction events, write the status ledger, queue re-runs for degraded scopes. Never mutates dossiers. |
+| `iumbtems_set_domain_pack` | Activate a Regulated Domain Pack (`biopharma` / `quant` / `legal` epistemic constitution) for subsequent audits. |
+
+---
+
+## 🎯 Skills & Slash Commands
+
+Nine canonical skills live in `skills/*/SKILL.md`. Each maps to a slash command on harnesses that support them and to the MCP tool that carries its programmatic surface.
+
+| Skill | Slash | Surface |
+| :--- | :--- | :--- |
+| `grilling` | `/grill` | `iumbtems_socratic_frontier` |
+| `research_cache` | — | `iumbtems_verify_quote` |
+| `epistemic_search` | — | research MCP servers (`brave-search`, `firecrawl`, `searxng`) |
+| `swarm_config` | `/swarm-config` | `iumbtems_config` |
+| `code_audit` | `/audit` | `iumbtems_code_audit` |
+| `oss_scout` | `/scout` | `iumbtems_oss_scout` |
+| `brainstorming` | `/brainstorming` | `iumbtems_brainstorm` |
+| `darkharvest` | `/darkharvest` | `iumbtems_darkharvest` |
+| `factory` | `/factory` | `iumbtems_factory` |
+
+- **`/swarm-config`**: Interactive tuning of search engines (DuckDuckGo, Brave, Firecrawl, SearXNG), iteration depth, divergence threshold, backend, and operating mode.
+- **`/audit`**: Dialectic codebase review pairing a Structural Architect (thesis) with a Vulnerability Red-Teamer (antithesis) enforcing line-number proofs (`file:///path#L10-25`).
+- **`/scout`**: Evaluates GitHub repositories and package ecosystems (npm, crates.io, PyPI), license contamination (GPL/AGPL copyleft vs MIT/Apache), and outputs clean-room re-implementation blueprints.
 - **`/darkharvest`**: Product competitor teardown (seed inspirations + prompt, expand to adjacents). Competitor × capability matrix, both-ways white-space gaps, per-feature `depend|vendor|clean-room-rebuild|skip` verdicts with SPDX attribution. Permissive-only vendoring; GPL/AGPL spec-rebuild only.
-- **`/factory`**: Coding-factory Manager loop — grill-gated phased build (manager profile), per-phase programmer spawns, dual QA (3 retries then escalate), explicit sign-off per phase.
+- **`/factory`**: Coding-factory Manager loop — grill-gated phased build, per-phase programmer spawns, dual QA (3 failures then escalate), explicit sign-off per phase.
 - **`/domainexpansion`**: Autonomous agent-guided self-improvement loop (`/domainexpansion <n>`, max 10); bypasses gates, stops on count OR `.factory/STOP` OR user kill.
-- **`/grilling`**: Socratic assumption-inversion and Matt Pocock-style design tree frontier discovery.
+- **`/grilling`**: Socratic assumption-inversion and design-tree frontier discovery.
 - **`epistemic_search`**: Zero-key DuckDuckGo Lite search and content-addressed fetch with automatic SHA-256 caching.
 
+---
+
+## 🗂️ Workspace & Evidence Model
+
+All state lives in a local `.research/` directory (resolved from `IUMBTEMS_PROJECT_DIR` when set, else the process cwd):
+
+```
+.research/
+├── config.json                 # active parameters (engine, depth, mode, backend, agents)
+├── manifest.json               # session metadata, scope DAG, status
+├── frontier.json               # settled Socratic decision frontier (input)
+├── sources/                    # content-addressed raw cache
+│   ├── <sha256>.md             # verbatim cleaned markdown
+│   └── <sha256>.json           # provenance: url, title, headers, timestamp, query
+├── scratchpads/<scope_id>/     # per-scope dossiers
+│   ├── alpha_dossier.json      # proponent findings
+│   ├── beta_dossier.json       # adversary counter-evidence
+│   ├── audit_report.json       # quote-verification log, divergence score, trimmed claims
+│   └── scope_synthesis.md
+├── ledger/claim_status.json    # Living Dossiers status ledger
+├── requeue.json                # scopes queued for re-run after degradation
+├── claims.sqlite               # derived claim index (rebuildable)
+└── final_synthesis.md          # master report
+```
+
+**Living Dossiers:** when a cached source is retracted or revised (`iumbtems_report_retraction`), dependent verified claims degrade to STALE/SUSPECT on the next `iumbtems_check_staleness` pass, and affected scopes are queued for re-run. Dossiers are never mutated in place.
+
+**Proof-Carrying Research Briefs (PCRB):** `iumbtems_export_brief` emits a self-contained, HMAC-signed bundle (synthesis + claims + quote witnesses + full source texts); `iumbtems_verify_brief` re-checks every quote against the bundled sources with exit-fail semantics.
+
+**Regulated Domain Packs:** `iumbtems_set_domain_pack` activates a stricter epistemic constitution for `biopharma`, `quant`, or `legal` audits.
 
 ---
 
 ## 🏷️ Epistemic Tagging Taxonomy
 
-Every factual claim in IUMBTEMS carries an explicit evidentiary tag:
+Every factual claim carries an explicit evidentiary tag:
 
 | Tag | Formal Definition | Verification Standard |
 | :--- | :--- | :--- |
-| `[VERIFIED: <hash>]` | Direct empirical fact from primary source. | Verbatim quote must exist in `.research/sources/<hash>.md`. |
+| `[VERIFIED: <hash>]` | Direct empirical fact from a primary source. | Verbatim quote must exist in `.research/sources/<hash>.md`. |
 | `[INFERRED: <reasoning>]` | Deductive conclusion from verified facts. | Explicit list of parent verified premises and bridging logic. |
 | `[HYPOTHESIS: <test>]` | Speculative assertion or projection. | Must define a measurable falsification criterion. |
-| `[NEGATIVE_KNOWLEDGE: <query>]` | Verified absence of empirical evidence. | Records exact search query and literature gap. |
+| `[NEGATIVE_KNOWLEDGE: <query>]` | Verified absence of empirical evidence. | Records the exact search query and literature gap. |
 
 ---
 
 ## 🔍 Multi-Tier OSINT & Search Pipeline
 
-1. **Discovery Tier**: SearXNG (unbiased metasearch) and Brave Search API.
-2. **Extraction Tier**: Firecrawl (headless JavaScript rendering, DOM cleaning, Markdown extraction).
+1. **Discovery Tier**: DuckDuckGo Lite (zero-key default), SearXNG (self-hosted metasearch), Brave Search API.
+2. **Extraction Tier**: Firecrawl (headless JavaScript rendering, DOM cleaning, Markdown extraction), with a clean readability fallback.
 3. **Academic Tier**: Semantic Scholar / arXiv MCPs for DOI citation resolution.
 4. **Caching Tier**: Content-addressed SHA-256 storage (`skills/research_cache/hasher.py`).
 
 ### Local Infrastructure (Optional)
-Run local SearXNG and Firecrawl instances via Docker Compose:
 ```bash
-docker compose -f config/docker-compose.infra.yml up -d
+docker compose -f config/docker-compose.infra.yml up -d   # local SearXNG + Firecrawl
 ```
+
+---
+
+## 🛠️ Repository Layout & Adapter Generation
+
+- **Canonical prose/specs**: `skills/*/SKILL.md`, `prompts/*.md`, `docs/*.md`.
+- **Canonical programmatic surface**: `runner/mcp_server.py`.
+- **Generated — never hand-edit**: `plugins/{antigravity,gemini,codex}/skills/**`, `.agents/skills/**`, and the modular copies under `plugins/{research-cache,socratic-grilling,darkharvest,factory}/skills/**`.
+
+Regenerate and verify:
+```bash
+python3 scripts/build_adapters.py           # rebuild stubs + modular copies
+python3 scripts/build_adapters.py --check   # CI gate: fails on drift
+python3 -m unittest discover -s runner/tests
+```
+
+`skills/research-cache` is a symlink to `skills/research_cache`, kept so the legacy hyphenated path resolves in a checkout (the Claude Code overlay installer creates the same alias under `~/.claude/skills/`).
 
 ---
 
 ## 📦 CI/CD & Trusted Publishing
 
-This package is distributed on npm under `@heretek-ai` with [npm Trusted Publishing (OIDC)](https://docs.npmjs.com/trusted-publishers) and GitHub Actions.
+The package is distributed on npm as `@heretek-ai/epistemic-swarm` using [npm Trusted Publishing (OIDC)](https://docs.npmjs.com/trusted-publishers) with GitHub Actions — no long-lived npm token.
 
-### First-Time CLI Bootstrap
-```bash
-git pull origin main
-npm publish --access public
-```
+**Release flow** (see [AGENTS.md](AGENTS.md#releases)):
 
-### GitHub Actions OIDC Setup
-1. In `npmjs.com/package/@heretek-ai/epistemic-swarm/access`, add **GitHub Actions** as a Trusted Publisher:
-   - **Repository Owner**: `Heretek-AI`
-   - **Repository Name**: `IUMBTEMS`
-   - **Workflow Pattern**: `.github/workflows/publish.yml`
-2. Future releases publish automatically upon pushing a GitHub Release or version tag (`v*.*.*`)!
+1. Bump `package.json` **and** `.claude-plugin/plugin.json` **and** the lockfile in lockstep.
+2. Commit and push to `main`.
+3. `gh release create vX.Y.Z` — the `Publish to npm` workflow
+   (`.github/workflows/publish.yml`) runs on `release: published`, executes the
+   test suite, and publishes with provenance.
+4. Verify: `curl https://registry.npmjs.org/@heretek-ai%2Fepistemic-swarm` (allow propagation time).
+
+Manual `npm publish` is not part of the flow; the trusted publisher is bound to `Heretek-AI/IUMBTEMS` + `.github/workflows/publish.yml`.
 
 ---
 

@@ -29,7 +29,7 @@ tail -F ~/.omp/logs/omp.$(date +%F).log  # extension load errors land here, not 
 .omp/
 ├── README.md            # this file
 ├── SYSTEM.md            # project system-prompt override (safe subset of base_epistemic_system.md)
-├── commands/*.md        # reusable slash commands: /swarm /grill /audit /scout /brainstorming /swarm-config
+├── commands/*.md        # reusable slash commands: /swarm /grill /audit /scout /brainstorming /darkharvest /factory /domainexpansion /swarm-config
 ├── prompts/*.md         # prompt templates with `description:` frontmatter + $1/$@ expansion
 └── hooks/pre/*.ts       # pre-tool hooks (epistemic redirect)
 └── hooks/post/*.ts      # post-tool hooks (audit-trail log)

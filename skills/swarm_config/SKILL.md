@@ -1,9 +1,9 @@
 ---
 name: swarm-config
-description: Dynamic configuration and settings skill for the Epistemic Swarm research harness. Manage search engines, research depth, dialectic iterations, operating modes (research, audit, scout, hybrid, brainstorm), and license filters.
+description: Dynamic configuration and settings skill for the IUMBTEMS (Epistemic Swarm) research harness. Manage search engines, research depth, dialectic iterations, operating modes (research, audit, scout, hybrid, brainstorm, darkharvest), agent backends, and license filters.
 ---
 
-# Epistemic Swarm Configuration & Parameter Tuning
+# IUMBTEMS Configuration & Parameter Tuning
 
 Use this skill to inspect, tune, and persist research parameters into `.research/config.json`.
 Settings are automatically loaded by the Swarm Runner, Epistemic Auditor, and CLI.

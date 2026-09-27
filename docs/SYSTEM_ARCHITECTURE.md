@@ -1,10 +1,10 @@
-# Epistemic Swarm: System Architecture & Technical Specification
+# IUMBTEMS (Epistemic Swarm): System Architecture & Technical Specification
 
 ## 1. Architectural Mandate & Epistemic Foundations
 
 Modern large language models suffer from severe parametric leakage and sycophancy when executing deep research: models hallucinate nonexistent citations, conflate correlational claims with causal proofs, and smooth over scientific controversies to generate artificially unified prose.
 
-**Epistemic Swarm** is an autonomous research harness built for Claude Code (`~/.claude/` and `~/.claude.json`) designed around one governing constraint: **Evidentiary Primacy over Parametric Intuition**.
+**IUMBTEMS** — shipped as the **Epistemic Swarm** harness — is an autonomous research system that runs across seven agent harnesses (Claude Code, OpenCode V2, Pi, OMP, Gemini CLI, Codex CLI, AntiGravity) on their host-native agent backends, designed around one governing constraint: **Evidentiary Primacy over Parametric Intuition**.
 
 ### 1.1 Formal Evidentiary Taxonomy
 Every factual assertion, quantitative metric, historical claim, or entity relationship produced by any agent in the harness must carry an explicit, machine-parseable epistemic classification:
@@ -36,7 +36,7 @@ Any dossier where $\mathcal{E}(D) < 0.65$ is rejected by the auditor and re-queu
 
 ## 2. Dialectic Multi-Agent Swarm
 
-The system replaces single-threaded LLM research with a decentralized dialectic swarm executed locally via Claude Code headless sessions (`claude -p`):
+The system replaces single-threaded LLM research with a decentralized dialectic swarm executed locally on the invoking harness's native backend — `claude -p` on Claude Code, `opencode run` on OpenCode V2 (selected via `IUMBTEMS_HOST`):
 
 ```mermaid
 flowchart TD
@@ -235,7 +235,7 @@ flowchart LR
 ```
 
 ### 4.1 Content-Addressed Caching
-Every web page, paper abstract, or document retrieved is immediately ingested by `skills/research-cache/hasher.py`:
+Every web page, paper abstract, or document retrieved is immediately ingested by `skills/research_cache/hasher.py`:
 1. Strips HTML boilerplate and scripts, converting to clean GitHub-Flavored Markdown.
 2. Computes the SHA-256 digest of the normalized text content.
 3. Saves `.research/sources/<sha256>.md` and `.research/sources/<sha256>.json` containing retrieval provenance (timestamp, search query, original URL, response code, and HTTP headers).
@@ -258,3 +258,78 @@ Based on Matt Pocock's design tree and frontier methodology:
 
 ### Phase 2: Convergent Dialectic Falsification
 Once the frontier is resolved, the Orchestrator freezes the problem space and transitions to the dialectic multi-agent swarm for empirical retrieval, falsification, and epistemic auditing.
+
+---
+
+## 6. Multi-Harness Runtime & Backends
+
+The harness runs on seven targets from one canonical source. `skills/*` + `prompts/*` are the single source of truth; `runner/mcp_server.py` is the canonical programmatic surface; every other target carries only generated thin stubs.
+
+| Layer | Location |
+| :--- | :--- |
+| Canonical prose & scripts | `skills/*/SKILL.md`, `prompts/*.md` |
+| Canonical programmatic surface | `runner/mcp_server.py` (stdio MCP, `iumbtems_*` tools) |
+| Generated stubs (never hand-edit) | `plugins/{antigravity,gemini,codex}/skills/**`, `.agents/skills/**` |
+| Generated modular copies | `plugins/{research-cache,socratic-grilling,darkharvest,factory}/skills/**` |
+| Generator / CI gate | `scripts/build_adapters.py` (`--check` fails CI on drift) |
+| OpenCode V2 plugin | `plugins/opencode/index.js` (transform domains: tool/command/agent/skill) |
+
+### 6.1 Agent Runtime Resolution
+
+Agent processes are spawned on the **host-native backend** by default, resolved in this precedence order:
+
+1. Explicit override (`--backend` on the CLI, `backend` argument on the MCP tools)
+2. Environment (`IUMBTEMS_BACKEND_<ROLE>`, `IUMBTEMS_MODEL_<ROLE>`)
+3. Config (`.research/config.json` → `agents.<role>.backend` / `agents.<role>.model`)
+4. Host-native default (`opencode run` when `IUMBTEMS_HOST=opencode`, else `claude -p`)
+
+### 6.2 Workspace Resolution and Spawn Semantics
+
+The evidence workspace is resolved in this order:
+
+1. Explicit `base_dir` / `dir` argument
+2. `IUMBTEMS_PROJECT_DIR` (set by the OpenCode plugin to the session workspace — the V2 web UI targets worktrees)
+3. Process cwd (manual CLI runs) — the definitive path
+
+Spawned agents run with their OS cwd **and** `PWD` set to the project root, because some harnesses (OpenCode) resolve their project root from `$PWD` rather than the OS cwd. Both are kept consistent so relative `.research/...` paths and absolute scratchpad paths agree; a mismatch sends evidence into a different tree than the auditor reads.
+
+### 6.3 Configuration Merge & Migration
+
+`load_config` deep-merges the `agents` block one role/key at a time over `DEFAULT_CONFIG`. Configs written before 0.7.6 that pinned `agents.<role>.backend = ["claude", "-p"]` are migrated to `null` on load (unless the top-level `backend` is an explicit `"claude"`), and the migration is persisted by the CLI and `iumbtems_config`.
+
+---
+
+## 7. Living Dossiers (Claim Degradation)
+
+Dossiers are immutable; currency is tracked separately.
+
+- `iumbtems_reindex_claims` rebuilds the derived `claims.sqlite` index from the `.research` flat files (flat files remain the source of truth).
+- `iumbtems_report_retraction` records a `RETRACTED`/`REVISED` event against a cached source hash.
+- `iumbtems_check_staleness` runs one degradation pass: it joins claims against retraction events, writes `.research/ledger/claim_status.json`, queues affected scopes into `.research/requeue.json`, and never mutates dossiers. Dependent `[VERIFIED]` claims degrade to `STALE` / `SUSPECT`.
+
+---
+
+## 8. Proof-Carrying Research Briefs (PCRB)
+
+A brief is a self-contained, HMAC-signed bundle for external consumers who must not trust the producing model:
+
+- `iumbtems_export_brief` bundles the synthesis, the claim set, per-claim quote witnesses, and the **full text** of every cited source.
+- `iumbtems_verify_brief` re-checks manifest integrity, the HMAC signature, and every quote against the bundled sources, with exit-fail semantics.
+- The signing key comes from `IUMBTEMS_PCRB_KEY` (or an explicit `key` / `key_file`).
+
+---
+
+## 9. Regulated Domain Packs
+
+`iumbtems_set_domain_pack` swaps in a stricter epistemic constitution (`biopharma`, `quant`, `legal`), adjusting the auditor's acceptance threshold and retraction policy for the session. Pack definitions live in `config/domain_packs/<id>.json`.
+
+---
+
+## 10. Factory & Self-Improvement Loops
+
+The factory is the delivery-side loop that consumes research output:
+
+- Run state lives in `<project>/.factory/`; phase output in `<project>/.roadmap/`; evidence in `.research/`.
+- Phase flow: grill-gated brief → programmer spawn (one phase per spawn) → dual QA (`qa-a` functional, `qa-b` adversarial; 3 failures escalate) → explicit sign-off.
+- `iumbtems_factory` (and `iumbtems factory <init|phase-add|qa-record|expansion|stop>`) drives state; `.factory/STOP` is a kill-file honored by expansion loops.
+

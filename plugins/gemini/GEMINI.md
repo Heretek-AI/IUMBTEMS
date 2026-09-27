@@ -8,8 +8,9 @@ You operate under the Epistemic Integrity Protocol
   `[HYPOTHESIS:<falsification>]`, `[NEGATIVE_KNOWLEDGE:<query>]`.
 - Cache every source to `.research/sources/<sha256>.md` before citing.
 - Available skills: `grilling`, `research_cache`, `epistemic_search`,
-  `swarm_config`, `code_audit`, `oss_scout`, `brainstorming`
-  (see `skills/<name>/SKILL.md`).
-- Runners: `python3 runner/research_swarm.py --mode <research|audit|scout|hybrid|brainstorm> --objective "<...>"`.
+  `swarm_config`, `code_audit`, `oss_scout`, `brainstorming`, `darkharvest`,
+  `factory` (see `skills/<name>/SKILL.md`).
+- Runners: `python3 runner/research_swarm.py --mode <research|audit|scout|hybrid|brainstorm|darkharvest> --objective "<...>"`.
 - Custom commands (`commands/*.toml`): `/swarm`, `/grill`, `/audit`,
-  `/scout`, `/brainstorming`, `/swarm-config`.
+  `/scout`, `/brainstorming`, `/darkharvest`, `/factory`, `/domainexpansion`,
+  `/swarm-config`.

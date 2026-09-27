@@ -1,4 +1,4 @@
-# Epistemic Swarm: Commercialization & Distribution Strategy Analysis
+# IUMBTEMS (Epistemic Swarm): Commercialization & Distribution Strategy Analysis
 
 ## 1. Strategic Context & Market Positioning
 
@@ -51,13 +51,17 @@ Current deep research solutions (e.g., Perplexity, OpenAI Deep Research, generic
 
 ---
 
-## 4. Immediate Actionable Next Steps
+## 4. Current Status & Immediate Next Steps
 
-1. **Bootstrap Initial NPM Release**:
-   - Complete first-time local CLI publish of `@heretek-ai/epistemic-swarm` (v0.1.0).
-2. **Authorize GitHub Actions Trusted Publisher**:
-   - Connect `Heretek-AI/IUMBTEMS` on `npmjs.com/package/@heretek-ai/epistemic-swarm/access`.
-3. **Register Claude Code Marketplace Manifest**:
-   - Submit `.claude-plugin/plugin.json` to the Claude Code plugins directory.
-4. **Community Outbound**:
-   - Publish technical deep-dive demonstrating how the Epistemic Swarm's dialectic red-teamer caught critical errors missed by standard single-prompt LLM research.
+**Done** — the bootstrap phase described in earlier revisions is complete:
+
+- `@heretek-ai/epistemic-swarm` is published on npm via **OIDC trusted publishing** (no long-lived token); the current line is 0.7.x.
+- The GitHub Actions trusted publisher is bound to `Heretek-AI/IUMBTEMS` + `.github/workflows/publish.yml`, so `gh release create vX.Y.Z` publishes automatically after the test suite passes.
+- `.claude-plugin/plugin.json` and the `heretek-official` marketplace (`.claude-plugin/marketplace.json`) are live and validated in CI (`validate-marketplace.yml`).
+- Seven harness targets ship from one canonical source (Claude Code, OpenCode V2, Pi, OMP, Gemini CLI, Codex CLI, AntiGravity), with generated stubs gated by `scripts/build_adapters.py --check`.
+
+**Next**:
+
+1. Grow distribution through the harness marketplaces and the modular plugins (`socratic-grilling`, `research-cache`, `darkharvest`, `factory`).
+2. Publish technical deep-dives demonstrating the dialectic red-teamer catching critical errors missed by single-prompt LLM research.
+3. Prototype the Phase 2 bridge (optional managed gateway + shared content-addressed source cache).

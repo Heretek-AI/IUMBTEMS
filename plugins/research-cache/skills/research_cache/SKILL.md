@@ -10,7 +10,7 @@ To maintain epistemic integrity, every document fetched from the web, arXiv, or 
 ## 1. CACHING A SOURCE
 When you fetch or scrape a URL:
 ```bash
-python3 skills/research-cache/hasher.py cache \
+python3 skills/research_cache/hasher.py cache \
   --url "https://arxiv.org/abs/2407.21783" \
   --title "Llama 3 Herd of Models" \
   --content "$(cat fetched_paper.md)"
@@ -29,7 +29,7 @@ Ensure that any `verbatim_quote` you provide is an exact substring from the cach
 ## 3. AUDITING A QUOTE
 The Epistemic Auditor verifies claims using:
 ```bash
-python3 skills/research-cache/hasher.py verify \
+python3 skills/research_cache/hasher.py verify \
   --hash "3f8a9e21..." \
   --quote "Our FPGA pipeline executes the Poseidon round constraints in 184ms"
 ```
