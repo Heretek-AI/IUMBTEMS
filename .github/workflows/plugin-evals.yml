@@ -35,7 +35,18 @@ jobs:
           claude plugin validate --strict plugins/factory/.claude-plugin/plugin.json
           claude plugin validate --strict .
 
+      - name: Check eval credentials (billable runs need a key)
+        id: creds
+        run: |
+          if [ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::ANTHROPIC_API_KEY secret is not set — skipping billable eval runs. Add it under Settings > Secrets and variables > Actions to enable them."
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Eval flagship suite
+        if: steps.creds.outputs.available == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
@@ -49,6 +60,7 @@ jobs:
             --max-cost-usd ${{ inputs.max_cost_usd || '20' }}
 
       - name: Eval darkharvest modular
+        if: steps.creds.outputs.available == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
@@ -62,6 +74,7 @@ jobs:
             --max-cost-usd ${{ inputs.max_cost_usd || '20' }}
 
       - name: Eval factory modular
+        if: steps.creds.outputs.available == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
