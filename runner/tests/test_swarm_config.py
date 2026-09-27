@@ -237,6 +237,9 @@ class TestAgentSpawnWorkingDirectory(unittest.TestCase):
             self.assertEqual(kwargs["cwd"], str(runner.project_root))
             self.assertNotEqual(kwargs["cwd"], str(PACKAGE_ROOT))
             self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+            # `opencode run` follows $PWD, which subprocess.run(cwd=...) does not
+            # update — keep them identical.
+            self.assertEqual(kwargs["env"]["PWD"], kwargs["cwd"])
 
 
 class TestBackendHostMismatchWarning(unittest.TestCase):

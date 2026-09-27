@@ -367,12 +367,19 @@ class SwarmRunner:
         try:
             if cmd:
                 _validate_backend([cmd[0]])
+            agent_cwd = _agent_cwd(self.project_root)
             res = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 check=True,
-                cwd=_agent_cwd(self.project_root),
+                cwd=agent_cwd,
+                # `opencode run` resolves its project root from $PWD, not the OS
+                # cwd — and subprocess.run(cwd=...) does NOT update PWD. Without
+                # this the worker operated on the launcher's PWD (observed live:
+                # runner evidence dir 5da7ec/sunny-otter, worker cwd
+                # /home/john/Projects/STC). Keep PWD consistent with cwd.
+                env={**os.environ, "PWD": agent_cwd},
                 # stdin MUST be DEVNULL: `opencode run` reads piped stdin to
                 # EOF before starting, and the MCP server's inherited stdin
                 # pipe is held open by the harness — every agent hung forever
