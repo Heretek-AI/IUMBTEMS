@@ -465,5 +465,104 @@ class TestOpenCodeLifecycle(unittest.TestCase):
             self.assertEqual(data["sid"], "ses_1")
 
 
+class TestOpenCodeV2Transforms(unittest.TestCase):
+    """V2 host (setup ctx transforms): commands + tools via owning domains."""
+
+    V2_SETUP = """
+            import plugin from "./plugins/opencode/index.js";
+            const addedCommands = [];
+            const addedTools = [];
+            const prompts = [];
+            const host = {
+              options: {},
+              command: {
+                list: async () => ({data: [{name: "goal"}]}),
+                transform: async (fn) => { fn({add: (d) => addedCommands.push(d)}); return () => {}; }
+              },
+              tool: {
+                transform: async (fn) => { fn({add: (t) => addedTools.push(t)}); return () => {}; }
+              },
+              session: { prompt: async (p) => { prompts.push(p); return {}; } }
+            };
+            const ret = await plugin.setup(host);
+            %s
+    """
+
+    def test_v2_registers_commands_and_tools(self):
+        res = run_node(
+            self.V2_SETUP
+            % """
+            console.log(JSON.stringify({
+              ret: ret.initialized,
+              commands: addedCommands.map(c => c.name),
+              cmdExec: typeof addedCommands.find(c => c.name === "swarm").execute,
+              tools: addedTools.map(t => t.name),
+              toolExec: typeof addedTools.find(t => t.name === "iumbtems_config").execute
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"v2 transform test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertTrue(data["ret"])
+        for c in [
+            "swarm",
+            "grill",
+            "swarm-config",
+            "audit",
+            "scout",
+            "brainstorming",
+            "brainstorm",
+        ]:
+            self.assertIn(c, data["commands"])
+        self.assertNotIn("goal", data["commands"])
+        self.assertEqual(data["cmdExec"], "function")
+        self.assertEqual(len(data["tools"]), 13)
+        self.assertIn("iumbtems_brainstorm", data["tools"])
+        self.assertEqual(data["toolExec"], "function")
+
+    def test_v2_command_execute_forwards_prompt(self):
+        res = run_node(
+            self.V2_SETUP
+            % """
+            const swarm = addedCommands.find(c => c.name === "swarm");
+            await swarm.execute({sessionID: "ses_9", prompt: {text: "probe objective"}, delivery: "steer"});
+            console.log(JSON.stringify({prompts}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"v2 execute test failed: {res.stderr}")
+        data = last_json_object(res.stdout)["prompts"]
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["sessionID"], "ses_9")
+        self.assertIn("probe objective", data[0]["text"])
+        self.assertNotIn("$ARGUMENTS", data[0]["text"])
+        self.assertEqual(data[0]["delivery"], "steer")
+
+    def test_v2_tool_execute_returns_content(self):
+        res = run_node(
+            self.V2_SETUP
+            % """
+            const cfg = addedTools.find(t => t.name === "iumbtems_config");
+            const r = await cfg.execute({}, {});
+            console.log(JSON.stringify({keys: Object.keys(r), status: r.status, hasContent: typeof r.content === "string"}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"v2 tool test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertEqual(data["keys"], ["content"])
+        self.assertTrue(data["hasContent"])
+
+    def test_setup_without_v2_domains_still_works(self):
+        res = run_node(
+            """
+            import plugin from "./plugins/opencode/index.js";
+            const ret = await plugin.setup({});
+            console.log(JSON.stringify({ret: ret.initialized}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"bare setup test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertTrue(data["ret"])
+
+
 if __name__ == "__main__":
     unittest.main()

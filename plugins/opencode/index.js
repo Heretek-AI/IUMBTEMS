@@ -659,7 +659,8 @@ export function createOpenCodePlugin(context = {}) {
     }),
 
     setup: async (appContext) => {
-      const opts = context.options || appContext?.options;
+      const host = appContext || {};
+      const opts = context.options || host.options;
       if (opts && typeof opts === 'object') {
         const updates = {};
         if (opts.search_engine) updates.search_engine = opts.search_engine;
@@ -669,23 +670,79 @@ export function createOpenCodePlugin(context = {}) {
           updates.divergence_threshold = opts.divergence_threshold;
         }
         if (Object.keys(updates).length > 0) {
-          await callMcp('iumbtems_config', updates, appContext?.cwd);
+          await callMcp('iumbtems_config', updates, host.cwd);
         }
       }
       // Phase C: idle staleness nudge (opt out with {staleness_nudge: false}).
       // Subscribes only when the host exposes event/session; one per root.
       try {
         if ((opts?.staleness_nudge ?? true)) {
-          const host = {
-            event: appContext?.event || context.event,
-            session: appContext?.session || context.session,
+          const nudgeHost = {
+            event: host.event || context.event,
+            session: host.session || context.session,
           };
           const root =
-            appContext?.location?.directory || context.location?.directory;
-          if (root) startStalenessNudge(host, root);
+            host.location?.directory || context.location?.directory;
+          if (root) startStalenessNudge(nudgeHost, root);
         }
       } catch {
         /* lifecycle hooks are best-effort */
+      }
+      // V2 host transforms (official dual-package pattern: V1 calls server(),
+      // V2 calls setup()). Registers slash commands + tools via the owning
+      // domains; each guarded so V1 hosts and partial V2 hosts keep working.
+      try {
+        if (host.command && typeof host.command.transform === 'function') {
+          let existing = new Set();
+          try {
+            const listed = await host.command.list();
+            existing = new Set(((listed && listed.data) || []).map((c) => c && c.name));
+          } catch {
+            /* treat as empty */
+          }
+          await host.command.transform((draft) => {
+            for (const cmd of OPENCODE_COMMANDS) {
+              if (!cmd || !cmd.name || existing.has(cmd.name)) continue;
+              existing.add(cmd.name);
+              draft.add({
+                name: cmd.name,
+                description: cmd.description,
+                execute: async (input) => {
+                  const args = (input && input.prompt && input.prompt.text) || '';
+                  const prompt = (input && input.prompt && typeof input.prompt === 'object') ? input.prompt : {};
+                  await host.session.prompt({
+                    ...prompt,
+                    sessionID: input && input.sessionID,
+                    text: cmd.template.split('$ARGUMENTS').join(String(args).trim()),
+                    delivery: input && input.delivery,
+                  });
+                },
+              });
+            }
+          });
+        }
+      } catch {
+        /* command transform is best-effort */
+      }
+      try {
+        if (host.tool && typeof host.tool.transform === 'function') {
+          await host.tool.transform((draft) => {
+            for (const [name, spec] of Object.entries(buildToolMap())) {
+              draft.add({
+                name,
+                description: spec.description,
+                input: spec.input,
+                options: { codemode: false },
+                execute: async (args = {}, toolContext) => {
+                  const r = await callMcp(name, normalizeArgs(name, args), toolContext?.cwd);
+                  return { content: r.content };
+                },
+              });
+            }
+          });
+        }
+      } catch {
+        /* tool transform is best-effort */
       }
       return { initialized: true, platform: 'opencode-v2' };
     },
