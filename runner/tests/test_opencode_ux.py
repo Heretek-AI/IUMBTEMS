@@ -850,38 +850,57 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
             )
 
     def test_v2_compaction_hook_preserves_state(self):
-        """The V1 `experimental.session.compacting` hook was dead code on V2."""
-        res = run_node(
-            """
-            import plugin from "./plugins/opencode/index.js";
-            let hookName = null;
-            let handler = null;
-            const host = {
-              options: {},
-              location: {directory: process.cwd()},
-              command: {list: async () => ({data: []}), transform: async () => ({dispose: async () => {}}), reload: async () => {}},
-              tool: {transform: async () => ({dispose: async () => {}}), reload: async () => {}},
-              session: {
-                prompt: async () => ({}),
-                hook: async (name, fn) => { hookName = name; handler = fn; return {dispose: async () => {}}; }
-              }
-            };
-            await plugin.setup(host);
-            const event = {system: []};
-            if (handler) await handler(event);
-            console.log(JSON.stringify({
-              hookName,
-              parts: event.system.map((p) => ({type: p.type, hasText: typeof p.text === "string" && p.text.length > 0}))
-            }));
-            """
-        )
-        self.assertEqual(res.returncode, 0, f"compaction hook test failed: {res.stderr}")
-        data = last_json_object(res.stdout)
-        self.assertEqual(data["hookName"], "compaction")
-        self.assertTrue(
-            data["parts"] and data["parts"][0]["type"] == "text" and data["parts"][0]["hasText"],
-            f"compaction hook did not push state onto event.system: {data}",
-        )
+        """The V1 `experimental.session.compacting` hook was dead code on V2.
+
+        Uses a real fixture workspace: `buildCompactionContext` returns null
+        without `.research/config.json`, and pointing at `process.cwd()` made
+        this pass only where a developer happened to have one.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rd = root / ".research"
+            rd.mkdir()
+            (rd / "config.json").write_text(
+                json.dumps({"mode": "audit", "search_engine": "duckduckgo", "max_iterations": 2}),
+                encoding="utf-8",
+            )
+            res = run_node(
+                f"""
+                import plugin from "./plugins/opencode/index.js";
+                let hookName = null;
+                let handler = null;
+                const host = {{
+                  options: {{}},
+                  location: {{directory: {str(root)!r}}},
+                  command: {{list: async () => ({{data: []}}), transform: async () => ({{dispose: async () => {{}}}}), reload: async () => {{}}}},
+                  tool: {{transform: async () => ({{dispose: async () => {{}}}}), reload: async () => {{}}}},
+                  session: {{
+                    prompt: async () => ({{}}),
+                    hook: async (name, fn) => {{ hookName = name; handler = fn; return {{dispose: async () => {{}}}}; }}
+                  }}
+                }};
+                await plugin.setup(host);
+                const event = {{system: [], directory: {str(root)!r}}};
+                if (handler) await handler(event);
+                const emptyEvent = {{system: [], directory: "/tmp/oc-v2-compaction-empty-nonexistent"}};
+                if (handler) await handler(emptyEvent);
+                console.log(JSON.stringify({{
+                  hookName,
+                  parts: event.system.map((p) => ({{type: p.type, text: p.text || ""}})),
+                  emptySkipped: emptyEvent.system.length
+                }}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"compaction hook test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertEqual(data["hookName"], "compaction")
+            self.assertEqual(data["emptySkipped"], 0, "empty workspace must not push state")
+            self.assertTrue(
+                data["parts"]
+                and data["parts"][0]["type"] == "text"
+                and "mode=audit" in data["parts"][0]["text"],
+                f"compaction hook did not push state onto event.system: {data}",
+            )
 
     def test_v2_logs_never_throw_and_surface_errors(self):
         """Bare `catch {}` made failures invisible under --log-level all."""
