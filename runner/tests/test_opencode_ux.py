@@ -25,6 +25,7 @@ EXPECTED_COMMANDS = [
     "scout",
     "brainstorming",
     "brainstorm",
+    "darkharvest",
 ]
 
 
@@ -116,7 +117,9 @@ class TestOpenCodeCommandCatalog(unittest.TestCase):
             }));
             """
         )
-        self.assertEqual(res.returncode, 0, f"entrypoint shape test failed: {res.stderr}")
+        self.assertEqual(
+            res.returncode, 0, f"entrypoint shape test failed: {res.stderr}"
+        )
         data = last_json_object(res.stdout)
         # V1 `server()` is gone: a v2 host never calls it, and keeping it meant
         # the real registration path had to guess which host it was talking to.
@@ -185,7 +188,9 @@ class TestOpenCodeCommandCatalog(unittest.TestCase):
             console.log(JSON.stringify({names: added.map(c => c.name)}));
             """
         )
-        self.assertEqual(res.returncode, 0, f"preexisting-name test failed: {res.stderr}")
+        self.assertEqual(
+            res.returncode, 0, f"preexisting-name test failed: {res.stderr}"
+        )
         data = last_json_object(res.stdout)
         # `swarm` was already registered by the user, so we add the other six.
         self.assertNotIn("swarm", data["names"])
@@ -207,7 +212,7 @@ class TestOpenCodeCommandCatalog(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"tool map test failed: {res.stderr}")
         data = last_json_object(res.stdout)
         self.assertEqual(sorted(data["keys"]), sorted(data["canonical"]))
-        self.assertEqual(len(data["keys"]), 13)
+        self.assertEqual(len(data["keys"]), 14)
         self.assertTrue(all(data["ok"]))
 
 
@@ -276,6 +281,7 @@ class TestInstallOpenCode(unittest.TestCase):
                 "beta-redteam",
                 "epistemic-auditor",
                 "brainstormer",
+                "darkharvester",
             ]:
                 self.assertIn(agent, cfg.get("agent", {}))
             self.assertIn("iumbtems", cfg.get("mcp", {}))
@@ -599,12 +605,14 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
             "scout",
             "brainstorming",
             "brainstorm",
+            "darkharvest",
         ]:
             self.assertIn(c, data["commands"])
         self.assertNotIn("goal", data["commands"])
         self.assertEqual(data["cmdExec"], "function")
-        self.assertEqual(len(data["tools"]), 13)
+        self.assertEqual(len(data["tools"]), 14)
         self.assertIn("iumbtems_brainstorm", data["tools"])
+        self.assertIn("iumbtems_darkharvest", data["tools"])
         self.assertEqual(data["toolExec"], "function")
 
     def test_v2_command_execute_forwards_prompt(self):
@@ -845,7 +853,8 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
         self.assertEqual(len(per_setup), 2)
         for i, added in enumerate(per_setup):
             self.assertEqual(
-                len(added), len(EXPECTED_COMMANDS),
+                len(added),
+                len(EXPECTED_COMMANDS),
                 f"setup cycle {i} registered {len(added)} commands",
             )
 
@@ -861,7 +870,13 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
             rd = root / ".research"
             rd.mkdir()
             (rd / "config.json").write_text(
-                json.dumps({"mode": "audit", "search_engine": "duckduckgo", "max_iterations": 2}),
+                json.dumps(
+                    {
+                        "mode": "audit",
+                        "search_engine": "duckduckgo",
+                        "max_iterations": 2,
+                    }
+                ),
                 encoding="utf-8",
             )
             res = run_node(
@@ -891,10 +906,14 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
                 }}));
                 """
             )
-            self.assertEqual(res.returncode, 0, f"compaction hook test failed: {res.stderr}")
+            self.assertEqual(
+                res.returncode, 0, f"compaction hook test failed: {res.stderr}"
+            )
             data = last_json_object(res.stdout)
             self.assertEqual(data["hookName"], "compaction")
-            self.assertEqual(data["emptySkipped"], 0, "empty workspace must not push state")
+            self.assertEqual(
+                data["emptySkipped"], 0, "empty workspace must not push state"
+            )
             self.assertTrue(
                 data["parts"]
                 and data["parts"][0]["type"] == "text"

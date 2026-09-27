@@ -44,6 +44,7 @@ SERVER_VERSION = "0.3.0"
 # helpers
 # ---------------------------------------------------------------------------
 
+
 def _tool_text(payload: Any) -> str:
     """Normalize a handler return into the MCP text content block body."""
     if isinstance(payload, str):
@@ -70,6 +71,7 @@ def _resolve_base_dir(args: Dict[str, Any]) -> Path:
     raw = args.get("base_dir") or args.get("dir") or DEFAULT_RESEARCH_DIR
     return Path(os.path.realpath(str(raw)))
 
+
 def _handle_config(args: Dict[str, Any]) -> str:
     """Inspect or modify swarm parameters in .research/config.json."""
     from skills.swarm_config.configure import (
@@ -82,7 +84,14 @@ def _handle_config(args: Dict[str, Any]) -> str:
     cfg = load_config(base_dir)
 
     updates = {}
-    for key in ("search_engine", "engine", "max_iterations", "depth", "mode", "divergence_threshold"):
+    for key in (
+        "search_engine",
+        "engine",
+        "max_iterations",
+        "depth",
+        "mode",
+        "divergence_threshold",
+    ):
         if key in args and args[key] is not None:
             canon = {
                 "engine": "search_engine",
@@ -94,7 +103,13 @@ def _handle_config(args: Dict[str, Any]) -> str:
     if updates:
         cfg.update(updates)
         save_config(cfg, base_dir)
-        return _tool_text({"status": "updated", "config": cfg, "written_to": str(Path(base_dir) / "config.json")})
+        return _tool_text(
+            {
+                "status": "updated",
+                "config": cfg,
+                "written_to": str(Path(base_dir) / "config.json"),
+            }
+        )
 
     return _tool_text({"status": "current", "config": cfg})
 
@@ -121,16 +136,21 @@ def _run_swarm_mode(mode: Optional[str], args: Dict[str, Any]) -> str:
         runner.run_swarm(objective, frontier_file=Path(frontier) if frontier else None)
 
     report = runner.base_dir / (
-        {"audit": "code_audit_report.md", "scout": "oss_scout_report.md", "brainstorm": "brainstorm_report.md"}.get(
-            mode or args.get("mode") or "research", "final_synthesis.md"
-        )
+        {
+            "audit": "code_audit_report.md",
+            "scout": "oss_scout_report.md",
+            "brainstorm": "brainstorm_report.md",
+            "darkharvest": "darkharvest_report.md",
+        }.get(mode or args.get("mode") or "research", "final_synthesis.md")
     )
-    return _tool_text({
-        "status": "completed",
-        "mode": mode or args.get("mode") or "research",
-        "report": str(report),
-        "log": buf.getvalue()[-4000:],
-    })
+    return _tool_text(
+        {
+            "status": "completed",
+            "mode": mode or args.get("mode") or "research",
+            "report": str(report),
+            "log": buf.getvalue()[-4000:],
+        }
+    )
 
 
 def _handle_swarm_research(args: Dict[str, Any]) -> str:
@@ -153,23 +173,32 @@ def _handle_brainstorm(args: Dict[str, Any]) -> str:
     return _run_swarm_mode("brainstorm", args)
 
 
+def _handle_darkharvest(args: Dict[str, Any]) -> str:
+    """Run product competitor teardown (seed + expand, harvest verdicts)."""
+    return _run_swarm_mode("darkharvest", args)
+
+
 def _handle_verify_quote(args: Dict[str, Any]) -> str:
     """Verify a verbatim quote against the content-addressed source cache."""
     from skills.research_cache.hasher import SourceHasher
 
-    content_hash = args.get("hash") or args.get("content_hash") or args.get("source_hash")
+    content_hash = (
+        args.get("hash") or args.get("content_hash") or args.get("source_hash")
+    )
     quote = args.get("quote")
     if not content_hash or quote is None:
         raise ValueError("hash and quote are required")
 
     hasher = SourceHasher(_resolve_base_dir(args))
     is_verified, confidence, message = hasher.verify_quote(content_hash, quote)
-    return _tool_text({
-        "verified": bool(is_verified),
-        "confidence": float(confidence),
-        "message": message,
-        "content_hash": content_hash,
-    })
+    return _tool_text(
+        {
+            "verified": bool(is_verified),
+            "confidence": float(confidence),
+            "message": message,
+            "content_hash": content_hash,
+        }
+    )
 
 
 def _handle_report_retraction(args: Dict[str, Any]) -> str:
@@ -213,13 +242,15 @@ def _handle_set_domain_pack(args: Dict[str, Any]) -> str:
     cfg = load_config(base_dir)
     cfg["domain_pack"] = pack
     save_config(cfg, base_dir)
-    return _tool_text({
-        "status": "activated",
-        "domain_pack": pack,
-        "accept_threshold": constitution.accept_threshold,
-        "retraction_policy": constitution.retraction_policy,
-        "banned_domains": constitution.banned_domains,
-    })
+    return _tool_text(
+        {
+            "status": "activated",
+            "domain_pack": pack,
+            "accept_threshold": constitution.accept_threshold,
+            "retraction_policy": constitution.retraction_policy,
+            "banned_domains": constitution.banned_domains,
+        }
+    )
 
 
 def _handle_export_brief(args: Dict[str, Any]) -> str:
@@ -284,7 +315,9 @@ def _handle_socratic_frontier(args: Dict[str, Any]) -> str:
     """Advance or inspect the Socratic decision-tree frontier."""
     from skills.grilling.socratic_tree import DesignTree
 
-    file_path = Path(args.get("file") or args.get("frontier_file") or ".research/frontier.json")
+    file_path = Path(
+        args.get("file") or args.get("frontier_file") or ".research/frontier.json"
+    )
 
     if args.get("settle"):
         node_id, answer = args["settle"][0], args["settle"][1]
@@ -294,31 +327,40 @@ def _handle_socratic_frontier(args: Dict[str, Any]) -> str:
             tree = DesignTree(objective=args.get("objective", ""))
         tree.settle_node(node_id, answer)
         tree.export_frontier_json(file_path)
-        return _tool_text({"status": "settled", "node_id": node_id, "file": str(file_path)})
+        return _tool_text(
+            {"status": "settled", "node_id": node_id, "file": str(file_path)}
+        )
 
     if not file_path.exists():
-        return _tool_text({
-            "status": "no_frontier",
-            "message": f"No frontier file at {file_path}. Run /grilling first.",
-            "file": str(file_path),
-        })
+        return _tool_text(
+            {
+                "status": "no_frontier",
+                "message": f"No frontier file at {file_path}. Run /grilling first.",
+                "file": str(file_path),
+            }
+        )
 
     tree = DesignTree.load_from_json(file_path)
     frontier = tree.compute_frontier()
-    return _tool_text({
-        "status": "frontier",
-        "objective": tree.objective,
-        "is_complete": tree.is_complete(),
-        "total_nodes": len(tree.nodes),
-        "settled": sum(1 for n in tree.nodes.values() if n.is_settled()),
-        "frontier": [{"node_id": n.node_id, "question": n.question} for n in frontier],
-        "file": str(file_path),
-    })
+    return _tool_text(
+        {
+            "status": "frontier",
+            "objective": tree.objective,
+            "is_complete": tree.is_complete(),
+            "total_nodes": len(tree.nodes),
+            "settled": sum(1 for n in tree.nodes.values() if n.is_settled()),
+            "frontier": [
+                {"node_id": n.node_id, "question": n.question} for n in frontier
+            ],
+            "file": str(file_path),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
 # registry
 # ---------------------------------------------------------------------------
+
 
 def build_tools() -> List[ToolSpec]:
     """The 7 canonical iumbtems_* tools, in-process wrappers only."""
@@ -329,10 +371,29 @@ def build_tools() -> List[ToolSpec]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "base_dir": {"type": "string", "description": "Path to .research workspace (default .research)"},
-                    "search_engine": {"type": "string", "enum": ["duckduckgo", "brave", "firecrawl", "searxng"]},
-                    "max_iterations": {"type": "integer", "description": "Dialectic depth 1-4"},
-                    "mode": {"type": "string", "enum": ["research", "audit", "scout", "hybrid", "brainstorm"]},
+                    "base_dir": {
+                        "type": "string",
+                        "description": "Path to .research workspace (default .research)",
+                    },
+                    "search_engine": {
+                        "type": "string",
+                        "enum": ["duckduckgo", "brave", "firecrawl", "searxng"],
+                    },
+                    "max_iterations": {
+                        "type": "integer",
+                        "description": "Dialectic depth 1-4",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": [
+                            "research",
+                            "audit",
+                            "scout",
+                            "hybrid",
+                            "brainstorm",
+                            "darkharvest",
+                        ],
+                    },
                     "divergence_threshold": {"type": "number"},
                 },
             },
@@ -344,12 +405,24 @@ def build_tools() -> List[ToolSpec]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "objective": {"type": "string", "description": "Research question or objective"},
+                    "objective": {
+                        "type": "string",
+                        "description": "Research question or objective",
+                    },
                     "base_dir": {"type": "string"},
-                    "frontier_file": {"type": "string", "description": "Settled frontier.json from grilling"},
-                    "engine": {"type": "string", "enum": ["duckduckgo", "brave", "firecrawl", "searxng"]},
+                    "frontier_file": {
+                        "type": "string",
+                        "description": "Settled frontier.json from grilling",
+                    },
+                    "engine": {
+                        "type": "string",
+                        "enum": ["duckduckgo", "brave", "firecrawl", "searxng"],
+                    },
                     "depth": {"type": "integer"},
-                    "mock_claude": {"type": "boolean", "description": "Synthetic run, zero API cost"},
+                    "mock_claude": {
+                        "type": "boolean",
+                        "description": "Synthetic run, zero API cost",
+                    },
                 },
                 "required": ["objective"],
             },
@@ -361,7 +434,10 @@ def build_tools() -> List[ToolSpec]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "target": {"type": "string", "description": "Codebase target or audit focus"},
+                    "target": {
+                        "type": "string",
+                        "description": "Codebase target or audit focus",
+                    },
                     "base_dir": {"type": "string"},
                     "mock_claude": {"type": "boolean"},
                 },
@@ -375,7 +451,10 @@ def build_tools() -> List[ToolSpec]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "feature": {"type": "string", "description": "Feature or library to scout"},
+                    "feature": {
+                        "type": "string",
+                        "description": "Feature or library to scout",
+                    },
                     "base_dir": {"type": "string"},
                     "mock_claude": {"type": "boolean"},
                 },
@@ -389,7 +468,10 @@ def build_tools() -> List[ToolSpec]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "objective": {"type": "string", "description": "Ambiguous prompt to ideate on"},
+                    "objective": {
+                        "type": "string",
+                        "description": "Ambiguous prompt to ideate on",
+                    },
                     "base_dir": {"type": "string"},
                     "mock_claude": {"type": "boolean"},
                 },
@@ -398,13 +480,46 @@ def build_tools() -> List[ToolSpec]:
             handler=_handle_brainstorm,
         ),
         ToolSpec(
+            name="iumbtems_darkharvest",
+            description="Product competitor teardown: seed inspirations plus prompt, expand to adjacents, emit per-feature depend/vendor/clean-room/skip verdicts with SPDX attribution. Permissive-only vendoring; GPL/AGPL spec-rebuild only.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "objective": {
+                        "type": "string",
+                        "description": "Product arena to tear down (e.g. Paseo-class agent harness competitor)",
+                    },
+                    "seeds": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Seed inspiration repo URLs",
+                    },
+                    "maxRepos": {
+                        "type": "integer",
+                        "description": "Cap on total competitors (default 10)",
+                    },
+                    "depth": {"type": "integer", "description": "Dialectic depth 1-4"},
+                    "base_dir": {"type": "string"},
+                    "mock_claude": {"type": "boolean"},
+                },
+                "required": ["objective"],
+            },
+            handler=_handle_darkharvest,
+        ),
+        ToolSpec(
             name="iumbtems_verify_quote",
             description="Audit a verbatim citation against the SHA-256 source cache (.research/sources/<hash>.md).",
             input_schema={
                 "type": "object",
                 "properties": {
-                    "hash": {"type": "string", "description": "Content-addressed SHA-256 of the cached source"},
-                    "quote": {"type": "string", "description": "Verbatim quote to verify"},
+                    "hash": {
+                        "type": "string",
+                        "description": "Content-addressed SHA-256 of the cached source",
+                    },
+                    "quote": {
+                        "type": "string",
+                        "description": "Verbatim quote to verify",
+                    },
                     "base_dir": {"type": "string"},
                 },
                 "required": ["hash", "quote"],
@@ -417,7 +532,10 @@ def build_tools() -> List[ToolSpec]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "base_dir": {"type": "string", "description": "Path to .research workspace"},
+                    "base_dir": {
+                        "type": "string",
+                        "description": "Path to .research workspace",
+                    },
                 },
             },
             handler=_handle_reindex_claims,
@@ -428,9 +546,15 @@ def build_tools() -> List[ToolSpec]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "hash": {"type": "string", "description": "Content-addressed SHA-256 of the affected source"},
+                    "hash": {
+                        "type": "string",
+                        "description": "Content-addressed SHA-256 of the affected source",
+                    },
                     "event": {"type": "string", "enum": ["RETRACTED", "REVISED"]},
-                    "note": {"type": "string", "description": "Why the source was retracted/revised"},
+                    "note": {
+                        "type": "string",
+                        "description": "Why the source was retracted/revised",
+                    },
                     "base_dir": {"type": "string"},
                 },
                 "required": ["hash", "event"],
@@ -459,7 +583,10 @@ def build_tools() -> List[ToolSpec]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "pack": {"type": "string", "description": "Pack id: biopharma | quant | legal (or a path)"},
+                    "pack": {
+                        "type": "string",
+                        "description": "Pack id: biopharma | quant | legal (or a path)",
+                    },
                     "base_dir": {"type": "string"},
                 },
                 "required": ["pack"],
@@ -473,9 +600,15 @@ def build_tools() -> List[ToolSpec]:
                 "type": "object",
                 "properties": {
                     "base_dir": {"type": "string"},
-                    "out": {"type": "string", "description": "Output path (default <base_dir>/brief.pcrb.json)"},
+                    "out": {
+                        "type": "string",
+                        "description": "Output path (default <base_dir>/brief.pcrb.json)",
+                    },
                     "objective": {"type": "string"},
-                    "key": {"type": "string", "description": "HMAC key (prefer key_file or env IUMBTEMS_PCRB_KEY)"},
+                    "key": {
+                        "type": "string",
+                        "description": "HMAC key (prefer key_file or env IUMBTEMS_PCRB_KEY)",
+                    },
                     "key_file": {"type": "string"},
                 },
             },
@@ -487,7 +620,10 @@ def build_tools() -> List[ToolSpec]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "brief": {"type": "string", "description": "Path to brief.pcrb.json"},
+                    "brief": {
+                        "type": "string",
+                        "description": "Path to brief.pcrb.json",
+                    },
                     "key": {"type": "string"},
                     "key_file": {"type": "string"},
                 },
@@ -529,13 +665,17 @@ def build_server() -> StdioJsonRpcServer:
 # entry points
 # ---------------------------------------------------------------------------
 
+
 def call_once(tool_name: str, arguments: Dict[str, Any]) -> int:
     """One-shot dispatch: run a single tool and print its text payload."""
     server = build_server()
     spec = server._by_name.get(tool_name)
     if spec is None:
         json.dump(
-            {"error": f"Tool {tool_name} not found", "available": [t.name for t in server.tools]},
+            {
+                "error": f"Tool {tool_name} not found",
+                "available": [t.name for t in server.tools],
+            },
             sys.stdout,
             indent=2,
         )

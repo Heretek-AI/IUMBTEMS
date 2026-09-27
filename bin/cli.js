@@ -49,6 +49,7 @@ Commands:
   scout "<feature>"     Scout open-source software, libraries & clean-room blueprints
   run "<objective>"     Run the dialectic multi-agent research swarm
   brainstorm "<prompt>"  Run lateral brainstorming (feature vectors + spikes)
+  darkharvest "<arena>"  Product competitor teardown with harvest verdicts
   grill                 Launch interactive Socratic decision tree framing
   adapters              Rebuild harness adapter mirrors (skills -> plugins/*, .agents)
   install               Install skills & MCP servers into ~/.claude/
@@ -80,6 +81,7 @@ Examples:
   iumbtems scout "Zero-dependency Raft consensus in Rust"
   iumbtems run "Verify sub-millisecond ZK prover latency"
   iumbtems brainstorm "Where do we go from here?"
+  iumbtems darkharvest "Paseo-class agent harness competitor" --seeds https://github.com/a/b,https://github.com/c/d --max-repos 6 --mock-claude
   iumbtems grill --objective "Rollup architecture trade-offs"
   iumbtems doctor
 `);
@@ -156,6 +158,18 @@ switch (command) {
       process.exit(1);
     }
     const forwardArgs = ['--mode', 'brainstorm', '--objective', objective, ...args.slice(2)];
+    runPython('runner/research_swarm.py', forwardArgs);
+    break;
+  }
+
+  case 'darkharvest': {
+    const objective = args[1];
+    if (!objective || objective.startsWith('--')) {
+      console.error('Error: Please provide a product arena to tear down.');
+      console.error('Example: npx @heretek-ai/epistemic-swarm darkharvest "Paseo-class harness" --seeds https://github.com/a/b --max-repos 6');
+      process.exit(1);
+    }
+    const forwardArgs = ['--mode', 'darkharvest', '--objective', objective, ...args.slice(2)];
     runPython('runner/research_swarm.py', forwardArgs);
     break;
   }

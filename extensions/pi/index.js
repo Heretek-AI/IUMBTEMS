@@ -202,6 +202,27 @@ export default function initPiExtension(pi) {
         }
       });
     } catch { /* alias is best-effort across pi/omp versions */ }
+
+    // /darkharvest: Product competitor teardown with harvest verdicts
+    pi.registerCommand('darkharvest', {
+      description: 'Product competitor teardown: seed inspirations, expand to adjacents, emit harvest verdicts',
+      usage: '/darkharvest <product-arena> [--seeds <urls>]',
+      handler: async (args, ctx) => {
+        const objective = args.trim();
+        if (!objective) {
+          ctx.output?.('⚠️ Please provide a product arena. Example: /darkharvest "Paseo-class agent harness" --seeds https://github.com/a/b');
+          return;
+        }
+        ctx.output?.(`🌑 [IUMBTEMS Darkharvest] Tearing down: "${objective}"...`);
+        const r = callMcp('iumbtems_darkharvest', { objective }, ctx);
+        if (r.ok) {
+          ctx.output?.(r.text);
+          ctx.output?.('\n✅ Darkharvest complete! Matrix written to .research/darkharvest_report.md');
+        } else {
+          ctx.output?.(`❌ Darkharvest failed:\n${r.text}`);
+        }
+      }
+    });
   }
 
   // 2. Register Agent Tools (thin forwarders)
@@ -233,7 +254,7 @@ export default function initPiExtension(pi) {
         properties: {
           search_engine: { type: 'string', enum: ['duckduckgo', 'brave', 'firecrawl', 'searxng'] },
           max_iterations: { type: 'integer', minimum: 1, maximum: 4 },
-          mode: { type: 'string', enum: ['research', 'audit', 'scout', 'hybrid', 'brainstorm'] },
+          mode: { type: 'string', enum: ['research', 'audit', 'scout', 'hybrid', 'brainstorm', 'darkharvest'] },
           divergence_threshold: { type: 'number', minimum: 0, maximum: 1 },
           show: { type: 'boolean', default: false }
         }
@@ -259,6 +280,31 @@ export default function initPiExtension(pi) {
       execute: async (args = {}) => {
         const r = callMcp('iumbtems_brainstorm', {
           objective: args.objective || 'Where do we go from here?',
+          mock_claude: Boolean(args.mock_mode)
+        }, {});
+        return { content: [{ type: 'text', text: r.text }] };
+      }
+    });
+
+    // Tool: iumbtems_darkharvest (competitor teardown)
+    pi.registerTool({
+      name: 'iumbtems_darkharvest',
+      description: 'Product competitor teardown with per-feature harvest verdicts and SPDX attribution',
+      parameters: {
+        type: 'object',
+        properties: {
+          objective: { type: 'string', description: 'Product arena to tear down' },
+          seeds: { type: 'array', items: { type: 'string' }, description: 'Seed inspiration repo URLs' },
+          maxRepos: { type: 'integer', description: 'Cap on total competitors', default: 10 },
+          mock_mode: { type: 'boolean', description: 'Mock mode without LLM tokens', default: false }
+        },
+        required: ['objective']
+      },
+      execute: async (args = {}) => {
+        const r = callMcp('iumbtems_darkharvest', {
+          objective: args.objective,
+          seeds: args.seeds,
+          maxRepos: args.maxRepos,
           mock_claude: Boolean(args.mock_mode)
         }, {});
         return { content: [{ type: 'text', text: r.text }] };

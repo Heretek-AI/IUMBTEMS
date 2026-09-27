@@ -92,6 +92,7 @@ export const IUMBTEMS_TOOL_NAMES = [
   'iumbtems_code_audit',
   'iumbtems_oss_scout',
   'iumbtems_brainstorm',
+  'iumbtems_darkharvest',
   'iumbtems_verify_quote',
   'iumbtems_socratic_frontier',
   'iumbtems_reindex_claims',
@@ -126,8 +127,8 @@ const TOOL_CATALOG = [
         },
         mode: {
           type: 'string',
-          enum: ['research', 'audit', 'scout', 'hybrid', 'brainstorm'],
-          description: 'Operating mode: research (literature), audit (codebase), scout (OSS), hybrid, brainstorm (lateral ideation)',
+          enum: ['research', 'audit', 'scout', 'hybrid', 'brainstorm', 'darkharvest'],
+          description: 'Operating mode: research (literature), audit (codebase), scout (OSS), hybrid, brainstorm (lateral ideation), darkharvest (competitor teardown)',
         },
         divergence_threshold: {
           type: 'number',
@@ -217,6 +218,39 @@ const TOOL_CATALOG = [
         mock_mode: {
           type: 'boolean',
           description: 'Run in mock/dry-run mode without external API charges',
+          default: false,
+        },
+      },
+      required: ['objective'],
+    },
+  },
+  {
+    name: 'iumbtems_darkharvest',
+    description:
+      'Product competitor teardown: seed inspirations plus prompt, expand to adjacents, emit per-feature depend/vendor/clean-room/skip verdicts with SPDX attribution.',
+    input: {
+      type: 'object',
+      properties: {
+        objective: {
+          type: 'string',
+          description: 'Product arena to tear down (e.g. Paseo-class agent harness competitor)',
+        },
+        seeds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Seed inspiration repo URLs',
+        },
+        maxRepos: {
+          type: 'integer',
+          description: 'Cap on total competitors (default 10)',
+        },
+        depth: {
+          type: 'integer',
+          description: 'Dialectic depth 1-4',
+        },
+        mock_mode: {
+          type: 'boolean',
+          description: 'Run in mock mode without invoking LLM tokens',
           default: false,
         },
       },
@@ -463,6 +497,19 @@ export const OPENCODE_COMMANDS = [
       'Alias for /brainstorming: run lateral brainstorming (divergent what-if ideation, never bug-fix lists).',
       'Prompt: $ARGUMENTS (defaults to "Where do we go from here?" when empty)',
       'Execute iumbtems_brainstorm with {"objective": "<prompt>"} and report feature vectors, paradigm inversions, and falsifiable spikes.',
+    ].join('\n'),
+  },
+  {
+    name: 'darkharvest',
+    description: 'Product competitor teardown with per-feature harvest verdicts',
+    usage: '/darkharvest <objective> [--seeds <urls>] [--max-repos <n>]',
+    template: [
+      'Run a product competitor teardown (seed inspirations plus prompt, expand to adjacents).',
+      'Objective: $ARGUMENTS (product arena; seeds may be embedded as URLs)',
+      'If $ARGUMENTS is empty, ask the user for the product arena and seed URLs first; never call the tool with placeholder arguments.',
+      '1. Execute iumbtems_darkharvest with {"objective": "<objective>", "seeds": ["<url>", "..."]} (pass "mock_mode": true only for dry runs).',
+      '2. Report the competitor x capability matrix, white-space gaps both ways, and the SPDX-attributed harvest backlog in .research/darkharvest_report.md.',
+      '3. Legal rule: permissive-only vendor; GPL/AGPL clean-room-rebuild only; workflows clonable, assets never.',
     ].join('\n'),
   },
 ];

@@ -39,6 +39,7 @@ CANONICAL_SKILLS = [
     "code_audit",
     "oss_scout",
     "brainstorming",
+    "darkharvest",
 ]
 
 # Skill -> the MCP tool(s) that now carry its programmatic surface.
@@ -50,6 +51,7 @@ SKILL_TOOLS = {
     "code_audit": ["iumbtems_code_audit"],
     "oss_scout": ["iumbtems_oss_scout"],
     "brainstorming": ["iumbtems_brainstorm"],
+    "darkharvest": ["iumbtems_darkharvest"],
 }
 
 SKILL_TITLES = {
@@ -60,6 +62,7 @@ SKILL_TITLES = {
     "code_audit": "Code Audit",
     "oss_scout": "OSS Scout",
     "brainstorming": "Brainstorming",
+    "darkharvest": "Darkharvest",
 }
 
 # (target dir relative to root, mode). All targets are stubs since A2b.
@@ -152,7 +155,9 @@ def _check_package_json() -> List[str]:
             for p in block.get(kind, []):
                 if "*" in p:
                     if not list(PROJECT_ROOT.glob(p.lstrip("./"))):
-                        errors.append(f"package.json {key}.{kind} glob matches nothing: {p}")
+                        errors.append(
+                            f"package.json {key}.{kind} glob matches nothing: {p}"
+                        )
                 elif not (PROJECT_ROOT / p.lstrip("./")).exists():
                     errors.append(f"package.json {key}.{kind} missing: {p}")
     return errors
@@ -170,7 +175,9 @@ def check():
         for e in errors:
             print(f"   - {e}")
         return 1
-    print("✅ All adapter stubs in sync with template; package.json pi/omp blocks resolve.")
+    print(
+        "✅ All adapter stubs in sync with template; package.json pi/omp blocks resolve."
+    )
     return 0
 
 

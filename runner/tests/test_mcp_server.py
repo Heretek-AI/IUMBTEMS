@@ -13,7 +13,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from runner.mcp_protocol import StdioJsonRpcServer, ToolSpec, read_message, write_message  # noqa: E402
+from runner.mcp_protocol import (
+    StdioJsonRpcServer,
+    ToolSpec,
+    read_message,
+    write_message,
+)  # noqa: E402
 from runner.mcp_server import SERVER_NAME, build_server, build_tools  # noqa: E402
 
 EXPECTED_TOOLS = [
@@ -22,6 +27,7 @@ EXPECTED_TOOLS = [
     "iumbtems_code_audit",
     "iumbtems_oss_scout",
     "iumbtems_brainstorm",
+    "iumbtems_darkharvest",
     "iumbtems_verify_quote",
     "iumbtems_socratic_frontier",
     "iumbtems_reindex_claims",
@@ -36,14 +42,25 @@ EXPECTED_TOOLS = [
 class TestMcpProtocol(unittest.TestCase):
     def test_tool_spec_manifest_shape(self):
         spec = ToolSpec("t", "d", {"type": "object"}, lambda a: "x")
-        self.assertEqual(spec.to_manifest(), {"name": "t", "description": "d", "inputSchema": {"type": "object"}})
+        self.assertEqual(
+            spec.to_manifest(),
+            {"name": "t", "description": "d", "inputSchema": {"type": "object"}},
+        )
 
     def test_alias_dispatch(self):
         calls = []
-        spec = ToolSpec("main", "d", {}, lambda a: calls.append(a) or "ok", aliases=("alt",))
+        spec = ToolSpec(
+            "main", "d", {}, lambda a: calls.append(a) or "ok", aliases=("alt",)
+        )
         server = StdioJsonRpcServer("s", "1", [spec])
-        res = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                             "params": {"name": "alt", "arguments": {"q": 1}}})
+        res = server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "alt", "arguments": {"q": 1}},
+            }
+        )
         self.assertEqual(res["result"]["content"][0]["text"], "ok")
         self.assertEqual(calls, [{"q": 1}])
 
@@ -52,15 +69,23 @@ class TestMcpProtocol(unittest.TestCase):
             raise RuntimeError("kaboom")
 
         server = StdioJsonRpcServer("s", "1", [ToolSpec("t", "d", {}, boom)])
-        res = server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-                             "params": {"name": "t", "arguments": {}}})
+        res = server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "t", "arguments": {}},
+            }
+        )
         self.assertIn("error", res)
         self.assertEqual(res["error"]["code"], -32603)
         self.assertIn("kaboom", res["error"]["message"])
 
     def test_notification_gets_no_reply(self):
         server = StdioJsonRpcServer("s", "1", [])
-        self.assertIsNone(server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+        self.assertIsNone(
+            server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        )
 
     def test_unknown_method_is_32601(self):
         server = StdioJsonRpcServer("s", "1", [])
@@ -70,7 +95,9 @@ class TestMcpProtocol(unittest.TestCase):
     def test_content_length_round_trip(self):
         import io
 
-        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        body = json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+        )
         raw = f"Content-Length: {len(body)}\r\n\r\n{body}"
         req, use_headers = read_message(io.StringIO(raw))
         self.assertTrue(use_headers)
@@ -101,7 +128,9 @@ class TestMcpServerTools(unittest.TestCase):
 
             hasher = SourceHasher(tmp_path)
             content = "The FPGA pipeline executes Poseidon in 184ms."
-            digest = hasher.store_source(url="https://example.test/p", content=content, title="T")
+            digest = hasher.store_source(
+                url="https://example.test/p", content=content, title="T"
+            )
 
             # Drive handle() directly in-process for tools/call; use the
             # subprocess only to prove the stdio loop serves initialize/tools/list.
@@ -113,8 +142,12 @@ class TestMcpServerTools(unittest.TestCase):
                 text=True,
             )
             lines = [
-                json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
-                json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
+                json.dumps(
+                    {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+                ),
+                json.dumps(
+                    {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+                ),
             ]
             out, err = proc.communicate("\n".join(lines) + "\n", timeout=20)
             self.assertEqual(err.strip(), "", f"server stderr: {err}")
@@ -130,37 +163,41 @@ class TestMcpServerTools(unittest.TestCase):
 
             # Round-trip verify_quote in-process against the temp cache.
             server = build_server()
-            res = server.handle({
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": {
-                    "name": "iumbtems_verify_quote",
-                    "arguments": {
-                        "hash": digest,
-                        "quote": "Poseidon in 184ms",
-                        "base_dir": tmp,
+            res = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "iumbtems_verify_quote",
+                        "arguments": {
+                            "hash": digest,
+                            "quote": "Poseidon in 184ms",
+                            "base_dir": tmp,
+                        },
                     },
-                },
-            })
+                }
+            )
             payload = json.loads(res["result"]["content"][0]["text"])
             self.assertTrue(payload["verified"])
             self.assertGreaterEqual(payload["confidence"], 0.95)
 
             # And a failing quote must come back unverified.
-            res_bad = server.handle({
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "tools/call",
-                "params": {
-                    "name": "iumbtems_verify_quote",
-                    "arguments": {
-                        "hash": digest,
-                        "quote": "this text was never cached anywhere",
-                        "base_dir": tmp,
+            res_bad = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "iumbtems_verify_quote",
+                        "arguments": {
+                            "hash": digest,
+                            "quote": "this text was never cached anywhere",
+                            "base_dir": tmp,
+                        },
                     },
-                },
-            })
+                }
+            )
             bad = json.loads(res_bad["result"]["content"][0]["text"])
             self.assertFalse(bad["verified"])
 
@@ -178,7 +215,13 @@ class TestMcpServerTools(unittest.TestCase):
                     str(PROJECT_ROOT / "runner" / "mcp_server.py"),
                     "call",
                     "iumbtems_verify_quote",
-                    json.dumps({"hash": digest, "quote": "parametric intuition", "base_dir": tmp}),
+                    json.dumps(
+                        {
+                            "hash": digest,
+                            "quote": "parametric intuition",
+                            "base_dir": tmp,
+                        }
+                    ),
                 ],
                 capture_output=True,
                 text=True,

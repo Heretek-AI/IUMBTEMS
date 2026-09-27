@@ -3,7 +3,7 @@
 Epistemic Swarm: Dialectic Multi-Agent Research Runner.
 Executes parallel Claude Code sub-processes (claude -p) for Proponent and Adversary agents,
 monitors filesystem IPC scratchpads, and invokes the Epistemic Auditor.
-Supports multiple modes: research, audit (codebase), scout (OSS), hybrid, and brainstorm (lateral ideation).
+Supports multiple modes: research, audit (codebase), scout (OSS), hybrid, brainstorm (lateral ideation), and darkharvest (product competitor teardown).
 """
 
 import os
@@ -52,7 +52,11 @@ def _validate_backend(backend: List[str]) -> List[str]:
         return list(backend)
     # Path form: resolve the same way the spawn will (cwd=PROJECT_ROOT).
     if os.sep in candidate or (os.altsep and os.altsep in candidate):
-        resolved = (PROJECT_ROOT / candidate).resolve() if not os.path.isabs(candidate) else Path(candidate)
+        resolved = (
+            (PROJECT_ROOT / candidate).resolve()
+            if not os.path.isabs(candidate)
+            else Path(candidate)
+        )
         if resolved.is_file():
             return list(backend)
         raise ValueError(
@@ -89,7 +93,9 @@ class SwarmRunner:
         # Stream F: "dag" (legacy default) or "auction" (Frontier Markets).
         self.allocation = allocation or self.config.get("allocation", "dag")
         # Stream G: optional Domain Pack (constitution) for the auditor.
-        self.domain_pack = domain_pack if domain_pack is not None else self.config.get("domain_pack")
+        self.domain_pack = (
+            domain_pack if domain_pack is not None else self.config.get("domain_pack")
+        )
         # Per-agent backend/model overrides (CLI > env > config > default).
         # Keys are role names ("alpha", "beta"); values are {"backend": [...],
         # "model": str|None}. Empty dict means "fall through to next source".
@@ -351,6 +357,31 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                     ],
                     "negative_knowledge": [],
                 }
+            elif self.mode == "darkharvest":
+                sample_content = "# Competitor Teardown Snapshot\nCapability: session handoff across agent harnesses. Verdict: clean-room-rebuild under Apache-2.0."
+                shash = self.hasher.store_source(
+                    "https://github.com/example/agent-harness",
+                    sample_content,
+                    "Competitor Snapshot",
+                )
+                dossier = {
+                    "agent": "Agent Alpha (Harvest Proponent)",
+                    "mode": "darkharvest",
+                    "scope_id": scope_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "affirmative_claims": [
+                        {
+                            "claim_id": "ALPHA-D01",
+                            "tag": "VERIFIED",
+                            "statement": "Competitor ships session handoff with portable workspace state.",
+                            "source_hash": shash,
+                            "source_url": "https://github.com/example/agent-harness",
+                            "verbatim_quote": "Capability: session handoff across agent harnesses.",
+                        }
+                    ],
+                    "inferred_implications": [],
+                    "negative_knowledge": [],
+                }
             else:
                 sample_content = "# FPGA Prover Benchmark\nOur FPGA pipeline executes the Poseidon round constraints in 184ms with a peak memory bandwidth of 45 GB/s."
                 shash = self.hasher.store_source(
@@ -389,9 +420,13 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 system_prompt = self.prompts_dir / "agent_oss_scout.md"
             elif self.mode == "brainstorm":
                 system_prompt = self.prompts_dir / "agent_brainstormer.md"
+            elif self.mode == "darkharvest":
+                system_prompt = self.prompts_dir / "agent_darkharvest.md"
             else:
                 system_prompt = self.prompts_dir / "agent_alpha_thesis.md"
-            self.run_claude_process(prompt, system_prompt_file=system_prompt, role="alpha")
+            self.run_claude_process(
+                prompt, system_prompt_file=system_prompt, role="alpha"
+            )
             dossier_path = (
                 self.state_machine.get_scope_dir(scope_id) / "alpha_dossier.json"
             )
@@ -503,6 +538,38 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                     ],
                     "negative_knowledge": [],
                 }
+            elif self.mode == "darkharvest":
+                sample_content = "# Competitor Risk Note\nSingle-maintainer harness with AGPL-licensed session sync; porting effort M."
+                shash = self.hasher.store_source(
+                    "https://github.com/example/agent-harness#risks",
+                    sample_content,
+                    "Competitor Risks",
+                )
+                dossier = {
+                    "agent": "Agent Beta (Harvest Red Team)",
+                    "mode": "darkharvest",
+                    "scope_id": scope_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "falsification_claims": [
+                        {
+                            "claim_id": "BETA-D01",
+                            "tag": "VERIFIED",
+                            "statement": "Competitor session sync is AGPL-licensed and single-maintained.",
+                            "source_hash": shash,
+                            "source_url": "https://github.com/example/agent-harness#risks",
+                            "verbatim_quote": "Single-maintainer harness with AGPL-licensed session sync",
+                            "severity": "HIGH",
+                        }
+                    ],
+                    "methodological_critiques": [
+                        {
+                            "target_assertion": "Competitor session handoff is safe to vendor.",
+                            "critique": "AGPL copyleft requires clean-room rebuild; vendor only permissive parts with SPDX attribution.",
+                            "evidence_hash": shash,
+                        }
+                    ],
+                    "negative_knowledge": [],
+                }
             else:
                 sample_content = "# PCIe Bus Saturation Study\nIn continuous batch streaming, PCIe 4.0 transfers introduce a 650ms delay, yielding total latency > 800ms."
                 shash = self.hasher.store_source(
@@ -547,9 +614,13 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 system_prompt = self.prompts_dir / "agent_oss_scout.md"
             elif self.mode == "brainstorm":
                 system_prompt = self.prompts_dir / "agent_brainstormer.md"
+            elif self.mode == "darkharvest":
+                system_prompt = self.prompts_dir / "agent_darkharvest.md"
             else:
                 system_prompt = self.prompts_dir / "agent_beta_antithesis.md"
-            self.run_claude_process(prompt, system_prompt_file=system_prompt, role="beta")
+            self.run_claude_process(
+                prompt, system_prompt_file=system_prompt, role="beta"
+            )
             dossier_path = (
                 self.state_machine.get_scope_dir(scope_id) / "beta_dossier.json"
             )
@@ -678,6 +749,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             "scout": "Open-Source Software Discovery & Clean-Room Blueprint",
             "hybrid": "Hybrid Codebase & Literature Epistemic Report",
             "brainstorm": "Lateral Brainstorm & Speculative Ideation Portfolio",
+            "darkharvest": "Product Competitor Teardown & Clean-Room Harvest",
             "research": "Master Epistemic Research Report",
         }
         title = mode_titles.get(self.mode, "Master Epistemic Research Report")
@@ -742,6 +814,11 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             with open(brainstorm_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(synthesis_lines))
             return brainstorm_path
+        elif self.mode == "darkharvest":
+            darkharvest_path = self.base_dir / "darkharvest_report.md"
+            with open(darkharvest_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(synthesis_lines))
+            return darkharvest_path
 
         return final_path
 
@@ -766,9 +843,33 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["research", "audit", "scout", "hybrid", "brainstorm"],
+        choices=["research", "audit", "scout", "hybrid", "brainstorm", "darkharvest"],
         default=None,
         help="Operating mode",
+    )
+    parser.add_argument(
+        "--seeds",
+        type=str,
+        default=None,
+        help="Darkharvest: comma-separated seed inspiration repo URLs",
+    )
+    parser.add_argument(
+        "--max-repos",
+        type=int,
+        default=None,
+        help="Darkharvest: cap on total competitors (default 10, recommended 6 live)",
+    )
+    parser.add_argument(
+        "--per-repo-mb",
+        type=int,
+        default=None,
+        help="Darkharvest: per-repo scan cap in MB (default 100)",
+    )
+    parser.add_argument(
+        "--per-repo-timeout",
+        type=int,
+        default=None,
+        help="Darkharvest: per-repo fetch timeout in seconds (default 300)",
     )
     parser.add_argument(
         "--engine",
@@ -785,16 +886,37 @@ def main():
     )
 
     # Stream E: per-agent backend/model overrides (CLI > env > config).
-    parser.add_argument("--model-alpha", type=str, default=None,
-                        help="Model id for Agent Alpha (thesis)")
-    parser.add_argument("--model-beta", type=str, default=None,
-                        help="Model id for Agent Beta (antithesis)")
-    parser.add_argument("--beta-backend", type=str, nargs="+", default=None,
-                        help="Backend command list for Beta, e.g. --beta-backend ollama run qwen3")
-    parser.add_argument("--allocation", choices=["dag", "auction"], default=None,
-                        help="Scope allocation policy (default: config/dag; auction = Frontier Markets)")
-    parser.add_argument("--domain-pack", type=str, default=None,
-                        help="Regulated Domain Pack id (config/domain_packs/<id>.json), e.g. biopharma")
+    parser.add_argument(
+        "--model-alpha",
+        type=str,
+        default=None,
+        help="Model id for Agent Alpha (thesis)",
+    )
+    parser.add_argument(
+        "--model-beta",
+        type=str,
+        default=None,
+        help="Model id for Agent Beta (antithesis)",
+    )
+    parser.add_argument(
+        "--beta-backend",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Backend command list for Beta, e.g. --beta-backend ollama run qwen3",
+    )
+    parser.add_argument(
+        "--allocation",
+        choices=["dag", "auction"],
+        default=None,
+        help="Scope allocation policy (default: config/dag; auction = Frontier Markets)",
+    )
+    parser.add_argument(
+        "--domain-pack",
+        type=str,
+        default=None,
+        help="Regulated Domain Pack id (config/domain_packs/<id>.json), e.g. biopharma",
+    )
 
     args = parser.parse_args()
     frontier_path = Path(args.frontier) if args.frontier else None

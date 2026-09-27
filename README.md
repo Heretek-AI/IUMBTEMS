@@ -146,6 +146,9 @@ iumbtems run "Sub-millisecond ZK state updates on L1 rollups"
 # Run lateral brainstorming (divergent what-if ideation, never bug fixes)
 iumbtems brainstorm "Where do we go from here?"
 
+# Product competitor teardown with per-feature harvest verdicts
+iumbtems darkharvest "Paseo-class agent harness competitor" --seeds https://github.com/a/b,https://github.com/c/d --max-repos 6 --mock-claude
+
 # Run Socratic grilling and decision frontier calculation
 iumbtems grill --objective "L1 vs L2 state verification trade-offs"
 
@@ -160,6 +163,7 @@ iumbtems test
 - **`/swarm-config`**: Interactive tuning of search engines (DuckDuckGo, Brave, Firecrawl, SearXNG), iteration depth, divergence thresholds, and operating modes.
 - **`/code-audit`**: Dialectic codebase review pairing a Structural Architect (thesis) with a Vulnerability Red-Teamer (antithesis) enforcing line-number proofs (`file:///path#L10-25`).
 - **`/oss-scout`**: Evaluates GitHub repositories, package ecosystems (npm, crates.io, PyPI), license contamination (GPL/AGPL copyleft vs MIT/Apache), and outputs clean-room re-implementation blueprints.
+- **`/darkharvest`**: Product competitor teardown (seed inspirations + prompt, expand to adjacents). Competitor × capability matrix, both-ways white-space gaps, per-feature `depend|vendor|clean-room-rebuild|skip` verdicts with SPDX attribution. Permissive-only vendoring; GPL/AGPL spec-rebuild only.
 - **`/grilling`**: Socratic assumption-inversion and Matt Pocock-style design tree frontier discovery.
 - **`epistemic_search`**: Zero-key DuckDuckGo Lite search and content-addressed fetch with automatic SHA-256 caching.
 

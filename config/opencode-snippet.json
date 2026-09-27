@@ -87,6 +87,18 @@
         "iumbtems_brainstorm": true,
         "iumbtems_config": true
       }
+    },
+    "darkharvester": {
+      "description": "IUMBTEMS Competitor Teardown: seed plus expand, product plus code matrix, per-feature harvest verdicts with SPDX attribution.",
+      "tools": {
+        "read": true,
+        "write": true,
+        "grep": true,
+        "glob": true,
+        "iumbtems_darkharvest": true,
+        "iumbtems_verify_quote": true,
+        "iumbtems_config": true
+      }
     }
   },
   "skills": {
@@ -97,7 +109,8 @@
       "./skills/swarm_config",
       "./skills/code_audit",
       "./skills/oss_scout",
-      "./skills/brainstorming"
+      "./skills/brainstorming",
+      "./skills/darkharvest"
     ]
   }
 }

@@ -252,6 +252,16 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
             content = f.read()
             self.assertIn("Lateral Brainstorm", content)
 
+    def test_mock_darkharvest_mode(self):
+        runner = SwarmRunner(base_dir=self.test_dir, mock_mode=True, mode="darkharvest")
+        runner.run_swarm("Paseo-class agent harness competitor")
+
+        darkharvest_report = self.test_dir / "darkharvest_report.md"
+        self.assertTrue(darkharvest_report.exists())
+        with open(darkharvest_report, "r") as f:
+            content = f.read()
+            self.assertIn("Competitor Teardown", content)
+
     def test_brainstorm_prompt_and_skill_exist(self):
         prompt = PROJECT_ROOT / "prompts" / "agent_brainstormer.md"
         skill = PROJECT_ROOT / "skills" / "brainstorming" / "SKILL.md"
@@ -370,6 +380,7 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
             "iumbtems_code_audit",
             "iumbtems_oss_scout",
             "iumbtems_brainstorm",
+            "iumbtems_darkharvest",
             "iumbtems_verify_quote",
             "iumbtems_socratic_frontier",
             "iumbtems_reindex_claims",
@@ -390,6 +401,7 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
             "scout",
             "brainstorming",
             "brainstorm",
+            "darkharvest",
         ]:
             self.assertIn(c, data_oc["commands"])
 

@@ -16,7 +16,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "search_engine": "duckduckgo",
     "max_iterations": 2,
     "divergence_threshold": 0.75,
-    "mode": "research",  # "research", "audit", "scout", "hybrid", "brainstorm"
+    "mode": "research",  # "research", "audit", "scout", "hybrid", "brainstorm", "darkharvest"
     "cache_raw_markdown": True,
     "license_whitelist": ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC"],
     "output_dir": DEFAULT_RESEARCH_DIR,
@@ -123,6 +123,7 @@ def run_interactive(cfg: Dict[str, Any]) -> Dict[str, Any]:
     print("  3) scout      — Open-source software discovery & clean-room harvesting")
     print("  4) hybrid     — Combined codebase audit + web research")
     print("  5) brainstorm — Lateral creative ideation & what-if exploration")
+    print("  6) darkharvest — Product competitor teardown & clean-room harvest")
     mode_choice = input(f"Choice [current: {cfg['mode']}]: ").strip()
     if mode_choice == "1":
         cfg["mode"] = "research"
@@ -134,6 +135,8 @@ def run_interactive(cfg: Dict[str, Any]) -> Dict[str, Any]:
         cfg["mode"] = "hybrid"
     elif mode_choice == "5":
         cfg["mode"] = "brainstorm"
+    elif mode_choice == "6":
+        cfg["mode"] = "darkharvest"
 
     return cfg
 
@@ -158,7 +161,14 @@ def _parse_cli_updates(args: list, cfg: Dict[str, Any]) -> bool:
             idx += 1
         elif arg in ("--mode", "-m") and idx + 1 < len(args):
             mode = args[idx + 1].lower()
-            if mode in ("research", "audit", "scout", "hybrid", "brainstorm"):
+            if mode in (
+                "research",
+                "audit",
+                "scout",
+                "hybrid",
+                "brainstorm",
+                "darkharvest",
+            ):
                 cfg["mode"] = mode
                 modified = True
             idx += 1
