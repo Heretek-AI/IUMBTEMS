@@ -22,6 +22,7 @@ from runner.research_swarm import (  # noqa: E402
     _build_opencode_cmd,
     _default_backend_cmd,
     _extract_opencode_text,
+    _opencode_auto,
     SwarmRunner,
 )
 
@@ -71,9 +72,27 @@ class TestOpencodeArgv(unittest.TestCase):
 
     def test_minimal_shape(self):
         self.assertEqual(
-            _build_opencode_cmd(["opencode", "run"], "p", None, None),
+            _build_opencode_cmd(["opencode", "run"], "p", None, None, auto=False),
             ["opencode", "run", "p", "--format", "json"],
         )
+
+    def test_auto_flag_default_and_opt_out(self):
+        self.assertIn(
+            "--auto", _build_opencode_cmd(["opencode", "run"], "p", None, None)
+        )
+        self.assertNotIn(
+            "--auto",
+            _build_opencode_cmd(["opencode", "run"], "p", None, None, auto=False),
+        )
+
+    def test_opencode_auto_env_and_config(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(_opencode_auto({}))
+            self.assertFalse(_opencode_auto({"opencode_auto": False}))
+        with mock.patch.dict(os.environ, {"IUMBTEMS_OPENCODE_AUTO": "0"}):
+            self.assertFalse(_opencode_auto({}))
+        with mock.patch.dict(os.environ, {"IUMBTEMS_OPENCODE_AUTO": "true"}):
+            self.assertTrue(_opencode_auto({"opencode_auto": False}))
 
     def test_family_detection(self):
         self.assertEqual(_backend_family(["opencode", "run"]), "opencode")

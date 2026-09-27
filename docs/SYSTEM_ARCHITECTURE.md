@@ -293,6 +293,20 @@ The evidence workspace is resolved in this order:
 
 Spawned agents run with their OS cwd **and** `PWD` set to the project root, because some harnesses (OpenCode) resolve their project root from `$PWD` rather than the OS cwd. Both are kept consistent so relative `.research/...` paths and absolute scratchpad paths agree; a mismatch sends evidence into a different tree than the auditor reads.
 
+### 6.2.1 Linked Worktrees and the `external_directory` Trap
+
+`git worktree add` creates a checkout whose **git common dir lives in another directory tree** (the primary clone). Some harnesses derive their project root from `git rev-parse --git-common-dir` / `--show-toplevel` and from `$PWD`, so a spawned agent can consider the primary clone its workspace while the runner reads the worktree. When that happens the runner's absolute scratchpad path is classified `external_directory` and **auto-rejected**, so no dossier is persisted.
+
+Three defenses:
+
+1. Spawn with `cwd` and `PWD` set to the resolved project root (see 6.2), so the child's workspace matches the runner's.
+2. Pass `--auto` to `opencode run` (auto-approve permissions that are not explicitly denied), so an `external_directory` write is approved rather than silently dropped. Disable with `IUMBTEMS_OPENCODE_AUTO=0`.
+3. On a missing dossier, report the searched path, the spawn cwd/`PWD`, `IUMBTEMS_PROJECT_DIR`, and any copy found in an alternate workspace (`PWD` / git common dir parent) — a workspace mismatch is then self-diagnosing instead of a bare `dossier not found`.
+
+### 6.2.2 Manifest Concurrency
+
+`.research/manifest.json` is written by multiple tools/processes. It is now per mode (`manifest.<mode>.json`; the default/research flow keeps `manifest.json`) so concurrent `brainstorm` and `darkharvest` runs cannot clobber each other's scope DAG. Every manifest write uses a **unique** temp file plus `os.replace`, under an `fcntl` advisory lock at `.research/.manifest.lock`, and read-modify-write helpers (`update_session_status`, `set_scopes`, `record_agent_completion`, `update_scope_status`) hold that lock across the whole operation so concurrent writers cannot lose updates. Mode-agnostic readers resolve with `state_machine.find_any_manifest`.
+
 ### 6.3 Configuration Merge & Migration
 
 `load_config` deep-merges the `agents` block one role/key at a time over `DEFAULT_CONFIG`. Configs written before 0.7.6 that pinned `agents.<role>.backend = ["claude", "-p"]` are migrated to `null` on load (unless the top-level `backend` is an explicit `"claude"`), and the migration is persisted by the CLI and `iumbtems_config`.

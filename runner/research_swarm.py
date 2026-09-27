@@ -21,7 +21,12 @@ from typing import Dict, Any, List, Optional, Tuple
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from runner.state_machine import ResearchStateMachine, SessionStatus, ScopeStatus
+from runner.state_machine import (
+    ResearchStateMachine,
+    ScopeStatus,
+    SessionStatus,
+    _atomic_write_json,
+)
 from runner.auditor_engine import EpistemicAuditorEngine
 from skills.research_cache.hasher import SourceHasher
 from skills.swarm_config.configure import load_config
@@ -83,20 +88,43 @@ def _agent_cwd(project_root: Path) -> str:
     return str(project_root)
 
 
+def _opencode_auto(config: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether to pass `--auto` to `opencode run`.
+
+    `--auto` auto-approves permissions that are not explicitly denied. Without
+    it, a spawned agent's write to the resolved `.research` path can be
+    auto-rejected as `external_directory` when the child's workspace root differs
+    from the runner's, silently dropping the dossier. Disable with
+    `IUMBTEMS_OPENCODE_AUTO=0` or `.research/config.json` → `"opencode_auto": false`.
+    """
+    env = os.environ.get("IUMBTEMS_OPENCODE_AUTO", "").strip().lower()
+    if env in ("0", "false", "no", "off"):
+        return False
+    if env in ("1", "true", "yes", "on"):
+        return True
+    val = (config or {}).get("opencode_auto")
+    if val is not None:
+        return bool(val)
+    return True
+
+
 def _build_opencode_cmd(
     backend: List[str],
     prompt: str,
     model: Optional[str],
     agent: Optional[str],
+    auto: bool = True,
 ) -> List[str]:
     """Argv for `opencode run` (docs: positional prompt, -m provider/model,
-    --agent <name>, --format json). No --tools/--system-prompt flags exist."""
+    --agent <name>, --format json, --auto). No --tools/--system-prompt flags."""
     cmd = list(backend) + [prompt]
     if agent:
         cmd.extend(["--agent", str(agent)])
     if model:
         cmd.extend(["-m", str(model)])
     cmd.extend(["--format", "json"])
+    if auto:
+        cmd.append("--auto")
     return cmd
 
 
@@ -230,7 +258,9 @@ class SwarmRunner:
         # Keys are role names ("alpha", "beta"); values are {"backend": [...],
         # "model": str|None}. Empty dict means "fall through to next source".
         self.agent_overrides: Dict[str, Dict[str, Any]] = agent_overrides or {}
-        self.state_machine = ResearchStateMachine(base_dir=self.base_dir)
+        self.state_machine = ResearchStateMachine(
+            base_dir=self.base_dir, mode=self.mode
+        )
         self.auditor = EpistemicAuditorEngine(base_dir=self.base_dir)
         self.hasher = SourceHasher(base_dir=self.base_dir)
         self.prompts_dir = PROJECT_ROOT / "prompts"
@@ -342,7 +372,9 @@ class SwarmRunner:
                 prompt = (
                     system_prompt_file.read_text(encoding="utf-8") + "\n\n" + prompt
                 )
-            return _build_opencode_cmd(backend, prompt, model, agent)
+            return _build_opencode_cmd(
+                backend, prompt, model, agent, auto=_opencode_auto(self.config)
+            )
         cmd = list(backend) + [prompt, "--tools", tools]
         if model:
             cmd.extend(["--model", str(model)])
@@ -391,16 +423,40 @@ class SwarmRunner:
                 return _extract_opencode_text(res.stdout)
             return res.stdout.strip()
         except subprocess.CalledProcessError as e:
+            stderr = e.stderr or ""
+            hint = self._permission_failure_hint(stderr)
             print(
-                f"[ERROR] {family} backend process failed: {e.stderr}", file=sys.stderr
+                f"[ERROR] {family} backend process failed: {stderr}{hint}",
+                file=sys.stderr,
             )
-            raise RuntimeError(f"{family} backend execution failed: {e.stderr}")
+            raise RuntimeError(f"{family} backend execution failed: {stderr}{hint}")
         except ValueError as e:
             # Bad backend config: report it as a run failure, not an abort of the
             # whole swarm. Matches the pre-allowlist behavior of surfacing the
             # error from inside the try.
             print(f"[ERROR] Invalid agent backend: {e}", file=sys.stderr)
             raise RuntimeError(f"Invalid agent backend: {e}")
+
+    def _permission_failure_hint(self, stderr: str) -> str:
+        """Actionable hint when the backend refused a write as external.
+
+        Reproduced failure shape: `! permission requested: external_directory
+        (<worktree>/.research/...) ; auto-rejecting` — the child's workspace root
+        disagreed with the runner's, so the dossier write was denied.
+        """
+        lowered = (stderr or "").lower()
+        if (
+            "external_directory" not in lowered
+            and "permission requested" not in lowered
+        ):
+            return ""
+        return (
+            "\n[hint] The spawned backend treated the workspace as external and "
+            "auto-rejected the write. Ensure its workspace matches the runner's "
+            f"({self.base_dir}). For OpenCode the backend is spawned with "
+            "cwd and PWD set to the project root and `--auto` "
+            "(disable with IUMBTEMS_OPENCODE_AUTO=0)."
+        )
 
     def _mock_claude_response(self, prompt: str) -> str:
         """Mock response generator for unit testing without live API keys."""
@@ -535,14 +591,74 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         if recovered is not None:
             recovered.setdefault("recovered_from_stdout", True)
             dossier_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(dossier_path, "w", encoding="utf-8") as f:
-                json.dump(recovered, f, indent=2)
+            _atomic_write_json(dossier_path, recovered)
             print(f"  [{role}] ⚠️ Dossier file missing; recovered from stdout.")
             return recovered
         raise FileNotFoundError(
-            f"{role} dossier not found at {dossier_path} and no dossier JSON "
-            f"in transcript for scope {scope_id}"
+            self._dossier_missing_message(dossier_path, scope_id, role)
         )
+
+    def _dossier_missing_message(
+        self, dossier_path: Path, scope_id: str, role: str
+    ) -> str:
+        """Diagnostic message naming the searched path and any stray copy.
+
+        The recurring failure mode is a workspace mismatch: the agent writes the
+        dossier to a different `.research` tree than the runner reads. Reporting
+        only the searched path made that invisible, so scan the plausible
+        alternates and say where the dossier actually is.
+        """
+        lines = [
+            f"{role} dossier not found at {dossier_path} and no dossier JSON "
+            f"in transcript for scope {scope_id}",
+            f"  runner workspace : {self.base_dir}",
+            f"  spawn cwd/PWD    : {_agent_cwd(self.project_root)}",
+            f"  IUMBTEMS_PROJECT_DIR: {os.environ.get('IUMBTEMS_PROJECT_DIR', '(unset)')}",
+        ]
+        elsewhere = self._locate_dossier_elsewhere(dossier_path.name)
+        if elsewhere:
+            lines.append(
+                f"  FOUND A COPY ELSEWHERE: {elsewhere} — the spawned agent wrote "
+                f"to a different workspace than the runner reads"
+            )
+        else:
+            lines.append(
+                "  no copy found in alternate workspaces (PWD / git common dir parent)"
+            )
+        return "\n".join(lines)
+
+    def _locate_dossier_elsewhere(self, filename: str) -> Optional[Path]:
+        """Best-effort scan for the dossier in workspaces the agent might have used."""
+        roots: List[Path] = []
+        pwd = os.environ.get("PWD", "").strip()
+        if pwd:
+            roots.append(Path(pwd))
+        env_project = os.environ.get("IUMBTEMS_PROJECT_DIR", "").strip()
+        if env_project:
+            roots.append(Path(env_project))
+        # Parent of the git common dir = the primary clone for a linked worktree.
+        try:
+            out = subprocess.run(
+                ["git", "rev-parse", "--git-common-dir"],
+                cwd=str(self.project_root),
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if out.returncode == 0 and out.stdout.strip():
+                common = Path(out.stdout.strip())
+                if not common.is_absolute():
+                    common = self.project_root / common
+                roots.append(common.resolve().parent)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        for root in roots:
+            candidate = root / ".research" / "scratchpads"
+            if candidate.is_dir():
+                for hit in candidate.glob(f"*/{filename}"):
+                    return hit
+        return None
 
     def run_agent_alpha(self, scope: Dict[str, Any]):
         """Executes Agent Alpha (Thesis / Proponent / Structural Auditor) for a scope."""
@@ -1006,6 +1122,11 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         )
         print(
             f"   Engine: {self.engine.upper()} | Depth: {self.depth} | Dir: {self.base_dir}"
+        )
+        print(
+            f"   Workspace: {self.base_dir} | Manifest: "
+            f"{self.state_machine.manifest_file.name} | Agent cwd: "
+            f"{_agent_cwd(self.project_root)}"
         )
         print("=" * 70)
 

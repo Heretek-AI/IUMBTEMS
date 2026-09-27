@@ -90,6 +90,15 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   resolves its project from `$PWD`, and `subprocess.run(cwd=...)` does NOT update
   `PWD`. A mismatch sends evidence into a different tree than the auditor reads.
   Override the directory with `IUMBTEMS_AGENT_CWD` (`project` | `package` | path).
+- Spawned OpenCode agents pass `--auto` (auto-approve permissions that are not
+  explicitly denied) so a workspace mismatch cannot silently auto-reject the
+  dossier write as `external_directory`. Disable with `IUMBTEMS_OPENCODE_AUTO=0`
+  or `.research/config.json` → `"opencode_auto": false`.
+- Manifests are per mode: `manifest.json` for the default/research flow and
+  `manifest.<mode>.json` otherwise, so concurrently running tools (brainstorm,
+  darkharvest) cannot clobber each other's scope DAG. Writes use unique temp
+  names plus an `fcntl` advisory lock at `.research/.manifest.lock`; readers must
+  not assume `manifest.json` — use `state_machine.find_any_manifest`.
 
 ## Releases
 - Bump `package.json` (+ lockfile sync) **and `.claude-plugin/plugin.json`**

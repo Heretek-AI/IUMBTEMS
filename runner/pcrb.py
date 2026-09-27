@@ -149,8 +149,10 @@ def _collect_claims(
 def _resolve_objective(base_dir: Path, objective: Optional[str]) -> Optional[str]:
     if objective:
         return objective
-    manifest_p = base_dir / "manifest.json"
-    if manifest_p.exists():
+    from runner.state_machine import find_any_manifest
+
+    manifest_p = find_any_manifest(base_dir)
+    if manifest_p is not None and manifest_p.exists():
         try:
             return json.loads(manifest_p.read_text(encoding="utf-8")).get("objective")
         except (OSError, json.JSONDecodeError):
