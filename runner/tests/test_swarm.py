@@ -319,19 +319,30 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
         # 1. Test OpenCode Plugin registration (A2b: thin forwarders + both
         #    name exports — canonical IUMBTEMS_TOOL_NAMES and the deprecated
         #    IUMBEMS_TOOL_NAMES alias). Object form: server() resolves to
-        #    {config, tool} with the tool map keyed by name.
+        #    V2 shape: tools + commands are registered through the owning
+        #    domains inside setup(); the declarative catalog is commandCatalog().
+        #    (The V1 `server()` config hook is gone — it wrote the deprecated
+        #    `command` key and registered nothing on a v2 host.)
         node_code_oc = """
-        import plugin, { IUMBTEMS_TOOL_NAMES, IUMBEMS_TOOL_NAMES } from "./plugins/opencode/index.js";
-        const shell = await plugin.server();
-        const tools = Object.values(shell.tool);
+        import plugin, { IUMBTEMS_TOOL_NAMES, IUMBEMS_TOOL_NAMES, commandCatalog } from "./plugins/opencode/index.js";
+        const toolMap = {};
+        const host = {
+          options: {},
+          command: {list: async () => ({data: []}), transform: async () => ({dispose: async () => {}}), reload: async () => {}},
+          tool: {
+            transform: async (fn) => { fn({add: (t) => { toolMap[t.name] = t; }}); return {dispose: async () => {}}; },
+            reload: async () => {}
+          },
+          session: {prompt: async () => ({})}
+        };
+        await plugin.setup(host);
+        const tools = Object.values(toolMap);
         const names = tools.map(t => t.name);
-        const cfg = {};
-        shell.config(cfg);
         console.log(JSON.stringify({
           names,
           canonical: IUMBTEMS_TOOL_NAMES,
           alias: IUMBEMS_TOOL_NAMES,
-          commands: Object.keys(cfg.command || {})
+          commands: Object.keys(commandCatalog())
         }));
         """
         res_oc = subprocess.run(
@@ -370,7 +381,7 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
         ]
         for t in expected_tools:
             self.assertIn(t, tools)
-        # Slash-command catalog registered via the server config hook.
+        # Slash-command catalog (V2 `commands` shape).
         for c in [
             "swarm",
             "grill",

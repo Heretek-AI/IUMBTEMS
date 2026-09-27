@@ -205,6 +205,13 @@ switch (command) {
 
   case 'doctor': {
     console.log('🔍 Checking Epistemic Swarm Environment:\n');
+
+    let pkgVersion = 'unknown';
+    try {
+      pkgVersion = JSON.parse(fs.readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8')).version || 'unknown';
+    } catch { /* keep 'unknown' */ }
+    console.log(`✅ epistemic-swarm: ${pkgVersion}`);
+
     const claudeCheck = spawnSync(resolveBinary('claude'), ['--version'], { encoding: 'utf-8' });
     if (claudeCheck.status === 0) {
       console.log(`✅ Claude Code: ${claudeCheck.stdout.trim()}`);
@@ -217,6 +224,32 @@ switch (command) {
 
     console.log(`✅ Node.js: ${process.version}`);
     console.log(`📁 Package Root: ${PKG_ROOT}`);
+
+    // opencode resolves this package as `@latest` into a per-fetch cache and
+    // keeps every generation. A session started against an old generation keeps
+    // running the old code until it is refreshed, so report what is cached.
+    try {
+      const cacheRoot = path.join(process.env.HOME || '', '.cache', 'opencode', 'npm', '@heretek-ai');
+      const pkgDir = path.join(cacheRoot, 'epistemic-swarm@latest');
+      if (fs.existsSync(pkgDir)) {
+        const generations = fs.readdirSync(pkgDir).filter((d) => /^\d+$/.test(d)).sort();
+        const newest = generations[generations.length - 1];
+        console.log(`\n🧩 OpenCode plugin cache: ${generations.length} generation(s) in ${pkgDir}`);
+        for (const g of generations.slice(-5)) {
+          const marker = g === newest ? '  <- newest' : '';
+          console.log(`   - ${g}${marker}`);
+        }
+        if (generations.length > 1) {
+          console.log('   ⚠️ Multiple generations cached. If slash commands vanish or the plugin');
+          console.log('      misbehaves, the running session may hold an older one — refresh with');
+          console.log('      `opencode plugin update` (or clear the cache dir) and relaunch.');
+        }
+      } else {
+        console.log('\n🧩 OpenCode plugin cache: not present (plugin not yet fetched)');
+      }
+    } catch (err) {
+      console.log(`\n🧩 OpenCode plugin cache: could not inspect (${err.message})`);
+    }
     break;
   }
 

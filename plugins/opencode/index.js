@@ -468,16 +468,20 @@ export const OPENCODE_COMMANDS = [
 ];
 
 /**
- * Register the command catalog into an OpenCode config object without
- * overwriting user-defined commands of the same name. Exported for tests.
+ * Command catalog shaped for a declarative opencode config.
+ *
+ * V2's schema key is `commands` (plural) — `command` is the deprecated V1 key
+ * and is ignored by a V2 host. Registration on a live V2 host goes through
+ * `command.transform` instead of this; this exists so tests and docs can assert
+ * the catalog shape and the correct key.
  */
-export function registerOpenCodeCommands(cfg = {}) {
-  cfg.command ??= {};
+export function commandCatalog() {
+  const out = {};
   for (const cmd of OPENCODE_COMMANDS) {
-    if (cfg.command[cmd.name]) continue;
-    cfg.command[cmd.name] = { description: cmd.description, template: cmd.template };
+    if (!cmd?.name) continue;
+    out[cmd.name] = { description: cmd.description, template: cmd.template };
   }
-  return cfg;
+  return out;
 }
 
 /** Tool map (object form) for the server hook; array catalog stays canonical. */
@@ -501,7 +505,7 @@ function buildToolMap() {
  * Reference pattern: @prevalentware/opencode-goal-plugin subscribes via
  * `context.event.subscribe({signal})`, detects idle as `session.idle` or an
  * idle `session.status`, continues via `context.session.prompt`, and preserves
- * state across compaction with the `experimental.session.compacting` hook.
+ * state across compaction with `context.session.hook("compaction", ...)`.
  * Every hook here is best-effort and never throws into the host.
  */
 
@@ -663,19 +667,74 @@ export function startStalenessNudge(host, root) {
   }
 }
 
+/**
+ * Plugin log. Never throws.
+ *
+ * Before this existed every setup block swallowed errors with a bare
+ * `catch {}`, so `--log-level all` showed only host-side symptoms and a
+ * registration failure was indistinguishable from success.
+ */
+function log(host, level, message, detail) {
+  let text = message;
+  if (detail !== undefined) {
+    try {
+      text = `${message} ${JSON.stringify(detail)}`;
+    } catch {
+      text = `${message} [unserialisable detail]`;
+    }
+  }
+  try {
+    const sink = host?.client?.app?.log;
+    if (typeof sink === 'function') {
+      Promise.resolve(sink.call(host.client.app, {
+        body: { service: 'iumbtems', level, message: text },
+      })).catch(() => {});
+      return;
+    }
+  } catch {
+    /* fall through to console */
+  }
+  try {
+    (console.error || console.log)(`[iumbtems] ${level}: ${text}`);
+  } catch {
+    /* logging must never throw into the host */
+  }
+}
+
+function errDetail(err) {
+  return { error: String(err?.message ?? err) };
+}
+
 async function registerHostCommands(host) {
-  if (typeof host?.command?.transform !== 'function') return;
-  let existing = new Set();
+  if (typeof host?.command?.transform !== 'function') return [];
+
+  // Snapshot which names are already taken *at setup time*. This snapshot is
+  // COPIED into the transform callback on every invocation and never grown.
+  //
+  // The host replays this callback on each command-registry rebuild, and the
+  // rebuilt registry starts from base config — so if the callback mutates a
+  // shared "already added" set, the second replay sees all six names as taken
+  // and adds nothing. That is exactly why the slash commands appeared at
+  // startup and vanished seconds later, and why only a full process restart
+  // brought them back (fresh setup -> fresh set).
+  //
+  // The reference plugin (@prevalentware/opencode-goal-plugin) gets this right
+  // with `const claimed = new Set(existingCommands)` inside the callback.
+  let existingNames = new Set();
   try {
     const listed = await host.command.list();
-    existing = new Set((listed?.data || []).map((c) => c?.name));
-  } catch {
-    /* treat as empty */
+    existingNames = new Set((listed?.data || []).map((c) => c?.name));
+  } catch (err) {
+    log(host, 'warn', 'command.list() failed; assuming an empty registry', errDetail(err));
   }
-  await host.command.transform((draft) => {
+
+  const registration = await host.command.transform((draft) => {
+    const claimed = new Set(existingNames); // fresh copy per replay
+    const added = [];
     for (const cmd of OPENCODE_COMMANDS) {
-      if (!cmd?.name || existing.has(cmd.name)) continue;
-      existing.add(cmd.name);
+      if (!cmd?.name || claimed.has(cmd.name)) continue;
+      claimed.add(cmd.name);
+      added.push(cmd.name);
       draft.add({
         name: cmd.name,
         description: cmd.description,
@@ -691,12 +750,27 @@ async function registerHostCommands(host) {
         },
       });
     }
+    log(host, 'debug', 'command.transform pass', {
+      added,
+      skippedAsPreexisting: [...existingNames].filter((n) => !added.includes(n)),
+    });
   });
+
+  // Force materialisation now instead of waiting for the host's own later
+  // reconcile (which is the pass that used to wipe them).
+  try {
+    if (typeof host.command.reload === 'function') await host.command.reload();
+    log(host, 'info', 'slash commands registered', { count: OPENCODE_COMMANDS.length });
+  } catch (err) {
+    log(host, 'warn', 'command.reload() failed', errDetail(err));
+  }
+
+  return registration ? [registration] : [];
 }
 
 async function registerHostTools(host) {
-  if (typeof host?.tool?.transform !== 'function') return;
-  await host.tool.transform((draft) => {
+  if (typeof host?.tool?.transform !== 'function') return [];
+  const registration = await host.tool.transform((draft) => {
     for (const [name, spec] of Object.entries(buildToolMap())) {
       draft.add({
         name,
@@ -709,7 +783,49 @@ async function registerHostTools(host) {
         },
       });
     }
+    log(host, 'debug', 'tool.transform pass', { count: Object.keys(buildToolMap()).length });
   });
+  try {
+    if (typeof host.tool.reload === 'function') await host.tool.reload();
+  } catch (err) {
+    log(host, 'warn', 'tool.reload() failed', errDetail(err));
+  }
+  return registration ? [registration] : [];
+}
+
+/**
+ * V2 compaction hook: keep .research state across context compaction.
+ *
+ * The V1 equivalent (`experimental.session.compacting`) lived in the old
+ * `server()` hook and was dead code on V2 — compaction silently lost the
+ * swarm state. Shape follows the reference plugin: push a text part onto
+ * `event.system`.
+ */
+async function registerCompactionHook(host, context) {
+  const hook = host?.session?.hook || context?.session?.hook;
+  if (typeof hook !== 'function') return [];
+  try {
+    const registration = await hook.call(host.session || context.session, 'compaction', async (event) => {
+      try {
+        const root =
+          event?.directory || host.location?.directory || context.location?.directory || event?.cwd;
+        if (!root) return;
+        const text = buildCompactionContext(root);
+        if (!text) return;
+        const system = Array.isArray(event?.system) ? event.system : null;
+        if (!system) return;
+        // Idempotent: the host may invoke this more than once per session.
+        if (system.some((part) => part?.type === 'text' && part?.text === text)) return;
+        system.push({ type: 'text', text });
+      } catch (err) {
+        log(host, 'warn', 'compaction hook failed', errDetail(err));
+      }
+    });
+    return registration ? [registration] : [];
+  } catch (err) {
+    log(host, 'warn', 'session.hook("compaction") unavailable', errDetail(err));
+    return [];
+  }
 }
 
 async function applyConfigOptions(host, opts, context) {
@@ -727,6 +843,7 @@ async function applyConfigOptions(host, opts, context) {
       updates,
       host.location?.directory || context.location?.directory || host.cwd
     );
+    log(host, 'debug', 'applied tuple options via iumbtems_config', updates);
   }
 }
 
@@ -740,6 +857,7 @@ function startNudgeSubscription(host, opts, context, cleanups) {
   if (root) {
     const stop = startStalenessNudge(nudgeHost, root);
     if (typeof stop === 'function') cleanups.add(stop);
+    log(host, 'debug', 'staleness nudge subscription', { root, started: typeof stop === 'function' });
   }
 }
 
@@ -751,57 +869,77 @@ export function createOpenCodePlugin(context = {}) {
     description:
       'I Use My Brain To Express My Self: High-integrity dialectic research, code audits, and open-source scouting',
 
-    server: async () => ({
-      // Config hook: slash-command catalog (mirrors the goal plugin's
-      // registerDesktopCommands pattern; never overwrites user commands).
-      config: (cfg) => registerOpenCodeCommands(cfg),
-      // Tool map (object form, as in the reference implementation).
-      tool: buildToolMap(),
-      // Compaction hook: preserve .research state (best-effort, silent skip
-      // when no workspace is present so compaction never breaks).
-      'experimental.session.compacting': async (input, output) => {
-        try {
-          const root = input?.directory ?? input?.location?.directory ?? process.cwd();
-          const ctx = buildCompactionContext(root);
-          if (ctx && output && Array.isArray(output.context)) output.context.push(ctx);
-        } catch {
-          /* never break compaction */
-        }
-      },
-    }),
-
+    // V2 only. The V1 `server()` factory and its `config` hook wrote the
+    // deprecated `command` key (V2's schema is `commands`), so they registered
+    // nothing on a V2 host — and carrying both shapes meant the real
+    // registration path had to guess which host it was talking to.
     setup: async (appContext) => {
       const host = appContext || {};
       const opts = context.options || host.options;
+      // Transform registrations must precede any slow work: the host may
+      // reconcile past a slow setup and never see the commands.
+      const registrations = [];
+      const adopt = (list) => {
+        for (const r of list || []) if (r) registrations.push(r);
+      };
+
+      log(host, 'info', 'iumbtems setup', {
+        version: PKG_VERSION,
+        directory: host.location?.directory || context.location?.directory || null,
+      });
+
       try {
-        await registerHostCommands(host);
-      } catch {
-        /* command transform is best-effort */
+        adopt(await registerHostCommands(host));
+      } catch (err) {
+        log(host, 'error', 'registering slash commands failed', errDetail(err));
       }
       try {
-        await registerHostTools(host);
-      } catch {
-        /* tool transform is best-effort */
+        adopt(await registerHostTools(host));
+      } catch (err) {
+        log(host, 'error', 'registering tools failed', errDetail(err));
       }
+      try {
+        adopt(await registerCompactionHook(host, context));
+      } catch (err) {
+        log(host, 'error', 'registering compaction hook failed', errDetail(err));
+      }
+      // Slow work AFTER registration.
       try {
         await applyConfigOptions(host, opts, context);
-      } catch {
-        /* options apply is best-effort */
+      } catch (err) {
+        log(host, 'warn', 'applying tuple options failed', errDetail(err));
       }
       try {
         startNudgeSubscription(host, opts, context, setupCleanups);
-      } catch {
-        /* lifecycle hooks are best-effort */
+      } catch (err) {
+        log(host, 'warn', 'starting staleness nudge failed', errDetail(err));
       }
-      return () => {
+
+      // The host calls this on unload/reload. It MUST be a function: returning
+      // a plain object used to abort the whole plugin reload with
+      // `TypeError: de is not a function`, dropping every registration.
+      return async () => {
+        let disposed = 0;
+        for (const registration of registrations) {
+          try {
+            await registration.dispose();
+            disposed += 1;
+          } catch (err) {
+            log(host, 'warn', 'registration.dispose() failed', errDetail(err));
+          }
+        }
+        registrations.length = 0;
+        let stopped = 0;
         for (const stop of setupCleanups) {
           try {
             stop();
-          } catch {
-            /* cleanup is best-effort */
+            stopped += 1;
+          } catch (err) {
+            log(host, 'warn', 'cleanup failed', errDetail(err));
           }
         }
         setupCleanups.clear();
+        log(host, 'info', 'iumbtems disposed', { registrations: disposed, nudges: stopped });
       };
     },
   };
