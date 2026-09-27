@@ -103,13 +103,29 @@ class TestRunnerBackendWiring(unittest.TestCase):
             r = self._runner(mode="scout")
             cmd = r.build_agent_cmd("obj")
             self.assertEqual(cmd[:2], ["opencode", "run"])
-            self.assertIn("oss-scout", cmd)
+            # No --agent by default: named agents fail hard unless the user
+            # installed the profile ("Agent not found", observed live).
+            self.assertNotIn("--agent", cmd)
+            self.assertIn("--format", cmd)
 
-    def test_research_beta_maps_to_beta_redteam(self):
+    def test_explicit_opencode_agent_config_opt_in(self):
+        with mock.patch.dict(os.environ, {"IUMBTEMS_HOST": "opencode"}):
+            r = self._runner(agent_overrides=None)
+            r.config["opencode_agent"] = "brainstormer"
+            cmd = r.build_agent_cmd("obj")
+            self.assertIn("--agent", cmd)
+            self.assertIn("brainstormer", cmd)
+
+    def test_system_prompt_inlined_for_opencode(self):
+        import tempfile as _tf
+
         with mock.patch.dict(os.environ, {"IUMBTEMS_HOST": "opencode"}):
             r = self._runner(mode="research")
-            self.assertIn("beta-redteam", r.build_agent_cmd("obj", role="beta"))
-            self.assertIn("alpha-thesis", r.build_agent_cmd("obj", role="alpha"))
+            spf = Path(_tf.mkdtemp()) / "sys.md"
+            spf.write_text("SYSTEM PROMPT BODY", encoding="utf-8")
+            cmd = r.build_agent_cmd("obj", system_prompt_file=spf)
+            self.assertIn("SYSTEM PROMPT BODY", cmd[2])
+            self.assertNotIn("--system-prompt", cmd)
 
     def test_explicit_override_beats_host_env(self):
         with mock.patch.dict(os.environ, {"IUMBTEMS_HOST": "opencode"}):
@@ -119,6 +135,17 @@ class TestRunnerBackendWiring(unittest.TestCase):
 
 
 class TestOpencodeOutputParsing(unittest.TestCase):
+    def test_extracts_real_part_text_events(self):
+        """Live shape: {"type":"text","part":{"type":"text","text":"..."}}."""
+        raw = "\n".join(
+            [
+                '{"type":"step_start","timestamp":1,"sessionID":"s","part":{"type":"step-start"}}',
+                '{"type":"text","timestamp":2,"sessionID":"s","part":{"id":"p1","type":"text","text":"pong"}}',
+                '{"type":"text","timestamp":3,"sessionID":"s","part":{"id":"p2","type":"text","text":"second"}}',
+            ]
+        )
+        self.assertEqual(_extract_opencode_text(raw), "pong\nsecond")
+
     def test_extracts_text_events(self):
         raw = "\n".join(
             [
@@ -137,6 +164,24 @@ class TestOpencodeOutputParsing(unittest.TestCase):
     def test_ignores_malformed_lines(self):
         raw = '{not json\n{"type":"result","result":"verdict: clean-room"}'
         self.assertEqual(_extract_opencode_text(raw), "verdict: clean-room")
+
+
+class TestSpawnHardening(unittest.TestCase):
+    def test_stdin_is_devnull_for_backend_spawns(self):
+        """Regression: held-open stdin pipe made `opencode run` hang forever."""
+        import tempfile
+        from runner.research_swarm import SwarmRunner
+
+        r = SwarmRunner(
+            base_dir=Path(tempfile.mkdtemp()), mock_mode=False, mode="research"
+        )
+        fake = mock.Mock()
+        fake.stdout = "ok"
+        with mock.patch("subprocess.run", return_value=fake) as run_mock:
+            r.run_claude_process("objective text")
+        kwargs = run_mock.call_args.kwargs
+        self.assertEqual(kwargs.get("stdin"), subprocess.DEVNULL)
+        self.assertEqual(kwargs.get("shell"), False)
 
 
 class TestDossierStdoutFallback(unittest.TestCase):

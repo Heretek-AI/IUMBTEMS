@@ -598,8 +598,14 @@ export function commandCatalog() {
   return out;
 }
 
-/** Tool map (object form) for the server hook; array catalog stays canonical. */
-function buildToolMap() {
+/** Tool map (object form) for the server hook; array catalog stays canonical.
+ *
+ * `hostRoot` is the host-reported project directory (host.location.directory).
+ * The tool context's own cwd is absent on some host builds — observed live:
+ * every dispatch fell back to process.cwd() (/home/john) and evidence escaped
+ * the project tree. Prefer toolContext.cwd, then hostRoot, then process.cwd().
+ */
+function buildToolMap(hostRoot = undefined) {
   return Object.fromEntries(
     TOOL_CATALOG.map((tool) => [
       tool.name,
@@ -607,7 +613,11 @@ function buildToolMap() {
         ...tool,
         options: { codemode: false },
         execute: async (args = {}, toolContext = undefined) =>
-          callMcp(tool.name, normalizeArgs(tool.name, args), toolContext?.cwd),
+          callMcp(
+            tool.name,
+            normalizeArgs(tool.name, args),
+            toolContext?.cwd || hostRoot
+          ),
       },
     ])
   );
@@ -892,15 +902,25 @@ async function registerHostTools(host) {
   // cannot be intercepted the way Claude Code's hooks/hooks.json does.
   // Steering lives in command templates (epistemic search first); a host API
   // for pre-execution guards would close this for real.
+  //
+  // hostRoot: the host's project directory. toolContext.cwd is absent on
+  // some host builds (observed live: dispatches fell back to process.cwd()
+  // = /home/john and evidence escaped the project tree), so capture the
+  // host-reported directory here as the fallback.
+  const hostRoot = host?.location?.directory || undefined;
   const registration = await host.tool.transform((draft) => {
-    for (const [name, spec] of Object.entries(buildToolMap())) {
+    for (const [name, spec] of Object.entries(buildToolMap(hostRoot))) {
       draft.add({
         name,
         description: spec.description,
         input: spec.input,
         options: { codemode: false },
         execute: async (args = {}, toolContext = undefined) => {
-          const r = await callMcp(name, normalizeArgs(name, args), toolContext?.cwd);
+          const r = await callMcp(
+            name,
+            normalizeArgs(name, args),
+            toolContext?.cwd || hostRoot
+          );
           return { content: r.content };
         },
       });

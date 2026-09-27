@@ -43,17 +43,6 @@ OPENCODE_RUN_BASE = ["opencode", "run"]
 # Fenced JSON block marker shared by orchestrator/dossier stdout parsers.
 _JSON_FENCE = "```json"
 
-# Swarm mode -> OpenCode agent carrying the equivalent system prompt
-# (`opencode run` has no --system-prompt flag; the prompt rides on --agent).
-MODE_OPENCODE_AGENT = {
-    "research": "alpha-thesis",
-    "audit": "code-auditor",
-    "scout": "oss-scout",
-    "hybrid": "alpha-thesis",
-    "brainstorm": "brainstormer",
-    "darkharvest": "darkharvester",
-}
-
 
 def _default_backend_cmd(config_host: Optional[str] = None) -> List[str]:
     """Host-native default backend argv.
@@ -99,7 +88,17 @@ _TEXT_EVENT_MARKERS = ("message", "text", "result", "output", "content")
 
 
 def _event_text(obj: Dict[str, Any]) -> Optional[str]:
-    """Text payload of one parsed event line, or None."""
+    """Text payload of one parsed event line, or None.
+
+    Handles the real `opencode run --format json` shape
+    ({"type":"text", "part":{"type":"text","text":"..."}}) plus top-level
+    variants for tolerance.
+    """
+    part = obj.get("part")
+    if isinstance(part, dict):
+        val = part.get("text")
+        if isinstance(val, str) and val.strip():
+            return val
     kind = str(obj.get("type", "")).lower()
     if kind and not any(m in kind for m in _TEXT_EVENT_MARKERS):
         return None
@@ -237,14 +236,16 @@ class SwarmRunner:
         return list(backend), model
 
     def _resolve_opencode_agent(self, role: str) -> Optional[str]:
-        """OpenCode agent carrying the system prompt for this mode/role."""
-        agents_cfg = self.config.get("agents") or {}
-        role_cfg = agents_cfg.get(role) or {}
-        if role_cfg.get("opencode_agent"):
-            return role_cfg["opencode_agent"]
-        if self.mode == "research" and role == "beta":
-            return "beta-redteam"
-        return MODE_OPENCODE_AGENT.get(self.mode)
+        """Explicitly configured OpenCode agent for this role, else None.
+
+        Default is None: the system prompt is inlined into the message because
+        `--agent <name>` fails hard ("Agent not found") unless the user
+        installed the snippet agent profiles — observed live, so the backend
+        must not depend on them. Set `agents.<role>.opencode_agent` (or the
+        top-level `opencode_agent` config key) to opt in.
+        """
+        role_cfg = (self.config.get("agents") or {}).get(role) or {}
+        return role_cfg.get("opencode_agent") or self.config.get("opencode_agent")
 
     def build_agent_cmd(
         self,
@@ -270,9 +271,16 @@ class SwarmRunner:
                 "backend (CLI flag injection)"
             )
         if _backend_family(backend) == "opencode":
-            return _build_opencode_cmd(
-                backend, prompt, model, self._resolve_opencode_agent(role)
-            )
+            agent = self._resolve_opencode_agent(role)
+            # No --system-prompt flag exists on `opencode run`, and --agent
+            # only works when the user installed the profile. Inline the
+            # system prompt into the message so runs never depend on
+            # host-side agent configuration.
+            if system_prompt_file and system_prompt_file.exists():
+                prompt = (
+                    system_prompt_file.read_text(encoding="utf-8") + "\n\n" + prompt
+                )
+            return _build_opencode_cmd(backend, prompt, model, agent)
         cmd = list(backend) + [prompt, "--tools", tools]
         if model:
             cmd.extend(["--model", str(model)])
@@ -303,6 +311,11 @@ class SwarmRunner:
                 text=True,
                 check=True,
                 cwd=str(PROJECT_ROOT),
+                # stdin MUST be DEVNULL: `opencode run` reads piped stdin to
+                # EOF before starting, and the MCP server's inherited stdin
+                # pipe is held open by the harness — every agent hung forever
+                # (observed live: 10+ min, 1s CPU, no network I/O).
+                stdin=subprocess.DEVNULL,
                 shell=False,
             )
             if family == "opencode":
