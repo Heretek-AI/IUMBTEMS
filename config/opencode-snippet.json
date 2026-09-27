@@ -1,10 +1,12 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "iumbtems": {
-      "type": "local",
-      "command": ["python3", "<IUMBTEMS_ROOT>/runner/mcp_server.py"],
-      "enabled": true
+    "servers": {
+      "iumbtems": {
+        "type": "local",
+        "command": ["python3", "<IUMBTEMS_ROOT>/runner/mcp_server.py"],
+        "enabled": true
+      }
     }
   },
   "plugins": [
@@ -17,187 +19,138 @@
       }
     }
   ],
-  "agent": {
+  "agents": {
     "code-auditor": {
       "description": "IUMBTEMS Codebase Auditor: Dialectic architecture mapping and vulnerability red-teaming with line-level proof.",
-      "tools": {
-        "read": true,
-        "write": true,
-        "grep": true,
-        "glob": true,
-        "iumbtems_code_audit": true,
-        "iumbtems_config": true
-      }
+      "mode": "all",
+      "permissions": [
+        { "action": "read", "resource": "*", "effect": "allow" },
+        { "action": "grep", "resource": "*", "effect": "allow" },
+        { "action": "glob", "resource": "*", "effect": "allow" },
+        { "action": "edit", "resource": "*", "effect": "allow" },
+        { "action": "shell", "resource": "*", "effect": "ask" }
+      ]
     },
     "oss-scout": {
       "description": "IUMBTEMS Open Source Scout: Discovers mature OSS packages, audits copyleft licensing, and generates clean-room blueprints.",
-      "tools": {
-        "read": true,
-        "write": true,
-        "grep": true,
-        "glob": true,
-        "iumbtems_oss_scout": true,
-        "iumbtems_config": true
-      }
+      "mode": "all",
+      "permissions": [
+        { "action": "read", "resource": "*", "effect": "allow" },
+        { "action": "grep", "resource": "*", "effect": "allow" },
+        { "action": "glob", "resource": "*", "effect": "allow" },
+        { "action": "edit", "resource": "*", "effect": "allow" },
+        { "action": "shell", "resource": "*", "effect": "ask" }
+      ]
     },
     "alpha-thesis": {
       "description": "IUMBTEMS Proponent Agent: Gathers corroborating primary sources, benchmark results, and empirical proofs.",
-      "tools": {
-        "bash": true,
-        "read": true,
-        "write": true,
-        "grep": true,
-        "glob": true,
-        "task": true,
-        "iumbtems_swarm_research": true,
-        "iumbtems_verify_quote": true,
-        "iumbtems_config": true
-      }
+      "mode": "all",
+      "permissions": [
+        { "action": "read", "resource": "*", "effect": "allow" },
+        { "action": "grep", "resource": "*", "effect": "allow" },
+        { "action": "glob", "resource": "*", "effect": "allow" },
+        { "action": "edit", "resource": "*", "effect": "allow" },
+        { "action": "shell", "resource": "*", "effect": "ask" },
+        { "action": "subagent", "resource": "*", "effect": "allow" }
+      ]
     },
     "beta-redteam": {
       "description": "IUMBTEMS Adversary Agent: Active falsification, red-teaming, hunting for counter-benchmarks, and edge-case failure modes.",
-      "tools": {
-        "bash": true,
-        "read": true,
-        "write": true,
-        "grep": true,
-        "glob": true,
-        "task": true,
-        "iumbtems_swarm_research": true,
-        "iumbtems_verify_quote": true
-      }
+      "mode": "all",
+      "permissions": [
+        { "action": "read", "resource": "*", "effect": "allow" },
+        { "action": "grep", "resource": "*", "effect": "allow" },
+        { "action": "glob", "resource": "*", "effect": "allow" },
+        { "action": "edit", "resource": "*", "effect": "allow" },
+        { "action": "shell", "resource": "*", "effect": "ask" },
+        { "action": "subagent", "resource": "*", "effect": "allow" }
+      ]
     },
     "epistemic-auditor": {
       "description": "IUMBTEMS Synthesizer & Auditor: Verifies verbatim source quotes, downgrades unverified claims, and calculates divergence.",
-      "tools": {
-        "read": true,
-        "write": true,
-        "grep": true,
-        "glob": true,
-        "iumbtems_verify_quote": true
-      }
+      "mode": "all",
+      "permissions": [
+        { "action": "read", "resource": "*", "effect": "allow" },
+        { "action": "grep", "resource": "*", "effect": "allow" },
+        { "action": "glob", "resource": "*", "effect": "allow" },
+        { "action": "edit", "resource": "*", "effect": "allow" }
+      ]
     },
     "brainstormer": {
       "description": "IUMBTEMS Lateral Brainstormer: divergent what-if features, paradigm inversions, falsifiable spikes (never bug fixes).",
-      "tools": {
-        "read": true,
-        "write": true,
-        "grep": true,
-        "glob": true,
-        "iumbtems_brainstorm": true,
-        "iumbtems_config": true
-      }
+      "mode": "all",
+      "permissions": [
+        { "action": "read", "resource": "*", "effect": "allow" },
+        { "action": "grep", "resource": "*", "effect": "allow" },
+        { "action": "glob", "resource": "*", "effect": "allow" },
+        { "action": "edit", "resource": "*", "effect": "allow" }
+      ]
     },
     "darkharvester": {
       "description": "IUMBTEMS Competitor Teardown: seed plus expand, product plus code matrix, per-feature harvest verdicts with SPDX attribution.",
-      "tools": {
-        "read": true,
-        "write": true,
-        "grep": true,
-        "glob": true,
-        "iumbtems_darkharvest": true,
-        "iumbtems_verify_quote": true,
-        "iumbtems_config": true
-      }
+      "mode": "all",
+      "permissions": [
+        { "action": "read", "resource": "*", "effect": "allow" },
+        { "action": "grep", "resource": "*", "effect": "allow" },
+        { "action": "glob", "resource": "*", "effect": "allow" },
+        { "action": "edit", "resource": "*", "effect": "allow" }
+      ]
     },
     "manager": {
       "description": "IUMBTEMS Factory Manager: grill-gated phased builds. Owns gates, swarm dispatch, roadmap synthesis, QA tiebreaks. Never writes code.",
       "mode": "primary",
-      "temperature": 0.2,
-      "permission": {
-        "edit": "deny",
-        "bash": "ask",
-        "task": {
-          "*": "deny",
-          "factory-*": "allow",
-          "programmer": "allow",
-          "qa-a": "allow",
-          "qa-b": "allow",
-          "brainstormer": "allow",
-          "darkharvester": "allow"
-        }
-      },
-      "tools": {
-        "read": true,
-        "write": true,
-        "grep": true,
-        "glob": true,
-        "task": true,
-        "iumbtems_brainstorm": true,
-        "iumbtems_darkharvest": true,
-        "iumbtems_verify_quote": true,
-        "iumbtems_socratic_frontier": true,
-        "iumbtems_config": true
-      }
+      "system": "You are the IUMBTEMS Factory Manager. Own gate discipline: grill until the frontier is settled, run the brainstorm and darkharvest swarms, synthesize .roadmap phase dossiers, spawn the programmer per phase, run qa-a and qa-b, and tiebreak their disagreements. Never write implementation code. Use the iumbtems_factory tool for run state. Explicit user approval advances each gate.",
+      "permissions": [
+        { "action": "edit", "resource": "*", "effect": "deny" },
+        { "action": "shell", "resource": "*", "effect": "ask" },
+        { "action": "subagent", "resource": "*", "effect": "deny" },
+        { "action": "subagent", "resource": "programmer", "effect": "allow" },
+        { "action": "subagent", "resource": "qa-a", "effect": "allow" },
+        { "action": "subagent", "resource": "qa-b", "effect": "allow" },
+        { "action": "subagent", "resource": "brainstormer", "effect": "allow" },
+        { "action": "subagent", "resource": "darkharvester", "effect": "allow" }
+      ]
     },
     "programmer": {
       "description": "IUMBTEMS Factory Programmer: implements exactly one phase brief per spawn. Cites phase evidence hashes. Never invokes swarms or other programmers.",
       "mode": "subagent",
-      "temperature": 0.3,
-      "permission": {
-        "edit": "allow",
-        "bash": "ask",
-        "task": {
-          "*": "deny"
-        }
-      },
-      "tools": {
-        "read": true,
-        "write": true,
-        "bash": true,
-        "grep": true,
-        "glob": true,
-        "iumbtems_verify_quote": true
-      }
+      "system": "You are the IUMBTEMS Factory Programmer. Implement exactly one phase brief per spawn. Cite phase evidence hashes. Never invoke swarms or other programmers. If the brief is ambiguous or untestable, stop and ask the manager.",
+      "permissions": [
+        { "action": "edit", "resource": "*", "effect": "allow" },
+        { "action": "shell", "resource": "*", "effect": "ask" },
+        { "action": "subagent", "resource": "*", "effect": "deny" }
+      ]
     },
     "qa-a": {
       "description": "IUMBTEMS Factory QA (functional): verifies phase acceptance criteria pass on the real surface. Read-only plus test execution. Diverged prompt from qa-b.",
       "mode": "subagent",
-      "temperature": 0.1,
-      "permission": {
-        "edit": "deny",
-        "bash": "ask",
-        "task": {
-          "*": "deny"
-        }
-      },
-      "tools": {
-        "read": true,
-        "bash": true,
-        "grep": true,
-        "glob": true
-      }
+      "system": "You are the IUMBTEMS Factory functional QA. Verify each phase acceptance criterion on the real surface with tests and inspection. Read-only plus test execution; never edit code. Return pass|fail(reason)|conditional(note).",
+      "permissions": [
+        { "action": "edit", "resource": "*", "effect": "deny" },
+        { "action": "shell", "resource": "*", "effect": "ask" },
+        { "action": "subagent", "resource": "*", "effect": "deny" }
+      ]
     },
     "qa-b": {
       "description": "IUMBTEMS Factory QA (adversarial): hunts edge cases, regressions, and acceptance loopholes the functional pass missed. Read-only plus test execution. Diverged prompt from qa-a.",
       "mode": "subagent",
-      "temperature": 0.4,
-      "permission": {
-        "edit": "deny",
-        "bash": "ask",
-        "task": {
-          "*": "deny"
-        }
-      },
-      "tools": {
-        "read": true,
-        "bash": true,
-        "grep": true,
-        "glob": true
-      }
+      "system": "You are the IUMBTEMS Factory adversarial QA. Attack the phase: edge cases, regressions, vacuous acceptance criteria, error paths, resource limits. Read-only plus test execution; never edit code. Return pass|fail(reason)|conditional(note) with reproductions.",
+      "permissions": [
+        { "action": "edit", "resource": "*", "effect": "deny" },
+        { "action": "shell", "resource": "*", "effect": "ask" },
+        { "action": "subagent", "resource": "*", "effect": "deny" }
+      ]
     }
   },
-  "skills": {
-    "paths": [
-      "./skills/grilling",
-      "./skills/research_cache",
-      "./skills/epistemic_search",
-      "./skills/swarm_config",
-      "./skills/code_audit",
-      "./skills/oss_scout",
-      "./skills/brainstorming",
-      "./skills/darkharvest",
-      "./skills/factory"
-    ]
-  }
+  "skills": [
+    "./skills/grilling",
+    "./skills/research_cache",
+    "./skills/epistemic_search",
+    "./skills/swarm_config",
+    "./skills/code_audit",
+    "./skills/oss_scout",
+    "./skills/brainstorming",
+    "./skills/darkharvest",
+    "./skills/factory"
+  ]
 }

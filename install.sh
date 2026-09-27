@@ -109,7 +109,7 @@ except Exception as e:
 EOF
 fi
 
-# 5. OpenCode V2 integration (plugin tuple, agents, MCP server — merge only)
+# 5. OpenCode V2 integration (plugins/agents/skills/mcp.servers — merge only)
 OPENCODE_JSON="$HOME/.config/opencode/opencode.json"
 echo "🔧 Merging OpenCode V2 configuration into $OPENCODE_JSON..."
 python3 - <<EOF
@@ -124,91 +124,114 @@ OPTION_KEYS = {"search_engine", "max_iterations", "mode", "divergence_threshold"
 oc_path.parent.mkdir(parents=True, exist_ok=True)
 cfg = json.loads(oc_path.read_text(encoding="utf-8")) if oc_path.exists() else {}
 
-# --- plugin entry: tuple form [package, options]; repair bare-object form ---
-plugins = cfg.get("plugin", [])
+# --- plugins (V2): object form {"package", "options"}; migrate legacy `plugin` ---
+plugins = cfg.get("plugins")
 if not isinstance(plugins, list):
-    print("   ⚠️ 'plugin' is not a list; leaving untouched")
-    plugins = cfg.get("plugin", [])
-else:
-    repaired = []
-    i = 0
-    changed = False
-    while i < len(plugins):
-        item = plugins[i]
-        # Bare options object following our package string (or standalone):
-        # fold into a tuple instead of leaving an invalid entry.
-        if isinstance(item, dict) and set(item) & OPTION_KEYS:
-            prev_is_pkg = repaired and repaired[-1] == PKG
-            prev_is_tuple = (
-                repaired and isinstance(repaired[-1], list)
-                and repaired[-1] and repaired[-1][0] == PKG
-            )
-            if prev_is_pkg:
-                repaired[-1] = [PKG, item]
-                changed = True
-                print("   ~ Repaired bare options object into tuple entry")
-            elif prev_is_tuple:
-                merged = {**(repaired[-1][1] if len(repaired[-1]) > 1 else {}), **item}
-                repaired[-1] = [PKG, merged]
-                changed = True
-                print("   ~ Folded stray options into existing tuple entry")
-            else:
-                repaired.append([PKG, item])
-                changed = True
-                print("   ~ Attached stray options object to new tuple entry")
-        else:
-            repaired.append(item)
-        i += 1
-    if not any((p == PKG or (isinstance(p, list) and p and p[0] == PKG)) for p in repaired):
-        repaired.append([PKG, {"search_engine": "duckduckgo", "max_iterations": 2, "mode": "research"}])
-        changed = True
-        print(f"   + Added plugin entry: {PKG}")
-    else:
-        print(f"   ℹ️ Plugin entry already configured: {PKG}")
-    cfg["plugin"] = repaired
+    plugins = []
 
-# --- agents: merge snippet definitions, never overwrite user agents ---
+# Migrate any legacy V1 `plugin` entries: bare strings, [pkg, options] tuples,
+# and the "wild" malformation where a bare options object trails our package.
+legacy = cfg.get("plugin")
+if isinstance(legacy, list):
+    i = 0
+    while i < len(legacy):
+        item = legacy[i]
+        if isinstance(item, str):
+            if item == PKG and i + 1 < len(legacy) and isinstance(legacy[i + 1], dict) and (set(legacy[i + 1]) & OPTION_KEYS):
+                plugins.append({"package": PKG, "options": legacy[i + 1]})
+                i += 2
+                continue
+            plugins.append(item)
+        elif isinstance(item, list) and item:
+            opts = item[1] if len(item) > 1 and isinstance(item[1], dict) else {}
+            plugins.append({"package": item[0], "options": opts})
+        elif isinstance(item, dict):
+            if "package" in item:
+                plugins.append(item)
+            elif set(item) & OPTION_KEYS:
+                plugins.append({"package": PKG, "options": item})
+            else:
+                plugins.append(item)
+        i += 1
+    cfg.pop("plugin", None)
+    print("   ~ Migrated legacy 'plugin' entries to V2 'plugins' (object form)")
+
+# Normalize our entry to the V2 object form and ensure default options exist.
+DEFAULT_OPTIONS = {"search_engine": "duckduckgo", "max_iterations": 2, "mode": "research"}
+our = None
+for idx, entry in enumerate(plugins):
+    if entry == PKG:
+        our = {"package": PKG, "options": {}}
+        plugins[idx] = our
+    elif isinstance(entry, dict) and entry.get("package") == PKG:
+        our = entry
+        entry["options"] = {**DEFAULT_OPTIONS, **(entry.get("options") or {})}
+if our is None:
+    our = {"package": PKG, "options": dict(DEFAULT_OPTIONS)}
+    plugins.append(our)
+    print(f"   + Added plugin entry: {PKG}")
+else:
+    print(f"   ℹ️ Plugin entry already configured: {PKG}")
+cfg["plugins"] = plugins
+
+# --- agents (V2 plural): merge snippet definitions, never overwrite users ---
 try:
     snippet = json.loads((repo / "config" / "opencode-snippet.json").read_text(encoding="utf-8"))
-    agents = cfg.setdefault("agent", {})
-    for name, definition in snippet.get("agent", {}).items():
+    agents = cfg.setdefault("agents", {})
+    legacy_agents = cfg.get("agent")
+    if isinstance(legacy_agents, dict):
+        for name, definition in legacy_agents.items():
+            agents.setdefault(name, definition)
+        cfg.pop("agent", None)
+        print("   ~ Migrated legacy 'agent' entries to V2 'agents'")
+    for name, definition in (snippet.get("agents") or snippet.get("agent") or {}).items():
         if name not in agents:
             agents[name] = definition
             print(f"   + Added agent: {name}")
         else:
             print(f"   ℹ️ Agent already configured: {name}")
 
-    # Skills: snippet paths are repo-relative ("./skills/x") which breaks
-    # from ~/.config — merge as absolute paths, repairing relative entries.
+    # Skills: V2 is a list of directories/URLs. Snippet paths are repo-relative
+    # ("./skills/x") which breaks from ~/.config — merge as absolute paths and
+    # repair a legacy `{"paths": [...]}` object or relative entries in place.
     import os as _os
     wanted = []
-    for sp in snippet.get("skills", {}).get("paths", []):
+    for sp in snippet.get("skills") or []:
         wanted.append(sp if _os.path.isabs(sp) else str(repo / sp.lstrip("./")))
-    skills_cfg = cfg.setdefault("skills", {})
-    paths = skills_cfg.setdefault("paths", [])
-    # Repair repo-relative entries in place, then append missing absolutes.
-    for i, existing in enumerate(list(paths)):
+    skills = cfg.get("skills")
+    if isinstance(skills, dict):
+        skills = cfg["skills"] = list(skills.get("paths") or [])
+        print("   ~ Migrated legacy skills.paths to the V2 skills list")
+    elif not isinstance(skills, list):
+        skills = cfg["skills"] = []
+    for i, existing in enumerate(list(skills)):
+        if existing in wanted:
+            continue
         for abs_sp in wanted:
-            if existing == abs_sp:
-                break
             rel = "./" + str(Path(abs_sp).relative_to(repo)) if str(abs_sp).startswith(str(repo)) else None
             if rel and existing == rel:
-                paths[i] = abs_sp
+                skills[i] = abs_sp
                 print(f"   ~ Repaired relative skill path: {rel} -> {abs_sp}")
                 break
     for abs_sp in wanted:
-        if abs_sp not in paths:
-            paths.append(abs_sp)
+        if abs_sp not in skills:
+            skills.append(abs_sp)
             print(f"   + Added skill path: {abs_sp}")
         else:
             print(f"   ℹ️ Skill path already configured: {abs_sp}")
 except Exception as e:
     print(f"   ⚠️ Non-critical warning merging agents: {e}")
 
-# --- MCP server: absolute runner path (relative paths only work at repo root) ---
+# --- MCP server (V2 `mcp.servers`): absolute runner path ---
 mcp = cfg.setdefault("mcp", {})
-if "iumbtems" not in mcp:
-    mcp["iumbtems"] = {
+servers = mcp.setdefault("servers", {})
+legacy_mcp = mcp.get("iumbtems")
+if isinstance(legacy_mcp, dict):
+    servers.setdefault("iumbtems", legacy_mcp)
+    mcp.pop("iumbtems", None)
+    print("   ~ Migrated legacy mcp.iumbtems to V2 mcp.servers.iumbtems")
+if "iumbtems" not in servers:
+    servers["iumbtems"] = {
         "type": "local",
         "command": ["python3", str(repo / "runner" / "mcp_server.py")],
         "enabled": True,

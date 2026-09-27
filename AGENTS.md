@@ -53,6 +53,12 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   agent hunted the filesystem for its own skill prose. Commands that pin an
   agent also call `session.switchAgent` (best-effort, shape-tolerant) so the
   pinned role is actually active.
+- V2 `AgentEditor` has NO `add()` — only `list/get/default/update/remove`, and
+  `update(id, mutate)` upserts (seeded from `Agent.Info.default(id)`; the
+  first-party `opencode.config.agent` uses the same path). The plugin registers
+  profiles with `update`; calling `add` made opencode v2.0.18 disable the whole
+  plugin (`disabled plugin after transform failure`, state=agent). The shipped
+  snippet is V2-shaped: `agents` (plural), `skills` as a list, `mcp.servers`.
 - Agent runtime backend is host-native by default (`claude -p` on Claude Code,
   `opencode run` on OpenCode via `IUMBTEMS_HOST`). Override with
   `--backend {auto,claude,opencode}`, `IUMBTEMS_BACKEND_<ROLE>`,

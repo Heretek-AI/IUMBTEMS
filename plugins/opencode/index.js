@@ -920,7 +920,8 @@ async function registerHostCommands(host) {
           await host.session.prompt({
             ...prompt,
             sessionID: input?.sessionID,
-            ...(cmd.agent ? { agent: cmd.agent } : {}),
+            // No `agent` field here: V2's SessionPromptInput has none (agent
+            // mentions only). Pinning happens via switchAgent above.
             text: cmd.template.split('$ARGUMENTS').join(String(args).trim()),
             delivery: input?.delivery,
           });
@@ -1028,7 +1029,9 @@ async function registerHostAgents(host) {
   // every step of a factory session executed as `build`, not `manager`).
   if (typeof host?.agent?.transform !== 'function') return [];
   const snippet = readPkgJson(path.join(PKG_ROOT, 'config', 'opencode-snippet.json'));
-  const agentDefs = (snippet && snippet.agent) || {};
+  // V2 config key is `agents` (plural); accept the legacy `agent` key for one
+  // release so older snippet copies keep working.
+  const agentDefs = (snippet && (snippet.agents || snippet.agent)) || {};
   if (Object.keys(agentDefs).length === 0) return [];
 
   let existing = new Set();
@@ -1046,7 +1049,7 @@ async function registerHostAgents(host) {
       if (claimed.has(name)) continue;
       claimed.add(name);
       added.push(name);
-      draft.add(toAgentInfo(name, def));
+      registerAgent(draft, name, def);
     }
     log(host, 'debug', 'agent.transform pass', { added });
   });
@@ -1071,18 +1074,49 @@ const FACTORY_SYSTEM = {
     'You are the IUMBTEMS Factory adversarial QA. Attack the phase: edge cases, regressions, vacuous acceptance criteria, error paths, resource limits. Read-only plus test execution; never edit code. Return pass|fail(reason)|conditional(note) with reproductions.',
 };
 
-/** Map one snippet agent definition to an Agent.Info shape. */
+/** V1 permission/tool action names -> V2 permission action names. */
+const ACTION_ALIASES = { bash: 'shell', task: 'subagent', patch: 'edit', write: 'edit' };
+
+function normalizeAction(action) {
+  const key = String(action || '').trim();
+  return ACTION_ALIASES[key] || key;
+}
+
+function normalizeEffect(effect) {
+  return effect === 'deny' || effect === 'ask' ? effect : 'allow';
+}
+
+/**
+ * Map one snippet agent definition to an Agent.Info shape.
+ *
+ * Accepts the V2 config form (`permissions: [{action,resource,effect}]`) and
+ * still understands the legacy V1 form (`tools` map + `permission` map) so an
+ * older snippet copy is not silently dropped.
+ */
 function toAgentInfo(name, def) {
   const permissions = [];
+  for (const rule of def?.permissions || []) {
+    if (rule && typeof rule === 'object' && typeof rule.action === 'string') {
+      permissions.push({
+        action: normalizeAction(rule.action),
+        resource: typeof rule.resource === 'string' ? rule.resource : '*',
+        effect: normalizeEffect(rule.effect),
+      });
+    }
+  }
   for (const [tool, enabled] of Object.entries(def?.tools || {})) {
-    permissions.push({ action: tool, resource: '*', effect: enabled ? 'allow' : 'deny' });
+    permissions.push({
+      action: normalizeAction(tool),
+      resource: '*',
+      effect: enabled ? 'allow' : 'deny',
+    });
   }
   for (const [key, value] of Object.entries(def?.permission || {})) {
     if (typeof value === 'string') {
-      permissions.push({ action: key, resource: '*', effect: value });
+      permissions.push({ action: normalizeAction(key), resource: '*', effect: normalizeEffect(value) });
     } else if (value && typeof value === 'object') {
       for (const [resource, effect] of Object.entries(value)) {
-        permissions.push({ action: key, resource, effect });
+        permissions.push({ action: normalizeAction(key), resource, effect: normalizeEffect(effect) });
       }
     }
   }
@@ -1097,9 +1131,39 @@ function toAgentInfo(name, def) {
   };
   if (def?.steps) info.steps = def.steps;
   if (def?.color) info.color = def.color;
-  const system = FACTORY_SYSTEM[name];
+  // The canonical short role prompt wins; fall back to a snippet-provided one.
+  const system = FACTORY_SYSTEM[name] || def?.system;
   if (system) info.system = system;
   return info;
+}
+
+/**
+ * Register one agent profile through a V2 `AgentEditor`.
+ *
+ * V2's AgentEditor has NO `add()` — only `list/get/default/update/remove`
+ * (verified against @opencode/plugin@2.0.18 dist/promise/agent.d.ts). Calling
+ * `draft.add(...)` threw `draft.add is not a function` and the host disabled
+ * the whole plugin ("disabled plugin after transform failure", state=agent).
+ *
+ * `update(id, mutate)` upserts: when the id is new the host seeds the draft
+ * from `Agent.Info.default(id)` plus global permission rules, then hands it to
+ * the callback (opencode v2.0.18 agent registry:
+ * `c = agents.get(d) ?? {...default(d), permissions:[...default.permissions, ...I]}`).
+ * The first-party `opencode.config.agent` plugin registers config agents the
+ * same way, so this is the supported path for creating profile agents.
+ *
+ * Seeded permissions are kept and ours appended: rule matching is
+ * last-match-wins, so an explicit `edit: deny` still beats the default allow.
+ */
+function registerAgent(editor, name, def) {
+  const info = toAgentInfo(name, def);
+  const rules = info.permissions || [];
+  const profile = { ...info };
+  delete profile.permissions;
+  editor.update(name, (agent) => {
+    Object.assign(agent, profile);
+    agent.permissions = [...(agent.permissions || []), ...rules];
+  });
 }
 
 /** Canonical skills the plugin registers so agents never hunt the filesystem. */

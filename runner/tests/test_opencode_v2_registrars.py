@@ -7,6 +7,12 @@ ran as the generic `build` agent, and skills were undiscoverable — the agent
 ran `find / -name factory.py` to learn its own mechanics. These tests pin the
 plugin-side fix: profiles and skills are registered through the V2 domains, and
 the command switches the session agent.
+
+Regression (0.7.6, opencode v2.0.18): the mock below used to hand the plugin an
+`{add}` agent editor. The real V2 `AgentEditor` has NO `add()` — only
+`list/get/default/update/remove`, where `update()` upserts. The plugin's
+`draft.add(...)` threw `draft.add is not a function` and the host disabled the
+whole plugin. The mock now models the real editor so that defect cannot pass.
 """
 
 import json
@@ -16,21 +22,71 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-V2_HOST = """
-const reg = {agents: [], skills: [], commands: [], tools: [], prompts: [], switches: []};
+# Faithful V2 AgentEditor: `update(id, fn)` upserts, seeding a new entry from
+# Agent.Info.default(id) (mode primary, allow-list) + global rules, exactly as
+# the opencode v2.0.18 agent registry does. No `add`.
+AGENT_EDITOR_JS = """
+function makeAgentEditor(reg) {
+  const store = new Map();
+  return {
+    store,
+    editor: {
+      list: () => [...store.values()],
+      get: (id) => store.get(id),
+      default: (id) => { reg.defaultAgent = id; },
+      update: (id, fn) => {
+        reg.agentUpdates.push(id);
+        let agent = store.get(id);
+        if (!agent) {
+          agent = {
+            id, name: id,
+            request: {settings: {}, headers: {}, body: {}},
+            mode: 'primary', hidden: false,
+            permissions: [{action: '*', resource: '*', effect: 'allow'}],
+          };
+          store.set(id, agent);
+        }
+        fn(agent);
+        agent.id = id;
+      },
+      remove: (id) => { store.delete(id); },
+    },
+  };
+}
+function seedAgent(box, id) {
+  box.store.set(id, {
+    id, name: id,
+    request: {settings: {}, headers: {}, body: {}},
+    mode: 'primary', hidden: false,
+    permissions: [{action: '*', resource: '*', effect: 'allow'}],
+  });
+}
+"""
+
+V2_HOST = (
+    AGENT_EDITOR_JS
+    + """
+const reg = {skills: [], commands: [], tools: [], prompts: [], switches: [], agentUpdates: [], defaultAgent: undefined};
+const agentBox = makeAgentEditor(reg);
 const host = {
   options: {},
   location: {directory: '/home/john/Projects/STC'},
   command: {list: async()=>({data:[]}), transform: async(fn)=>{fn({add:(x)=>{reg.commands.push(x);}}); return {dispose:()=>{}};}, reload: async()=>{}},
   tool: {transform: async(fn)=>{fn({add:(t)=>{reg.tools.push(t);}}); return {dispose:()=>{}};}, reload: async()=>{}},
-  agent: {list: async()=>({data:[]}), transform: async(fn)=>{fn({add:(a)=>{reg.agents.push(a);}}); return {dispose:()=>{}};}, reload: async()=>{}},
+  agent: {
+    list: async()=>({data: [...agentBox.store.values()].map((a)=>({id: a.id, name: a.name}))}),
+    transform: async(fn)=>{fn(agentBox.editor); return {dispose:()=>{}};},
+    reload: async()=>{}
+  },
   skill: {list: async()=>({data:[]}), transform: async(fn)=>{fn({add:(s)=>{reg.skills.push(s);}}); return {dispose:()=>{}};}, reload: async()=>{}},
   session: {
     prompt: async(p)=>{reg.prompts.push(p); return {};},
     switchAgent: async(a)=>{reg.switches.push(a); return {};}
   }
 };
+const agents = () => [...agentBox.store.values()];
 """
+)
 
 
 def run_node(code):
@@ -54,16 +110,17 @@ class TestV2Registration(unittest.TestCase):
             + """
             import plugin from "./plugins/opencode/index.js";
             await plugin.setup(host);
-            const manager = reg.agents.find(a => a.id === 'manager');
-            const qa = reg.agents.find(a => a.id === 'qa-a');
+            const manager = agents().find(a => a.id === 'manager');
+            const qa = agents().find(a => a.id === 'qa-a');
             const factory = reg.skills.find(s => s.id === 'factory');
             console.log(JSON.stringify({
-              agentIds: reg.agents.map(a => a.id).sort(),
+              agentIds: agents().map(a => a.id).sort(),
               managerMode: manager?.mode,
               managerSystem: Boolean(manager?.system),
               managerPermissions: manager?.permissions?.length || 0,
               managerDeniesEdit: (manager?.permissions || []).some(p => p.action === 'edit' && p.effect === 'deny'),
               qaMode: qa?.mode,
+              qaDeniesEdit: (qa?.permissions || []).some(p => p.action === 'edit' && p.effect === 'deny'),
               skillIds: reg.skills.map(s => s.id).sort(),
               factoryHasContent: Boolean(factory?.content?.includes('Factory')),
               factoryPath: factory?.path,
@@ -85,10 +142,45 @@ class TestV2Registration(unittest.TestCase):
         self.assertTrue(d["managerSystem"])
         self.assertTrue(d["managerDeniesEdit"], "manager must not edit code")
         self.assertEqual(d["qaMode"], "subagent")
+        self.assertTrue(d["qaDeniesEdit"], "qa must not edit code")
         self.assertIn("factory", d["skillIds"])
         self.assertIn("darkharvest", d["skillIds"])
         self.assertTrue(d["factoryHasContent"])
         self.assertTrue(d["factoryPath"].endswith("skills/factory/SKILL.md"))
+
+    def test_agent_editor_never_calls_add(self):
+        """Pin the exact 0.7.6 failure: AgentEditor has no `add`."""
+        res = run_node(
+            """
+            const reg = {agentUpdates: []};
+            const editor = {
+              list: () => [],
+              get: () => undefined,
+              default: () => {},
+              update: (id, fn) => {
+                reg.agentUpdates.push(id);
+                fn({id, permissions: []});
+              },
+              remove: () => {},
+              // intentionally NO add
+            };
+            const host = {
+              options: {}, location: {directory: '/tmp'},
+              command: {list: async()=>({data:[]}), transform: async(fn)=>{fn({add:()=>{}}); return {dispose:()=>{}};}, reload: async()=>{}},
+              tool: {transform: async()=>({dispose:()=>{}}), reload: async()=>{}},
+              agent: {list: async()=>({data:[]}), transform: async(fn)=>{fn(editor); return {dispose:()=>{}};}, reload: async()=>{}},
+              skill: {list: async()=>({data:[]}), transform: async(fn)=>{fn({add:()=>{}}); return {dispose:()=>{}};}, reload: async()=>{}},
+              session: {prompt: async()=>({})}
+            };
+            import plugin from "./plugins/opencode/index.js";
+            await plugin.setup(host);
+            console.log(JSON.stringify({agentUpdates: reg.agentUpdates}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        d = last_json_object(res.stdout)
+        self.assertIn("manager", d["agentUpdates"])
+        self.assertIn("qa-b", d["agentUpdates"])
 
     def test_command_switches_session_agent(self):
         res = run_node(
@@ -100,7 +192,7 @@ class TestV2Registration(unittest.TestCase):
             await factory.execute({sessionID: 'ses_test', prompt: {text: 'Cockpit beta'}, delivery: 'steer'});
             console.log(JSON.stringify({
               switches: reg.switches,
-              promptAgent: reg.prompts[0]?.agent,
+              promptAgentKey: Object.prototype.hasOwnProperty.call(reg.prompts[0] || {}, 'agent'),
               promptHasArena: reg.prompts[0]?.text?.includes('Cockpit beta'),
             }));
             """
@@ -108,39 +200,44 @@ class TestV2Registration(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         d = last_json_object(res.stdout)
         self.assertTrue(d["switches"], "switchAgent was never called")
-        self.assertEqual(d["promptAgent"], "manager")
+        self.assertEqual(d["switches"][0]["agent"], "manager")
+        # V2 SessionPromptInput has no `agent` field; pinning is switchAgent's job.
+        self.assertFalse(d["promptAgentKey"])
         self.assertTrue(d["promptHasArena"])
 
     def test_preexisting_agent_and_skill_preserved(self):
         res = run_node(
-            """
-            const agents = [], skills = [];
+            AGENT_EDITOR_JS
+            + """
+            const reg = {agentUpdates: [], skills: []};
+            const agentBox = makeAgentEditor(reg);
+            seedAgent(agentBox, 'manager'); // user-defined manager wins
             const host = {
               options: {}, location: {directory: '/tmp'},
               command: {list: async()=>({data:[]}), transform: async(fn)=>{fn({add:()=>{}}); return {dispose:()=>{}};}, reload: async()=>{}},
               tool: {transform: async()=>({dispose:()=>{}}), reload: async()=>{}},
               agent: {
-                list: async()=>({data:[{id:'manager'}]}),
-                transform: async(fn)=>{fn({add:(a)=>{agents.push(a.id);}}); return {dispose:()=>{}};},
+                list: async()=>({data: [...agentBox.store.values()].map((a)=>({id: a.id}))}),
+                transform: async(fn)=>{fn(agentBox.editor); return {dispose:()=>{}};},
                 reload: async()=>{}
               },
               skill: {
                 list: async()=>({data:[{id:'factory'}]}),
-                transform: async(fn)=>{fn({add:(s)=>{skills.push(s.id);}}); return {dispose:()=>{}};},
+                transform: async(fn)=>{fn({add:(s)=>{reg.skills.push(s.id);}}); return {dispose:()=>{}};},
                 reload: async()=>{}
               },
               session: {prompt: async()=>({})}
             };
             import plugin from "./plugins/opencode/index.js";
             await plugin.setup(host);
-            console.log(JSON.stringify({agents, skills}));
+            console.log(JSON.stringify({agentUpdates: reg.agentUpdates, skills: reg.skills}));
             """
         )
         self.assertEqual(res.returncode, 0, res.stderr)
         d = last_json_object(res.stdout)
-        self.assertNotIn("manager", d["agents"], "user-defined manager must win")
+        self.assertNotIn("manager", d["agentUpdates"], "user-defined manager must win")
         self.assertNotIn("factory", d["skills"], "user-defined factory skill must win")
-        self.assertIn("qa-a", d["agents"])
+        self.assertIn("qa-a", d["agentUpdates"])
 
     def test_graceful_without_agent_skill_domains(self):
         res = run_node(

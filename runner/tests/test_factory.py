@@ -214,16 +214,24 @@ class TestFactoryHelper(unittest.TestCase):
     def test_snippet_factory_roster(self):
         with open(PROJECT_ROOT / "config" / "opencode-snippet.json") as f:
             snippet = json.load(f)
+        # V2 config key is `agents` (plural) and rules are a `permissions` list.
         for agent in ("manager", "programmer", "qa-a", "qa-b"):
-            self.assertIn(agent, snippet["agent"])
-        manager = snippet["agent"]["manager"]
+            self.assertIn(agent, snippet["agents"])
+
+        def rule(agent, action, resource="*"):
+            return next(
+                r
+                for r in snippet["agents"][agent]["permissions"]
+                if r["action"] == action and r.get("resource", "*") == resource
+            )
+
+        manager = snippet["agents"]["manager"]
         self.assertEqual(manager["mode"], "primary")
-        task = manager["permission"]["task"]
-        self.assertEqual(task["*"], "deny")
+        self.assertEqual(rule("manager", "subagent")["effect"], "deny")
         for allowed in ("programmer", "qa-a", "qa-b", "brainstormer", "darkharvester"):
-            self.assertEqual(task[allowed], "allow")
-        self.assertEqual(snippet["agent"]["qa-a"]["permission"]["edit"], "deny")
-        self.assertEqual(snippet["agent"]["qa-b"]["permission"]["edit"], "deny")
+            self.assertEqual(rule("manager", "subagent", allowed)["effect"], "allow")
+        self.assertEqual(rule("qa-a", "edit")["effect"], "deny")
+        self.assertEqual(rule("qa-b", "edit")["effect"], "deny")
 
     def test_factory_commands_carry_agent_subtask(self):
         res = run_node(

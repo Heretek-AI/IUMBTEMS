@@ -30,6 +30,20 @@ EXPECTED_COMMANDS = [
     "domainexpansion",
 ]
 
+EXPECTED_AGENTS = [
+    "code-auditor",
+    "oss-scout",
+    "alpha-thesis",
+    "beta-redteam",
+    "epistemic-auditor",
+    "brainstormer",
+    "darkharvester",
+    "manager",
+    "programmer",
+    "qa-a",
+    "qa-b",
+]
+
 
 def run_node(code):
     return subprocess.run(
@@ -259,48 +273,44 @@ class TestInstallOpenCode(unittest.TestCase):
             self.assertEqual(first.returncode, 0, f"install failed: {first.stderr}")
             oc_path = home / ".config" / "opencode" / "opencode.json"
             cfg = json.loads(oc_path.read_text(encoding="utf-8"))
-            # Bare object repaired into tuple form, preserving user options.
-            tuples = [
+            # V1 `plugin` migrated to V2 `plugins` in object form; the trailing
+            # bare options object is folded in and user options are preserved.
+            self.assertNotIn("plugin", cfg)
+            self.assertFalse(
+                any(isinstance(p, list) for p in cfg["plugins"]),
+                f"V2 plugins must not use tuple form: {cfg['plugins']}",
+            )
+            ours = [
                 p
-                for p in cfg["plugin"]
-                if isinstance(p, list) and p and p[0] == "@heretek-ai/epistemic-swarm"
+                for p in cfg["plugins"]
+                if isinstance(p, dict)
+                and p.get("package") == "@heretek-ai/epistemic-swarm"
             ]
-            self.assertEqual(len(tuples), 1)
+            self.assertEqual(len(ours), 1)
             self.assertEqual(
-                tuples[0][1],
+                ours[0]["options"],
                 {
                     "search_engine": "duckduckgo",
                     "max_iterations": 10,
                     "mode": "research",
                 },
             )
-            self.assertFalse(any(isinstance(p, dict) for p in cfg["plugin"]))
-            # Agents merged from the snippet, MCP server absolute.
-            for agent in [
-                "code-auditor",
-                "oss-scout",
-                "alpha-thesis",
-                "beta-redteam",
-                "epistemic-auditor",
-                "brainstormer",
-                "darkharvester",
-                "manager",
-                "programmer",
-                "qa-a",
-                "qa-b",
-            ]:
-                self.assertIn(agent, cfg.get("agent", {}))
-            self.assertIn("iumbtems", cfg.get("mcp", {}))
-            cmd = cfg["mcp"]["iumbtems"]["command"]
+            self.assertIn("@prevalentware/opencode-goal-plugin", cfg["plugins"])
+            # Agents merged from the snippet under the V2 plural key.
+            for agent in EXPECTED_AGENTS:
+                self.assertIn(agent, cfg.get("agents", {}))
+            # MCP server absolute under V2 mcp.servers (no legacy top-level key).
+            self.assertNotIn("iumbtems", cfg["mcp"])
+            cmd = cfg["mcp"]["servers"]["iumbtems"]["command"]
             self.assertTrue(Path(cmd[-1]).is_absolute())
             self.assertEqual(cmd[-1], str(PROJECT_ROOT / "runner" / "mcp_server.py"))
-            # Skills merged as absolute repo paths (relative entries repaired).
-            skill_paths = cfg.get("skills", {}).get("paths", [])
+            # Skills merged as a V2 list of absolute repo paths.
+            skill_paths = cfg.get("skills")
+            self.assertIsInstance(skill_paths, list)
             self.assertTrue(skill_paths)
             for sp in skill_paths:
                 self.assertTrue(Path(sp).is_absolute(), f"relative skill path: {sp}")
             self.assertIn(str(PROJECT_ROOT / "skills" / "grilling"), skill_paths)
-            self.assertFalse(any(not Path(sp).is_absolute() for sp in skill_paths))
             # Second run changes nothing.
             before = oc_path.read_bytes()
             second = self._run_install(home)
