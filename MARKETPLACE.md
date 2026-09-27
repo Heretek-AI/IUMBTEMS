@@ -30,6 +30,8 @@ claude plugin marketplace list
 | **`epistemic-swarm`** | `research` | **Flagship Swarm Harness**: Multi-agent dialectic research harness pairing Agent Alpha (Thesis) against Agent Beta (Red Team), audited by an Epistemic Auditor with verbatim empirical quote validation. | `claude plugin install epistemic-swarm@heretek-official` |
 | **`socratic-grilling`** | `agents` | **Socratic Ideation**: Matt Pocock-style Socratic interrogation, premise inversion, and lateral exploration skill. | `claude plugin install socratic-grilling@heretek-official` |
 | **`research-cache`** | `research` | **Source Hasher**: Content-addressed SHA256 Markdown source hashing and verbatim quote verification engine. | `claude plugin install research-cache@heretek-official` |
+| **`darkharvest`** | `research` | **Competitor Teardown**: Product-level teardown with per-feature `depend\|vendor\|clean-room\|skip` verdicts and SPDX attribution. | `claude plugin install darkharvest@heretek-official` |
+| **`factory`** | `agents` | **Coding Factory**: Manager loop with grill-gated phases, programmer spawns, and dual QA. | `claude plugin install factory@heretek-official` |
 
 ---
 
@@ -71,6 +73,32 @@ claude plugin marketplace list
   ```bash
   claude plugin install research-cache@heretek-official
   ```
+
+### 4. `darkharvest` (Modular Tool)
+- **Manifest**: [`plugins/darkharvest/.claude-plugin/plugin.json`](file:///plugins/darkharvest/.claude-plugin/plugin.json)
+- **Components**:
+  - **Skill**: `skills/darkharvest` (competitor × capability teardown).
+  - **Agents**: `harvest-proponent` (per-feature verdicts), `harvest-redteam` (license/Bloat/CVE vetting).
+  - **Evals**: `plugins/darkharvest/evals/teardown-verdict` (skill fires + license-line rubric).
+- **Install**:
+  ```bash
+  claude plugin install darkharvest@heretek-official
+  ```
+
+### 5. `factory` (Modular Agent Pack)
+- **Manifest**: [`plugins/factory/.claude-plugin/plugin.json`](file:///plugins/factory/.claude-plugin/plugin.json)
+- **Components**:
+  - **Skill**: `skills/factory` (Manager loop, gates, QA bounds).
+  - **Agents**: `factory-manager`, `programmer`, `qa-functional`, `qa-adversarial`.
+  - **Evals**: `plugins/factory/evals/gate-halt` (skill fires + gates-first rubric).
+- **Install**:
+  ```bash
+  claude plugin install factory@heretek-official
+  ```
+
+### Flagship agents & evals
+- **Agents** (repo-root `agents/`): `alpha-thesis`, `beta-antithesis`, `epistemic-auditor` — condensed from `prompts/agent_alpha_thesis.md`, `prompts/agent_beta_antithesis.md`, `prompts/epistemic_auditor.md`.
+- **Evals** (repo-root `evals/`): `grill-fires`, `darkharvest-fires`, `factory-gate` — each `prompt.md` plus `tool_used: Skill` and `llm` graders. Run `claude plugin eval .` (billable model calls); CI gates via `.github/workflows/plugin-evals.yml` on release/dispatch.
 
 ---
 

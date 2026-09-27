@@ -4,6 +4,8 @@ node_modules/
 .factory/
 .roadmap/
 !.roadmap/.gitkeep
+evals/results/
+plugins/*/evals/results/
 __pycache__/
 *.py[cod]
 *$py.class

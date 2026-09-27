@@ -21,7 +21,7 @@ echo "✅ Core prerequisites detected (Python $(python3 --version | cut -d' ' -f
 mkdir -p "$CLAUDE_DIR/skills"
 
 echo "🔗 Linking skills into $CLAUDE_DIR/skills/..."
-for skill in grilling research_cache epistemic_search swarm_config code_audit oss_scout brainstorming; do
+for skill in grilling research_cache epistemic_search swarm_config code_audit oss_scout brainstorming darkharvest factory; do
   # legacy research-cache dir name kept as alias for older configs
   ln -sfn "$REPO_DIR/skills/$skill" "$CLAUDE_DIR/skills/$skill"
   echo "   - $CLAUDE_DIR/skills/$skill -> $REPO_DIR/skills/$skill"

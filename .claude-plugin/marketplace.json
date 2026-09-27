@@ -36,6 +36,26 @@
       "category": "research",
       "source": "./plugins/research-cache",
       "homepage": "https://github.com/Heretek-AI/IUMBTEMS"
+    },
+    {
+      "name": "darkharvest",
+      "description": "Product-level competitor teardown and clean-room harvest engine.",
+      "author": {
+        "name": "Heretek AI"
+      },
+      "category": "research",
+      "source": "./plugins/darkharvest",
+      "homepage": "https://github.com/Heretek-AI/IUMBTEMS"
+    },
+    {
+      "name": "factory",
+      "description": "Coding-factory Manager loop with grill-gated phased builds and dual QA.",
+      "author": {
+        "name": "Heretek AI"
+      },
+      "category": "agents",
+      "source": "./plugins/factory",
+      "homepage": "https://github.com/Heretek-AI/IUMBTEMS"
     }
   ]
 }

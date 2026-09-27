@@ -48,5 +48,9 @@ jobs:
           claude plugin validate --strict plugins/socratic-grilling/.claude-plugin/plugin.json
           echo "Validating modular research-cache plugin manifest..."
           claude plugin validate --strict plugins/research-cache/.claude-plugin/plugin.json
+          echo "Validating modular darkharvest plugin manifest..."
+          claude plugin validate --strict plugins/darkharvest/.claude-plugin/plugin.json
+          echo "Validating modular factory plugin manifest..."
+          claude plugin validate --strict plugins/factory/.claude-plugin/plugin.json
           echo "Validating workspace..."
           claude plugin validate --strict .

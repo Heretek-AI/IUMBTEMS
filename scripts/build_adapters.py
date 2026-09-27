@@ -43,6 +43,17 @@ CANONICAL_SKILLS = [
     "factory",
 ]
 
+# Modular Claude Code plugins mirror canonical skills as full copies (Claude
+# Code loads plugin-local skills/, not the repo skills/ tree). Rule: copies
+# are generated — never hand-edit under plugins/<mod>/skills/. Rebuild with
+# `python3 scripts/build_adapters.py`; `--check` fails CI on drift.
+MODULAR_PLUGINS = {
+    "socratic-grilling": "grilling",
+    "research-cache": "research_cache",
+    "darkharvest": "darkharvest",
+    "factory": "factory",
+}
+
 # Skill -> the MCP tool(s) that now carry its programmatic surface.
 SKILL_TOOLS = {
     "grilling": ["iumbtems_socratic_frontier"],
@@ -133,7 +144,64 @@ def build():
             if _build_skill_stub(target_base, skill):
                 count += 1
     print(f"✅ Built {count} thin skill stubs across {len(TARGETS)} targets.")
+    synced = sync_modular_plugins()
+    print(f"✅ Synced {synced} modular Claude Code plugin skill copies.")
     return 0
+
+
+def _iter_modular_files(src: Path, dst: Path):
+    """Yield (relpath, src_bytes|None, dst_bytes|None) for sync/check."""
+    src_files = {}
+    for p in sorted(src.rglob("*")):
+        if p.is_file() and "__pycache__" not in p.parts:
+            src_files[p.relative_to(src)] = p
+    dst_files = {}
+    if dst.exists():
+        for p in sorted(dst.rglob("*")):
+            if p.is_file() and "__pycache__" not in p.parts:
+                dst_files[p.relative_to(dst)] = p
+    for rel in sorted(set(src_files) | set(dst_files)):
+        s = src_files.get(rel)
+        d = dst_files.get(rel)
+        yield rel, (s.read_bytes() if s else None), (d.read_bytes() if d else None)
+
+
+def sync_modular_plugins() -> int:
+    synced = 0
+    for mod, skill in MODULAR_PLUGINS.items():
+        src = PROJECT_ROOT / "skills" / skill
+        dst = PROJECT_ROOT / "plugins" / mod / "skills" / skill
+        if not (src / SKILL_FILENAME).exists():
+            print(f"[WARN] canonical skill missing: skills/{skill}", file=sys.stderr)
+            continue
+        if dst.exists():
+            shutil.rmtree(dst)
+        dst.mkdir(parents=True, exist_ok=True)
+        for rel, content, _ in _iter_modular_files(src, dst):
+            if content is None:
+                continue
+            out = dst / rel
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(content)
+            shutil.copymode(src / rel, out)
+        synced += 1
+    return synced
+
+
+def _check_modular_plugins() -> List[str]:
+    errors = []
+    for mod, skill in MODULAR_PLUGINS.items():
+        src = PROJECT_ROOT / "skills" / skill
+        dst = PROJECT_ROOT / "plugins" / mod / "skills" / skill
+        if not dst.exists():
+            errors.append(f"MISSING modular copy: plugins/{mod}/skills/{skill}/")
+            continue
+        for rel, s_bytes, d_bytes in _iter_modular_files(src, dst):
+            if s_bytes is None:
+                errors.append(f"STRAY FILE in plugins/{mod}/skills/{skill}/{rel}")
+            elif s_bytes != d_bytes:
+                errors.append(f"OUT OF SYNC: plugins/{mod}/skills/{skill}/{rel}")
+    return errors
 
 
 def _check_skill_stub(target_rel: str, skill: str) -> List[str]:
@@ -176,6 +244,7 @@ def check():
     for target_rel, _mode in TARGETS:
         for skill in CANONICAL_SKILLS:
             errors.extend(_check_skill_stub(target_rel, skill))
+    errors.extend(_check_modular_plugins())
     errors.extend(_check_package_json())
     if errors:
         print("❌ Adapter check failed:")

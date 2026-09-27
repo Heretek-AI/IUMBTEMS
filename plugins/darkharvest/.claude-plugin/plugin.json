@@ -1,0 +1,15 @@
+{
+  "name": "darkharvest",
+  "version": "0.1.0",
+  "description": "Product-level competitor teardown and clean-room harvest engine for Claude Code.",
+  "author": {
+    "name": "Heretek AI",
+    "email": "dev@heretek.ai"
+  },
+  "license": "Apache-2.0",
+  "repository": "https://github.com/Heretek-AI/IUMBTEMS",
+  "homepage": "https://github.com/Heretek-AI/IUMBTEMS#readme",
+  "skills": [
+    "./skills/darkharvest"
+  ]
+}
