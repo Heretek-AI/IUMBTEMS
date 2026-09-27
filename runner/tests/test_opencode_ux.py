@@ -493,7 +493,7 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
             self.V2_SETUP
             % """
             console.log(JSON.stringify({
-              ret: ret.initialized,
+              cleanupFn: typeof ret === "function",
               commands: addedCommands.map(c => c.name),
               cmdExec: typeof addedCommands.find(c => c.name === "swarm").execute,
               tools: addedTools.map(t => t.name),
@@ -503,7 +503,7 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
         )
         self.assertEqual(res.returncode, 0, f"v2 transform test failed: {res.stderr}")
         data = last_json_object(res.stdout)
-        self.assertTrue(data["ret"])
+        self.assertEqual(data["cleanupFn"], True)
         for c in [
             "swarm",
             "grill",
@@ -556,12 +556,37 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
             """
             import plugin from "./plugins/opencode/index.js";
             const ret = await plugin.setup({});
-            console.log(JSON.stringify({ret: ret.initialized}));
+            ret();
+            ret();
+            console.log(JSON.stringify({cleanupFn: typeof ret === "function"}));
             """
         )
         self.assertEqual(res.returncode, 0, f"bare setup test failed: {res.stderr}")
         data = last_json_object(res.stdout)
-        self.assertTrue(data["ret"])
+        self.assertEqual(data["cleanupFn"], True)
+
+    def test_setup_cleanup_aborts_nudge_streams(self):
+        res = run_node(
+            """
+            import plugin from "./plugins/opencode/index.js";
+            const seen = [];
+            const host = {
+              options: {},
+              location: {directory: "/tmp/oc-nudge-cleanup"},
+              event: {subscribe: (opts) => { seen.push(opts && opts.signal); return {[Symbol.asyncIterator]() { return {next: async () => ({done: true})}; }}; }},
+              session: {prompt: async () => ({})}
+            };
+            const cleanup = await plugin.setup(host);
+            const before = seen.length;
+            cleanup();
+            console.log(JSON.stringify({subscribed: before > 0, cleanupFn: typeof cleanup === "function", aborted: seen.length > 0 && seen[0].aborted === true}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"cleanup test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertTrue(data["subscribed"])
+        self.assertTrue(data["cleanupFn"])
+        self.assertTrue(data["aborted"])
 
 
 if __name__ == "__main__":

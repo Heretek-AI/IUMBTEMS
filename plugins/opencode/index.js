@@ -563,6 +563,10 @@ export function buildCompactionContext(root) {
 
 const NUDGE_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const activeNudges = new Map();
+// Cleanup functions for the setup() disposer (a setup that returns a plain
+// object crashes host reload: the host calls the return value as a cleanup
+// function). All setup-owned resources register here.
+const setupCleanups = new Set();
 
 /**
  * Handle one subscribed event: nudge once per ledger change when degraded
@@ -683,7 +687,10 @@ export function createOpenCodePlugin(context = {}) {
           };
           const root =
             host.location?.directory || context.location?.directory;
-          if (root) startStalenessNudge(nudgeHost, root);
+          if (root) {
+            const stop = startStalenessNudge(nudgeHost, root);
+            if (typeof stop === 'function') setupCleanups.add(stop);
+          }
         }
       } catch {
         /* lifecycle hooks are best-effort */
@@ -744,7 +751,20 @@ export function createOpenCodePlugin(context = {}) {
       } catch {
         /* tool transform is best-effort */
       }
-      return { initialized: true, platform: 'opencode-v2' };
+      // Disposer: the host calls setup's return value as a cleanup function
+      // on unload/reload. It MUST be a function (returning a plain object
+      // crashes host reload with "not a function"). Aborts nudge streams so
+      // reloads never stack duplicate subscriptions.
+      return () => {
+        for (const stop of [...setupCleanups]) {
+          setupCleanups.delete(stop);
+          try {
+            stop();
+          } catch {
+            /* cleanup is best-effort */
+          }
+        }
+      };
     },
   };
 }
