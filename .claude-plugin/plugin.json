@@ -1,6 +1,6 @@
 {
   "name": "epistemic-swarm",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "High-Integrity Dialectic Research Agent Harness for Claude Code enforcing empirical evidence over parametric hallucination.",
   "author": {
     "name": "Heretek AI",
