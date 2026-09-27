@@ -145,9 +145,9 @@ def claim_verdict(
     if (
         claim.status in (STATUS_STALE, STATUS_SUSPECT)
         and constitution.retraction_policy == "zero_tolerance"
+        and not any(r.startswith("ZERO_TOLERANCE_RETRACTION") for r in reasons)
     ):
-        if not any(r.startswith("ZERO_TOLERANCE_RETRACTION") for r in reasons):
-            reasons.append(f"ZERO_TOLERANCE_RETRACTION: claim status {claim.status}")
+        reasons.append(f"ZERO_TOLERANCE_RETRACTION: claim status {claim.status}")
 
     return {
         "claim_id": claim.claim_id,

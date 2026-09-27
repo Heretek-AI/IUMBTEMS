@@ -857,6 +857,64 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         )
         return audit_report
 
+    def _auction_dispatch(self, ready_scopes: List[Dict[str, Any]]) -> None:
+        """Stream F: order the ready batch by expected information gain."""
+        from runner.auctioneer import (
+            estimate_tokens,
+            record_scope_telemetry,
+            score_scopes,
+        )
+
+        scored = score_scopes(ready_scopes, base_dir=self.base_dir)
+        bids = {s.get("scope_id"): b for b, s in scored}
+        for _bid, ordered_scope in scored:
+            audit_report = self.execute_scope_dialectic(ordered_scope)
+            summary = (audit_report or {}).get("summary", {})
+            sid = ordered_scope.get("scope_id", "")
+            record_scope_telemetry(
+                self.base_dir,
+                sid,
+                # tokens_used is a chars/4 ESTIMATE — flagged approximation.
+                tokens_used=estimate_tokens("x" * self._dossier_chars(sid)),
+                verified_claims=summary.get("verified_passed", 0),
+                bid=bids.get(sid),
+            )
+
+    def _dossier_chars(self, scope_id: str) -> int:
+        scope_dir = self.state_machine.get_scope_dir(scope_id)
+        total = 0
+        for name in ("alpha_dossier.json", "beta_dossier.json"):
+            p = scope_dir / name
+            if p.exists():
+                total += p.stat().st_size
+        return total
+
+    def _run_scope_batches(self) -> bool:
+        """Drive scopes by DAG until complete. False on deadlock."""
+        while True:
+            ready_scopes = self.state_machine.get_ready_scopes()
+            if not ready_scopes:
+                manifest = self.state_machine.load_global_manifest()
+                if self._all_scopes_complete(manifest):
+                    return True
+                print("[ERROR] Deadlock in scope dependency graph.", file=sys.stderr)
+                self.state_machine.update_session_status(SessionStatus.FAILED)
+                return False
+            # "auction" reorders each ready batch by expected information
+            # gain; "dag" keeps legacy dependency order.
+            if self.allocation == "auction":
+                self._auction_dispatch(ready_scopes)
+            else:
+                for scope in ready_scopes:
+                    self.execute_scope_dialectic(scope)
+
+    def _all_scopes_complete(self, manifest: Dict[str, Any]) -> bool:
+        return all(
+            self.state_machine.load_scope_manifest(s["scope_id"]).get("status")
+            == ScopeStatus.COMPLETE.value
+            for s in manifest["scopes"]
+        )
+
     def run_swarm(self, objective: str, frontier_file: Optional[Path] = None):
         """Full end-to-end execution loop."""
         start_time = datetime.now(timezone.utc)
@@ -873,59 +931,8 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         self.orchestrate_objective(objective, frontier_file)
 
         # 2. Execute scopes according to DAG
-        while True:
-            ready_scopes = self.state_machine.get_ready_scopes()
-            if not ready_scopes:
-                # Check if all scopes are complete
-                manifest = self.state_machine.load_global_manifest()
-                all_complete = all(
-                    self.state_machine.load_scope_manifest(s["scope_id"]).get("status")
-                    == ScopeStatus.COMPLETE.value
-                    for s in manifest["scopes"]
-                )
-                if all_complete:
-                    break
-                else:
-                    print(
-                        "[ERROR] Deadlock in scope dependency graph.", file=sys.stderr
-                    )
-                    self.state_machine.update_session_status(SessionStatus.FAILED)
-                    return
-
-            # Stream F: "auction" reorders each ready batch by expected
-            # information gain; "dag" keeps legacy dependency order (all ready
-            # scopes dispatched in the batch, unchanged).
-            if self.allocation == "auction":
-                from runner.auctioneer import (
-                    estimate_tokens,
-                    record_scope_telemetry,
-                    score_scopes,
-                )
-
-                scored = score_scopes(ready_scopes, base_dir=self.base_dir)
-                ordered = [s for _b, s in scored]
-                bids = {s.get("scope_id"): b for b, s in scored}
-                for ordered_scope in ordered:
-                    audit_report = self.execute_scope_dialectic(ordered_scope)
-                    summary = (audit_report or {}).get("summary", {})
-                    sid = ordered_scope.get("scope_id", "")
-                    # tokens_used is a chars/4 ESTIMATE — flagged approximation.
-                    dossier_chars = 0
-                    scope_dir = self.state_machine.get_scope_dir(sid)
-                    for name in ("alpha_dossier.json", "beta_dossier.json"):
-                        p = scope_dir / name
-                        if p.exists():
-                            dossier_chars += p.stat().st_size
-                    record_scope_telemetry(
-                        self.base_dir,
-                        sid,
-                        tokens_used=estimate_tokens("x" * dossier_chars),
-                        verified_claims=summary.get("verified_passed", 0),
-                        bid=bids.get(sid),
-                    )
-            else:
-                for scope in ready_scopes:
-                    self.execute_scope_dialectic(scope)
+        if not self._run_scope_batches():
+            return
 
         # 3. Master Synthesis Compilation
         print(
