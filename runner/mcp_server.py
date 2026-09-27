@@ -68,8 +68,16 @@ DEFAULT_RESEARCH_DIR = ".research"
 
 
 def _resolve_base_dir(args: Dict[str, Any]) -> Path:
-    raw = args.get("base_dir") or args.get("dir") or DEFAULT_RESEARCH_DIR
-    return Path(os.path.realpath(str(raw)))
+    raw = args.get("base_dir") or args.get("dir")
+    if raw:
+        return Path(os.path.realpath(str(raw)))
+    # Project root wins over process cwd: a relative ".research" resolved
+    # against the MCP server's cwd escapes the project (observed live:
+    # evidence landed in ~/.research instead of the project tree).
+    project = os.environ.get("IUMBTEMS_PROJECT_DIR", "").strip()
+    if project and Path(project).is_dir():
+        return Path(os.path.realpath(os.path.join(project, DEFAULT_RESEARCH_DIR)))
+    return Path(os.path.realpath(DEFAULT_RESEARCH_DIR))
 
 
 def _handle_config(args: Dict[str, Any]) -> str:

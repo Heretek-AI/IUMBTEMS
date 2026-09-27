@@ -139,6 +139,105 @@ class TestOpencodeOutputParsing(unittest.TestCase):
         self.assertEqual(_extract_opencode_text(raw), "verdict: clean-room")
 
 
+class TestDossierStdoutFallback(unittest.TestCase):
+    def _runner(self):
+        import tempfile
+        from runner.research_swarm import SwarmRunner
+
+        tmp = tempfile.mkdtemp()
+        r = SwarmRunner(base_dir=Path(tmp), mock_mode=False, mode="research")
+        r.state_machine.init_session("fallback probe")
+        r.state_machine.set_scopes(
+            [
+                {
+                    "scope_id": "scope_01_probe",
+                    "title": "Probe",
+                    "objective": "probe objective",
+                    "dependencies": [],
+                    "affirmative_targets": [],
+                    "adversarial_targets": [],
+                }
+            ]
+        )
+        return r
+
+    def test_recovers_dossier_from_stdout(self):
+        from runner.research_swarm import SwarmRunner
+
+        r = self._runner()
+        payload = json.dumps(
+            {
+                "agent": "Agent Alpha (Thesis)",
+                "scope_id": "scope_01_probe",
+                "affirmative_claims": [],
+            }
+        )
+        transcript = "Some chatter\n```json\n" + payload + "\n```\nDone."
+        with mock.patch.object(
+            SwarmRunner, "run_claude_process", return_value=transcript
+        ):
+            scope = {
+                "scope_id": "scope_01_probe",
+                "title": "Probe",
+                "objective": "probe objective",
+                "dependencies": [],
+                "affirmative_targets": [],
+                "adversarial_targets": [],
+            }
+            r.run_agent_alpha(scope)
+        dossier_path = (
+            r.state_machine.get_scope_dir("scope_01_probe") / "alpha_dossier.json"
+        )
+        self.assertTrue(dossier_path.is_file())
+        saved = json.loads(dossier_path.read_text())
+        self.assertTrue(saved.get("recovered_from_stdout"))
+
+    def test_raises_when_no_file_and_no_json(self):
+        from runner.research_swarm import SwarmRunner
+
+        r = self._runner()
+        with mock.patch.object(
+            SwarmRunner, "run_claude_process", return_value="just some prose, no json"
+        ):
+            scope = {
+                "scope_id": "scope_01_probe",
+                "title": "Probe",
+                "objective": "probe objective",
+                "dependencies": [],
+                "affirmative_targets": [],
+                "adversarial_targets": [],
+            }
+            with self.assertRaises(FileNotFoundError):
+                r.run_agent_beta(scope)
+
+
+class TestProjectDirResolution(unittest.TestCase):
+    def test_explicit_base_dir_wins(self):
+        from runner.mcp_server import _resolve_base_dir
+
+        with mock.patch.dict(os.environ, {"IUMBTEMS_PROJECT_DIR": "/tmp"}):
+            p = _resolve_base_dir({"base_dir": "/tmp/custom"})
+            self.assertEqual(p, Path("/tmp/custom"))
+
+    def test_project_dir_preferred_over_cwd(self):
+        import tempfile
+        from runner.mcp_server import _resolve_base_dir
+
+        project = tempfile.mkdtemp()
+        with mock.patch.dict(os.environ, {"IUMBTEMS_PROJECT_DIR": project}):
+            p = _resolve_base_dir({})
+            self.assertEqual(
+                p, Path(os.path.realpath(os.path.join(project, ".research")))
+            )
+
+    def test_missing_project_dir_falls_back_to_cwd(self):
+        from runner.mcp_server import _resolve_base_dir
+
+        with mock.patch.dict(os.environ, {"IUMBTEMS_PROJECT_DIR": "/no/such/dir"}):
+            p = _resolve_base_dir({})
+            self.assertEqual(p, Path(os.path.realpath(".research")))
+
+
 def run_node(code):
     return subprocess.run(
         ["node", "--input-type=module", "-e", code],

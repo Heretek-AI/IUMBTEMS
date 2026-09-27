@@ -49,7 +49,13 @@ function callMcp(tool, args = {}, ctx = {}) {
     {
       encoding: 'utf-8',
       cwd: ctx.cwd || process.cwd(),
-      env: { ...process.env, PYTHONPATH: PKG_ROOT },
+      // Project root: evidence defaults under <project>/.research instead
+      // of the server process cwd.
+      env: {
+        ...process.env,
+        PYTHONPATH: PKG_ROOT,
+        IUMBTEMS_PROJECT_DIR: ctx.cwd || process.cwd(),
+      },
     }
   );
   return {

@@ -73,7 +73,14 @@ function callMcp(tool, args = {}, cwd = undefined) {
           cwd: cwd || process.cwd(),
           // Host hint: the runner defaults to the host-native backend
           // (opencode run here), unless the caller passes backend explicitly.
-          env: { ...process.env, PYTHONPATH: PKG_ROOT, IUMBTEMS_HOST: 'opencode' },
+          // Project root: evidence defaults under <project>/.research instead
+          // of the server process cwd.
+          env: {
+            ...process.env,
+            PYTHONPATH: PKG_ROOT,
+            IUMBTEMS_HOST: 'opencode',
+            IUMBTEMS_PROJECT_DIR: cwd || process.cwd(),
+          },
         }
       );
     } catch (err) {

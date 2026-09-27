@@ -383,6 +383,60 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         print(f"✅ Generated {len(scopes)} decoupled dialectic scopes.")
         return scopes
 
+    @staticmethod
+    def _parse_dossier_json(text: str) -> Optional[Dict[str, Any]]:
+        """Extract a dossier dict from free-form agent stdout (fence-aware)."""
+        if not text or not text.strip():
+            return None
+        candidates = [text]
+        if "```json" in text:
+            candidates.append(text.split("```json", 1)[1].split("```")[0])
+        elif "```" in text:
+            candidates.append(text.split("```", 1)[1].split("```")[0])
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            candidates.append(text[start : end + 1])
+        for candidate in candidates:
+            try:
+                obj = json.loads(candidate.strip())
+            except (ValueError, TypeError):
+                continue
+            if isinstance(obj, dict) and obj.get("scope_id"):
+                return obj
+        return None
+
+    def _load_agent_dossier(
+        self,
+        dossier_path: Path,
+        scope_id: str,
+        role: str,
+        transcript: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Load an agent dossier from disk, falling back to stdout parsing.
+
+        Headless agents sometimes answer in chat instead of writing the
+        dossier file; without this fallback the whole scope dies on
+        FileNotFoundError (observed live: 10+ minute runs, zero dossiers).
+        Parsed stdout dossiers are tagged so the auditor treats them as
+        recovered, not natively filed.
+        """
+        if dossier_path.exists():
+            with open(dossier_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        recovered = self._parse_dossier_json(transcript or "")
+        if recovered is not None:
+            recovered.setdefault("recovered_from_stdout", True)
+            dossier_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(dossier_path, "w", encoding="utf-8") as f:
+                json.dump(recovered, f, indent=2)
+            print(f"  [{role}] ⚠️ Dossier file missing; recovered from stdout.")
+            return recovered
+        raise FileNotFoundError(
+            f"{role} dossier not found at {dossier_path} and no dossier JSON "
+            f"in transcript for scope {scope_id}"
+        )
+
     def run_agent_alpha(self, scope: Dict[str, Any]):
         """Executes Agent Alpha (Thesis / Proponent / Structural Auditor) for a scope."""
         scope_id = scope["scope_id"]
@@ -538,14 +592,15 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 system_prompt = self.prompts_dir / "agent_darkharvest.md"
             else:
                 system_prompt = self.prompts_dir / "agent_alpha_thesis.md"
-            self.run_claude_process(
+            transcript = self.run_claude_process(
                 prompt, system_prompt_file=system_prompt, role="alpha"
             )
             dossier_path = (
                 self.state_machine.get_scope_dir(scope_id) / "alpha_dossier.json"
             )
-            with open(dossier_path, "r", encoding="utf-8") as f:
-                dossier = json.load(f)
+            dossier = self._load_agent_dossier(
+                dossier_path, scope_id, "alpha", transcript
+            )
 
         self.state_machine.record_agent_completion(scope_id, "alpha", dossier)
         print(f"  [Alpha] ✅ Completed Agent Alpha for [{scope_id}].")
@@ -732,14 +787,15 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 system_prompt = self.prompts_dir / "agent_darkharvest.md"
             else:
                 system_prompt = self.prompts_dir / "agent_beta_antithesis.md"
-            self.run_claude_process(
+            transcript = self.run_claude_process(
                 prompt, system_prompt_file=system_prompt, role="beta"
             )
             dossier_path = (
                 self.state_machine.get_scope_dir(scope_id) / "beta_dossier.json"
             )
-            with open(dossier_path, "r", encoding="utf-8") as f:
-                dossier = json.load(f)
+            dossier = self._load_agent_dossier(
+                dossier_path, scope_id, "beta", transcript
+            )
 
         self.state_machine.record_agent_completion(scope_id, "beta", dossier)
         print(f"  [Beta] ✅ Completed Agent Beta for [{scope_id}].")
