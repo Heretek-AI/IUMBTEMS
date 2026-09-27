@@ -28,6 +28,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
+from typing import List
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CANONICAL_SKILLS = [

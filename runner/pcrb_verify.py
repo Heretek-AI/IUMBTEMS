@@ -237,8 +237,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     key = None
     if args.key_file:
         key_file_path = Path(os.path.realpath(str(args.key_file)))
-        if key_file_path.is_file():
-            key = key_file_path.read_bytes().strip()
+        # Fail loudly rather than fall through to an unsigned verification:
+        # a typo'd --key-file would otherwise silently verify with no key.
+        if not key_file_path.is_file():
+            print(f"error: key file is not a readable file: {args.key_file}", file=sys.stderr)
+            return 2
+        key = key_file_path.read_bytes().strip()
     elif os.environ.get(ENV_KEY):
         key = os.environ[ENV_KEY].encode("utf-8")
 

@@ -5,10 +5,14 @@ Advisory mode ONLY: findings are formatted as PR comments, never block, and
 the process always exits 0. Measures: seeded-defect hit rate (finding cites
 seeded file + line within +/-3) and clean-fixture false-positive rate.
 
-  python3 scripts/bet1_advisory_spike.py --generate --dir /tmp/bet1
-  python3 scripts/bet1_advisory_spike.py --run --mock --dir /tmp/bet1
-  python3 scripts/bet1_advisory_spike.py --run --live --only bet1-01,bet1-02 --dir /tmp/bet1
-  python3 scripts/bet1_advisory_spike.py --score --dir /tmp/bet1
+The default workdir is a per-user scratch dir under the system temp dir
+(`<tmpdir>/bet1_<uid>`), not the shared world-writable `/tmp/bet1` it used to
+be. Pass --dir explicitly to override:
+
+  python3 scripts/bet1_advisory_spike.py --generate
+  python3 scripts/bet1_advisory_spike.py --run --mock
+  python3 scripts/bet1_advisory_spike.py --run --live --only bet1-01,bet1-02
+  python3 scripts/bet1_advisory_spike.py --score
 
 Live runs invoke real audits (LLM spend); mock runs exercise dispatch only.
 """

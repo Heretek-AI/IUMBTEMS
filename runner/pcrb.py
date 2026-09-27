@@ -71,9 +71,15 @@ def _resolve_key(key: Optional[str], key_path: Optional[Path]) -> Optional[bytes
     if env:
         return env.encode("utf-8")
     if key_path:
+        # An explicitly supplied key file that cannot be read must fail loudly.
+        # Returning None here would sign the brief with `alg: "none"` and report
+        # success — a typo'd path silently produces an unauthenticated bundle.
         canonical_key_path = Path(os.path.realpath(str(key_path)))
-        if canonical_key_path.is_file():
-            return canonical_key_path.read_bytes().strip()
+        if not canonical_key_path.is_file():
+            raise ValueError(
+                f"key file is not a readable file: {key_path!r} (resolved {canonical_key_path})"
+            )
+        return canonical_key_path.read_bytes().strip()
     return None
 
 

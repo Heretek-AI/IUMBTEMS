@@ -12,7 +12,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,11 +27,14 @@ function resolveBinary(name) {
     if (!dir || dir === '.' || dir.startsWith('./') || dir.startsWith('../')) continue;
     const full = path.join(dir, name);
     try {
-      if (existsSync(full)) {
-        return realpathSync(full);
-      }
+      // Match Node's own PATH search: skip non-files and non-executables so a
+      // directory or a non-executable named `python3` earlier on PATH cannot
+      // shadow the real binary.
+      if (!statSync(full).isFile()) continue;
+      accessSync(full, constants.X_OK);
+      return realpathSync(full);
     } catch {
-      /* ignore access errors */
+      /* not present, not a file, or not executable — keep searching */
     }
   }
   return name;

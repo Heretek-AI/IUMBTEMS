@@ -11,45 +11,104 @@ import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
 from typing import Dict, List, Optional, Tuple
+from xml.sax.saxutils import escape as xml_escape
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
 class DDGLiteParser(HTMLParser):
-    """Linear, non-backtracking HTML parser for DuckDuckGo Lite search results."""
+    """Linear, non-backtracking HTML parser for DuckDuckGo Lite search results.
+
+    DuckDuckGo Lite emits one table row per result: an ``<a class="result-link">``
+    holding the title and a ``<td class="result-snippet">`` holding the summary.
+    Results are assembled **per row** so that:
+
+    * a missing link or snippet cannot desynchronise every later result (the old
+      ``zip(links, snippets)`` pairing shifted all subsequent rows), and
+    * nested markup inside a snippet — including a nested
+      ``<a class="result-link">`` — never hijacks capture state (the old parser
+      reset its buffer mid-snippet and then never recorded the snippet at all).
+
+    Captured text is stored decoded (``convert_charrefs`` default); escaping is
+    done at emit time by :func:`format_xml`.
+    """
 
     def __init__(self):
         super().__init__()
-        self.links: List[Tuple[str, str]] = []
-        self.snippets: List[str] = []
-        self._current_tag: Optional[str] = None
-        self._current_href: str = ""
-        self._buf: List[str] = []
+        self.results: List[Dict[str, str]] = []
+        self._row_href: Optional[str] = None
+        self._row_title: List[str] = []
+        self._row_snippet: List[str] = []
+        self._capture: Optional[str] = None  # "title" | "snippet" | None
+        self._depth = 0  # nesting depth of the tag that opened the capture
 
     def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]):
         attr_dict = {k: v or "" for k, v in attrs}
         classes = attr_dict.get("class", "").split()
+
+        if tag == "tr":
+            self.flush()
+            return
+
+        # While capturing a snippet, nested markup (including a nested
+        # result-link) stays inside the snippet. Only track nested <td> so the
+        # capture still ends at the *outer* </td>.
+        if self._capture == "snippet":
+            if tag == "td":
+                self._depth += 1
+            return
+
+        # Likewise for a title: a nested <a> must not close the capture early.
+        if self._capture == "title":
+            if tag == "a":
+                self._depth += 1
+            return
+
         if tag == "a" and "result-link" in classes:
-            self._current_tag = "a"
-            self._current_href = attr_dict.get("href", "")
-            self._buf = []
+            # Row-less fallback: a new result-link implies the previous result
+            # is complete even if no <tr> ever bounded it.
+            if self._row_href is not None:
+                self.flush()
+            self._capture = "title"
+            self._depth = 1
+            self._row_href = attr_dict.get("href", "")
+            self._row_title = []
         elif tag == "td" and "result-snippet" in classes:
-            self._current_tag = "td"
-            self._buf = []
+            self._capture = "snippet"
+            self._depth = 1
+            self._row_snippet = []
 
     def handle_endtag(self, tag: str):
-        if tag == "a" and self._current_tag == "a":
-            self.links.append((self._current_href, "".join(self._buf).strip()))
-            self._current_tag = None
-            self._buf = []
-        elif tag == "td" and self._current_tag == "td":
-            self.snippets.append("".join(self._buf).strip())
-            self._current_tag = None
-            self._buf = []
+        if self._capture == "title" and tag == "a":
+            self._depth -= 1
+            if self._depth <= 0:
+                self._capture = None
+        elif self._capture == "snippet" and tag == "td":
+            self._depth -= 1
+            if self._depth <= 0:
+                self._capture = None
+        elif tag == "tr":
+            self.flush()
 
     def handle_data(self, data: str):
-        if self._current_tag:
-            self._buf.append(data)
+        if self._capture == "title":
+            self._row_title.append(data)
+        elif self._capture == "snippet":
+            self._row_snippet.append(data)
+
+    def flush(self):
+        """Emit the in-progress row, if any. Call after ``feed()`` completes."""
+        if self._row_href is not None:
+            self.results.append({
+                "href": self._row_href,
+                "title": "".join(self._row_title).strip(),
+                "snippet": "".join(self._row_snippet).strip(),
+            })
+        self._row_href = None
+        self._row_title = []
+        self._row_snippet = []
+        self._capture = None
+        self._depth = 0
 
 
 def _build_search_query(
@@ -116,10 +175,11 @@ def search_duckduckgo(
 
     parser = DDGLiteParser()
     parser.feed(html)
+    parser.flush()
 
     results = []
-    for (href, title), snip in zip(parser.links, parser.snippets):
-        clean_url = _parse_clean_url(href)
+    for row in parser.results:
+        clean_url = _parse_clean_url(row["href"])
         if not clean_url.startswith("http"):
             continue
 
@@ -129,9 +189,9 @@ def search_duckduckgo(
             continue
 
         results.append({
-            "title": title,
+            "title": row["title"],
             "url": clean_url,
-            "snippet": snip,
+            "snippet": row["snippet"],
         })
         if len(results) >= max_results:
             break
@@ -140,13 +200,19 @@ def search_duckduckgo(
 
 
 def format_xml(results: List[Dict[str, str]]) -> str:
-    """Format results as Claude Code <search_results> XML."""
+    """Format results as Claude Code <search_results> XML.
+
+    Every field is XML-escaped at emit time. The parser stores decoded text, so
+    without this a snippet like ``A &amp; B`` becomes ``A & B`` and produces
+    malformed markup (bare ``&``); URLs containing query strings have the same
+    problem.
+    """
     lines = ["<search_results>"]
     for r in results:
         lines.append("  <result>")
-        lines.append(f"    <title>{urllib.parse.quote(r['title'])}</title>")
-        lines.append(f"    <url>{r['url']}</url>")
-        lines.append(f"    <snippet>{r['snippet']}</snippet>")
+        lines.append(f"    <title>{xml_escape(r['title'])}</title>")
+        lines.append(f"    <url>{xml_escape(r['url'])}</url>")
+        lines.append(f"    <snippet>{xml_escape(r['snippet'])}</snippet>")
         lines.append("  </result>")
     lines.append("</search_results>")
     return "\n".join(lines)

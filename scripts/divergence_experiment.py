@@ -52,18 +52,40 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def _extract_audit_divergence(base_dir: Path) -> Tuple[Optional[float], Optional[int]]:
+def _extract_audit_divergence(base_dir: Path) -> Tuple[Optional[float], Optional[bool]]:
+    """Aggregate divergence across every scored audit in a run's scratchpads.
+
+    A swarm run writes one ``audit_report.json`` per scope, so a single scalar has
+    to be reduced from N scores. The reduction is the **mean** of all scores that
+    are present, which is deterministic and independent of scope-name ordering.
+
+    ``verified_passed`` is True only when every scored audit reports True; it is
+    None when no audit reports it at all.
+
+    (Earlier revisions returned whichever audit happened to be visited — first,
+    then briefly last — so the reported number silently tracked directory sort
+    order. Neither is a meaningful rule; the mean is.)
+    """
     audit_paths = sorted((base_dir / "scratchpads").glob("*/audit_report.json"))
+    scores: List[float] = []
+    verified_flags: List[bool] = []
     for ap in audit_paths:
         try:
             with open(ap, "r", encoding="utf-8") as f:
                 audit = json.load(f)
-            summary = audit.get("summary", {})
-            if summary.get("divergence_score") is not None:
-                return summary["divergence_score"], summary.get("verified_passed")
         except (OSError, json.JSONDecodeError):
             continue
-    return None, None
+        summary = audit.get("summary", {})
+        if summary.get("divergence_score") is not None:
+            scores.append(float(summary["divergence_score"]))
+        if summary.get("verified_passed") is not None:
+            verified_flags.append(bool(summary["verified_passed"]))
+
+    if not scores:
+        return None, (None if not verified_flags else all(verified_flags))
+    divergence = sum(scores) / len(scores)
+    verified: Optional[int] = all(verified_flags) if verified_flags else None
+    return divergence, verified
 
 
 def run_one(

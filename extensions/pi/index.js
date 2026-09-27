@@ -28,11 +28,14 @@ function resolveBinary(name) {
     if (!dir || dir === '.' || dir.startsWith('./') || dir.startsWith('../')) continue;
     const full = path.join(dir, name);
     try {
-      if (fs.existsSync(full)) {
-        return fs.realpathSync(full);
-      }
+      // Match Node's own PATH search: skip non-files and non-executables so a
+      // directory or a non-executable named `python3` earlier on PATH cannot
+      // shadow the real binary.
+      if (!fs.statSync(full).isFile()) continue;
+      fs.accessSync(full, fs.constants.X_OK);
+      return fs.realpathSync(full);
     } catch {
-      /* ignore access errors */
+      /* not present, not a file, or not executable — keep searching */
     }
   }
   return name;

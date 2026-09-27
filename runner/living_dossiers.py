@@ -39,6 +39,7 @@ from runner.claim_witness import (  # noqa: E402
     STATUS_SUSPECT,
     ClaimWitness,
 )
+from runner.path_safety import safe_join  # noqa: E402
 
 EVENT_RETRACTED = "RETRACTED"
 EVENT_REVISED = "REVISED"
@@ -95,7 +96,11 @@ def write_retraction(
         note=note,
         supersedes=supersedes,
     )
-    path = retr_dir / f"{source_hash}.json"
+    # `source_hash` is untrusted tool input, so the filename is joined under
+    # `retractions/` through safe_join (no separators, no bare `..`, and a
+    # containment re-check after canonicalisation). The regex above is the
+    # input gate; safe_join is the one that holds if the gate is ever loosened.
+    path = safe_join(retr_dir, f"{source_hash}.json")
     # Last write wins per hash (a REVISED may follow a RETRACTED); the ledger
     # keeps the full history of claim transitions either way.
     with open(path, "w", encoding="utf-8") as f:
@@ -261,7 +266,14 @@ def check_staleness(base_dir: Path, scope_ids: Optional[List[str]] = None) -> Di
 
     if scope_ids is None:
         if not scratch.exists():
-            return {"scopes": [], "retractions": len(retractions), "degraded": 0}
+            return {
+                "scopes": [],
+                "retractions": len(retractions),
+                "degraded": 0,
+                # Keep the early return shape identical to the normal one so
+                # callers can key off `degraded_scopes` unconditionally.
+                "degraded_scopes": [],
+            }
         scope_dirs = sorted(p for p in scratch.iterdir() if p.is_dir())
     else:
         scope_dirs = [scratch / s for s in scope_ids]
@@ -339,7 +351,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     rep.add_argument("--event", required=True, choices=list(VALID_EVENTS))
     rep.add_argument("--note", default="")
 
-    sub.add_parser("check", help="Run one staleness/degradation pass")
+    sub.add_parser(
+        "check",
+        help=(
+            "Run one staleness/degradation pass. Exits 1 when any scope "
+            "degraded (the ledger reporting a problem IS the outcome), 0 "
+            "otherwise — callers under `set -e` should expect that."
+        ),
+    )
     args = parser.parse_args(argv)
 
     base = Path(os.path.realpath(str(args.dir)))

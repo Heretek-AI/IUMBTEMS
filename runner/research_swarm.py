@@ -27,15 +27,44 @@ from skills.research_cache.hasher import SourceHasher
 from skills.swarm_config.configure import load_config
 
 EXAMPLE_RUST_RAFT_URL = "https://github.com/example/rust-raft"
-ALLOWED_BACKEND_BINARIES = {"claude", "opencode", "python", "python3", "node"}
+# Common backends we can resolve without touching PATH. This is a convenience
+# fast-path, NOT an allowlist: backend resolution is a documented extension
+# point (CLI > IUMBTEMS_BACKEND_* > config), so any executable the OS can
+# resolve must work. The security property is argv-list + shell=False, which
+# run_claude_process already enforces; injection is not possible here.
+KNOWN_BACKEND_BINARIES = {"claude", "opencode", "python", "python3", "node"}
 
 
 def _validate_backend(backend: List[str]) -> List[str]:
+    """Resolve-check a backend argv. Raises ValueError only if nothing can run it.
+
+    Resolution mirrors what subprocess does with shell=False: an absolute/relative
+    path is taken as-is (checked against the spawn cwd, PROJECT_ROOT), otherwise
+    the name is looked up on PATH. Previously this rejected anything outside a
+    five-name allowlist, which broke `python3.11`, `aider`, `codex exec`,
+    `npx -y ...` and any config-supplied backend.
+    """
     if not backend:
         return ["claude", "-p"]
-    bin_name = Path(backend[0]).name
-    if bin_name not in ALLOWED_BACKEND_BINARIES and not Path(backend[0]).is_file():
-        raise ValueError(f"Disallowed backend binary: {backend[0]}")
+    candidate = backend[0]
+    bin_name = Path(candidate).name
+    if bin_name in KNOWN_BACKEND_BINARIES:
+        return list(backend)
+    # Path form: resolve the same way the spawn will (cwd=PROJECT_ROOT).
+    if os.sep in candidate or (os.altsep and os.altsep in candidate):
+        resolved = (PROJECT_ROOT / candidate).resolve() if not os.path.isabs(candidate) else Path(candidate)
+        if resolved.is_file():
+            return list(backend)
+        raise ValueError(
+            f"Backend binary not found at {candidate!r} (resolved {resolved}); "
+            f"expected an executable file relative to {PROJECT_ROOT}"
+        )
+    # Bare name: ask PATH, exactly as subprocess will.
+    if shutil.which(candidate) is None:
+        raise ValueError(
+            f"Backend binary {candidate!r} is not on PATH and is not a known backend "
+            f"({', '.join(sorted(KNOWN_BACKEND_BINARIES))})"
+        )
     return list(backend)
 
 
@@ -125,10 +154,10 @@ class SwarmRunner:
             return self._mock_claude_response(prompt)
 
         cmd = self.build_agent_cmd(prompt, system_prompt_file, tools, role=role)
-        if cmd:
-            _validate_backend([cmd[0]])
 
         try:
+            if cmd:
+                _validate_backend([cmd[0]])
             res = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -141,6 +170,12 @@ class SwarmRunner:
         except subprocess.CalledProcessError as e:
             print(f"[ERROR] Claude process failed: {e.stderr}", file=sys.stderr)
             raise RuntimeError(f"Claude execution failed: {e.stderr}")
+        except ValueError as e:
+            # Bad backend config: report it as a run failure, not an abort of the
+            # whole swarm. Matches the pre-allowlist behavior of surfacing the
+            # error from inside the try.
+            print(f"[ERROR] Invalid agent backend: {e}", file=sys.stderr)
+            raise RuntimeError(f"Invalid agent backend: {e}")
 
     def _mock_claude_response(self, prompt: str) -> str:
         """Mock response generator for unit testing without live API keys."""

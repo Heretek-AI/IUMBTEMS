@@ -261,8 +261,11 @@ def _handle_verify_brief(args: Dict[str, Any]) -> str:
         key = args["key"].encode("utf-8")
     elif args.get("key_file"):
         kf = Path(os.path.realpath(str(args["key_file"])))
-        if kf.is_file():
-            key = kf.read_bytes().strip()
+        # An explicit key_file that cannot be read must surface as an error, not
+        # a silent fallthrough to `alg: "none"`.
+        if not kf.is_file():
+            raise ValueError(f"key file is not a readable file: {args['key_file']!r}")
+        key = kf.read_bytes().strip()
     elif os.environ.get(ENV_KEY):
         key = os.environ[ENV_KEY].encode("utf-8")
 

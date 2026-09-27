@@ -74,7 +74,14 @@ class SourceHasher:
         return None
 
     def _resolve_hash_file(self, hash_prefix: str, extension: str) -> Optional[Path]:
-        """Resolves exact or prefix hash to disk path."""
+        """Resolves exact or prefix hash to disk path.
+
+        ``hash_prefix`` is untrusted (it arrives from an LLM tool call), so the
+        result is required to stay inside ``sources_dir``. Containment is checked
+        inline rather than via ``runner.path_safety`` because this module is
+        mirrored into the standalone ``research-cache`` plugin, which has no
+        ``runner`` package on its path.
+        """
         if not re.match(r"^[a-fA-F0-9]+$", hash_prefix):
             return None
         exact_path = Path(os.path.realpath(str(self.sources_dir / f"{hash_prefix}{extension}")))
