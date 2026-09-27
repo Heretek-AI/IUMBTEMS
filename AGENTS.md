@@ -45,6 +45,14 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   `config/opencode-snippet.json` and `plugins/opencode/index.js`
   (`OPENCODE_COMMANDS`, `commandCatalog()`); commands may pin `agent:` and
   `subagent:` (`subtask:` legacy alias) per https://opencode.ai/v2/docs/commands/.
+- The plugin registers through the V2 domains at setup: `tool.transform` and
+  `command.transform` (catalog), plus `agent.transform` (the snippet's role
+  profiles, incl. manager/programmer/qa-a/qa-b) and `skill.transform` (bundled
+  `skills/*/SKILL.md`). This removes the config-snippet install dependency —
+  without it a `/factory` run executed as the generic `build` agent and the
+  agent hunted the filesystem for its own skill prose. Commands that pin an
+  agent also call `session.switchAgent` (best-effort, shape-tolerant) so the
+  pinned role is actually active.
 - Agent runtime backend is host-native by default (`claude -p` on Claude Code,
   `opencode run` on OpenCode via `IUMBTEMS_HOST`). Override with
   `--backend {auto,claude,opencode}`, `IUMBTEMS_BACKEND_<ROLE>`,

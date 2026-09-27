@@ -587,6 +587,7 @@ export const OPENCODE_COMMANDS = [
       '2. Per gate run iumbtems_brainstorm and iumbtems_darkharvest (mock_mode only for dry runs), then synthesize .roadmap/<phase>/ GOAL.md + dossier.json (goal/evidence/acceptance/brief/verdict/hashes; every claim needs a VERIFIED hash).',
       '3. Spawn the programmer subagent per phase with the phase dossier (cite phase hashes); run qa-a and qa-b (diverged prompts) per phase; track retries with the iumbtems_factory tool (command: phase-add / qa-record; 3 failures escalate to manager). Never invoke factory helper scripts by relative path.',
       '4. Manager tiebreaks QA disagreements; explicit user sign-off closes each phase.',
+      'Swarm agents use the host-native backend automatically (claude -p on Claude Code, opencode run on OpenCode). Do not debug backend selection, config pins, or binary availability as part of a gate — if a swarm call fails, report the error and continue.',
     ].join('\n'),
   },
   {
@@ -907,9 +908,19 @@ async function registerHostCommands(host) {
         execute: async (input) => {
           const args = input?.prompt?.text || '';
           const prompt = (typeof input?.prompt === 'object' && input?.prompt !== null) ? input.prompt : {};
+          // Pin the declared agent for this run: the template says "as the
+          // manager agent", so make that true rather than aspirational.
+          let switched = false;
+          if (cmd.agent) {
+            switched = await switchSessionAgent(host, input?.sessionID, cmd.agent);
+            log(host, 'debug', 'command agent switch', {
+              command: cmd.name, agent: cmd.agent, switched,
+            });
+          }
           await host.session.prompt({
             ...prompt,
             sessionID: input?.sessionID,
+            ...(cmd.agent ? { agent: cmd.agent } : {}),
             text: cmd.template.split('$ARGUMENTS').join(String(args).trim()),
             delivery: input?.delivery,
           });
@@ -1010,6 +1021,174 @@ async function registerCompactionHook(host, context) {
   }
 }
 
+async function registerHostAgents(host) {
+  // V2 Context exposes `agent.transform` (AgentDomain). Registering the IUMBTEMS
+  // role profiles here removes the config-snippet install dependency: without
+  // them the `/factory` command ran as the generic `build` agent (observed live:
+  // every step of a factory session executed as `build`, not `manager`).
+  if (typeof host?.agent?.transform !== 'function') return [];
+  const snippet = readPkgJson(path.join(PKG_ROOT, 'config', 'opencode-snippet.json'));
+  const agentDefs = (snippet && snippet.agent) || {};
+  if (Object.keys(agentDefs).length === 0) return [];
+
+  let existing = new Set();
+  try {
+    const listed = await host.agent.list();
+    existing = new Set((listed?.data || listed || []).map((a) => a?.id || a?.name));
+  } catch (err) {
+    log(host, 'warn', 'agent.list() failed; assuming an empty registry', errDetail(err));
+  }
+
+  const registration = await host.agent.transform((draft) => {
+    const claimed = new Set(existing);
+    const added = [];
+    for (const [name, def] of Object.entries(agentDefs)) {
+      if (claimed.has(name)) continue;
+      claimed.add(name);
+      added.push(name);
+      draft.add(toAgentInfo(name, def));
+    }
+    log(host, 'debug', 'agent.transform pass', { added });
+  });
+  try {
+    if (typeof host.agent.reload === 'function') await host.agent.reload();
+    log(host, 'info', 'agent profiles registered', { count: Object.keys(agentDefs).length });
+  } catch (err) {
+    log(host, 'warn', 'agent.reload() failed', errDetail(err));
+  }
+  return registration ? [registration] : [];
+}
+
+/** Short role system prompts for the factory seats (skills carry the long form). */
+const FACTORY_SYSTEM = {
+  manager:
+    'You are the IUMBTEMS Factory Manager. Own gate discipline: grill until the frontier is settled, run the brainstorm and darkharvest swarms, synthesize .roadmap phase dossiers, spawn the programmer per phase, run qa-a and qa-b, and tiebreak their disagreements. Never write implementation code. Use the iumbtems_factory tool for run state. Explicit user approval advances each gate.',
+  programmer:
+    'You are the IUMBTEMS Factory Programmer. Implement exactly one phase brief per spawn. Cite phase evidence hashes. Never invoke swarms or other programmers. If the brief is ambiguous or untestable, stop and ask the manager.',
+  'qa-a':
+    'You are the IUMBTEMS Factory functional QA. Verify each phase acceptance criterion on the real surface with tests and inspection. Read-only plus test execution; never edit code. Return pass|fail(reason)|conditional(note).',
+  'qa-b':
+    'You are the IUMBTEMS Factory adversarial QA. Attack the phase: edge cases, regressions, vacuous acceptance criteria, error paths, resource limits. Read-only plus test execution; never edit code. Return pass|fail(reason)|conditional(note) with reproductions.',
+};
+
+/** Map one snippet agent definition to an Agent.Info shape. */
+function toAgentInfo(name, def) {
+  const permissions = [];
+  for (const [tool, enabled] of Object.entries(def?.tools || {})) {
+    permissions.push({ action: tool, resource: '*', effect: enabled ? 'allow' : 'deny' });
+  }
+  for (const [key, value] of Object.entries(def?.permission || {})) {
+    if (typeof value === 'string') {
+      permissions.push({ action: key, resource: '*', effect: value });
+    } else if (value && typeof value === 'object') {
+      for (const [resource, effect] of Object.entries(value)) {
+        permissions.push({ action: key, resource, effect });
+      }
+    }
+  }
+  const info = {
+    id: name,
+    name,
+    description: def?.description || `IUMBTEMS ${name}`,
+    mode: def?.mode || 'all',
+    hidden: Boolean(def?.hidden),
+    request: { settings: {}, headers: {}, body: {} },
+    permissions,
+  };
+  if (def?.steps) info.steps = def.steps;
+  if (def?.color) info.color = def.color;
+  const system = FACTORY_SYSTEM[name];
+  if (system) info.system = system;
+  return info;
+}
+
+/** Canonical skills the plugin registers so agents never hunt the filesystem. */
+const BUNDLED_SKILLS = [
+  'factory',
+  'darkharvest',
+  'brainstorming',
+  'grilling',
+  'swarm_config',
+  'code_audit',
+  'oss_scout',
+  'research_cache',
+  'epistemic_search',
+];
+
+function parseSkillFrontmatter(text) {
+  const out = {};
+  if (!text.startsWith('---')) return out;
+  const end = text.indexOf('\n---', 3);
+  if (end < 0) return out;
+  for (const line of text.slice(3, end).split('\n')) {
+    const idx = line.indexOf(':');
+    if (idx > 0) out[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+  }
+  return out;
+}
+
+async function registerHostSkills(host) {
+  // V2 Context exposes `skill.transform` (SkillDomain). Live evidence: with no
+  // skills registered, a factory agent ran `find / -name factory.py` and read
+  // the skill prose out of the CLAUDE plugin cache to learn its own mechanics.
+  if (typeof host?.skill?.transform !== 'function') return [];
+  const skills = [];
+  for (const name of BUNDLED_SKILLS) {
+    const skillPath = path.join(PKG_ROOT, 'skills', name, 'SKILL.md');
+    let content;
+    try {
+      content = readFileSync(skillPath, 'utf-8');
+    } catch {
+      continue;
+    }
+    const fm = parseSkillFrontmatter(content);
+    skills.push({
+      id: name,
+      name,
+      description: fm.description || `IUMBTEMS ${name} skill`,
+      path: skillPath,
+      content,
+      autoinvoke: true,
+    });
+  }
+  if (skills.length === 0) return [];
+
+  let existing = new Set();
+  try {
+    const listed = await host.skill.list();
+    existing = new Set((listed?.data || listed || []).map((s) => s?.id || s?.name));
+  } catch (err) {
+    log(host, 'warn', 'skill.list() failed; assuming an empty registry', errDetail(err));
+  }
+
+  const registration = await host.skill.transform((draft) => {
+    const claimed = new Set(existing);
+    const added = [];
+    for (const skill of skills) {
+      if (claimed.has(skill.id)) continue;
+      claimed.add(skill.id);
+      added.push(skill.id);
+      draft.add(skill);
+    }
+    log(host, 'debug', 'skill.transform pass', { added });
+  });
+  try {
+    if (typeof host.skill.reload === 'function') await host.skill.reload();
+    log(host, 'info', 'skills registered', { count: skills.length });
+  } catch (err) {
+    log(host, 'warn', 'skill.reload() failed', errDetail(err));
+  }
+  return registration ? [registration] : [];
+}
+
+function readPkgJson(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf-8'));
+  } catch {
+    return undefined;
+  }
+}
+
 async function applyConfigOptions(host, opts, context) {
   if (!opts || typeof opts !== 'object') return;
   const updates = {};
@@ -1043,6 +1222,36 @@ function startNudgeSubscription(host, opts, context, cleanups) {
   }
 }
 
+/**
+ * Best-effort session agent switch for commands that pin an agent.
+ *
+ * Live gap: `/factory` declared `agent: 'manager'` but the session kept running
+ * as `build`, so the manager playbook was never loaded. The V2 SessionDomain
+ * exposes `switchAgent`; its exact call shape is not pinned in the public types,
+ * so try the plausible shapes and never throw into the host.
+ */
+async function switchSessionAgent(host, sessionID, agentId) {
+  if (!agentId || !sessionID) return false;
+  const fn = host?.session?.switchAgent;
+  if (typeof fn !== 'function') return false;
+  const attempts = [
+    () => fn.call(host.session, { sessionID, agent: agentId }),
+    () => fn.call(host.session, { sessionID, agentID: agentId }),
+    () => fn.call(host.session, sessionID, agentId),
+    () => fn.call(host.session, agentId),
+  ];
+  for (const attempt of attempts) {
+    try {
+      const res = attempt();
+      if (res && typeof res.then === 'function') await res;
+      return true;
+    } catch {
+      /* try the next call shape */
+    }
+  }
+  return false;
+}
+
 export function createOpenCodePlugin(context = {}) {
   return {
     id: 'heretek.iumbtems.epistemic-swarm',
@@ -1074,6 +1283,16 @@ export function createOpenCodePlugin(context = {}) {
         adopt(await registerHostCommands(host));
       } catch (err) {
         log(host, 'error', 'registering slash commands failed', errDetail(err));
+      }
+      try {
+        adopt(await registerHostAgents(host));
+      } catch (err) {
+        log(host, 'error', 'registering agent profiles failed', errDetail(err));
+      }
+      try {
+        adopt(await registerHostSkills(host));
+      } catch (err) {
+        log(host, 'error', 'registering skills failed', errDetail(err));
       }
       try {
         adopt(await registerHostTools(host));
