@@ -149,6 +149,13 @@ iumbtems brainstorm "Where do we go from here?"
 # Product competitor teardown with per-feature harvest verdicts
 iumbtems darkharvest "Paseo-class agent harness competitor" --seeds https://github.com/a/b,https://github.com/c/d --max-repos 6 --mock-claude
 
+# Coding-factory run-state helper (init, phase-add, qa-record, expansion, stop)
+iumbtems factory init --run arena
+iumbtems factory phase-add --run arena --phase 01-handoff --goal "Session handoff" --accept "round-trips;STOP kills loop"
+iumbtems factory expansion --run arena --loops 10
+
+# OpenCode slash commands (also Pi/OMP/Gemini): /factory, /domainexpansion, /darkharvest, /scout, /audit, /grill, /swarm
+
 # Run Socratic grilling and decision frontier calculation
 iumbtems grill --objective "L1 vs L2 state verification trade-offs"
 
@@ -164,6 +171,8 @@ iumbtems test
 - **`/code-audit`**: Dialectic codebase review pairing a Structural Architect (thesis) with a Vulnerability Red-Teamer (antithesis) enforcing line-number proofs (`file:///path#L10-25`).
 - **`/oss-scout`**: Evaluates GitHub repositories, package ecosystems (npm, crates.io, PyPI), license contamination (GPL/AGPL copyleft vs MIT/Apache), and outputs clean-room re-implementation blueprints.
 - **`/darkharvest`**: Product competitor teardown (seed inspirations + prompt, expand to adjacents). Competitor × capability matrix, both-ways white-space gaps, per-feature `depend|vendor|clean-room-rebuild|skip` verdicts with SPDX attribution. Permissive-only vendoring; GPL/AGPL spec-rebuild only.
+- **`/factory`**: Coding-factory Manager loop — grill-gated phased build (manager profile), per-phase programmer spawns, dual QA (3 retries then escalate), explicit sign-off per phase.
+- **`/domainexpansion`**: Autonomous agent-guided self-improvement loop (`/domainexpansion <n>`, max 10); bypasses gates, stops on count OR `.factory/STOP` OR user kill.
 - **`/grilling`**: Socratic assumption-inversion and Matt Pocock-style design tree frontier discovery.
 - **`epistemic_search`**: Zero-key DuckDuckGo Lite search and content-addressed fetch with automatic SHA-256 caching.
 

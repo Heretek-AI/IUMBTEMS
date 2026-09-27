@@ -26,6 +26,8 @@ EXPECTED_COMMANDS = [
     "brainstorming",
     "brainstorm",
     "darkharvest",
+    "factory",
+    "domainexpansion",
 ]
 
 
@@ -282,6 +284,10 @@ class TestInstallOpenCode(unittest.TestCase):
                 "epistemic-auditor",
                 "brainstormer",
                 "darkharvester",
+                "manager",
+                "programmer",
+                "qa-a",
+                "qa-b",
             ]:
                 self.assertIn(agent, cfg.get("agent", {}))
             self.assertIn("iumbtems", cfg.get("mcp", {}))
@@ -606,6 +612,8 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
             "brainstorming",
             "brainstorm",
             "darkharvest",
+            "factory",
+            "domainexpansion",
         ]:
             self.assertIn(c, data["commands"])
         self.assertNotIn("goal", data["commands"])

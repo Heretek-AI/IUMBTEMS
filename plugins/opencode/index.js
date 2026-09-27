@@ -512,6 +512,37 @@ export const OPENCODE_COMMANDS = [
       '3. Legal rule: permissive-only vendor; GPL/AGPL clean-room-rebuild only; workflows clonable, assets never.',
     ].join('\n'),
   },
+  {
+    name: 'factory',
+    description: 'Coding-factory Manager loop: grill-gated phased build with programmer spawns and dual QA',
+    usage: '/factory <product-arena>',
+    agent: 'manager',
+    subtask: false,
+    template: [
+      'Run the IUMBTEMS coding-factory Manager loop as the manager agent.',
+      'Arena: $ARGUMENTS',
+      'If $ARGUMENTS is empty, ask the user what to build first; never proceed on placeholder input.',
+      '1. Grill the user until .factory/frontier.json is settled (max 5 brainstorm+darkharvest swarm cycles per gate); explicit user approve advances each gate.',
+      '2. Per gate run iumbtems_brainstorm and iumbtems_darkharvest (mock_mode only for dry runs), then synthesize .roadmap/<phase>/ GOAL.md + dossier.json (goal/evidence/acceptance/brief/verdict/hashes; every claim needs a VERIFIED hash).',
+      '3. Spawn the programmer subagent per phase with the phase dossier (cite phase hashes); run qa-a and qa-b (diverged prompts) per phase; track retries with skills/factory/scripts/factory.py (3 failures escalate to manager).',
+      '4. Manager tiebreaks QA disagreements; explicit user sign-off closes each phase.',
+    ].join('\n'),
+  },
+  {
+    name: 'domainexpansion',
+    description: 'Autonomous agent-guided self-improvement loop over the codebase (count-flagged)',
+    usage: '/domainexpansion <n>',
+    agent: 'manager',
+    subtask: false,
+    template: [
+      'Run the IUMBTEMS domain-expansion loop as the manager agent.',
+      'Loops: $ARGUMENTS (integer count, max 10)',
+      'If $ARGUMENTS is not a positive integer, ask the user for the loop count first.',
+      '1. Bypass per-loop gates; stop on count OR .factory/STOP file OR user kill, whichever first (enforce via skills/factory/scripts/factory.py expansion).',
+      '2. Each loop: agents propose direction, quick iumbtems_brainstorm/iumbtems_darkharvest check, implement via programmer spawn, dual-QA verify.',
+      '3. All expansion proposals carry the strict VERIFIED evidence bar; log every loop to .factory/state.json.',
+    ].join('\n'),
+  },
 ];
 
 /**
@@ -527,6 +558,8 @@ export function commandCatalog() {
   for (const cmd of OPENCODE_COMMANDS) {
     if (!cmd?.name) continue;
     out[cmd.name] = { description: cmd.description, template: cmd.template };
+    if (cmd.agent) out[cmd.name].agent = cmd.agent;
+    if (cmd.subtask !== undefined) out[cmd.name].subtask = cmd.subtask;
   }
   return out;
 }
@@ -785,6 +818,8 @@ async function registerHostCommands(host) {
       draft.add({
         name: cmd.name,
         description: cmd.description,
+        ...(cmd.agent ? { agent: cmd.agent } : {}),
+        ...(cmd.subtask !== undefined ? { subtask: cmd.subtask } : {}),
         execute: async (input) => {
           const args = input?.prompt?.text || '';
           const prompt = (typeof input?.prompt === 'object' && input?.prompt !== null) ? input.prompt : {};

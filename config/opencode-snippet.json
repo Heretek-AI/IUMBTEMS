@@ -99,6 +99,92 @@
         "iumbtems_verify_quote": true,
         "iumbtems_config": true
       }
+    },
+    "manager": {
+      "description": "IUMBTEMS Factory Manager: grill-gated phased builds. Owns gates, swarm dispatch, roadmap synthesis, QA tiebreaks. Never writes code.",
+      "mode": "primary",
+      "temperature": 0.2,
+      "permission": {
+        "edit": "deny",
+        "bash": "ask",
+        "task": {
+          "*": "deny",
+          "factory-*": "allow",
+          "programmer": "allow",
+          "qa-a": "allow",
+          "qa-b": "allow",
+          "brainstormer": "allow",
+          "darkharvester": "allow"
+        }
+      },
+      "tools": {
+        "read": true,
+        "write": true,
+        "grep": true,
+        "glob": true,
+        "task": true,
+        "iumbtems_brainstorm": true,
+        "iumbtems_darkharvest": true,
+        "iumbtems_verify_quote": true,
+        "iumbtems_socratic_frontier": true,
+        "iumbtems_config": true
+      }
+    },
+    "programmer": {
+      "description": "IUMBTEMS Factory Programmer: implements exactly one phase brief per spawn. Cites phase evidence hashes. Never invokes swarms or other programmers.",
+      "mode": "subagent",
+      "temperature": 0.3,
+      "permission": {
+        "edit": "allow",
+        "bash": "ask",
+        "task": {
+          "*": "deny"
+        }
+      },
+      "tools": {
+        "read": true,
+        "write": true,
+        "bash": true,
+        "grep": true,
+        "glob": true,
+        "iumbtems_verify_quote": true
+      }
+    },
+    "qa-a": {
+      "description": "IUMBTEMS Factory QA (functional): verifies phase acceptance criteria pass on the real surface. Read-only plus test execution. Diverged prompt from qa-b.",
+      "mode": "subagent",
+      "temperature": 0.1,
+      "permission": {
+        "edit": "deny",
+        "bash": "ask",
+        "task": {
+          "*": "deny"
+        }
+      },
+      "tools": {
+        "read": true,
+        "bash": true,
+        "grep": true,
+        "glob": true
+      }
+    },
+    "qa-b": {
+      "description": "IUMBTEMS Factory QA (adversarial): hunts edge cases, regressions, and acceptance loopholes the functional pass missed. Read-only plus test execution. Diverged prompt from qa-a.",
+      "mode": "subagent",
+      "temperature": 0.4,
+      "permission": {
+        "edit": "deny",
+        "bash": "ask",
+        "task": {
+          "*": "deny"
+        }
+      },
+      "tools": {
+        "read": true,
+        "bash": true,
+        "grep": true,
+        "glob": true
+      }
     }
   },
   "skills": {
@@ -110,7 +196,8 @@
       "./skills/code_audit",
       "./skills/oss_scout",
       "./skills/brainstorming",
-      "./skills/darkharvest"
+      "./skills/darkharvest",
+      "./skills/factory"
     ]
   }
 }

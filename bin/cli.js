@@ -50,6 +50,7 @@ Commands:
   run "<objective>"     Run the dialectic multi-agent research swarm
   brainstorm "<prompt>"  Run lateral brainstorming (feature vectors + spikes)
   darkharvest "<arena>"  Product competitor teardown with harvest verdicts
+  factory <subcommand>  Factory run-state helper (init, phase-add, qa-record, expansion, stop)
   grill                 Launch interactive Socratic decision tree framing
   adapters              Rebuild harness adapter mirrors (skills -> plugins/*, .agents)
   install               Install skills & MCP servers into ~/.claude/
@@ -82,6 +83,7 @@ Examples:
   iumbtems run "Verify sub-millisecond ZK prover latency"
   iumbtems brainstorm "Where do we go from here?"
   iumbtems darkharvest "Paseo-class agent harness competitor" --seeds https://github.com/a/b,https://github.com/c/d --max-repos 6 --mock-claude
+  iumbtems factory init --run arena && iumbtems factory phase-add --run arena --phase 01-x --goal "..." --accept "a;b"
   iumbtems grill --objective "Rollup architecture trade-offs"
   iumbtems doctor
 `);
@@ -171,6 +173,25 @@ switch (command) {
     }
     const forwardArgs = ['--mode', 'darkharvest', '--objective', objective, ...args.slice(2)];
     runPython('runner/research_swarm.py', forwardArgs);
+    break;
+  }
+
+  case 'factory': {
+    // Factory run-state helper: forward subcommands to skills/factory/scripts/factory.py
+    // e.g. iumbtems factory init --run arena
+    //      iumbtems factory qa-record --run arena --phase 01-x --seat qa-a --verdict pass
+    if (args[1] === '--help' || !args[1]) {
+      console.log([
+        'Usage: iumbtems factory <init|phase-add|qa-record|expansion|stop> [options]',
+        '  init --run <name>',
+        '  phase-add --run <name> --phase <id> --goal "<goal>" --accept "a;b"',
+        '  qa-record --run <name> --phase <id> --seat <qa-a|qa-b> --verdict <pass|fail|conditional> [--reason "..."]',
+        '  expansion --run <name> --loops <n> [--max-loops 10]',
+        '  stop --run <name>   (writes .factory/STOP kill-file)',
+      ].join('\n'));
+      break;
+    }
+    runPython('skills/factory/scripts/factory.py', args.slice(1));
     break;
   }
 

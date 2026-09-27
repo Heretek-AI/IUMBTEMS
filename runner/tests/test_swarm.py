@@ -402,6 +402,8 @@ In our experiments, the 70B parameter model was trained on 15.0 trillion tokens.
             "brainstorming",
             "brainstorm",
             "darkharvest",
+            "factory",
+            "domainexpansion",
         ]:
             self.assertIn(c, data_oc["commands"])
 

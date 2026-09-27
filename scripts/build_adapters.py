@@ -40,6 +40,7 @@ CANONICAL_SKILLS = [
     "oss_scout",
     "brainstorming",
     "darkharvest",
+    "factory",
 ]
 
 # Skill -> the MCP tool(s) that now carry its programmatic surface.
@@ -52,6 +53,11 @@ SKILL_TOOLS = {
     "oss_scout": ["iumbtems_oss_scout"],
     "brainstorming": ["iumbtems_brainstorm"],
     "darkharvest": ["iumbtems_darkharvest"],
+    "factory": [
+        "iumbtems_brainstorm",
+        "iumbtems_darkharvest",
+        "iumbtems_socratic_frontier",
+    ],
 }
 
 SKILL_TITLES = {
@@ -63,6 +69,7 @@ SKILL_TITLES = {
     "oss_scout": "OSS Scout",
     "brainstorming": "Brainstorming",
     "darkharvest": "Darkharvest",
+    "factory": "Factory",
 }
 
 # (target dir relative to root, mode). All targets are stubs since A2b.

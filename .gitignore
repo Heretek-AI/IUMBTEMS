@@ -1,6 +1,9 @@
 node_modules/
 .research/
 !.research/.gitkeep
+.factory/
+.roadmap/
+!.roadmap/.gitkeep
 __pycache__/
 *.py[cod]
 *$py.class
