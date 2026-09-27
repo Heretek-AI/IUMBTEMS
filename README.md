@@ -75,19 +75,20 @@ pi install npm:@heretek-ai/epistemic-swarm
 - OMP (`omp.sh`, oh-my-pi) shares the same entry point: `omp install npm:@heretek-ai/epistemic-swarm`, project commands in `.omp/commands/` (`/swarm`, `/grill`, `/audit`, `/scout`, `/brainstorming`, `/swarm-config`), prompts in `.omp/prompts/`, hooks in `.omp/hooks/pre|post/`.
 - All commands automatically respect `.research/config.json`.
 
-### 3. OpenCode V2 (`opencode.ai`)
-Enable IUMBTEMS in your `~/.config/opencode/opencode.json` or project `opencode.jsonc`. You can configure settings declaratively:
-```json
+### 3. OpenCode V2 ([opencode.ai/v2/docs](https://opencode.ai/v2/docs))
+Enable IUMBTEMS in your `~/.config/opencode/opencode.jsonc` or project `opencode.jsonc`. You can configure settings declaratively using native OpenCode V2 syntax:
+```jsonc
 {
-  "plugin": [
-    [
-      "@heretek-ai/epistemic-swarm",
-      {
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "@heretek-ai/epistemic-swarm",
+      "options": {
         "search_engine": "duckduckgo",
         "max_iterations": 2,
         "mode": "research"
       }
-    ]
+    }
   ]
 }
 ```
@@ -197,7 +198,7 @@ Every factual claim in IUMBTEMS carries an explicit evidentiary tag:
 1. **Discovery Tier**: SearXNG (unbiased metasearch) and Brave Search API.
 2. **Extraction Tier**: Firecrawl (headless JavaScript rendering, DOM cleaning, Markdown extraction).
 3. **Academic Tier**: Semantic Scholar / arXiv MCPs for DOI citation resolution.
-4. **Caching Tier**: Content-addressed SHA-256 storage (`skills/research-cache/hasher.py`).
+4. **Caching Tier**: Content-addressed SHA-256 storage (`skills/research_cache/hasher.py`).
 
 ### Local Infrastructure (Optional)
 Run local SearXNG and Firecrawl instances via Docker Compose:

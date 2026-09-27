@@ -7,15 +7,15 @@
       "enabled": true
     }
   },
-  "plugin": [
-    [
-      "@heretek-ai/epistemic-swarm",
-      {
+  "plugins": [
+    {
+      "package": "@heretek-ai/epistemic-swarm",
+      "options": {
         "search_engine": "duckduckgo",
         "max_iterations": 2,
         "mode": "research"
       }
-    ]
+    }
   ],
   "agent": {
     "code-auditor": {

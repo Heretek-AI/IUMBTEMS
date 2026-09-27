@@ -238,8 +238,12 @@ class TestFactoryHelper(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         data = last_json_object(res.stdout)
         self.assertEqual(data["factory"]["agent"], "manager")
+        self.assertEqual(data["factory"]["subagent"], False)
+        self.assertEqual(data["factory"]["subtask"], False)
         self.assertIn("$ARGUMENTS", data["factory"]["template"])
         self.assertEqual(data["expansion"]["agent"], "manager")
+        self.assertEqual(data["expansion"]["subagent"], False)
+        self.assertEqual(data["expansion"]["subtask"], False)
 
 
 if __name__ == "__main__":

@@ -577,6 +577,7 @@ export const OPENCODE_COMMANDS = [
     description: 'Coding-factory Manager loop: grill-gated phased build with programmer spawns and dual QA',
     usage: '/factory <product-arena>',
     agent: 'manager',
+    subagent: false,
     subtask: false,
     template: [
       'Run the IUMBTEMS coding-factory Manager loop as the manager agent.',
@@ -593,6 +594,7 @@ export const OPENCODE_COMMANDS = [
     description: 'Autonomous agent-guided self-improvement loop over the codebase (count-flagged)',
     usage: '/domainexpansion <n>',
     agent: 'manager',
+    subagent: false,
     subtask: false,
     template: [
       'Run the IUMBTEMS domain-expansion loop as the manager agent.',
@@ -619,7 +621,14 @@ export function commandCatalog() {
     if (!cmd?.name) continue;
     out[cmd.name] = { description: cmd.description, template: cmd.template };
     if (cmd.agent) out[cmd.name].agent = cmd.agent;
+    if (cmd.subagent !== undefined) out[cmd.name].subagent = cmd.subagent;
     if (cmd.subtask !== undefined) out[cmd.name].subtask = cmd.subtask;
+    if (out[cmd.name].subagent === undefined && out[cmd.name].subtask !== undefined) {
+      out[cmd.name].subagent = out[cmd.name].subtask;
+    }
+    if (out[cmd.name].subtask === undefined && out[cmd.name].subagent !== undefined) {
+      out[cmd.name].subtask = out[cmd.name].subagent;
+    }
   }
   return out;
 }
@@ -889,7 +898,12 @@ async function registerHostCommands(host) {
         name: cmd.name,
         description: cmd.description,
         ...(cmd.agent ? { agent: cmd.agent } : {}),
-        ...(cmd.subtask !== undefined ? { subtask: cmd.subtask } : {}),
+        ...(cmd.subagent !== undefined || cmd.subtask !== undefined
+          ? {
+              subagent: cmd.subagent !== undefined ? cmd.subagent : cmd.subtask,
+              subtask: cmd.subtask !== undefined ? cmd.subtask : cmd.subagent,
+            }
+          : {}),
         execute: async (input) => {
           const args = input?.prompt?.text || '';
           const prompt = (typeof input?.prompt === 'object' && input?.prompt !== null) ? input.prompt : {};
