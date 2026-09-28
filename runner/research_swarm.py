@@ -28,6 +28,7 @@ from runner.state_machine import (
     _atomic_write_json,
 )
 from runner.auditor_engine import EpistemicAuditorEngine
+from runner.errors import DossierNotFound
 from runner.retrieval_log import current_offset as _retrieval_offset
 from runner.retrieval_log import summarize as _retrieval_summary
 from skills.research_cache.hasher import SourceHasher
@@ -242,8 +243,12 @@ class SwarmRunner:
         agent_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
         allocation: Optional[str] = None,
         domain_pack: Optional[str] = None,
+        resume: bool = False,
+        dry_run: bool = False,
     ):
         self.base_dir = base_dir or Path(".research")
+        self.resume = resume
+        self.dry_run = dry_run
         # Project root = the directory containing the evidence dir. Agents are
         # spawned here so the relative `.research/...` paths named by the
         # canonical prompts resolve to the RUNNER's evidence tree. Spawning in
@@ -598,6 +603,22 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         return SwarmRunner._parse_json_block(text, require_key="scope_id")
 
     @staticmethod
+    def _warn_schema_violations(dossier: Dict[str, Any], role: str) -> None:
+        """Advisory contract check — warn with the offending key, never abort (#6 2.1)."""
+        try:
+            from runner.schema_validate import check_dossier
+
+            problems = check_dossier(dossier, role)
+        except Exception:  # noqa: BLE001 - validation must never break a run
+            return
+        for problem in problems[:5]:
+            sys.stderr.write(f"[swarm] schema: {problem}\n")
+        if len(problems) > 5:
+            sys.stderr.write(
+                f"[swarm] schema: … {len(problems) - 5} more violation(s)\n"
+            )
+
+    @staticmethod
     def _load_dossier_file(
         path: Path, expected_scope: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
@@ -682,6 +703,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                     f"  [{role}] ⚠️ Dossier found as {candidate.name}; "
                     f"normalized to {dossier_path.name}."
                 )
+            self._warn_schema_violations(data, role)
             return data
         recovered = self._parse_dossier_json(transcript or "")
         if recovered is not None:
@@ -690,8 +712,25 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             _atomic_write_json(dossier_path, recovered)
             print(f"  [{role}] ⚠️ Dossier file missing; recovered from stdout.")
             return recovered
-        raise FileNotFoundError(
-            self._dossier_missing_message(dossier_path, scope_id, role, aliases)
+        message = self._dossier_missing_message(dossier_path, scope_id, role, aliases)
+        elsewhere = None
+        for name in [dossier_path.name, *aliases]:
+            found = self._locate_dossier_elsewhere(scope_id, name)
+            if found:
+                elsewhere = found
+                break
+        raise DossierNotFound(
+            code="DOSSIER_NOT_FOUND",
+            message=message,
+            path_searched=str(dossier_path),
+            path_written=str(elsewhere) if elsewhere else None,
+            workspace=str(self.base_dir),
+            spawn_cwd=_agent_cwd(self.project_root),
+            suggested_fix=(
+                "The agent likely wrote to a different workspace than the runner "
+                "reads. Re-run on the current plugin, or point IUMBTEMS_AGENT_CWD / "
+                "IUMBTEMS_PROJECT_DIR at the runner's workspace."
+            ),
         )
 
     def _dossier_missing_message(
@@ -1219,6 +1258,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             else:
                 for scope in ready_scopes:
                     self.execute_scope_dialectic(scope)
+            self._write_progress()
 
     def _all_scopes_complete(self, manifest: Dict[str, Any]) -> bool:
         return all(
@@ -1247,10 +1287,40 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         # Retrieval telemetry baseline: count only events from this run.
         self._retrieval_offset = _retrieval_offset(self.base_dir)
         print(f"   {self._retrieval_banner()}")
-        print("=" * 70)
 
-        # 1. Orchestrate
-        self.orchestrate_objective(objective, frontier_file)
+        # Preflight: workspace, backend binary, engine reachability, write test.
+        from runner.preflight import format_report, preflight
+
+        self._preflight = preflight(
+            self.base_dir,
+            mode=self.mode,
+            config=self.config,
+            mock_mode=self.mock_mode,
+            probe=os.environ.get("IUMBTEMS_PREFLIGHT_PROBE", "1").strip().lower()
+            not in ("0", "false", "no", "off"),
+        )
+        print(format_report(self._preflight))
+        print("=" * 70)
+        self.state_machine.record_preflight(
+            self._preflight, backend=self._preflight.get("backend", {}).get("family")
+        )
+
+        if self.dry_run:
+            print("\n🧪 [Dry Run] configuration validated; no agents spawned.")
+            return
+
+        # 1. Orchestrate (skip when resuming a session that already has scopes)
+        resumed = False
+        if self.resume:
+            try:
+                existing = self.state_machine.load_global_manifest().get("scopes") or []
+            except FileNotFoundError:
+                existing = []
+            resumed = bool(existing)
+            if resumed:
+                print(f"   ↻ resume: {len(existing)} scope(s) already recorded")
+        if not resumed:
+            self.orchestrate_objective(objective, frontier_file)
 
         # 2. Execute scopes according to DAG
         if not self._run_scope_batches():
@@ -1266,7 +1336,69 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
 
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         print(f"   {self._retrieval_banner()}")
+        self._warn_version_drift()
+        self._report_stdout_recovery()
         print(f"\n🎉 Swarm run completed in {duration:.1f}s. Report: {report_path}")
+
+    def _write_progress(self) -> None:
+        """Per-scope status snapshot so a long run is observable while it runs."""
+        try:
+            manifest = self.state_machine.load_global_manifest()
+            rows = [
+                {
+                    "scope_id": scope["scope_id"],
+                    "status": self.state_machine.reconcile_scope_status(
+                        scope["scope_id"]
+                    ).get("status"),
+                }
+                for scope in manifest.get("scopes", [])
+            ]
+            (self.base_dir / "progress.json").write_text(
+                json.dumps(rows, indent=2), encoding="utf-8"
+            )
+        except Exception:  # noqa: BLE001 - progress must not fail a run
+            return
+
+    def _report_stdout_recovery(self) -> None:
+        """Surface dossiers salvaged from stdout — the file-write path failed (#6 2.9)."""
+        try:
+            manifest = self.state_machine.load_global_manifest()
+        except Exception:  # noqa: BLE001
+            return
+        recovered = []
+        for scope in manifest.get("scopes", []):
+            scope_dir = self.state_machine.get_scope_dir(scope["scope_id"])
+            for name in ("alpha_dossier.json", "beta_dossier.json"):
+                path = scope_dir / name
+                if not path.exists():
+                    continue
+                try:
+                    if json.loads(path.read_text(encoding="utf-8")).get(
+                        "recovered_from_stdout"
+                    ):
+                        recovered.append(f"{scope['scope_id']}/{name}")
+                except (OSError, ValueError):
+                    continue
+        if recovered:
+            print(
+                f"   ⚠️ {len(recovered)} dossier(s) recovered from stdout "
+                f"(agent file write failed): {', '.join(recovered[:4])}"
+            )
+
+    def _warn_version_drift(self) -> None:
+        """Warn when the installed plugin version changed during the run (#6 2.7)."""
+        try:
+            from runner.preflight import plugin_version
+
+            current = plugin_version()
+            recorded = self.state_machine.load_global_manifest().get("plugin_version")
+        except Exception:  # noqa: BLE001
+            return
+        if recorded and current and recorded != current:
+            print(
+                f"   ⚠️ plugin version changed mid-run: {recorded} -> {current}; "
+                "artifacts may span versions"
+            )
 
     def _write_orphan_report(self) -> None:
         """Record scope dirs absent from every manifest (mark-only, never delete)."""
@@ -1500,6 +1632,16 @@ def main():
         default=None,
         help="Agent runtime backend for both roles (default: auto = host-native; explicit beats env/config)",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Continue an existing session instead of re-orchestrating",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate config/backends/engine and exit without spawning agents",
+    )
 
     args = parser.parse_args()
     frontier_path = Path(args.frontier) if args.frontier else None
@@ -1525,6 +1667,8 @@ def main():
         agent_overrides=agent_overrides or None,
         allocation=args.allocation,
         domain_pack=args.domain_pack,
+        resume=getattr(args, "resume", False),
+        dry_run=getattr(args, "dry_run", False),
     )
     runner.run_swarm(args.objective, frontier_file=frontier_path)
 

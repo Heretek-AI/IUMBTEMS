@@ -333,6 +333,18 @@ Darkharvest dossiers carry `candidate_repositories[]` rather than the standard c
 
 Agent-authored audit-shaped fields are renamed to `self_reported_*` and never counted. The per-scope §3 text is verdict-driven (no more static "100% of cited assertions verified"). Orphaned scope dirs are listed in `.research/orphans.json` and never auto-deleted.
 
+### 6.5 Contracts, Preflight, and Run Lifecycle
+
+**Contracts are generated.** `runner/schemas.py` is the source of truth for `alpha_dossier`, `beta_dossier`, `audit_report`, `manifest`, `scope_manifest`, and `frontier`; `python3 scripts/gen_schemas.py` renders `schemas/*.schema.json` and `--check` fails CI on drift. `runner/schema_validate.py` is a dependency-free subset validator; dossiers are checked **warn-on-load** so a missing key is named without aborting the run.
+
+**Preflight.** Every swarm prints a preflight line — plugin version, backend family + resolved binary path, engine with a live one-query probe (timeout-bounded, skippable), and a workspace write test — and records it in the manifest under `preflight`. It is also exposed as the `iumbtems_doctor` tool. `iumbtems_test` runs the suite in a subprocess.
+
+**Run lifecycle.** Runs stamp the plugin version + backend and warn if the version changes mid-run; they write `.research/progress.json` per scope; `--resume` continues a session with existing scopes instead of re-orchestrating; `--dry-run` validates configuration without spawning agents. Failures raise typed `runner/errors.py` errors carrying code, searched/written paths, workspace, spawn cwd, and a suggested fix.
+
+**Run-scoped layout (opt-in).** With `IUMBTEMS_RUN_SCOPED=1`, artifacts live under `.research/runs/<run_id>/` with a `latest.json` pointer; `find_any_manifest` and PCRB resolve across both layouts. Default remains the flat layout pending a live end-to-end run.
+
+**Factory gate.** `iumbtems_factory` (and the CLI) expose `gate open|settle|approve|waive|escalate|count` as first-class state, and `phase-add` writes its own `phase.json` — it never overwrites author-written `GOAL.md`/`dossier.json` (refused unless `--force`).
+
 ### 6.3 Configuration Merge & Migration
 
 `load_config` deep-merges the `agents` block one role/key at a time over `DEFAULT_CONFIG`. Configs written before 0.7.6 that pinned `agents.<role>.backend = ["claude", "-p"]` are migrated to `null` on load (unless the top-level `backend` is an explicit `"claude"`), and the migration is persisted by the CLI and `iumbtems_config`.

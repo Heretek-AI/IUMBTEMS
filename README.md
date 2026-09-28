@@ -199,10 +199,12 @@ iumbtems adapters
 # Other utility commands
 iumbtems install      # install skills & MCP servers into ~/.claude/
 iumbtems marketplace  # print the Claude Code marketplace catalog
-iumbtems doctor       # check environment requirements
+iumbtems doctor       # environment + preflight health check
 iumbtems test         # run the automated test suite
 iumbtems help         # full usage text
 ```
+
+Run-shaping flags: `--resume` (continue a session instead of re-orchestrating) and `--dry-run` (validate config/backends/engine without spawning agents). Frontier authoring is fully tool-driven: `socratic_tree.py --add-node/--settle/--export`.
 
 Common options: `--mock-claude` (synthetic responses, zero API cost), `--frontier <file>` (settled `frontier.json`), `--mode <research|audit|scout|hybrid|brainstorm|darkharvest>`, `--engine <duckduckgo|brave|firecrawl|searxng>`, `--depth <1-4>`, `--backend <auto|claude|opencode>`, `--dir <path>`.
 
@@ -231,6 +233,8 @@ The canonical MCP server (`python3 runner/mcp_server.py`, stdio) exposes these t
 | `iumbtems_report_retraction` | Record a RETRACTED/REVISED event for a cached source; dependent `VERIFIED` claims degrade to STALE/SUSPECT on the next audit. |
 | `iumbtems_check_staleness` | One claim-degradation pass: join claims against retraction events, write the status ledger, queue re-runs for degraded scopes. Never mutates dossiers. |
 | `iumbtems_set_domain_pack` | Activate a Regulated Domain Pack (`biopharma` / `quant` / `legal` epistemic constitution) for subsequent audits. |
+| `iumbtems_doctor` | Preflight health check: plugin version, backend + resolved binary, search-engine live probe, workspace write test. Run first when something looks wrong. |
+| `iumbtems_test` | Run the packaged test suite in a subprocess and report pass/fail with the tail. |
 
 ---
 

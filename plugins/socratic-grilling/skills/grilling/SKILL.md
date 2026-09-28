@@ -42,7 +42,20 @@ Always challenge default premises in Round 1:
 
 ## 5. FRONTIER RESOLUTION & FREEZING
 
+The frontier is fully tool-drivable (no hand-written JSON):
+
+```bash
+# author a node (prerequisites gate when it appears on the frontier)
+python3 skills/grilling/socratic_tree.py --add-node --id N1 \
+  --question "L1 or L2 for state verification?" --depends-on ""
+# settle a node
+python3 skills/grilling/socratic_tree.py --settle N1 "L1 for finality"
+# inspect / freeze
+python3 skills/grilling/socratic_tree.py --show-frontier
+python3 skills/grilling/socratic_tree.py --export
+```
+
 When every branch of the design tree has been visited and the frontier is empty:
 1. Summarize the settled constraints.
-2. Save the settled state to `.research/frontier.json` using `python3 skills/grilling/socratic_tree.py --export`.
+2. Freeze the settled state to `.research/frontier.json` (`--export`, default path).
 3. Hand off the settled frontier to the **Swarm Orchestrator** to begin empirical dialectic execution.

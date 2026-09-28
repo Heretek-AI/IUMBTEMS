@@ -53,6 +53,10 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
 - After touching `skills/*`, `package.json` (pi/omp blocks), or OpenCode plugin
   surface: run `python3 scripts/build_adapters.py --check` and
   `python3 -m unittest discover -s runner/tests`. Both must be green.
+- After touching `runner/schemas.py`: run `python3 scripts/gen_schemas.py`
+  (regenerates `schemas/*.schema.json`); `--check` must be green.
+- Docs changes: `python3 scripts/check_docs.py` must resolve every repo-relative
+  reference.
 - OpenCode V2 is the first-class target: agent profiles + commands live in
   `config/opencode-snippet.json` and `plugins/opencode/index.js`
   (`OPENCODE_COMMANDS`, `commandCatalog()`); commands may pin `agent:` and
@@ -125,6 +129,19 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   (`epistemic_audit`, `confidence`, `verified_*`) are renamed to `self_reported_*`
   and never counted. The per-scope §3 text follows the verdict, and orphaned scope
   dirs are reported to `.research/orphans.json` (marked, never deleted).
+- Contracts are generated, not guessed: `runner/schemas.py` → `schemas/*.schema.json`
+  via `python3 scripts/gen_schemas.py` (`--check` fails CI on drift), validated
+  warn-on-load so a missing key is named without aborting a run. `scripts/check_docs.py`
+  fails on repo-relative doc references that don't resolve.
+- `iumbtems_doctor` (MCP) / preflight auto-runs at every swarm start: version,
+  backend + resolved binary, engine live probe, workspace write test. `iumbtems_test`
+  runs the suite in a subprocess. The frontier is tool-drivable
+  (`socratic_tree.py --add-node/--settle/--export`, and `iumbtems_socratic_frontier`
+  actions `add|export|settle|inspect`). `factory` writes `phase.json` (never
+  `GOAL.md`/`dossier.json`, refused unless `--force`) and exposes `gate
+  open|settle|approve|waive|escalate|count`. Runs support `--resume` and
+  `--dry-run`, write `.research/progress.json`, and resolve the workspace via a
+  run-scoped layout when `IUMBTEMS_RUN_SCOPED=1` (default: flat).
 
 ## Releases
 - Bump `package.json` (+ lockfile sync) **and `.claude-plugin/plugin.json`**

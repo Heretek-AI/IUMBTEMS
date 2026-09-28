@@ -150,6 +150,8 @@ def _run_swarm_mode(mode: Optional[str], args: Dict[str, Any]) -> str:
         depth=args.get("depth"),
         domain_pack=args.get("domain_pack"),
         agent_overrides=overrides,
+        resume=bool(args.get("resume")),
+        dry_run=bool(args.get("dry_run")),
     )
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -209,9 +211,9 @@ def _handle_factory(args: Dict[str, Any]) -> str:
     import subprocess
 
     command = str(args.get("command") or "").strip()
-    if command not in ("init", "phase-add", "qa-record", "expansion", "stop"):
+    if command not in ("init", "phase-add", "qa-record", "expansion", "stop", "gate"):
         raise ValueError(
-            "command must be one of: init, phase-add, qa-record, expansion, stop"
+            "command must be one of: init, phase-add, qa-record, expansion, stop, gate"
         )
     script = Path(PROJECT_ROOT) / "skills" / "factory" / "scripts" / "factory.py"
     if not script.is_file():
@@ -412,20 +414,95 @@ def _handle_reindex_claims(args: Dict[str, Any]) -> str:
     return _tool_text(reindex(base_dir))
 
 
+def _handle_doctor(args: Dict[str, Any]) -> str:
+    """Preflight for the resolved workspace: backend, engine, write test, version."""
+    from runner.preflight import format_report, preflight
+    from skills.swarm_config.configure import load_config
+
+    base_dir = _resolve_base_dir(args)
+    cfg = load_config(str(base_dir))
+    report = preflight(
+        base_dir,
+        mode=args.get("mode") or cfg.get("mode") or "research",
+        config=cfg,
+        # Never spawn in a health check; report resolution only.
+        mock_mode=True,
+        probe=bool(args.get("probe", True)),
+    )
+    return _tool_text({"report": report, "text": format_report(report)})
+
+
+def _handle_test(args: Dict[str, Any]) -> str:
+    """Run the packaged test suite in a subprocess (timeout-bounded)."""
+    import subprocess
+
+    timeout = float(os.environ.get("IUMBTEMS_TEST_TIMEOUT", "300"))
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "unittest", "discover", "-s", "runner/tests"],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        return _tool_text({"status": "timeout", "timeout_s": timeout})
+    tail = "\n".join((result.stderr or "").strip().splitlines()[-12:])
+    passed = result.returncode == 0
+    return _tool_text(
+        {
+            "status": "pass" if passed else "fail",
+            "returncode": result.returncode,
+            "tail": tail,
+        }
+    )
+
+
 def _handle_socratic_frontier(args: Dict[str, Any]) -> str:
-    """Advance or inspect the Socratic decision-tree frontier."""
-    from skills.grilling.socratic_tree import DesignTree
+    """Inspect, add to, settle, or export the Socratic decision-tree frontier."""
+    from skills.grilling.socratic_tree import DecisionNode, DesignTree
 
     file_path = Path(
         args.get("file") or args.get("frontier_file") or ".research/frontier.json"
     )
+    action = str(args.get("action") or "").strip().lower()
+    node_spec = args.get("node") if isinstance(args.get("node"), dict) else {}
+
+    def _tree():
+        if file_path.exists():
+            return DesignTree.load_from_json(file_path)
+        return DesignTree(objective=args.get("objective", ""))
+
+    # Authoring: add a node (tool-drivable, previously hand-written JSON only).
+    if action == "add" or node_spec:
+        if not node_spec.get("id") or not node_spec.get("question"):
+            return _tool_text(
+                {"status": "error", "message": "'node' needs 'id' and 'question'"}
+            )
+        tree = _tree()
+        tree.add_node(
+            DecisionNode(
+                node_id=node_spec["id"],
+                title=node_spec.get("title") or node_spec["id"],
+                question=node_spec["question"],
+                recommended=node_spec.get("recommended", ""),
+                options=node_spec.get("options") or [],
+                prerequisites=node_spec.get("depends_on") or [],
+            )
+        )
+        tree.export_frontier_json(file_path)
+        return _tool_text(
+            {"status": "added", "node_id": node_spec["id"], "file": str(file_path)}
+        )
+
+    if action == "export":
+        _tree().export_frontier_json(file_path)
+        return _tool_text({"status": "exported", "file": str(file_path)})
 
     if args.get("settle"):
         node_id, answer = args["settle"][0], args["settle"][1]
-        if file_path.exists():
-            tree = DesignTree.load_from_json(file_path)
-        else:
-            tree = DesignTree(objective=args.get("objective", ""))
+        tree = _tree()
         tree.settle_node(node_id, answer)
         tree.export_frontier_json(file_path)
         return _tool_text(
@@ -545,6 +622,10 @@ def build_tools() -> List[ToolSpec]:
                         "description": "Codebase target or audit focus",
                     },
                     "base_dir": {"type": "string"},
+                    "frontier_file": {
+                        "type": "string",
+                        "description": "Settled frontier.json from /grilling",
+                    },
                     "mock_claude": {"type": "boolean"},
                     "backend": {
                         "type": "string",
@@ -566,6 +647,10 @@ def build_tools() -> List[ToolSpec]:
                         "description": "Feature or library to scout",
                     },
                     "base_dir": {"type": "string"},
+                    "frontier_file": {
+                        "type": "string",
+                        "description": "Settled frontier.json from /grilling",
+                    },
                     "mock_claude": {"type": "boolean"},
                     "backend": {
                         "type": "string",
@@ -587,6 +672,10 @@ def build_tools() -> List[ToolSpec]:
                         "description": "Ambiguous prompt to ideate on",
                     },
                     "base_dir": {"type": "string"},
+                    "frontier_file": {
+                        "type": "string",
+                        "description": "Settled frontier.json from /grilling",
+                    },
                     "mock_claude": {"type": "boolean"},
                     "backend": {
                         "type": "string",
@@ -618,6 +707,10 @@ def build_tools() -> List[ToolSpec]:
                     },
                     "depth": {"type": "integer", "description": "Dialectic depth 1-4"},
                     "base_dir": {"type": "string"},
+                    "frontier_file": {
+                        "type": "string",
+                        "description": "Settled frontier.json from /grilling",
+                    },
                     "mock_claude": {"type": "boolean"},
                     "backend": {
                         "type": "string",
@@ -801,6 +894,15 @@ def build_tools() -> List[ToolSpec]:
                 "properties": {
                     "file": {"type": "string", "description": "Path to frontier.json"},
                     "objective": {"type": "string"},
+                    "action": {
+                        "type": "string",
+                        "enum": ["inspect", "add", "settle", "export"],
+                        "description": "inspect (default) | add a node | settle a node | export the file",
+                    },
+                    "node": {
+                        "type": "object",
+                        "description": "Node to add: {id, question, title?, recommended?, depends_on?[]}",
+                    },
                     "settle": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -809,6 +911,28 @@ def build_tools() -> List[ToolSpec]:
                 },
             },
             handler=_handle_socratic_frontier,
+        ),
+        ToolSpec(
+            name="iumbtems_doctor",
+            description="Preflight health check for the resolved workspace: plugin version, backend binary, search-engine reachability, and workspace writability. Run this first when anything looks wrong.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "base_dir": {"type": "string"},
+                    "mode": {"type": "string"},
+                    "probe": {
+                        "type": "boolean",
+                        "description": "Run a live 1-query search probe (default true)",
+                    },
+                },
+            },
+            handler=_handle_doctor,
+        ),
+        ToolSpec(
+            name="iumbtems_test",
+            description="Run the packaged IUMBTEMS test suite (subprocess, timeout-bounded) and report pass/fail with the tail of the output.",
+            input_schema={"type": "object", "properties": {}},
+            handler=_handle_test,
         ),
     ]
 

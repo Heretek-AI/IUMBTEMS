@@ -37,6 +37,8 @@ EXPECTED_TOOLS = [
     "iumbtems_set_domain_pack",
     "iumbtems_export_brief",
     "iumbtems_verify_brief",
+    "iumbtems_doctor",
+    "iumbtems_test",
 ]
 
 

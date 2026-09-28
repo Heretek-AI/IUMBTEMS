@@ -118,6 +118,7 @@
     "bin",
     "prompts",
     "skills",
+    "schemas",
     "hooks",
     "config",
     "runner",

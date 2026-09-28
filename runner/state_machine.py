@@ -44,6 +44,36 @@ class ScopeStatus(str, Enum):
 
 
 MANIFEST_FILENAME = "manifest.json"
+RUNS_DIRNAME = "runs"
+LATEST_POINTER = "latest.json"
+
+
+def run_scoped_enabled() -> bool:
+    """Opt-in run-scoped layout (`.research/runs/<id>/`). Default: flat.
+
+    The capability ships behind `IUMBTEMS_RUN_SCOPED=1` rather than flipped by
+    default: it changes every artifact path and deserves a live end-to-end run
+    before it becomes the default (see issue #6 item 3.9).
+    """
+    return os.environ.get("IUMBTEMS_RUN_SCOPED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def latest_run_dir(workspace: Path) -> Optional[Path]:
+    """The run dir a `latest.json` pointer refers to, if any."""
+    try:
+        data = json.loads((workspace / LATEST_POINTER).read_text(encoding="utf-8"))
+        run_id = data.get("run_id")
+    except (OSError, ValueError):
+        return None
+    if not run_id:
+        return None
+    candidate = workspace / RUNS_DIRNAME / str(run_id)
+    return candidate if candidate.is_dir() else None
 
 
 def manifest_name_for_mode(mode: Optional[str]) -> str:
@@ -68,19 +98,29 @@ def resolve_manifest_path(base_dir, mode: Optional[str] = None) -> Path:
 def find_any_manifest(base_dir) -> Optional[Path]:
     """Newest manifest in the workspace, preferring the canonical name.
 
-    Lets mode-agnostic readers (e.g. PCRB export) find whichever session last
-    wrote a manifest.
+    Understands both layouts: flat (`manifest.json`, `manifest.<mode>.json`) and
+    run-scoped (`runs/<id>/manifest*.json`, resolved via `latest.json`).
     """
     base = Path(os.path.realpath(str(base_dir)))
+    candidates = []
     canonical = base / MANIFEST_FILENAME
     if canonical.exists():
         return canonical
-    candidates = sorted(
-        base.glob("manifest.*.json"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    return candidates[0] if candidates else None
+    candidates.extend(base.glob("manifest.*.json"))
+
+    run_dir = latest_run_dir(base)
+    if run_dir is not None:
+        run_manifest = run_dir / MANIFEST_FILENAME
+        if run_manifest.exists():
+            return run_manifest
+        candidates.extend(run_dir.glob("manifest.*.json"))
+    if (base / RUNS_DIRNAME).is_dir():
+        candidates.extend((base / RUNS_DIRNAME).glob("*/manifest*.json"))
+
+    existing = [c for c in candidates if c.exists()]
+    if not existing:
+        return None
+    return max(existing, key=lambda p: p.stat().st_mtime)
 
 
 @contextmanager
@@ -122,8 +162,26 @@ def _atomic_write_json(path: Path, data: Any) -> None:
 
 
 class ResearchStateMachine:
-    def __init__(self, base_dir: Optional[Path] = None, mode: Optional[str] = None):
-        self.base_dir = Path(os.path.realpath(str(base_dir or ".research")))
+    def __init__(
+        self,
+        base_dir: Optional[Path] = None,
+        mode: Optional[str] = None,
+        run_scoped: Optional[bool] = None,
+        run_id: Optional[str] = None,
+    ):
+        workspace = Path(os.path.realpath(str(base_dir or ".research")))
+        if run_scoped is None:
+            run_scoped = run_scoped_enabled()
+        self.workspace = workspace
+        self.run_scoped = bool(run_scoped)
+        if self.run_scoped:
+            self.run_id = run_id or (
+                f"{mode or 'run'}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+            )
+            self.base_dir = workspace / RUNS_DIRNAME / self.run_id
+        else:
+            self.run_id = None
+            self.base_dir = workspace
         self.scratchpads_dir = self.base_dir / "scratchpads"
         self.sources_dir = self.base_dir / "sources"
         self.manifest_file = self.base_dir / manifest_name_for_mode(mode)
@@ -133,6 +191,16 @@ class ResearchStateMachine:
         # Ensure directories exist
         self.scratchpads_dir.mkdir(parents=True, exist_ok=True)
         self.sources_dir.mkdir(parents=True, exist_ok=True)
+        if self.run_scoped:
+            self._write_latest_pointer(mode)
+
+    def _write_latest_pointer(self, mode: Optional[str]) -> None:
+        try:
+            (self.workspace / LATEST_POINTER).write_text(
+                json.dumps({"run_id": self.run_id, "mode": mode}), encoding="utf-8"
+            )
+        except OSError:
+            pass
 
     def init_session(
         self, objective: str, session_id: Optional[str] = None
@@ -161,6 +229,24 @@ class ResearchStateMachine:
         }
         self.save_global_manifest(manifest)
         return manifest
+
+    def record_preflight(
+        self, report: Dict[str, Any], backend: Optional[str] = None
+    ) -> None:
+        """Persist the preflight report + plugin version into the manifest."""
+        with self._lock, _file_lock(self._lock_file):
+            try:
+                manifest = self._read_manifest_unlocked()
+            except FileNotFoundError:
+                # Dry runs / pre-orchestration: keep the report rather than fail.
+                manifest = {"preflight": report}
+            manifest["preflight"] = report
+            version = report.get("plugin_version")
+            if version:
+                manifest["plugin_version"] = version
+            if backend:
+                manifest["backend"] = backend
+            self._write_manifest_unlocked(manifest)
 
     def _read_manifest_unlocked(self) -> Dict[str, Any]:
         if not self.manifest_file.exists():

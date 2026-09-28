@@ -11,10 +11,17 @@ import argparse
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
+
 class DecisionNode:
-    def __init__(self, node_id: str, title: str, question: str, 
-                 recommended: str, options: Optional[List[str]] = None,
-                 prerequisites: Optional[List[str]] = None):
+    def __init__(
+        self,
+        node_id: str,
+        title: str,
+        question: str,
+        recommended: str,
+        options: Optional[List[str]] = None,
+        prerequisites: Optional[List[str]] = None,
+    ):
         self.node_id = node_id
         self.title = title
         self.question = question
@@ -34,18 +41,18 @@ class DecisionNode:
             "recommended": self.recommended,
             "options": self.options,
             "prerequisites": self.prerequisites,
-            "settled_answer": self.settled_answer
+            "settled_answer": self.settled_answer,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'DecisionNode':
+    def from_dict(cls, data: Dict[str, Any]) -> "DecisionNode":
         node = cls(
             node_id=data["node_id"],
             title=data["title"],
             question=data["question"],
             recommended=data["recommended"],
             options=data.get("options", []),
-            prerequisites=data.get("prerequisites", [])
+            prerequisites=data.get("prerequisites", []),
         )
         node.settled_answer = data.get("settled_answer")
         return node
@@ -82,7 +89,9 @@ class DesignTree:
             self.nodes[node_id].settled_answer = answer
 
     def is_complete(self) -> bool:
-        return len(self.compute_frontier()) == 0 and all(n.is_settled() for n in self.nodes.values())
+        return len(self.compute_frontier()) == 0 and all(
+            n.is_settled() for n in self.nodes.values()
+        )
 
     def export_frontier_json(self, output_path: Path):
         safe_path = Path(os.path.realpath(str(output_path)))
@@ -93,13 +102,13 @@ class DesignTree:
             "nodes": {k: v.to_dict() for k, v in self.nodes.items()},
             "settled_constraints": {
                 k: v.settled_answer for k, v in self.nodes.items() if v.is_settled()
-            }
+            },
         }
         with open(safe_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
     @classmethod
-    def load_from_json(cls, file_path: Path) -> 'DesignTree':
+    def load_from_json(cls, file_path: Path) -> "DesignTree":
         safe_path = Path(os.path.realpath(str(file_path)))
         with open(safe_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -111,12 +120,16 @@ class DesignTree:
 
 def _display_frontier(tree: DesignTree, frontier: list) -> None:
     print(f"\n🎯 Objective: {tree.objective}")
-    print(f"📊 Total Nodes: {len(tree.nodes)} | Settled: {sum(1 for n in tree.nodes.values() if n.is_settled())}")
+    print(
+        f"📊 Total Nodes: {len(tree.nodes)} | Settled: {sum(1 for n in tree.nodes.values() if n.is_settled())}"
+    )
     if not frontier:
         if tree.nodes and tree.is_complete():
             print("✅ Frontier is EMPTY. All prerequisite branches are fully settled!")
         else:
-            print("ℹ️ No active frontier nodes. Define new decision nodes to begin grilling.")
+            print(
+                "ℹ️ No active frontier nodes. Define new decision nodes to begin grilling."
+            )
     else:
         print(f"\n⚡ Current Active Frontier ({len(frontier)} questions ready):")
         for idx, node in enumerate(frontier, 1):
@@ -126,11 +139,49 @@ def _display_frontier(tree: DesignTree, frontier: list) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Epistemic Swarm Socratic Decision Tree")
+    parser = argparse.ArgumentParser(
+        description="Epistemic Swarm Socratic Decision Tree"
+    )
     parser.add_argument("--objective", type=str, help="Research objective")
-    parser.add_argument("--file", type=str, default=".research/frontier.json", help="Path to frontier.json")
-    parser.add_argument("--show-frontier", action="store_true", help="Print the current decision frontier")
-    parser.add_argument("--settle", nargs=2, metavar=("NODE_ID", "ANSWER"), help="Settle a decision node")
+    parser.add_argument(
+        "--file",
+        type=str,
+        default=".research/frontier.json",
+        help="Path to frontier.json",
+    )
+    parser.add_argument(
+        "--show-frontier",
+        action="store_true",
+        help="Print the current decision frontier",
+    )
+    parser.add_argument(
+        "--settle",
+        nargs=2,
+        metavar=("NODE_ID", "ANSWER"),
+        help="Settle a decision node",
+    )
+    parser.add_argument(
+        "--add-node",
+        action="store_true",
+        help="Add a decision node (with --id/--question)",
+    )
+    parser.add_argument("--id", type=str, help="Node id (with --add-node)")
+    parser.add_argument("--question", type=str, help="Node question (with --add-node)")
+    parser.add_argument(
+        "--title", type=str, default="", help="Node title (defaults to --id)"
+    )
+    parser.add_argument(
+        "--recommended", type=str, default="", help="Recommended option"
+    )
+    parser.add_argument(
+        "--depends-on",
+        type=str,
+        default="",
+        help="Comma-separated prerequisite node ids",
+    )
+    parser.add_argument(
+        "--export", action="store_true", help="Write the frontier JSON and exit"
+    )
 
     args = parser.parse_args()
     frontier_path = Path(os.path.realpath(str(args.file)))
@@ -141,14 +192,35 @@ def main():
         objective = args.objective or "Epistemic Swarm Research Objective"
         tree = DesignTree(objective=objective)
 
+    if args.add_node:
+        if not args.id or not args.question:
+            parser.error("--add-node requires --id and --question")
+        prereqs = [p.strip() for p in (args.depends_on or "").split(",") if p.strip()]
+        tree.add_node(
+            DecisionNode(
+                node_id=args.id,
+                title=args.title or args.id,
+                question=args.question,
+                recommended=args.recommended or "",
+                options=[],
+                prerequisites=prereqs,
+            )
+        )
+        tree.export_frontier_json(frontier_path)
+        print(f"Added node {args.id} -> {frontier_path}")
+
     if args.settle:
         node_id, answer = args.settle
         tree.settle_node(node_id, answer)
         tree.export_frontier_json(frontier_path)
         print(f"Settled {node_id} -> {answer}")
 
+    if args.export:
+        tree.export_frontier_json(frontier_path)
+        print(f"Exported frontier -> {frontier_path}")
+
     frontier = tree.compute_frontier()
-    if args.show_frontier or not args.settle:
+    if args.show_frontier or not (args.settle or args.add_node or args.export):
         _display_frontier(tree, frontier)
 
 

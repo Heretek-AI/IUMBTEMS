@@ -55,7 +55,10 @@ def run_dir(run):
 def load_state(run):
     p = run_dir(run) / "state.json"
     if not p.exists():
-        raise SystemExit(f"No factory run '{run}'. Run `factory.py init` first.")
+        raise SystemExit(
+            f"No factory run '{run}'. Pass --run <name> (or run "
+            f"`factory.py init --run <name>` first)."
+        )
     return json.loads(p.read_text(encoding="utf-8"))
 
 
@@ -82,6 +85,19 @@ def cmd_phase_add(args):
     state = load_state(args.run)
     if args.phase in state["phases"]:
         raise SystemExit(f"Phase '{args.phase}' already exists.")
+    # Phase output goes to phase.json — a run-state helper must never clobber the
+    # author-written GOAL.md / dossier.json it is meant to track (#6 item 2.3).
+    # This check runs BEFORE any state mutation so a refusal leaves no trace.
+    phase_dir = ROADMAP_DIR / args.phase
+    authored = [
+        name for name in ("GOAL.md", "dossier.json") if (phase_dir / name).exists()
+    ]
+    if authored and not getattr(args, "force", False):
+        raise SystemExit(
+            f"Refusing to touch author-written file(s) in {phase_dir}: "
+            f"{', '.join(authored)}. phase-add now writes phase.json only; "
+            f"re-run with --force to overwrite."
+        )
     state["phases"][args.phase] = {
         "goal": args.goal,
         "acceptance": [a.strip() for a in args.accept.split(";") if a.strip()],
@@ -90,30 +106,52 @@ def cmd_phase_add(args):
         "qa_reports": [],
     }
     save_state(args.run, state)
-    # Phase output: GOAL.md + dossier.json skeleton (evidence filled by manager).
-    phase_dir = ROADMAP_DIR / args.phase
     phase_dir.mkdir(parents=True, exist_ok=True)
-    (phase_dir / "GOAL.md").write_text(
-        f"# {args.phase}: {args.goal}\n\n## Acceptance\n"
-        + "".join(f"- [ ] {a}\n" for a in state["phases"][args.phase]["acceptance"]),
-        encoding="utf-8",
-    )
-    (phase_dir / "dossier.json").write_text(
+    (phase_dir / "phase.json").write_text(
         json.dumps(
             {
                 "phase": args.phase,
                 "goal": args.goal,
-                "evidence": [],
                 "acceptance": state["phases"][args.phase]["acceptance"],
-                "brief": "",
-                "verdict": "briefed",
-                "hashes": [],
+                "status": "briefed",
             },
             indent=2,
         ),
         encoding="utf-8",
     )
-    print(f"✅ Phase '{args.phase}' briefed → {phase_dir}")
+    print(f"✅ Phase '{args.phase}' briefed → {phase_dir / 'phase.json'}")
+
+
+def cmd_gate(args):
+    """First-class gate bookkeeping (open/settle/approve/waive/escalate/count)."""
+    state = load_state(args.run)
+    gates = state.setdefault("gates", {})
+    gate = gates.setdefault(
+        args.phase, {"status": "closed", "cycles": 0, "waivers": [], "history": []}
+    )
+    action = (args.action or "").lower()
+    if action == "open":
+        gate["status"] = "open"
+        gate["cycles"] = gate.get("cycles", 0) + 1
+        state["gate_cycles"] = state.get("gate_cycles", 0) + 1
+    elif action == "settle":
+        gate["status"] = "settled"
+    elif action == "approve":
+        gate["status"] = "approved"
+    elif action == "waive":
+        gate["status"] = "waived"
+        gate["waivers"].append(args.reason or "")
+    elif action == "escalate":
+        gate["status"] = "escalated"
+        gate["cycles"] = gate.get("cycles", 0) + 1
+        state["gate_cycles"] = state.get("gate_cycles", 0) + 1
+    elif action != "count":
+        raise SystemExit(
+            "gate --action must be one of: open, settle, approve, waive, escalate, count"
+        )
+    gate["history"].append({"action": action, "at": now(), "reason": args.reason or ""})
+    save_state(args.run, state)
+    print(json.dumps({"phase": args.phase, "gate": gate}, indent=2))
 
 
 def cmd_qa_record(args):
@@ -211,6 +249,11 @@ def main():
     p.add_argument("--phase", required=True)
     p.add_argument("--goal", required=True)
     p.add_argument("--accept", default="")
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite author-written GOAL.md/dossier.json if present",
+    )
     _add_common(p)
     p = sub.add_parser("qa-record")
     p.add_argument("--run", required=True)
@@ -227,6 +270,16 @@ def main():
     p = sub.add_parser("stop")
     p.add_argument("--run", required=True)
     _add_common(p)
+    p = sub.add_parser("gate")
+    p.add_argument("--run", required=True)
+    p.add_argument("--phase", required=True)
+    p.add_argument(
+        "--action",
+        required=True,
+        choices=["open", "settle", "approve", "waive", "escalate", "count"],
+    )
+    p.add_argument("--reason", default="")
+    _add_common(p)
 
     args = ap.parse_args()
     root = resolve_project_root(args.project_dir)
@@ -238,6 +291,7 @@ def main():
         "qa-record": cmd_qa_record,
         "expansion": cmd_expansion,
         "stop": cmd_stop,
+        "gate": cmd_gate,
     }[args.command](args)
     sys.exit(code if isinstance(code, int) else 0)
 

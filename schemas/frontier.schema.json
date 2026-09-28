@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "frontier",
+  "type": "object",
+  "required": [
+    "objective"
+  ],
+  "properties": {
+    "objective": {
+      "type": "string"
+    },
+    "is_complete": {
+      "type": "boolean"
+    },
+    "nodes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "node_id",
+          "question"
+        ],
+        "properties": {
+          "node_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "recommended": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prerequisites": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "settled_answer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "settled_constraints": {
+      "type": "object"
+    }
+  }
+}
