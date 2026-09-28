@@ -336,7 +336,7 @@ python3 scripts/build_adapters.py --check   # CI gate: fails on drift
 python3 -m unittest discover -s runner/tests
 ```
 
-`skills/research-cache` is a symlink to `skills/research_cache`, kept so the legacy hyphenated path resolves in a checkout (the Claude Code overlay installer creates the same alias under `~/.claude/skills/`).
+The legacy hyphenated skill name is served by an alias the overlay installer creates under the user's `~/.claude/skills/` directory. It is deliberately **not** committed as an in-repo symlink: `claude plugin validate --strict` treats a symlink entry as a warning (→ error), which fails marketplace and eval validation.
 
 ---
 

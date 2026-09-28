@@ -228,7 +228,7 @@ class TestOpenCodeCommandCatalog(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"tool map test failed: {res.stderr}")
         data = last_json_object(res.stdout)
         self.assertEqual(sorted(data["keys"]), sorted(data["canonical"]))
-        self.assertEqual(len(data["keys"]), 15)
+        self.assertEqual(len(data["keys"]), 17)
         self.assertTrue(all(data["ok"]))
 
 
@@ -628,9 +628,11 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
             self.assertIn(c, data["commands"])
         self.assertNotIn("goal", data["commands"])
         self.assertEqual(data["cmdExec"], "function")
-        self.assertEqual(len(data["tools"]), 15)
+        self.assertEqual(len(data["tools"]), 17)
         self.assertIn("iumbtems_brainstorm", data["tools"])
         self.assertIn("iumbtems_darkharvest", data["tools"])
+        self.assertIn("iumbtems_doctor", data["tools"])
+        self.assertIn("iumbtems_test", data["tools"])
         self.assertEqual(data["toolExec"], "function")
 
     def test_v2_command_execute_forwards_prompt(self):

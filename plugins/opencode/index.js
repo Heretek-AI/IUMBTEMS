@@ -111,6 +111,8 @@ export const IUMBTEMS_TOOL_NAMES = [
   'iumbtems_set_domain_pack',
   'iumbtems_export_brief',
   'iumbtems_verify_brief',
+  'iumbtems_doctor',
+  'iumbtems_test',
 ];
 
 // Deprecated misspelled alias (pre-A2b export). Remove in a semver-major.
@@ -443,6 +445,25 @@ const TOOL_CATALOG = [
       },
       required: ['brief'],
     },
+  },
+  {
+    name: 'iumbtems_doctor',
+    description:
+      'Preflight health check for the resolved workspace: plugin version, backend binary, search-engine reachability, and workspace writability. Run this first when anything looks wrong.',
+    input: {
+      type: 'object',
+      properties: {
+        base_dir: { type: 'string', description: 'Project root (default: IUMBTEMS_PROJECT_DIR or cwd)' },
+        mode: { type: 'string', description: 'Operating mode to report for' },
+        probe: { type: 'boolean', description: 'Run a live 1-query search probe (default true)' },
+      },
+    },
+  },
+  {
+    name: 'iumbtems_test',
+    description:
+      'Run the packaged IUMBTEMS test suite (subprocess, timeout-bounded) and report pass/fail with the tail of the output.',
+    input: { type: 'object', properties: {} },
   },
 ];
 
