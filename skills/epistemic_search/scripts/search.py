@@ -10,10 +10,83 @@ import sys
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from xml.sax.saxutils import escape as xml_escape
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+# ---------------------------------------------------------------------------
+# DuckDuckGo anti-bot ("anomaly") detection
+# ---------------------------------------------------------------------------
+#
+# DuckDuckGo Lite answers suspected automation with an HTTP-2xx image-selection
+# CAPTCHA instead of results. The page is *not* empty, but it carries no
+# ``result-link`` rows, so the parser yielded ``[]`` and callers could not tell
+# a block apart from a legitimate no-hits query (they were swallowed as
+# ``results: 0`` in ``.research/retrieval.jsonl``).
+#
+# We deliberately do NOT key off the bare word "anomaly": a normal result
+# snippet may legitimately contain it — that is the false positive this phase
+# guards against. Detection is anchored to page chrome that only the
+# interstitial emits, captured verbatim in the recorded fixture
+# ``runner/tests/fixtures/ddg_anomaly_page.html`` (14,213 bytes, HTTP 202):
+#
+#   * ``id="challenge-form"``                — CAPTCHA submit form
+#   * ``id="img-form"``                      — challenge image form
+#   * ``assets/anomaly/images/challenge/``   — challenge image asset path
+#   * ``anomaly-modal``                      — challenge modal CSS class
+#
+# Detection additionally requires the page to be free of real ``result-link``
+# anchors, so even an (implausible) results page whose snippet embeds one of the
+# markers is still treated as a results page.
+DDG_ANOMALY_MARKERS: Tuple[str, ...] = (
+    'id="challenge-form"',
+    'id="img-form"',
+    "assets/anomaly/images/challenge/",
+    "anomaly-modal",
+)
+
+DDG_BLOCKED_HINT = (
+    "DuckDuckGo served its anti-bot challenge page (BLOCKED), not results. "
+    "Back off and retry later, or fall back to another engine: set "
+    "search_engine to firecrawl or searxng in .research/config.json, or "
+    "export a BYO key (EXA_API_KEY / FIRECRAWL_API_KEY / PARALLEL_API_KEY / "
+    "TAVILY_API_KEY / TINYFISH_API_KEY)."
+)
+
+DDG_ERROR_HINT = (
+    "DuckDuckGo request failed (network/HTTP error). Retry with backoff or "
+    "fall back to firecrawl or searxng."
+)
+
+
+class SearchBlocked(RuntimeError):
+    """DuckDuckGo served its anti-bot interstitial instead of results.
+
+    Exposed for callers that want the block to be an error rather than an empty
+    list — see :func:`require_search_duckduckgo`. ``hint`` carries the
+    actionable fallback/backoff advice.
+    """
+
+    def __init__(
+        self, message: str = DDG_BLOCKED_HINT, hint: str = DDG_BLOCKED_HINT
+    ) -> None:
+        super().__init__(message)
+        self.hint = hint
+
+
+def _is_ddg_anomaly_page(html: str) -> bool:
+    """True iff *html* is DDG's anti-bot interstitial rather than results.
+
+    Anchored to structural page chrome (see the module comment above), never to
+    the bare word "anomaly". An empty body or a page already carrying
+    ``result-link`` anchors is a results page and is never flagged.
+    """
+    if not html:
+        return False
+    if "result-link" in html:
+        return False
+    return any(marker in html for marker in DDG_ANOMALY_MARKERS)
 
 
 def _log_retrieval(kind: str, **fields) -> None:
@@ -29,6 +102,34 @@ def _log_retrieval(kind: str, **fields) -> None:
         log_event(default_base_dir(), kind, **fields)
     except Exception:
         pass
+
+
+def _log_ddg_query(
+    status: str, effective_query: str, results: int, log: bool = True
+) -> None:
+    """Record a query event whose ``status`` distinguishes block from empty.
+
+    The plain ``results`` count is kept so ``retrieval_log.summarize`` still
+    works, but a block additionally carries ``status: "blocked"`` and
+    ``blocked: true`` so the anomaly can no longer masquerade as a normal
+    zero-hit query.
+
+    ``log=False`` suppresses telemetry entirely. The preflight/reachability
+    probe uses it so its own request is never counted as an agent search and
+    never leaks an event into whichever workspace happens to be the process
+    cwd (see ``runner/preflight.py:_engine_probe``).
+    """
+    if not log:
+        return
+    fields: Dict[str, Any] = {
+        "query": effective_query,
+        "results": results,
+        "status": status,
+        "provider": "duckduckgo",
+    }
+    if status == "blocked":
+        fields["blocked"] = True
+    _log_retrieval("query", **fields)
 
 
 class DDGLiteParser(HTMLParser):
@@ -139,7 +240,7 @@ def _build_search_query(
     return effective_query
 
 
-def _fetch_ddg_html(effective_query: str) -> str:
+def _fetch_ddg_html(effective_query: str, timeout: float = 15.0) -> str:
     url = "https://lite.duckduckgo.com/lite/"
     data = urllib.parse.urlencode({"q": effective_query}).encode("utf-8")
     headers = {
@@ -150,7 +251,7 @@ def _fetch_ddg_html(effective_query: str) -> str:
     }
     req = urllib.request.Request(url, data=data, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except Exception as e:
         sys.stderr.write(
@@ -182,18 +283,12 @@ def _is_domain_allowed(
     return True
 
 
-def search_duckduckgo(
-    query: str,
+def _parse_ddg_results(
+    html: str,
     allowed_domains: Optional[List[str]] = None,
     blocked_domains: Optional[List[str]] = None,
     max_results: int = 10,
 ) -> List[Dict[str, str]]:
-    """Execute search query against DuckDuckGo Lite without API keys."""
-    effective_query = _build_search_query(query, allowed_domains, blocked_domains)
-    html = _fetch_ddg_html(effective_query)
-    if not html:
-        return []
-
     parser = DDGLiteParser()
     parser.feed(html)
     parser.flush()
@@ -219,8 +314,104 @@ def search_duckduckgo(
         if len(results) >= max_results:
             break
 
-    _log_retrieval("query", query=effective_query, results=len(results))
     return results
+
+
+def search_duckduckgo_detailed(
+    query: str,
+    allowed_domains: Optional[List[str]] = None,
+    blocked_domains: Optional[List[str]] = None,
+    max_results: int = 10,
+    log: bool = True,
+    timeout: float = 15.0,
+) -> Dict[str, Any]:
+    """Search DuckDuckGo Lite and report *why* a run produced no results.
+
+    Returns a typed dict::
+
+        {"status": "ok" | "empty" | "blocked" | "error",
+         "results": [...], "hint": "...", "query": "<effective query>"}
+
+    ``"blocked"`` is DDG's anti-bot interstitial (an actionable hint, not an
+    empty success). ``"empty"`` is a genuine no-hits query. ``"error"`` is a
+    network/HTTP failure. Only this function preserves the distinction;
+    :func:`search_duckduckgo` keeps the legacy list contract for callers that
+    do not need it. ``timeout`` bounds the HTTP fetch (the preflight probe wires
+    its own bound through here instead of the hardcoded default).
+    """
+    effective_query = _build_search_query(query, allowed_domains, blocked_domains)
+    try:
+        html = _fetch_ddg_html(effective_query, timeout=timeout)
+    except TypeError:
+        # An injected/older ``_fetch_ddg_html`` that takes only the query.
+        html = _fetch_ddg_html(effective_query)
+
+    if not html:
+        results: List[Dict[str, str]] = []
+        status = "error"
+        hint = DDG_ERROR_HINT
+    elif _is_ddg_anomaly_page(html):
+        results = []
+        status = "blocked"
+        hint = DDG_BLOCKED_HINT
+    else:
+        results = _parse_ddg_results(
+            html, allowed_domains, blocked_domains, max_results
+        )
+        status = "ok" if results else "empty"
+        hint = "" if results else "No results parsed for this query."
+
+    _log_ddg_query(status, effective_query, len(results), log=log)
+    return {
+        "status": status,
+        "results": results,
+        "hint": hint,
+        "query": effective_query,
+    }
+
+
+def search_duckduckgo(
+    query: str,
+    allowed_domains: Optional[List[str]] = None,
+    blocked_domains: Optional[List[str]] = None,
+    max_results: int = 10,
+    log: bool = True,
+    timeout: float = 15.0,
+) -> List[Dict[str, str]]:
+    """Execute search query against DuckDuckGo Lite without API keys.
+
+    Preserves the original list contract for callers that only want results.
+    When DDG serves its anti-bot interstitial this returns ``[]`` *and* warns on
+    stderr; callers that must act on the block should use
+    :func:`search_duckduckgo_detailed` or :func:`require_search_duckduckgo`.
+    """
+    outcome = search_duckduckgo_detailed(
+        query, allowed_domains, blocked_domains, max_results, log=log, timeout=timeout
+    )
+    if outcome["status"] == "blocked":
+        sys.stderr.write(f"[epistemic-search] BLOCKED: {outcome['hint']}\n")
+    return outcome["results"]
+
+
+def require_search_duckduckgo(
+    query: str,
+    allowed_domains: Optional[List[str]] = None,
+    blocked_domains: Optional[List[str]] = None,
+    max_results: int = 10,
+    log: bool = True,
+    timeout: float = 15.0,
+) -> List[Dict[str, str]]:
+    """Like :func:`search_duckduckgo` but raises :class:`SearchBlocked`.
+
+    Use when an anti-bot page is an error condition (fall back to another
+    engine, then retry) rather than an empty success.
+    """
+    outcome = search_duckduckgo_detailed(
+        query, allowed_domains, blocked_domains, max_results, log=log, timeout=timeout
+    )
+    if outcome["status"] == "blocked":
+        raise SearchBlocked(outcome["hint"], hint=outcome["hint"])
+    return outcome["results"]
 
 
 def format_xml(results: List[Dict[str, str]]) -> str:
@@ -267,16 +458,19 @@ def _parse_cli_args(
     default_query: str = "",
     default_allowed: Optional[List[str]] = None,
     default_blocked: Optional[List[str]] = None,
-) -> Tuple[str, Optional[List[str]], Optional[List[str]], bool]:
+) -> Tuple[str, Optional[List[str]], Optional[List[str]], bool, bool]:
     query = default_query
     allowed = default_allowed
     blocked = default_blocked
     output_json = False
+    output_status = False
     idx = 0
     while idx < len(args):
         arg = args[idx]
         if arg == "--json":
             output_json = True
+        elif arg == "--status":
+            output_status = True
         elif arg == "--allowed-domain" and idx + 1 < len(args):
             allowed = (allowed or []) + [args[idx + 1]]
             idx += 1
@@ -286,31 +480,50 @@ def _parse_cli_args(
         elif not query and not arg.startswith("--"):
             query = arg
         idx += 1
-    return query, allowed, blocked, output_json
+    return query, allowed, blocked, output_json, output_status
 
 
 def main():
     std_query, std_allowed, std_blocked = _read_stdin_payload()
-    query, allowed, blocked, output_json = _parse_cli_args(
+    query, allowed, blocked, output_json, output_status = _parse_cli_args(
         sys.argv[1:], std_query, std_allowed, std_blocked
     )
 
     if not query:
         sys.stderr.write(
             'Usage: search.py [options] <query>\nOr pipe JSON: echo \'{"query":"..."}\' | search.py\n'
+            "Options: --json (results as JSON), --status (typed status + hint),\n"
+            "         --allowed-domain D, --blocked-domain D\n"
         )
         sys.exit(1)
 
-    results = search_duckduckgo(
+    outcome = search_duckduckgo_detailed(
         query=query,
         allowed_domains=allowed,
         blocked_domains=blocked,
     )
 
-    if output_json:
-        print(json.dumps(results, indent=2))
+    if outcome["status"] in ("blocked", "error"):
+        sys.stderr.write(
+            f"[epistemic-search] {outcome['status'].upper()}: {outcome['hint']}\n"
+        )
+
+    if output_status:
+        print(
+            json.dumps(
+                {
+                    "status": outcome["status"],
+                    "query": outcome["query"],
+                    "results": len(outcome["results"]),
+                    "hint": outcome["hint"],
+                },
+                indent=2,
+            )
+        )
+    elif output_json:
+        print(json.dumps(outcome["results"], indent=2))
     else:
-        print(format_xml(results))
+        print(format_xml(outcome["results"]))
 
 
 if __name__ == "__main__":

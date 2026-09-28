@@ -316,6 +316,26 @@ Every factual claim carries an explicit evidentiary tag:
 3. **Academic Tier**: Semantic Scholar / arXiv MCPs for DOI citation resolution.
 4. **Caching Tier**: Content-addressed SHA-256 storage (`skills/research_cache/hasher.py`).
 
+### Free-first provider ladder & cost safety
+
+OpenCode V2 hosts a plugin-registered **search provider** (`iumbtems-cached`) that resolves its upstream free-first and never overrides a deliberate `websearch.provider` or a provider you `/connect`ed. ("Cached" describes the evidence pipeline — `hasher.py` content-addresses full pages fetched via `webfetch` — not in-execute memoisation.)
+
+1. **`/connect`-ed provider** (integration store) — **metered**, credential lives in the host store.
+2. **BYO key** (`exa`/`firecrawl`/`parallel`/`tavily`/`tinyfish` via `EXA_API_KEY`/`FIRECRAWL_API_KEY`/`PARALLEL_API_KEY`/`TAVILY_API_KEY`/`TINYFISH_API_KEY`) — **metered** (vendor-billed).
+3. **Self-hosted SearXNG** (`SEARXNG_URL`) — free; availability requires the URL.
+4. **DuckDuckGo Lite** — free, zero-key, routed through `skills/epistemic_search/scripts/search.py` (anti-bot detection + telemetry).
+5. **Console** (hosted, `$0.01`/successful search) — **metered, never implicit**.
+
+Provider `execute()` returns **hits only** (`title`/`url`/`content`). Full page content must be fetched explicitly with the host `webfetch` tool and cached via `python3 skills/research_cache/hasher.py cache …`; **a snippet alone never witnesses a `[VERIFIED: <hash>]` claim**.
+
+Preflight prints the active provider, a free|metered classification, a **per-run** our-path search count + cost **estimate**, and `metered-mode: yes|no|unknown`. The reachability probe is excluded, so a zero-search run reports `our-path searches: 0`, and every metered rung logs its own event. Engine aliases are normalised before the probe (`ddg`/`DuckDuckGo`/`DDG`/whitespace all mean `duckduckgo`), so no spelling can skip the probe. It also gates availability mode-aware: `research`/`scout`/`darkharvest`/`hybrid` (and strict `brainstorm`, including `--domain-pack`) **HALT before any agent spawns** when no usable search exists (exit code 3 — deliberately distinct from argparse's usage-error 2); `audit`/internal `brainstorm` warn and proceed, and `--dry-run` validates and reports without halting. The workspace connection file (`.research/websearch-state.json`) is advisory: it is honoured only within a 24h TTL and never marks a provider usable without a resolvable credential. It is resolved in a **single read** (provider + advisory verdict together), only when the path is a **regular file**, and read with a bounded non-blocking guard — so a FIFO/device/symlink or a file swapped between reads can neither spoof host confirmation nor wedge preflight/`doctor`. Enable the opt-in per-search cost gate with `./install.sh --search-gate`, which adds:
+
+```jsonc
+{ "permissions": [ { "action": "websearch", "resource": "*", "effect": "ask" } ] }
+```
+
+Without the flag, `install.sh` never touches your permissions. If a `websearch` `deny` already exists the gate refuses to downgrade it (exit non-zero, config untouched), and resource-scoped websearch rules are preserved and reported — never silently deleted.
+
 ### Local Infrastructure (Optional)
 ```bash
 docker compose -f config/docker-compose.infra.yml up -d   # local SearXNG + Firecrawl

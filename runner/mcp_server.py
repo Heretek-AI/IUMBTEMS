@@ -154,8 +154,34 @@ def _run_swarm_mode(mode: Optional[str], args: Dict[str, Any]) -> str:
         dry_run=bool(args.get("dry_run")),
     )
     buf = io.StringIO()
+    status = None
     with redirect_stdout(buf):
-        runner.run_swarm(objective, frontier_file=Path(frontier) if frontier else None)
+        status = runner.run_swarm(
+            objective, frontier_file=Path(frontier) if frontier else None
+        )
+
+    mode_name = mode or args.get("mode") or "research"
+    log = buf.getvalue()[-4000:]
+
+    # Decide from the ACTUAL run outcome, not the raw gate verdict: mock and dry
+    # runs are exempt from the fail-fast halt (they complete/validate), and only
+    # a real halt sets `_halted`. Reading `_search_gate.action` alone mislabelled
+    # every blocked-but-exempt run as `halted`.
+    if status == "halted" or getattr(runner, "_halted", False):
+        gate = getattr(runner, "_search_gate", None) or {}
+        return _tool_text(
+            {
+                "status": "halted",
+                "mode": mode_name,
+                "reason": gate.get("reason"),
+                "message": gate.get("message"),
+                "log": log,
+            }
+        )
+    if status == "dry-run":
+        return _tool_text({"status": "dry-run", "mode": mode_name, "log": log})
+    if status == "incomplete":
+        return _tool_text({"status": "incomplete", "mode": mode_name, "log": log})
 
     report = runner.base_dir / (
         {
@@ -163,14 +189,14 @@ def _run_swarm_mode(mode: Optional[str], args: Dict[str, Any]) -> str:
             "scout": "oss_scout_report.md",
             "brainstorm": "brainstorm_report.md",
             "darkharvest": "darkharvest_report.md",
-        }.get(mode or args.get("mode") or "research", "final_synthesis.md")
+        }.get(mode_name, "final_synthesis.md")
     )
     return _tool_text(
         {
             "status": "completed",
-            "mode": mode or args.get("mode") or "research",
+            "mode": mode_name,
             "report": str(report),
-            "log": buf.getvalue()[-4000:],
+            "log": log,
         }
     )
 
@@ -416,7 +442,7 @@ def _handle_reindex_claims(args: Dict[str, Any]) -> str:
 
 def _handle_doctor(args: Dict[str, Any]) -> str:
     """Preflight for the resolved workspace: backend, engine, write test, version."""
-    from runner.preflight import format_report, preflight
+    from runner.preflight import format_report, host_websearch_provider, preflight
     from skills.swarm_config.configure import load_config
 
     base_dir = _resolve_base_dir(args)
@@ -428,6 +454,11 @@ def _handle_doctor(args: Dict[str, Any]) -> str:
         # Never spawn in a health check; report resolution only.
         mock_mode=True,
         probe=bool(args.get("probe", True)),
+        # Feed the same host-reported provider/since the run path uses, or the
+        # doctor names a different provider than the run banner (observed:
+        # IUMBTEMS_WEBSEARCH_PROVIDER=tavily -> doctor said duckduckgo).
+        host_provider=host_websearch_provider(cfg),
+        since=args.get("since"),
     )
     return _tool_text({"report": report, "text": format_report(report)})
 
@@ -461,50 +492,51 @@ def _handle_test(args: Dict[str, Any]) -> str:
 
 def _handle_socratic_frontier(args: Dict[str, Any]) -> str:
     """Inspect, add to, settle, or export the Socratic decision-tree frontier."""
-    from skills.grilling.socratic_tree import DecisionNode, DesignTree
+    from skills.grilling.socratic_tree import (
+        DecisionNode,
+        DesignTree,
+        frontier_transaction,
+    )
 
     file_path = Path(
         args.get("file") or args.get("frontier_file") or ".research/frontier.json"
     )
     action = str(args.get("action") or "").strip().lower()
     node_spec = args.get("node") if isinstance(args.get("node"), dict) else {}
-
-    def _tree():
-        if file_path.exists():
-            return DesignTree.load_from_json(file_path)
-        return DesignTree(objective=args.get("objective", ""))
+    objective = args.get("objective", "")
 
     # Authoring: add a node (tool-drivable, previously hand-written JSON only).
+    # Mutations run as a locked read-modify-write so concurrent add/settle calls
+    # are serialized across processes instead of racing on a bare open("w").
     if action == "add" or node_spec:
         if not node_spec.get("id") or not node_spec.get("question"):
             return _tool_text(
                 {"status": "error", "message": "'node' needs 'id' and 'question'"}
             )
-        tree = _tree()
-        tree.add_node(
-            DecisionNode(
-                node_id=node_spec["id"],
-                title=node_spec.get("title") or node_spec["id"],
-                question=node_spec["question"],
-                recommended=node_spec.get("recommended", ""),
-                options=node_spec.get("options") or [],
-                prerequisites=node_spec.get("depends_on") or [],
+        with frontier_transaction(file_path, objective) as tree:
+            tree.add_node(
+                DecisionNode(
+                    node_id=node_spec["id"],
+                    title=node_spec.get("title") or node_spec["id"],
+                    question=node_spec["question"],
+                    recommended=node_spec.get("recommended", ""),
+                    options=node_spec.get("options") or [],
+                    prerequisites=node_spec.get("depends_on") or [],
+                )
             )
-        )
-        tree.export_frontier_json(file_path)
         return _tool_text(
             {"status": "added", "node_id": node_spec["id"], "file": str(file_path)}
         )
 
     if action == "export":
-        _tree().export_frontier_json(file_path)
+        with frontier_transaction(file_path, objective):
+            pass
         return _tool_text({"status": "exported", "file": str(file_path)})
 
     if args.get("settle"):
         node_id, answer = args["settle"][0], args["settle"][1]
-        tree = _tree()
-        tree.settle_node(node_id, answer)
-        tree.export_frontier_json(file_path)
+        with frontier_transaction(file_path, objective) as tree:
+            tree.settle_node(node_id, answer)
         return _tool_text(
             {"status": "settled", "node_id": node_id, "file": str(file_path)}
         )
@@ -723,13 +755,32 @@ def build_tools() -> List[ToolSpec]:
         ),
         ToolSpec(
             name="iumbtems_factory",
-            description="Drive factory run state: init / phase-add / qa-record / expansion / stop. State goes to <project>/.factory and <project>/.roadmap; no filesystem path to helper scripts required.",
+            description="Drive factory run state: init / phase-add / qa-record / expansion / stop / gate. State goes to <project>/.factory and <project>/.roadmap; no filesystem path to helper scripts required.",
             input_schema={
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "enum": ["init", "phase-add", "qa-record", "expansion", "stop"],
+                        "enum": [
+                            "init",
+                            "phase-add",
+                            "qa-record",
+                            "expansion",
+                            "stop",
+                            "gate",
+                        ],
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "open",
+                            "settle",
+                            "approve",
+                            "waive",
+                            "escalate",
+                            "count",
+                        ],
+                        "description": "Gate action (with command: gate)",
                     },
                     "run": {"type": "string", "description": "Factory run name"},
                     "phase": {

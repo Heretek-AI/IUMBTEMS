@@ -34,6 +34,12 @@ from runner.retrieval_log import summarize as _retrieval_summary
 from skills.research_cache.hasher import SourceHasher
 from skills.swarm_config.configure import load_config
 
+# Exit code for a fail-fast preflight refusal (search gate HALT). Deliberately
+# distinct from argparse's usage-error code (2) so a script or CI can tell a
+# deliberate refusal apart from a mistyped invocation. A dry run never halts: it
+# validates configuration and reports (see `run_swarm`).
+EXIT_PREFLIGHT_HALT = 3
+
 EXAMPLE_RUST_RAFT_URL = "https://github.com/example/rust-raft"
 # Common backends we can resolve without touching PATH. This is a convenience
 # fast-path, NOT an allowlist: backend resolution is a documented extension
@@ -249,6 +255,10 @@ class SwarmRunner:
         self.base_dir = base_dir or Path(".research")
         self.resume = resume
         self.dry_run = dry_run
+        # Set by run_swarm: the mode-aware search gate verdict and whether a
+        # fail-fast halt refused the run (the CLI maps that to a non-zero exit).
+        self._search_gate: Optional[Dict[str, Any]] = None
+        self._halted = False
         # Project root = the directory containing the evidence dir. Agents are
         # spawned here so the relative `.research/...` paths named by the
         # canonical prompts resolve to the RUNNER's evidence tree. Spawning in
@@ -1267,8 +1277,26 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             for s in manifest["scopes"]
         )
 
+    def _host_websearch_provider(self) -> Optional[str]:
+        """The host-reported explicit websearch provider (env > config).
+
+        The OpenCode plugin knows the user's ``websearch.provider``; when it (or
+        an operator) exports ``IUMBTEMS_WEBSEARCH_PROVIDER`` the run path must
+        feed it to preflight so the banner names the provider actually in play
+        instead of re-deriving a different one. Delegates to the shared helper so
+        ``iumbtems_doctor`` resolves the same provider.
+        """
+        from runner.preflight import host_websearch_provider
+
+        return host_websearch_provider(self.config)
+
     def run_swarm(self, objective: str, frontier_file: Optional[Path] = None):
-        """Full end-to-end execution loop."""
+        """Full end-to-end execution loop.
+
+        Returns a status string: ``"completed"``, ``"dry-run"``, ``"halted"``
+        (a fail-fast preflight refusal; the CLI maps this to
+        :data:`EXIT_PREFLIGHT_HALT`), or ``"incomplete"``.
+        """
         start_time = datetime.now(timezone.utc)
         print("=" * 70)
         print(
@@ -1291,13 +1319,22 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         # Preflight: workspace, backend binary, engine reachability, write test.
         from runner.preflight import format_report, preflight
 
+        # The CLI `--domain-pack` lives on the runner, not the persisted config,
+        # so fold it in or the strict-brainstorm gate would miss it and proceed
+        # ungrounded. `since` scopes the cost count to THIS run (the probe is
+        # excluded upstream so a zero-search run reports 0).
+        preflight_config = self.config
+        if self.domain_pack:
+            preflight_config = {**self.config, "domain_pack": self.domain_pack}
         self._preflight = preflight(
             self.base_dir,
             mode=self.mode,
-            config=self.config,
+            config=preflight_config,
             mock_mode=self.mock_mode,
             probe=os.environ.get("IUMBTEMS_PREFLIGHT_PROBE", "1").strip().lower()
             not in ("0", "false", "no", "off"),
+            host_provider=self._host_websearch_provider(),
+            since=self._retrieval_offset,
         )
         print(format_report(self._preflight))
         print("=" * 70)
@@ -1305,9 +1342,29 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             self._preflight, backend=self._preflight.get("backend", {}).get("family")
         )
 
+        # Mode-aware search availability gate (deliverable 7): fail fast BEFORE
+        # any agent spawns when a retrieval-requiring mode has no usable search.
+        # Mock runs never retrieve, so they are exempt. A dry run validates and
+        # reports but must never halt (it spawns nothing to ground).
+        gate = (self._preflight or {}).get("search_gate") or {}
+        self._search_gate = gate
+        if gate.get("action") == "halt" and not self.mock_mode and not self.dry_run:
+            print(f"\n⛔ PREFLIGHT HALT ({gate.get('reason')}): {gate.get('message')}")
+            self._halted = True
+            try:
+                self.state_machine.update_session_status(SessionStatus.FAILED)
+            except Exception:  # noqa: BLE001 - halting must not raise
+                pass
+            return "halted"
+
         if self.dry_run:
             print("\n🧪 [Dry Run] configuration validated; no agents spawned.")
-            return
+            if gate.get("action") == "halt":
+                print(
+                    "   (dry run: this configuration would HALT a real run — "
+                    f"{gate.get('reason')})"
+                )
+            return "dry-run"
 
         # 1. Orchestrate (skip when resuming a session that already has scopes)
         resumed = False
@@ -1324,7 +1381,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
 
         # 2. Execute scopes according to DAG
         if not self._run_scope_batches():
-            return
+            return "incomplete"
 
         # 3. Master Synthesis Compilation
         print(
@@ -1339,6 +1396,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         self._warn_version_drift()
         self._report_stdout_recovery()
         print(f"\n🎉 Swarm run completed in {duration:.1f}s. Report: {report_path}")
+        return "completed"
 
     def _write_progress(self) -> None:
         """Per-scope status snapshot so a long run is observable while it runs."""
@@ -1670,7 +1728,12 @@ def main():
         resume=getattr(args, "resume", False),
         dry_run=getattr(args, "dry_run", False),
     )
-    runner.run_swarm(args.objective, frontier_file=frontier_path)
+    status = runner.run_swarm(args.objective, frontier_file=frontier_path)
+    if status == "halted":
+        # Fail-fast refusal: exit non-zero so CI/scripts cannot read a halted
+        # run as success. Dry runs return "dry-run" and stay zero (they only
+        # validate and report).
+        raise SystemExit(EXIT_PREFLIGHT_HALT)
 
 
 if __name__ == "__main__":
