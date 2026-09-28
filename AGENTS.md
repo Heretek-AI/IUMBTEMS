@@ -151,3 +151,10 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   publishing) runs on release-published. Verify with
   `curl https://registry.npmjs.org/@heretek-ai%2Fepistemic-swarm`
   (allow propagation time).
+- **After every push to `main` or release, check *all* workflows, not just the
+  publisher:** `gh run list --limit 10` and inspect `Validate All Harnesses`,
+  `Validate Claude Code Marketplace`, `Plugin Evals`, `CodeQL`, and
+  `Publish to npm`. A green `Publish to npm` alone hid real failures for several
+  releases (a committed symlink under `skills/` broke `plugin validate --strict`,
+  and an OpenCode tool-parity gap went unnoticed) — the release is not done until
+  every workflow is green.
