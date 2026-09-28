@@ -12,7 +12,17 @@
  */
 
 import { spawn } from 'node:child_process';
-import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs';
+import {
+  accessSync,
+  appendFileSync,
+  constants,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -1008,6 +1018,585 @@ async function registerHostTools(host) {
   return registration ? [registration] : [];
 }
 
+// ---------------------------------------------------------------------------
+// Cached search provider (Phase 03-search-anomaly, deliverables 2-4)
+// ---------------------------------------------------------------------------
+//
+// OpenCode V2 ships four provider-backed websearch engines, each keyed by an
+// env var: exa/FIRECRAWL/parallel/tavily
+// [VERIFIED: 7414d12951b5bf3ca0f26853f562e6450dc1f4734e5330763b420fe173e20003].
+// Console hosted websearch bills $0.01 per successful search
+// [VERIFIED: 6301b3c686f9e404b0e2147ec42255c1ab923e030e1f656c90478b54481ebab6].
+// A plugin registers a provider and selects it via `ctx.websearch.transform`
+// with `editor.add(...)` / `editor.default.set(...)`
+// [VERIFIED: dc72ef876fa6d90d288597b81806ef5129bc87deec7562081881901764bed2bd].
+//
+// We register ONE provider that routes through the free-first ladder:
+//
+//   0. host-connected provider (`/connect` integration store) -> metered
+//   1. BYO provider key (exa/firecrawl/parallel/tavily/tinyfish) -> metered
+//   2. self-hosted SearXNG (SEARXNG_URL)                  -> free
+//   3. DuckDuckGo Lite (zero-key)                         -> free, via our Python path
+//   4. Console (hosted)                                   -> metered, never implicit
+//
+// NAMING HONESTY: the provider id/name say "cached", but `execute` performs no
+// in-memory memoisation — caching happens in the SURROUNDING evidence pipeline
+// (`hasher.py cache` content-addresses the full page after an explicit host
+// `webfetch`). What this provider guarantees is telemetry: every rung it runs
+// appends a `query` event (with provider + status) to
+// `.research/retrieval.jsonl`, so the preflight cost line is truthful for
+// metered rungs and not just the DDG path.
+//
+// Whatever the rung, `execute` returns *hits* (title/url/content) only. Full
+// page content MUST be fetched explicitly by the agent via host `webfetch` and
+// cached through `python3 skills/research_cache/hasher.py cache ...`; a snippet
+// alone can never witness a [VERIFIED: <hash>] claim.
+//
+// We never override a user's deliberate `websearch.provider` OR a provider they
+// connected with `/connect`: `default.set` is called ONLY when the editor
+// reports no default at all AND we know of no explicit/connected choice.
+
+export const WEBSEARCH_PROVIDER_ID = 'iumbtems-cached';
+export const WEBSEARCH_PROVIDER_NAME = 'IUMBTEMS search (cached evidence pipeline)';
+
+const BYO_PROVIDER_KEYS = {
+  exa: 'EXA_API_KEY',
+  firecrawl: 'FIRECRAWL_API_KEY',
+  parallel: 'PARALLEL_API_KEY',
+  tavily: 'TAVILY_API_KEY',
+  tinyfish: 'TINYFISH_API_KEY',
+};
+const FREE_WEBSEARCH_PROVIDERS = new Set(['duckduckgo', 'ddg', 'searxng']);
+const METERED_WEBSEARCH_PROVIDERS = new Set([
+  'brave',
+  'console',
+  ...Object.keys(BYO_PROVIDER_KEYS),
+]);
+const CONSOLE_WEBSEARCH_PROVIDER = 'console';
+const RETRIEVAL_LOG_NAME = 'retrieval.jsonl';
+const CONNECTED_STATE_NAME = 'websearch-state.json';
+// Bound an execute() that never settles so a hung upstream cannot leave the
+// host waiting forever (the host may not supply its own abort signal).
+export const DEFAULT_EXECUTE_TIMEOUT_MS = 20000;
+
+/** "free" | "metered" | "unknown" — mirrors runner/preflight.py. */
+export function providerClassification(provider) {
+  const key = String(provider || '').trim().toLowerCase();
+  if (FREE_WEBSEARCH_PROVIDERS.has(key)) return 'free';
+  if (METERED_WEBSEARCH_PROVIDERS.has(key)) return 'metered';
+  return 'unknown';
+}
+
+/** First BYO provider whose API key is present, in ladder order. */
+export function detectByoProvider(env = process.env) {
+  for (const [provider, key] of Object.entries(BYO_PROVIDER_KEYS)) {
+    if (String(env?.[key] || '').trim()) return provider;
+  }
+  return null;
+}
+
+/**
+ * Free-first ladder. Mirrors `runner/preflight.py:resolve_search_provider` so
+ * the plugin's choice and the preflight cost line agree. Console is never
+ * chosen implicitly — it only surfaces when `explicit` names it. A provider the
+ * user connected via `/connect` (`connected`) beats an env key because its
+ * credential lives in the host's integration store, not our env.
+ */
+export function resolveWebsearchUpstream(env = process.env, explicit = undefined, connected = undefined) {
+  const norm = (v) => String(v || '').trim().toLowerCase();
+  const explicitId = norm(explicit);
+  if (explicitId) return { provider: explicitId, explicit: true, source: 'configured' };
+  const connectedList = (Array.isArray(connected) ? connected : [connected])
+    .map(norm)
+    .filter(Boolean);
+  for (const id of connectedList) {
+    if (id && id !== 'duckduckgo' && id !== 'ddg' && id !== 'searxng' && id !== CONSOLE_WEBSEARCH_PROVIDER) {
+      return { provider: id, explicit: false, source: 'host-connected' };
+    }
+  }
+  const byo = detectByoProvider(env);
+  if (byo) return { provider: byo, explicit: false, source: 'byo-env-key' };
+  if (norm(env?.SEARXNG_URL)) {
+    return { provider: 'searxng', explicit: false, source: 'searxng-url' };
+  }
+  return { provider: 'duckduckgo', explicit: false, source: 'zero-key-default' };
+}
+
+const KNOWN_WEBSEARCH_PROVIDER_IDS = [
+  ...Object.keys(BYO_PROVIDER_KEYS),
+  'searxng',
+  CONSOLE_WEBSEARCH_PROVIDER,
+];
+
+/**
+ * Ask the host's integration/connection store which websearch provider(s) the
+ * user connected with `/connect`. Credentials live in that store, so env-var
+ * only detection would miss them and could halt a run whose provider is usable.
+ * Best-effort + shape-tolerant: a host without the API (or an error) yields [].
+ */
+export async function readConnectedWebsearchProviders(host, context = {}) {
+  const connection =
+    host?.integration?.connection || context?.integration?.connection;
+  if (!connection || typeof connection.active !== 'function') return [];
+  const found = [];
+  for (const id of KNOWN_WEBSEARCH_PROVIDER_IDS) {
+    try {
+      const active = await connection.active(id);
+      if (active) found.push(id);
+    } catch {
+      /* provider not connected, or the host lacks the store */
+    }
+  }
+  return found;
+}
+
+/** Single-provider convenience for the ladder. */
+export async function readConnectedWebsearchProvider(host, context = {}) {
+  const found = await readConnectedWebsearchProviders(host, context);
+  return found[0];
+}
+
+/** Append one retrieval event to `<cwd>/.research/retrieval.jsonl`. No throw. */
+export function appendRetrievalEvent(cwd, event) {
+  if (!cwd) return;
+  try {
+    const dir = path.join(cwd, '.research');
+    mkdirSync(dir, { recursive: true });
+    const record = { kind: 'query', ts: new Date().toISOString(), ...(event || {}) };
+    appendFileSync(path.join(dir, RETRIEVAL_LOG_NAME), `${JSON.stringify(record)}\n`, 'utf-8');
+  } catch {
+    /* telemetry must never break a search */
+  }
+}
+
+/**
+ * Resolve to the promise's value, or `undefined` after `ms` (never rejects).
+ * `onTimeout` runs when the bound elapses (e.g. to abort the upstream).
+ */
+function withTimeout(promise, ms, onTimeout) {
+  return new Promise((resolve) => {
+    let done = false;
+    // NOTE: intentionally NOT unref'd — an unref'd timer lets the event loop
+    // drain while a hung upstream settles, so the timeout would never fire.
+    const timer = setTimeout(() => {
+      if (!done) {
+        done = true;
+        try {
+          if (typeof onTimeout === 'function') onTimeout();
+        } catch {
+          /* abort is best-effort */
+        }
+        resolve(undefined);
+      }
+    }, ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          resolve(value);
+        }
+      },
+      () => {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          resolve(undefined);
+        }
+      }
+    );
+  });
+}
+
+/** Normalise an upstream hit into OpenCode's WebSearch.Result shape. */
+function normalizeHit(hit) {
+  return {
+    url: String(hit?.url || hit?.link || ''),
+    title: String(hit?.title || hit?.name || ''),
+    content: String(
+      hit?.content ?? hit?.snippet ?? hit?.description ?? hit?.text ?? ''
+    ),
+    time: hit?.time && typeof hit.time === 'object' ? hit.time : {},
+  };
+}
+
+function firstArray(...candidates) {
+  for (const c of candidates) if (Array.isArray(c)) return c;
+  return [];
+}
+
+async function postJson(fetchImpl, url, body, headers, signal) {
+  const res = await fetchImpl(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(headers || {}) },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res || !res.ok) return null;
+  return res.json();
+}
+
+/** One upstream rung. Errors are swallowed into an empty hit list.
+ *
+ * ``ctx.statusRef`` (optional) records why a rung produced nothing so the
+ * caller can log an honest `provider`/`status` event; errors land as
+ * ``error`` rather than masquerading as a legitimate empty result set.
+ */
+async function runUpstream(upstream, query, ctx = {}) {
+  const { fetchImpl, hostQuery, runPythonSearch, signal } = ctx;
+  const provider = upstream?.provider;
+  const env = ctx.env || process.env;
+  const fail = (reason) => {
+    if (ctx.statusRef) {
+      ctx.statusRef.status = 'error';
+      ctx.statusRef.error = reason;
+    }
+    return [];
+  };
+  try {
+    if (provider === 'duckduckgo' || provider === 'ddg') {
+      // Reuse our own path: anomaly detection, telemetry, domain filtering.
+      if (typeof runPythonSearch !== 'function') return fail('no-python-search');
+      const raw = await runPythonSearch(query, { signal });
+      return firstArray(raw).map(normalizeHit);
+    }
+    if (provider === 'searxng') {
+      if (typeof fetchImpl !== 'function') return fail('no-fetch');
+      const base = String(env?.SEARXNG_URL || 'http://localhost:8080').replace(/\/+$/, '');
+      const url = `${base}/search?q=${encodeURIComponent(query)}&format=json`;
+      const res = await fetchImpl(url, { signal });
+      if (!res || !res.ok) return fail('searxng-http');
+      const data = await res.json();
+      return firstArray(data?.results).map(normalizeHit);
+    }
+    if (provider === 'exa') {
+      if (typeof fetchImpl !== 'function') return fail('no-fetch');
+      const data = await postJson(
+        fetchImpl,
+        'https://api.exa.ai/search',
+        { query, numResults: 8 },
+        { 'x-api-key': String(env?.EXA_API_KEY || '') },
+        signal
+      );
+      return firstArray(data?.results).map(normalizeHit);
+    }
+    if (provider === 'tavily') {
+      if (typeof fetchImpl !== 'function') return fail('no-fetch');
+      const data = await postJson(
+        fetchImpl,
+        'https://api.tavily.com/search',
+        { api_key: String(env?.TAVILY_API_KEY || ''), query, max_results: 8 },
+        {},
+        signal
+      );
+      return firstArray(data?.results).map(normalizeHit);
+    }
+    if (provider === 'firecrawl') {
+      if (typeof fetchImpl !== 'function') return fail('no-fetch');
+      const data = await postJson(
+        fetchImpl,
+        'https://api.firecrawl.dev/v1/search',
+        { query, limit: 8 },
+        { authorization: `Bearer ${String(env?.FIRECRAWL_API_KEY || '')}` },
+        signal
+      );
+      return firstArray(data?.data).map(normalizeHit);
+    }
+    if (provider === 'parallel') {
+      if (typeof fetchImpl !== 'function') return fail('no-fetch');
+      const data = await postJson(
+        fetchImpl,
+        'https://api.parallel.ai/v1beta/search',
+        { search_queries: [query], max_results: 8 },
+        { 'x-api-key': String(env?.PARALLEL_API_KEY || '') },
+        signal
+      );
+      return firstArray(data?.results).map((r) =>
+        normalizeHit({
+          url: r?.url,
+          title: r?.title,
+          content: firstArray(r?.excerpts).join(' ') || r?.snippet,
+        })
+      );
+    }
+    if (provider === 'tinyfish') {
+      if (typeof fetchImpl !== 'function') return fail('no-fetch');
+      const data = await postJson(
+        fetchImpl,
+        'https://api.tinyfish.ai/v1/search',
+        { query, max_results: 8 },
+        { 'x-api-key': String(env?.TINYFISH_API_KEY || '') },
+        signal
+      );
+      return firstArray(data?.results, data?.data).map(normalizeHit);
+    }
+    if (provider === CONSOLE_WEBSEARCH_PROVIDER) {
+      // Console is the host's own metered provider; delegate rather than
+      // re-implement it, and only when explicitly selected.
+      if (typeof hostQuery !== 'function') return fail('no-host-query');
+      const out = await hostQuery({ query, providerID: CONSOLE_WEBSEARCH_PROVIDER });
+      const results = firstArray(out?.results, out?.data, out);
+      return results.map(normalizeHit);
+    }
+    return fail('unknown-provider');
+  } catch (err) {
+    return fail(String(err?.message || 'upstream-error'));
+  }
+}
+
+/** Spawn our Python DDG path so its telemetry + anomaly detection apply. */
+function spawnPythonWebsearch(query, { cwd, signal } = {}) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let child;
+    try {
+      child = spawn(
+        resolveBinary('python3'),
+        [
+          path.join(PKG_ROOT, 'skills', 'epistemic_search', 'scripts', 'search.py'),
+          '--json',
+          String(query),
+        ],
+        {
+          cwd: cwd || process.cwd(),
+          env: {
+            ...process.env,
+            PYTHONPATH: PKG_ROOT,
+            IUMBTEMS_PROJECT_DIR: cwd || process.cwd(),
+            IUMBTEMS_RESEARCH_DIR: path.join(cwd || process.cwd(), '.research'),
+          },
+        }
+      );
+    } catch {
+      resolve([]);
+      return;
+    }
+    child.stdout?.on('data', (d) => { stdout += String(d); });
+    child.on('error', () => resolve([]));
+    if (signal && typeof signal.addEventListener === 'function') {
+      signal.addEventListener('abort', () => { try { child.kill(); } catch { /* noop */ } }, { once: true });
+    }
+    child.on('close', () => {
+      try {
+        const parsed = JSON.parse(stdout);
+        resolve(Array.isArray(parsed) ? parsed.map(normalizeHit) : []);
+      } catch {
+        resolve([]);
+      }
+    });
+  });
+}
+
+/** Build the provider definition. Everything network-touching is injectable. */
+export function websearchProviderDefinition(options = {}) {
+  const {
+    env = process.env,
+    explicit = undefined,
+    connected = [],
+    cwd = undefined,
+    fetchImpl = typeof fetch === 'function' ? fetch : undefined,
+    hostQuery = undefined,
+    runPythonSearch = undefined,
+    logEvent = appendRetrievalEvent,
+    timeoutMs = DEFAULT_EXECUTE_TIMEOUT_MS,
+  } = options;
+  return {
+    id: WEBSEARCH_PROVIDER_ID,
+    name: WEBSEARCH_PROVIDER_NAME,
+    execute: async ({ query } = {}, opts = {}) => {
+      const signal = opts?.signal;
+      // A pre-aborted request must not touch the network at all.
+      if (signal && signal.aborted) return [];
+      const text = String(query || '');
+      if (!text) return [];
+      const upstream = resolveWebsearchUpstream(env, explicit, connected);
+      const statusRef = { status: 'ok' };
+      // Link the host signal to an internal controller so the timeout can abort
+      // a hung upstream / child process, not merely stop waiting on it.
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      if (controller && signal && typeof signal.addEventListener === 'function') {
+        signal.addEventListener('abort', () => controller.abort(), { once: true });
+      }
+      // Bounded: a never-settling upstream resolves to [] rather than hanging
+      // the host forever.
+      const timed = await withTimeout(
+        runUpstream(upstream, text, {
+          env,
+          fetchImpl,
+          hostQuery,
+          runPythonSearch,
+          signal: controller ? controller.signal : signal,
+          statusRef,
+        }),
+        timeoutMs,
+        () => controller?.abort()
+      );
+      const hits = Array.isArray(timed) ? timed : [];
+      if (timed === undefined) statusRef.status = 'timeout';
+      else if (statusRef.status === 'ok') statusRef.status = hits.length ? 'ok' : 'empty';
+      // Every rung on OUR path is recorded with its provider + status, so a
+      // metered-only run cannot read as `0 searches (~$0.00 est)`. The DDG rung
+      // is exempt: it routes through `search.py`, which already logs a richer
+      // event (blocked/empty/error), and logging here too would double-count.
+      if (upstream.provider !== 'duckduckgo' && upstream.provider !== 'ddg') {
+        try {
+          logEvent(cwd, {
+            query: text,
+            results: hits.length,
+            status: statusRef.status,
+            provider: upstream.provider,
+            ...(statusRef.error ? { error: statusRef.error } : {}),
+          });
+        } catch {
+          /* telemetry must never break a search */
+        }
+      }
+      return hits;
+    },
+  };
+}
+
+/** Read the user's explicit selection from the host config shapes, if any. */
+function readExplicitWebsearchProvider(host, context) {
+  const candidates = [
+    host?.config?.websearch?.provider,
+    host?.websearch?.provider,
+    context?.config?.websearch?.provider,
+    context?.options?.websearch?.provider,
+    host?.options?.websearch?.provider,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim()) return c.trim();
+  }
+  return undefined;
+}
+
+/**
+ * Read the editor's current default. Distinguishes "no default configured"
+ * (safe to set ours) from "cannot tell" (never override — do not set).
+ */
+function readWebsearchDefault(editor) {
+  try {
+    const d = editor?.default;
+    if (d && typeof d.get === 'function') return { known: true, value: d.get() };
+  } catch {
+    /* fall through to unknown */
+  }
+  return { known: false, value: undefined };
+}
+
+/**
+ * Register the cached provider via the V2 `websearch.transform` domain.
+ *
+ * Shape-tolerant: a host build without `websearch` yields `[]` and the plugin
+ * carries on. The transform callback is wrapped so a registration fault can
+ * never disable the whole plugin the way the AgentEditor `add` bug did.
+ */
+export async function registerHostWebsearch(host, context = {}) {
+  if (typeof host?.websearch?.transform !== 'function') return [];
+  const cwd = host?.location?.directory || context?.location?.directory || undefined;
+  const explicit = readExplicitWebsearchProvider(host, context);
+  // Consult the host's integration store: a `/connect`ed provider is usable
+  // even without a `websearch.provider` or an env key. Best-effort.
+  let connected = [];
+  try {
+    connected = await readConnectedWebsearchProviders(host, context);
+  } catch (err) {
+    log(host, 'warn', 'integration store probe failed', errDetail(err));
+  }
+  // Record the choice for the runner's preflight (the integration store is only
+  // reachable from inside the host process). Two best-effort channels:
+  //   1. `<cwd>/.research/websearch-state.json` for a run pointed at this tree,
+  //   2. the spawn env, since the plugin starts the MCP runner with
+  //      `...process.env` — so the banner names the active provider and never
+  //      halts a run whose `/connect`ed provider is usable.
+  persistConnectedState(cwd, connected);
+  try {
+    if (explicit) process.env.IUMBTEMS_WEBSEARCH_PROVIDER = explicit;
+    else delete process.env.IUMBTEMS_WEBSEARCH_PROVIDER;
+    if (connected.length) {
+      process.env.IUMBTEMS_CONNECTED_WEBSEARCH_PROVIDER = connected[0];
+    } else {
+      delete process.env.IUMBTEMS_CONNECTED_WEBSEARCH_PROVIDER;
+    }
+  } catch {
+    /* some sandboxes expose a read-only process.env */
+  }
+
+  const definition = websearchProviderDefinition({
+    env: process.env,
+    explicit,
+    connected,
+    cwd,
+    hostQuery:
+      typeof host?.websearch?.query === 'function'
+        ? (input) => host.websearch.query(input)
+        : undefined,
+    runPythonSearch: (query, opts) => spawnPythonWebsearch(query, { ...(opts || {}), cwd }),
+  });
+
+  const registration = await host.websearch.transform((editor) => {
+    try {
+      editor.add(definition);
+      const current = readWebsearchDefault(editor);
+      // ONLY choose our default when we can prove the user made no explicit
+      // `websearch.provider` choice (and did not `/connect` one) AND the editor
+      // reports no default at all.
+      if (
+        !explicit &&
+        !connected.length &&
+        current.known &&
+        current.value === undefined &&
+        typeof editor?.default?.set === 'function'
+      ) {
+        editor.default.set(WEBSEARCH_PROVIDER_ID);
+      }
+    } catch (err) {
+      log(host, 'warn', 'websearch provider registration failed', errDetail(err));
+    }
+  });
+  log(host, 'info', 'cached search provider registered', {
+    id: WEBSEARCH_PROVIDER_ID,
+    explicitProvider: explicit || null,
+    connectedProviders: connected,
+  });
+  return registration ? [registration] : [];
+}
+
+/** Write the host-reported connections where the runner's preflight can read them. */
+function persistConnectedState(cwd, connected) {
+  if (!cwd) return;
+  const dir = path.join(cwd, '.research');
+  const file = path.join(dir, CONNECTED_STATE_NAME);
+  const list = Array.isArray(connected) ? connected.filter(Boolean) : [];
+  try {
+    if (list.length === 0) {
+      // The host reports NO `/connect`ed provider: remove any stale record so a
+      // previous connection (or a forged file) cannot keep advertising a
+      // provider that is gone. The runner treats the file as advisory, but it
+      // must not outlive the connection either.
+      rmSync(file, { force: true });
+      return;
+    }
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      file,
+      `${JSON.stringify(
+        {
+          connected_provider: list[0],
+          connected_providers: list,
+          updated: new Date().toISOString(),
+        },
+        null,
+        2
+      )}\n`,
+      'utf-8'
+    );
+  } catch {
+    /* best-effort channel; never break registration */
+  }
+}
+
 /**
  * V2 compaction hook: keep .research state across context compaction.
  *
@@ -1383,6 +1972,11 @@ export function createOpenCodePlugin(context = {}) {
         adopt(await registerHostTools(host));
       } catch (err) {
         log(host, 'error', 'registering tools failed', errDetail(err));
+      }
+      try {
+        adopt(await registerHostWebsearch(host, context));
+      } catch (err) {
+        log(host, 'error', 'registering cached search provider failed', errDetail(err));
       }
       try {
         adopt(await registerCompactionHook(host, context));

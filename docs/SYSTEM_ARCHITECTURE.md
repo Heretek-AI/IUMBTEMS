@@ -242,6 +242,40 @@ Every web page, paper abstract, or document retrieved is immediately ingested by
 4. The agent is provided with the `<sha256>` hash.
 5. In downstream synthesis, when the agent cites `[VERIFIED: sha256]`, the Epistemic Auditor verifies that `verbatim_quote` is an exact substring within `.research/sources/<sha256>.md`. If substring lookup fails, the claim is rejected.
 
+### 4.2 Provider Ladder, Cost Reporting & the Snippet/Witness Contract
+
+OpenCode V2 can host a plugin-provided search provider (`websearch.transform`); IUMBTEMS registers one provider (`iumbtems-cached`) that resolves its upstream from a **free-first ladder** and never overrides a user's deliberate `websearch.provider` or a provider the user `/connect`ed. ("Cached" names the surrounding evidence pipeline — `hasher.py` content-addresses the full page after an explicit `webfetch` — not in-execute memoisation.)
+
+| Rung | Provider | Tier | Notes |
+| :--- | :--- | :--- | :--- |
+| 0 | `/connect`-ed provider (integration store) | **metered** | Reported by the host; credential lives in the integration store, not our env. |
+| 1 | BYO key: `exa` / `firecrawl` / `parallel` / `tavily` / `tinyfish` | **metered** | Vendor-billed via `EXA_API_KEY` / `FIRECRAWL_API_KEY` / `PARALLEL_API_KEY` / `TAVILY_API_KEY` / `TINYFISH_API_KEY`. |
+| 2 | self-hosted SearXNG (`SEARXNG_URL`) | free | `docker compose -f config/docker-compose.infra.yml up -d`; availability requires the URL (explicit selection alone does not make it reachable). |
+| 3 | DuckDuckGo Lite | free | Zero-key default; runs through `skills/epistemic_search/scripts/search.py` so anomaly detection and telemetry apply. |
+| 4 | Console (hosted) | **metered** | `$0.01`/successful search; **never implicit** — only when explicitly selected. |
+
+**Snippet/witness contract.** A search provider returns *hits* (`title`, `url`, `content`) only. Full page content is fetched explicitly by the agent via the host `webfetch` tool and cached through `python3 skills/research_cache/hasher.py cache …`. A search **snippet alone can never witness a `[VERIFIED: <hash>]` claim** — the auditor still requires a verbatim substring match in `.research/sources/<sha256>.md`.
+
+**Cost reporting.** `runner/preflight.py` resolves the active provider, classifies it `free`/`metered` (BYO keys count as metered), counts only searches that flowed through OUR path (`.research/retrieval.jsonl`), and prints an explicitly-labelled estimate:
+
+```
+search: <provider> (<free|metered>) | our-path searches: N (~$X est) | metered-mode: <yes|no|unknown>
+```
+
+Vendor pricing is unknown, so a BYO provider reports `~$? est, vendor-billed`; metered detection is best-effort and emits `unknown` rather than guessing. The count is **per run**: the runner passes the byte offset captured at start, and the reachability probe is excluded, so a zero-search run reports `our-path searches: 0`. Metered rungs executed by the plugin provider append their own `query` events (provider + status) through the same log.
+
+### 4.3 Mode-Aware Availability Gate
+
+Preflight fails fast **before any agent spawns** when a retrieval-requiring mode (`research`, `scout`, `darkharvest`, `hybrid`, and `brainstorm` once `strict` — including `--domain-pack` on the CLI) has no usable search — the gate HALTs with an actionable fix naming a BYO key, SearXNG, or a DuckDuckGo retry. Engine aliases are canonicalised (`ddg`/`DuckDuckGo`/`DDG`/whitespace → `duckduckgo`) before the probe, so no alias can skip it. `audit` and internal `brainstorm` warn and proceed; an implicit Console warns loudly about the `$0.01` metered charge and is never overridden. Inconclusive probes (skipped/offline) warn, never halt. The workspace `websearch-state.json` is **advisory**: it is read only while fresh (24h TTL, `STATE_CONNECTED_TTL_SECONDS`), resolved in a **single read** (provider and advisory verdict together, so a file swapped between reads cannot be mistaken for host-confirmed), only when the path is a **regular file**, and under a bounded non-blocking read so a FIFO/device/symlink cannot hang preflight or `doctor`. It never marks a provider usable without a resolvable credential or the host-confirmed env channel, so a forged/stale file cannot suppress the halt; the plugin deletes it when `/connect` reports zero providers. A HALT exits non-zero (`EXIT_PREFLIGHT_HALT = 3`, deliberately distinct from argparse's usage-error `2`) so CI can detect the refusal; `--dry-run` validates and reports but never halts.
+
+The opt-in cost gate writes the ask rule to the user's OpenCode config (`install.sh --search-gate`):
+
+```jsonc
+{ "permissions": [ { "action": "websearch", "resource": "*", "effect": "ask" } ] }
+```
+
+The websearch permission action uses the search query as the resource, so `"*"` gates every search; without `--search-gate`, `install.sh` never touches permissions. The gate never downgrades an existing `websearch` `deny` (it refuses, exit non-zero, config untouched) and preserves/reports resource-scoped websearch rules rather than silently deleting them.
+
 ---
 
 ## 5. Socratic Grilling & Divergent-to-Convergent Balance

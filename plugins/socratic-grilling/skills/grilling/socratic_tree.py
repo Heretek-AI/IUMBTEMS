@@ -8,8 +8,70 @@ import sys
 import os
 import json
 import argparse
+import tempfile
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional, Any
+
+try:  # POSIX advisory locking; no-op where unavailable
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - non-POSIX
+    _fcntl = None
+
+
+def _fallback_atomic_write_json(path: Path, data: Any) -> None:
+    """Self-contained atomic JSON write: unique temp file + os.replace.
+
+    Fallback used when `runner.state_machine` is not importable, e.g. the
+    generated plugin mirror (plugins/socratic-grilling/) run standalone from an
+    arbitrary cwd where no `runner/` package exists.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(
+        dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+@contextmanager
+def _fallback_file_lock(lock_path: Path):
+    """Self-contained cross-process advisory lock; graceful no-op without fcntl."""
+    if _fcntl is None:
+        yield
+        return
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+", encoding="utf-8") as fh:
+        _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+
+
+# Reuse the runner's cross-process lock + atomic-write primitives (see
+# runner/state_machine.py) rather than re-implementing them here. The import is
+# OPTIONAL: the generated plugin mirror ships no `runner/` package, so it must
+# still run standalone from an arbitrary cwd. On ImportError we fall back to the
+# self-contained primitives above, mirroring the try/except precedent in
+# plugins/research-cache/skills/research_cache/hasher.py.
+try:
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from runner.state_machine import _atomic_write_json, _file_lock  # noqa: E402
+except ImportError:  # pragma: no cover - plugin mirror / standalone
+    _atomic_write_json = _fallback_atomic_write_json
+    _file_lock = _fallback_file_lock
 
 
 class DecisionNode:
@@ -93,9 +155,12 @@ class DesignTree:
             n.is_settled() for n in self.nodes.values()
         )
 
-    def export_frontier_json(self, output_path: Path):
-        safe_path = Path(os.path.realpath(str(output_path)))
-        safe_path.parent.mkdir(parents=True, exist_ok=True)
+    def _write_unlocked(self, safe_path: Path) -> None:
+        """Serialize to an already-locked path via a unique temp + os.replace.
+
+        Callers must hold the frontier lock (see `frontier_transaction` /
+        `export_frontier_json`); nested `flock` on a second fd would deadlock.
+        """
         data = {
             "objective": self.objective,
             "is_complete": self.is_complete(),
@@ -104,8 +169,13 @@ class DesignTree:
                 k: v.settled_answer for k, v in self.nodes.items() if v.is_settled()
             },
         }
-        with open(safe_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        _atomic_write_json(safe_path, data)
+
+    def export_frontier_json(self, output_path: Path):
+        safe_path = Path(os.path.realpath(str(output_path)))
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
+        with _reentrant_file_lock(_lock_path_for(safe_path)):
+            self._write_unlocked(safe_path)
 
     @classmethod
     def load_from_json(cls, file_path: Path) -> "DesignTree":
@@ -116,6 +186,68 @@ class DesignTree:
         for k, v in data.get("nodes", {}).items():
             tree.add_node(DecisionNode.from_dict(v))
         return tree
+
+
+def _lock_path_for(safe_path: Path) -> Path:
+    """Sibling lock file next to the frontier (e.g. `.factory/frontier.json.lock`).
+
+    Append `.lock` rather than `with_suffix(".lock")`: replacing the suffix would
+    make a frontier literally named `frontier.lock` use its own data file as the
+    lock, which corrupts the data on a fresh run.
+    """
+    return Path(str(safe_path) + ".lock")
+
+
+# Re-entrancy guard. `flock` is bound to the open file description, so a second
+# open()+flock of the same lock file within one process self-deadlocks with no
+# timeout (e.g. calling `export_frontier_json` inside `frontier_transaction`).
+# Track the lock keys this *thread* already holds and reuse them; the guard is
+# thread-local so distinct threads still contend on the real flock.
+_HELD_LOCKS = threading.local()
+
+
+def _held_lock_keys() -> set:
+    keys = getattr(_HELD_LOCKS, "keys", None)
+    if keys is None:
+        keys = set()
+        _HELD_LOCKS.keys = keys
+    return keys
+
+
+@contextmanager
+def _reentrant_file_lock(lock_path: Path):
+    """`_file_lock` that is re-entrant within a single thread."""
+    key = str(os.path.realpath(str(lock_path)))
+    keys = _held_lock_keys()
+    if key in keys:
+        yield  # already held by this thread; reuse it, do not re-flock
+        return
+    keys.add(key)
+    try:
+        with _file_lock(lock_path):
+            yield
+    finally:
+        keys.discard(key)
+
+
+@contextmanager
+def frontier_transaction(file_path: Path, objective: str = ""):
+    """Cross-process-locked read-modify-write cycle over one frontier file.
+
+    Locking only the final write is not enough: two processes can both read the
+    pre-state and then serialize their writes, silently dropping one another's
+    nodes. The advisory lock is therefore held across load -> mutate -> atomic
+    write, so concurrent `add`/`settle` calls never corrupt or lose data.
+    """
+    safe_path = Path(os.path.realpath(str(file_path)))
+    safe_path.parent.mkdir(parents=True, exist_ok=True)
+    with _reentrant_file_lock(_lock_path_for(safe_path)):
+        if safe_path.exists():
+            tree = DesignTree.load_from_json(safe_path)
+        else:
+            tree = DesignTree(objective=objective)
+        yield tree
+        tree._write_unlocked(safe_path)
 
 
 def _display_frontier(tree: DesignTree, frontier: list) -> None:
@@ -185,39 +317,42 @@ def main():
 
     args = parser.parse_args()
     frontier_path = Path(os.path.realpath(str(args.file)))
+    objective = args.objective or "Epistemic Swarm Research Objective"
 
-    if frontier_path.exists():
-        tree = DesignTree.load_from_json(frontier_path)
-    else:
-        objective = args.objective or "Epistemic Swarm Research Objective"
-        tree = DesignTree(objective=objective)
-
+    # Every mutating action is a locked read-modify-write so concurrent
+    # `--add-node`/`--settle` invocations cannot drop nodes or corrupt the file.
     if args.add_node:
         if not args.id or not args.question:
             parser.error("--add-node requires --id and --question")
         prereqs = [p.strip() for p in (args.depends_on or "").split(",") if p.strip()]
-        tree.add_node(
-            DecisionNode(
-                node_id=args.id,
-                title=args.title or args.id,
-                question=args.question,
-                recommended=args.recommended or "",
-                options=[],
-                prerequisites=prereqs,
+        with frontier_transaction(frontier_path, objective) as tree:
+            tree.add_node(
+                DecisionNode(
+                    node_id=args.id,
+                    title=args.title or args.id,
+                    question=args.question,
+                    recommended=args.recommended or "",
+                    options=[],
+                    prerequisites=prereqs,
+                )
             )
-        )
-        tree.export_frontier_json(frontier_path)
         print(f"Added node {args.id} -> {frontier_path}")
 
     if args.settle:
         node_id, answer = args.settle
-        tree.settle_node(node_id, answer)
-        tree.export_frontier_json(frontier_path)
+        with frontier_transaction(frontier_path, objective) as tree:
+            tree.settle_node(node_id, answer)
         print(f"Settled {node_id} -> {answer}")
 
     if args.export:
-        tree.export_frontier_json(frontier_path)
+        with frontier_transaction(frontier_path, objective):
+            pass
         print(f"Exported frontier -> {frontier_path}")
+
+    if frontier_path.exists():
+        tree = DesignTree.load_from_json(frontier_path)
+    else:
+        tree = DesignTree(objective=objective)
 
     frontier = tree.compute_frontier()
     if args.show_frontier or not (args.settle or args.add_node or args.export):
