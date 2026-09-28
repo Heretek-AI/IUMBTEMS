@@ -1262,7 +1262,10 @@ async function runUpstream(upstream, query, ctx = {}) {
     }
     if (provider === 'searxng') {
       if (typeof fetchImpl !== 'function') return fail('no-fetch');
-      const base = String(env?.SEARXNG_URL || 'http://localhost:8080').replace(/\/+$/, '');
+      // Strip trailing slashes without a regex: /\/+$/ on uncontrolled input
+      // trips CodeQL js/polynomial-redos; this loop is linear by construction.
+      let base = String(env?.SEARXNG_URL || 'http://localhost:8080');
+      while (base.length > 1 && base.endsWith('/')) base = base.slice(0, -1);
       const url = `${base}/search?q=${encodeURIComponent(query)}&format=json`;
       const res = await fetchImpl(url, { signal });
       if (!res || !res.ok) return fail('searxng-http');

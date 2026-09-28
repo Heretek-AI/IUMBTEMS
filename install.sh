@@ -154,6 +154,7 @@ echo "🔧 Merging OpenCode V2 configuration into $OPENCODE_JSON..."
 # unquoted heredoc would execute as command substitution ("permissions: command
 # not found", "plugin: command not found", …). Variables go via the environment.
 REPO_DIR="$REPO_DIR" OPENCODE_JSON="$OPENCODE_JSON" SEARCH_GATE="$SEARCH_GATE" python3 - <<'PY'
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -303,19 +304,39 @@ if search_gate == "1":
     def _is_websearch(rule):
         return isinstance(rule, dict) and rule.get("action") == "websearch"
 
-    # --- Safety: NEVER downgrade an explicit deny. An existing websearch
-    # `deny` is stricter than the `ask` gate, so adding ask would weaken it.
-    # Preserve the config untouched and refuse loudly instead of silently
-    # rewriting a security decision the user made.
+    def _action_matches_websearch(rule):
+        # V2 actions support whole-value wildcards and the host resolves with
+        # last-match-wins, so `*` / `web*` also govern websearch queries.
+        action = rule.get("action") if isinstance(rule, dict) else None
+        return isinstance(action, str) and fnmatch.fnmatchcase(
+            "websearch", action
+        )
+
+    KNOWN_EFFECTS = {"allow", "ask", "deny"}
+
+    def _effect_known(rule):
+        effect = rule.get("effect")
+        return isinstance(effect, str) and effect in KNOWN_EFFECTS
+
+    # --- Safety: NEVER weaken an explicit deny. An existing websearch deny —
+    # literal action OR wildcard (`*`, `web*`), ANY resource — is stricter than
+    # the `ask` gate, and under last-match-wins our appended rule would win and
+    # silently downgrade it. The same holds for a matching rule whose effect is
+    # missing or not a known effect string: its safety cannot be determined.
+    # Preserve the config untouched and refuse loudly instead of rewriting a
+    # security decision the user made.
     websearch_denies = [
-        r for r in rules if _is_websearch(r) and r.get("effect") == "deny"
+        r
+        for r in rules
+        if _action_matches_websearch(r)
+        and (r.get("effect") == "deny" or not _effect_known(r))
     ]
     if websearch_denies:
         raise SystemExit(
             "❌ opencode.json already denies websearch "
             f"({json.dumps(websearch_denies)}); the --search-gate `ask` rule "
-            "would be WEAKER than it, so install.sh refuses to downgrade it and "
-            "leaves your config untouched.\n"
+            "would be WEAKER than it under last-match-wins, so install.sh "
+            "refuses to downgrade it and leaves your config untouched.\n"
             "   The existing deny is already stricter than ask. If you really "
             "want the ask gate instead, remove the websearch deny rule(s) "
             "manually, then re-run `install.sh --search-gate`."
@@ -327,18 +348,21 @@ if search_gate == "1":
     ]
     # Resource-scoped websearch rules (resource != "*") are the user's explicit
     # per-query decisions. NEVER silently drop them: keep every one and report
-    # it, so a scoped `allow` that out-ranks the gate is visible rather than
-    # quietly deleted.
+    # it. Note the appended '*' ask rule is evaluated later and wins overlapping
+    # queries under last-match-wins — the scoped rules below are preserved
+    # verbatim for documentation, not as overrides.
     scoped_ws = [
-        r for r in rules if _is_websearch(r) and r.get("resource") != "*"
+        r
+        for r in rules
+        if _action_matches_websearch(r) and r.get("resource") != "*"
     ]
     for rule in scoped_ws:
         if rule.get("effect") == "allow":
             print(
                 "   ⚠️ Preserved resource-scoped websearch allow "
-                f"({json.dumps(rule)}): a specific resource rule out-ranks the "
-                "'*' ask gate, so the gate will NOT prompt for queries it "
-                "matches."
+                f"({json.dumps(rule)}): kept verbatim; note the appended '*' "
+                "ask rule below takes precedence for overlapping queries "
+                "under last-match-wins."
             )
         else:
             print(
@@ -347,34 +371,52 @@ if search_gate == "1":
             )
 
     if global_ws:
-        # Collapse every resource-"*" websearch rule into the single canonical
-        # ask gate. Only allow|ask effects can reach here (a deny aborts above).
-        # Report every replacement/drop instead of mutating silently.
-        replaced = []
-        for rule in global_ws:
-            effect = rule.get("effect")
-            if effect == "allow":
-                replaced.append("replaced websearch allow (*) with ask")
-            elif effect != "ask":
-                replaced.append(
-                    f"replaced websearch effect={effect!r} (*) with ask"
+        existing_ask = [r for r in global_ws if r.get("effect") == "ask"]
+        if existing_ask:
+            # An ask gate is already present. Keep it VERBATIM — rewriting it to
+            # the canonical shape would silently drop unknown keys (e.g. a
+            # user-added "note"), so preserve and report instead.
+            kept = existing_ask[0]
+            dropped = [r for r in global_ws if r is not kept]
+            for r in dropped:
+                print(
+                    "   ~ Dropped duplicate websearch '*' rule "
+                    f"({json.dumps(r)})"
                 )
-        duplicates = len(global_ws) - 1
-        rules[:] = [
-            r for r in rules if not (_is_websearch(r) and r.get("resource") == "*")
-        ]
-        rules.append(canonical)
-        for note in replaced:
-            print(f"   ~ {note}")
-        if duplicates > 0:
-            print(
-                f"   ~ Dropped {duplicates} duplicate websearch '*' rule(s)"
-            )
-        if not replaced and duplicates == 0:
-            print("   ℹ️ websearch ask-gate permission already configured")
+            drop_ids = {id(r) for r in dropped}
+            rules[:] = [r for r in rules if id(r) not in drop_ids]
+            if kept == canonical:
+                print("   ℹ️ websearch ask-gate permission already configured")
+            else:
+                print(
+                    "   ℹ️ Preserved existing websearch ask rule with extra keys "
+                    f"({json.dumps(kept)}); not rewritten."
+                )
+        else:
+            # Only allow effects can reach here (deny/malformed abort above).
+            for r in global_ws:
+                print("   ~ replaced websearch allow (*) with ask")
+            drop_ids = {id(r) for r in global_ws}
+            rules[:] = [r for r in rules if id(r) not in drop_ids]
+            rules.append(canonical)
     else:
-        rules.append(canonical)
-        print("   + Added websearch ask-gate permission (--search-gate)")
+        # No literal global websearch rule. A broader ask already covering
+        # websearch means the gate is effectively in place — don't duplicate it.
+        broader_ask = any(
+            _action_matches_websearch(r)
+            and not _is_websearch(r)
+            and r.get("resource") == "*"
+            and r.get("effect") == "ask"
+            for r in rules
+        )
+        if broader_ask:
+            print(
+                "   ℹ️ websearch is already gated by a broader ask rule; "
+                "nothing to add"
+            )
+        else:
+            rules.append(canonical)
+            print("   + Added websearch ask-gate permission (--search-gate)")
 else:
     print("   ℹ️ permissions untouched (pass --search-gate to add the websearch ask rule)")
 

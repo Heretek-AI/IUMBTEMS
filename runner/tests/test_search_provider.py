@@ -1313,6 +1313,79 @@ class TestInstallSearchGate(unittest.TestCase):
             # The keep-decision is reported, never silent.
             self.assertIn("Preserved resource-scoped websearch allow", res.stdout)
 
+    def test_wildcard_action_deny_is_never_downgraded(self):
+        # Under last-match-wins, appending a websearch ask after a wildcard
+        # deny ({action:"*"} or {action:"web*"}) would silently weaken it.
+        for action in ("*", "web*"):
+            with self.subTest(action=action):
+                with tempfile.TemporaryDirectory() as tmp:
+                    home = Path(tmp)
+                    oc = self._oc_path(home)
+                    oc.parent.mkdir(parents=True, exist_ok=True)
+                    deny = {"action": action, "resource": "*", "effect": "deny"}
+                    oc.write_text(
+                        json.dumps(
+                            {
+                                "$schema": "https://opencode.ai/config.json",
+                                "permissions": [deny],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    res = self._run_install(home, "--search-gate")
+                    self.assertNotEqual(res.returncode, 0)
+                    combined = (res.stdout + res.stderr).lower()
+                    self.assertIn("deny", combined)
+                    self.assertEqual(
+                        json.loads(oc.read_text(encoding="utf-8"))["permissions"],
+                        [deny],
+                    )
+
+    def test_malformed_effect_is_refused_not_rewritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            oc = self._oc_path(home)
+            oc.parent.mkdir(parents=True, exist_ok=True)
+            oc.write_text(
+                json.dumps(
+                    {
+                        "$schema": "https://opencode.ai/config.json",
+                        "permissions": [
+                            {"action": "websearch", "resource": "*", "effect": None}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            res = self._run_install(home, "--search-gate")
+            self.assertNotEqual(res.returncode, 0)
+
+    def test_existing_ask_with_extra_keys_is_preserved_verbatim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            oc = self._oc_path(home)
+            oc.parent.mkdir(parents=True, exist_ok=True)
+            rule = {
+                "action": "websearch",
+                "resource": "*",
+                "effect": "ask",
+                "note": "keep-me",
+            }
+            oc.write_text(
+                json.dumps(
+                    {
+                        "$schema": "https://opencode.ai/config.json",
+                        "permissions": [rule],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            res = self._run_install(home, "--search-gate")
+            self.assertEqual(res.returncode, 0, res.stderr)
+            rules = json.loads(oc.read_text(encoding="utf-8"))["permissions"]
+            # Verbatim — the unknown key must survive, not be rewritten away.
+            self.assertEqual(rules, [rule])
+
     def test_help_and_unknown_flag(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
