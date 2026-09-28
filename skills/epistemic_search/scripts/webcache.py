@@ -249,6 +249,17 @@ def cmd_archive(stdin_data):
             encoding="utf-8",
         )
         log(f"archived {domain_of(url)} -> {digest[:16]} ({len(text)} chars)")
+        try:
+            root = Path(__file__).resolve().parents[3]
+            if str(root) not in sys.path:
+                sys.path.insert(0, str(root))
+            from runner.retrieval_log import log_event
+
+            log_event(
+                research_dir(stdin_data), "cache", url=url, hash=digest, tool="webcache"
+            )
+        except Exception:
+            pass
     except Exception as e:
         log(f"archive failed for {domain_of(url)}: {e}")
     return None

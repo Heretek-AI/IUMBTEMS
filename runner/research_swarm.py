@@ -28,6 +28,8 @@ from runner.state_machine import (
     _atomic_write_json,
 )
 from runner.auditor_engine import EpistemicAuditorEngine
+from runner.retrieval_log import current_offset as _retrieval_offset
+from runner.retrieval_log import summarize as _retrieval_summary
 from skills.research_cache.hasher import SourceHasher
 from skills.swarm_config.configure import load_config
 
@@ -421,7 +423,13 @@ class SwarmRunner:
                 # this the worker operated on the launcher's PWD (observed live:
                 # runner evidence dir 5da7ec/sunny-otter, worker cwd
                 # /home/john/Projects/STC). Keep PWD consistent with cwd.
-                env={**os.environ, "PWD": agent_cwd},
+                # IUMBTEMS_RESEARCH_DIR points agent-invoked skill scripts
+                # (search.py/hasher.py) at this workspace for retrieval telemetry.
+                env={
+                    **os.environ,
+                    "PWD": agent_cwd,
+                    "IUMBTEMS_RESEARCH_DIR": str(self.base_dir),
+                },
                 # stdin MUST be DEVNULL: `opencode run` reads piped stdin to
                 # EOF before starting, and the MCP server's inherited stdin
                 # pipe is held open by the harness — every agent hung forever
@@ -580,14 +588,28 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         return SwarmRunner._parse_json_block(text, require_key="scope_id")
 
     @staticmethod
-    def _load_dossier_file(path: Path) -> Optional[Dict[str, Any]]:
-        """Load a path as a dossier dict, or None when it is not one."""
+    def _load_dossier_file(
+        path: Path, expected_scope: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Load a path as a dossier dict for `expected_scope`, or None.
+
+        A file under the research dir is untrusted input: require a `scope_id`
+        that matches the scope being loaded, so a stray or stub artifact cannot
+        satisfy completion for a different scope.
+        """
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, ValueError):
             return None
-        return data if isinstance(data, dict) and data.get("scope_id") else None
+        if not isinstance(data, dict):
+            return None
+        scope_id = data.get("scope_id")
+        if not scope_id:
+            return None
+        if expected_scope is not None and scope_id != expected_scope:
+            return None
+        return data
 
     def _dossier_candidates(
         self, dossier_path: Path, aliases: Sequence[str]
@@ -639,7 +661,7 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         agent's stdout, then raises a diagnostic error naming where it looked.
         """
         for candidate in self._dossier_candidates(dossier_path, aliases):
-            data = self._load_dossier_file(candidate)
+            data = self._load_dossier_file(candidate, scope_id)
             if data is None:
                 continue
             if candidate != dossier_path:
@@ -1128,7 +1150,9 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             from runner.refinement import load_domain_pack
 
             constitution = load_domain_pack(self.domain_pack)
-        audit_report = self.auditor.audit_scope(scope_id, constitution=constitution)
+        audit_report = self.auditor.audit_scope(
+            scope_id, constitution=constitution, mode=self.mode
+        )
         summary = audit_report["summary"]
         print(
             f"  [Audit Result] Score: {summary['epistemic_score']}/1.0 | Divergence: {summary['divergence_score']} | Verified: {summary['verified_passed']} | Rejected: {summary['unverified_rejected']}"
@@ -1210,6 +1234,11 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         )
         print("=" * 70)
 
+        # Retrieval telemetry baseline: count only events from this run.
+        self._retrieval_offset = _retrieval_offset(self.base_dir)
+        print(f"   {self._retrieval_banner()}")
+        print("=" * 70)
+
         # 1. Orchestrate
         self.orchestrate_objective(objective, frontier_file)
 
@@ -1225,15 +1254,30 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         self.state_machine.update_session_status(SessionStatus.COMPLETED)
 
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        print(f"   {self._retrieval_banner()}")
         print(f"\n🎉 Swarm run completed in {duration:.1f}s. Report: {report_path}")
+
+    def _retrieval_banner(self) -> str:
+        """One-line retrieval summary for the current run (issue #3).
+
+        `N queries, M results, K cached` makes an ungrounded run obvious at a
+        glance instead of inferring it from an empty `sources/`.
+        """
+        since = getattr(self, "_retrieval_offset", 0)
+        stats = _retrieval_summary(self.base_dir, since=since)
+        return (
+            f"retrieval: {stats['queries']} queries, {stats['results']} results, "
+            f"{stats['cached']} cached"
+        )
 
     def _collect_scope_totals(
         self, manifest: Dict[str, Any], synthesis_lines: List[str]
-    ) -> Tuple[int, int, List[float]]:
+    ) -> Tuple[int, int, List[float], List[str]]:
         """Fold per-scope audit/synthesis artifacts into running totals."""
         total_verified = 0
         total_rejected = 0
         all_divergences: List[float] = []
+        verdicts: List[str] = []
         for scope in manifest["scopes"]:
             sid = scope["scope_id"]
             scope_dir = self.state_machine.get_scope_dir(sid)
@@ -1246,11 +1290,31 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 total_verified += summary["verified_passed"]
                 total_rejected += summary["unverified_rejected"]
                 all_divergences.append(summary["divergence_score"])
+                verdicts.append(summary.get("verdict", ""))
 
             if synth_file.exists():
                 synthesis_lines.append(synth_file.read_text(encoding="utf-8"))
                 synthesis_lines.append("\n---\n")
-        return total_verified, total_rejected, all_divergences
+        return total_verified, total_rejected, all_divergences, verdicts
+
+    def _grounding_sentence(self, verified: int, rejected: int, warnings: int) -> str:
+        """Executive summary that matches the audit — never claims certainty it lacks."""
+        if verified == 0 and warnings:
+            return (
+                "⚠️ **WARNING_LOW_GROUNDING**: this run verified 0 primary citations "
+                f"({rejected} claim(s) rejected). Treat the findings below as unverified "
+                "hypotheses, not evidence."
+            )
+        if warnings:
+            return (
+                f"⚠️ {warnings} scope(s) reported WARNING_LOW_GROUNDING. "
+                f"{verified} primary citation(s) verified; {rejected} rejected."
+            )
+        return (
+            f"Compiled by the IUMBTEMS dialectic harness ({self.mode} mode); "
+            f"{verified} primary citation(s) verified against the content-addressed "
+            "source cache."
+        )
 
     def _write_report(self, filename: str, lines: List[str]) -> Path:
         path = self.base_dir / filename
@@ -1269,27 +1333,29 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         }
         title = mode_titles.get(self.mode, "Master Epistemic Research Report")
 
+        # Collect per-scope sections first so the executive summary can reflect
+        # the actual audit verdict instead of asserting certainty we don't have.
+        scope_sections: List[str] = []
+        total_verified, total_rejected, all_divergences, verdicts = (
+            self._collect_scope_totals(manifest, scope_sections)
+        )
+        avg_div = round(sum(all_divergences) / max(1, len(all_divergences)), 2)
+        warnings = sum(1 for v in verdicts if v == "WARNING_LOW_GROUNDING")
+
         synthesis_lines = [
             f"# {title}: {objective}\n",
             f"**Session ID**: `{manifest['session_id']}` | **Mode**: `{self.mode.upper()}` | **Engine**: `{self.engine}` | **Generated**: `{manifest['updated_at']}`\n",
             "## Executive Summary",
-            f"This brief was compiled using the Epistemic Swarm dialectic harness ({self.mode} mode). Every factual statement carries an empirical verification pointer backed by a content-addressed raw document cache.\n",
+            self._grounding_sentence(total_verified, total_rejected, warnings) + "\n",
+            f"{self._retrieval_banner()}\n",
             "## Scope Findings & Dialectic Balance Sheets\n",
+            *scope_sections,
+            "\n## Swarm Epistemic Audit Totals\n",
+            f"- **Total Verified Primary Citations**: `{total_verified}`",
+            f"- **Total Unverified Claims Purged**: `{total_rejected}`",
+            f"- **Mean Swarm Divergence Score**: `{avg_div}`",
+            f"- **Scopes Flagged WARNING_LOW_GROUNDING**: `{warnings}`",
         ]
-
-        total_verified, total_rejected, all_divergences = self._collect_scope_totals(
-            manifest, synthesis_lines
-        )
-
-        avg_div = round(sum(all_divergences) / max(1, len(all_divergences)), 2)
-        synthesis_lines.append("\n## Swarm Epistemic Audit Totals\n")
-        synthesis_lines.append(
-            f"- **Total Verified Primary Citations**: `{total_verified}`"
-        )
-        synthesis_lines.append(
-            f"- **Total Unverified Claims Purged**: `{total_rejected}`"
-        )
-        synthesis_lines.append(f"- **Mean Swarm Divergence Score**: `{avg_div}`")
 
         final_path = self._write_report("final_synthesis.md", synthesis_lines)
 

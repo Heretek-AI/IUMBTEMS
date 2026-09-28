@@ -17,6 +17,20 @@ from typing import Dict, Any, Optional, Tuple
 DEFAULT_RESEARCH_DIR = ".research"
 BASE_DIR_HELP = "Base .research directory"
 
+
+def _log_retrieval(base_dir, kind: str, **fields) -> None:
+    """Best-effort retrieval telemetry (see runner/retrieval_log.py)."""
+    try:
+        root = Path(__file__).resolve().parents[2]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from runner.retrieval_log import log_event
+
+        log_event(base_dir, kind, **fields)
+    except Exception:
+        pass
+
+
 class SourceHasher:
     def __init__(self, base_dir: Optional[Path] = None):
         target = base_dir or Path(DEFAULT_RESEARCH_DIR)
@@ -30,8 +44,14 @@ class SourceHasher:
         normalized = content.strip().encode("utf-8")
         return hashlib.sha256(normalized).hexdigest()
 
-    def store_source(self, url: str, content: str, title: Optional[str] = None, 
-                     tier: str = "WEB_DOCUMENT", metadata: Optional[Dict[str, Any]] = None) -> str:
+    def store_source(
+        self,
+        url: str,
+        content: str,
+        title: Optional[str] = None,
+        tier: str = "WEB_DOCUMENT",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """Store content and metadata content-addressed by SHA-256."""
         content_hash = self.compute_sha256(content)
         md_path = self.sources_dir / f"{content_hash}.md"
@@ -50,7 +70,7 @@ class SourceHasher:
             "cached_at": datetime.now(timezone.utc).isoformat(),
             "byte_size": len(content.encode("utf-8")),
             "char_count": len(content),
-            "custom_metadata": metadata or {}
+            "custom_metadata": metadata or {},
         }
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
@@ -84,7 +104,9 @@ class SourceHasher:
         """
         if not re.match(r"^[a-fA-F0-9]+$", hash_prefix):
             return None
-        exact_path = Path(os.path.realpath(str(self.sources_dir / f"{hash_prefix}{extension}")))
+        exact_path = Path(
+            os.path.realpath(str(self.sources_dir / f"{hash_prefix}{extension}"))
+        )
         if exact_path.parent != self.sources_dir:
             return None
         if exact_path.exists():
@@ -102,12 +124,16 @@ class SourceHasher:
     def normalize_text_for_search(text: str) -> str:
         """Collapse whitespace and normalize typography for substring matching."""
         # Replace smart quotes and dashes
-        text = text.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+        text = (
+            text.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+        )
         text = text.replace("—", "-").replace("–", "-")
         # Collapse all whitespace to single spaces
         return re.sub(r"\s+", " ", text).strip().lower()
 
-    def verify_quote(self, content_hash: str, quote: str) -> Tuple[bool, float, Optional[str]]:
+    def verify_quote(
+        self, content_hash: str, quote: str
+    ) -> Tuple[bool, float, Optional[str]]:
         """
         Verifies whether quote exists in cached document.
         Returns: (is_verified, confidence_score, context_match)
@@ -136,7 +162,7 @@ class SourceHasher:
         best_score = 0.0
 
         for i in range(max(1, len(source_words) - window_size + 1)):
-            window = source_words[i:i + window_size]
+            window = source_words[i : i + window_size]
             matches = sum(1 for w1, w2 in zip(quote_words, window) if w1 == w2)
             score = matches / window_size
             if score > best_score:
@@ -147,11 +173,17 @@ class SourceHasher:
         if best_score >= 0.88:
             return True, best_score, f"High-confidence fuzzy match ({best_score:.2f})."
 
-        return False, best_score, f"Verification failed. Highest word overlap: {best_score:.2f}."
+        return (
+            False,
+            best_score,
+            f"Verification failed. Highest word overlap: {best_score:.2f}.",
+        )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Epistemic Swarm Content Hasher & Quote Verifier")
+    parser = argparse.ArgumentParser(
+        description="Epistemic Swarm Content Hasher & Quote Verifier"
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     # Cache command
@@ -166,7 +198,9 @@ def main():
     verify_parser = subparsers.add_parser("verify", help="Verify a verbatim quote")
     verify_parser.add_argument("--hash", required=True, help="Document SHA-256 hash")
     verify_parser.add_argument("--quote", required=True, help="Verbatim quote to check")
-    verify_parser.add_argument("--dir", default=DEFAULT_RESEARCH_DIR, help=BASE_DIR_HELP)
+    verify_parser.add_argument(
+        "--dir", default=DEFAULT_RESEARCH_DIR, help=BASE_DIR_HELP
+    )
 
     # List command
     list_parser = subparsers.add_parser("list", help="List cached sources")
@@ -182,18 +216,26 @@ def main():
             if not sys.stdin.isatty():
                 content = sys.stdin.read()
             else:
-                print("Error: No content provided via --content or stdin.", file=sys.stderr)
+                print(
+                    "Error: No content provided via --content or stdin.",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
-        h = hasher.store_source(url=args.url, content=content, title=args.title, tier=args.tier)
+        h = hasher.store_source(
+            url=args.url, content=content, title=args.title, tier=args.tier
+        )
         print(f"[CACHED] {h} -> {args.title} ({args.url})")
+        _log_retrieval(hasher.base_dir, "cache", url=args.url, hash=h, tool="hasher")
 
     elif args.command == "verify":
-        verified, conf, msg = hasher.verify_quote(content_hash=args.hash, quote=args.quote)
+        verified, conf, msg = hasher.verify_quote(
+            content_hash=args.hash, quote=args.quote
+        )
         result = {
             "hash": args.hash,
             "verified": verified,
             "confidence": conf,
-            "message": msg
+            "message": msg,
         }
         print(json.dumps(result, indent=2))
         sys.exit(0 if verified else 1)

@@ -26,6 +26,20 @@ context < 40%, use shallow mode (README + top-level tree only) and say so.
    - Open loops: TODOs, failing tests, stale branches.
 3. NEVER invent file contents. If a file was not ingested, mark the claim
    `[HYPOTHESIS: <how to check>]`, never `[VERIFIED]`.
+4. **External grounding** (mandatory when the objective implies external facts,
+   benchmarks, or prior art): discover with the zero-key search skill and cache
+   every source before citing it:
+
+   ```bash
+   python3 skills/epistemic_search/scripts/search.py "<query>"
+   python3 skills/research_cache/hasher.py cache --url "<URL>" --content "$(cat fetched.md)" --title "<TITLE>"
+   ```
+
+   Cite a cached source as `[VERIFIED: <sha256>]` **with an exact
+   `verbatim_quote`**; anything not retrieved stays `[HYPOTHESIS: <test>]`. A run
+   that never searches yields zero cached sources and will be flagged
+   `WARNING_LOW_GROUNDING` — that is only acceptable when the objective is purely
+   internal to the workspace.
 
 ## 2. DIALECTICAL DIVERGENCE (mandatory, in order)
 

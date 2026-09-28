@@ -390,3 +390,77 @@ def compute_epistemic_score_from_claims(
         "raw_score": raw_score,
     }
     return epistemic_score, breakdown
+
+
+# Brainstorm's deliverable is hypotheses, not quote-verified facts. Scoring it
+# with the research formula (which counts only verified claims positively)
+# guarantees WARNING_LOW_GROUNDING on a well-formed ideation run.
+BRAINSTORM_MODE_THRESHOLD = 0.5
+
+
+def compute_brainstorm_score_from_claims(
+    claims: Iterable[ClaimWitness],
+    constitution: Optional[Constitution] = None,
+) -> Tuple[float, Dict[str, Any]]:
+    """E(D) variant for brainstorm mode: credit *well-formed* speculation.
+
+    A hypothesis scores when it carries a falsification criterion; an inference
+    when it names its parent claims; negative knowledge earns the usual bonus;
+    verified workspace facts still count. Only rejected (quote-unverified)
+    VERIFIED claims are penalized. This keeps brainstorm honest about grounding
+    without failing a mode whose output is speculative by design.
+    """
+    constitution = constitution or LEGACY_CONSTITUTION
+    counts = {
+        "verified": 0,
+        "rejected": 0,
+        "inferred": 0,
+        "hypotheses": 0,
+        "neg_knowledge": 0,
+    }
+    well_formed = 0
+    for c in claims:
+        if c.status == STATUS_REJECTED or c.tag == "UNVERIFIED_REJECTED":
+            counts["rejected"] += 1
+        elif c.tag == TAG_VERIFIED:
+            counts["verified"] += 1
+        elif c.tag == TAG_INFERRED:
+            counts["inferred"] += 1
+            if c.parent_claims:
+                well_formed += 1
+        elif c.tag == TAG_HYPOTHESIS:
+            counts["hypotheses"] += 1
+            if (c.falsification or "").strip():
+                well_formed += 1
+        elif c.tag == TAG_NEGATIVE_KNOWLEDGE:
+            counts["neg_knowledge"] += 1
+
+    total_assertions = max(
+        1,
+        counts["verified"]
+        + counts["inferred"]
+        + counts["hypotheses"]
+        + counts["rejected"]
+        + counts["neg_knowledge"],
+    )
+    raw_score = (
+        counts["verified"]
+        + well_formed
+        + constitution.neg_bonus * counts["neg_knowledge"]
+        - constitution.reject_penalty * counts["rejected"]
+    ) / total_assertions
+    epistemic_score = max(0.0, min(1.0, round(raw_score, 3)))
+
+    breakdown = {
+        "total_claims_audited": counts["verified"] + counts["rejected"],
+        "verified_passed": counts["verified"],
+        "unverified_rejected": counts["rejected"],
+        "negative_knowledge_count": counts["neg_knowledge"],
+        "inferred_count": counts["inferred"],
+        "hypothesis_count": counts["hypotheses"],
+        "well_formed_count": well_formed,
+        "verified_weight": float(counts["verified"]),
+        "total_assertions": total_assertions,
+        "raw_score": raw_score,
+    }
+    return epistemic_score, breakdown

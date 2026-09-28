@@ -313,6 +313,16 @@ Each dialectic agent is given an explicit output contract in its prompt: the abs
 
 Scope completion is **derived from artifacts on disk** (`ResearchStateMachine.reconcile_scope_status`): `alpha_completed`/`beta_completed` reflect whether the dossier files exist, and the status is recomputed from them. Because agents can write anywhere in the workspace, a stored boolean is not trusted — a hand-edited or agent-written `manifest.json` claiming `DOSSIERS_READY` is corrected on the next reconcile.
 
+### 6.3 Grounding, Retrieval Telemetry & Scoring Contracts
+
+**Retrieval telemetry.** Agents invoke the retrieval skills as subprocesses, so their activity is only visible through a shared append-only log: `search.py`, `hasher.py`, and `webcache.py` append to `.research/retrieval.jsonl` (`query` / `cache` events). Every run prints and records a one-line banner — `retrieval: N queries, M results, K cached` — which makes an ungrounded run obvious instead of inferring it from an empty `sources/`. The runner points agent subprocesses at the workspace via `IUMBTEMS_RESEARCH_DIR`.
+
+**Scoring contracts are per mode.** `compute_epistemic_score_from_claims` (research/audit/scout/darkharvest) credits only quote-verified claims. `compute_brainstorm_score_from_claims` credits *well-formed speculation* — hypotheses carrying a `falsification` criterion, inferences naming their parents — with the usual negative-knowledge bonus, penalizing only rejected `VERIFIED` claims. Brainstorm therefore does not fail a mode whose deliverable is speculative by design.
+
+**Tag counting.** Only structured claim objects (`affirmative_claims`, `falsification_claims`, `inferred_implications`, `hypotheses`, `negative_knowledge`) that carry `source_hash` **and** `verbatim_quote` can be verified. Markdown `[VERIFIED: …]` strings in narrative prose are not counted, and `[VERIFIED: NO …]` honest-negatives are narrative signals rather than verified citations.
+
+**The summary must match the audit.** The master synthesis computes scope totals *before* writing its executive summary and warns (`WARNING_LOW_GROUNDING`) when nothing was verified, instead of asserting that every statement is backed by the source cache.
+
 ### 6.3 Configuration Merge & Migration
 
 `load_config` deep-merges the `agents` block one role/key at a time over `DEFAULT_CONFIG`. Configs written before 0.7.6 that pinned `agents.<role>.backend = ["claude", "-p"]` are migrated to `null` on load (unless the top-level `backend` is an explicit `"claude"`), and the migration is persisted by the CLI and `iumbtems_config`.

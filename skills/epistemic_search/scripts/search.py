@@ -16,6 +16,21 @@ from xml.sax.saxutils import escape as xml_escape
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
+def _log_retrieval(kind: str, **fields) -> None:
+    """Best-effort retrieval telemetry (see runner/retrieval_log.py)."""
+    try:
+        from pathlib import Path as _Path
+
+        root = _Path(__file__).resolve().parents[3]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from runner.retrieval_log import default_base_dir, log_event
+
+        log_event(default_base_dir(), kind, **fields)
+    except Exception:
+        pass
+
+
 class DDGLiteParser(HTMLParser):
     """Linear, non-backtracking HTML parser for DuckDuckGo Lite search results.
 
@@ -204,6 +219,7 @@ def search_duckduckgo(
         if len(results) >= max_results:
             break
 
+    _log_retrieval("query", query=effective_query, results=len(results))
     return results
 
 

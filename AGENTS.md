@@ -106,6 +106,15 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   editing the manifest cannot forge `DOSSIERS_READY`. The loader tolerates a
   bounded set of mode aliases (`brainstorm_dossier.json`) and the manifest
   `outputs` list, normalizing any hit to the canonical filename.
+- Grounding is observable: agent-invoked `search.py` / `hasher.py` / `webcache.py`
+  append to `.research/retrieval.jsonl`, and every run prints and records
+  `retrieval: N queries, M results, K cached`. Scoring is per mode —
+  `compute_brainstorm_score_from_claims` credits well-formed hypotheses and
+  inferences, while research/audit/scout/darkharvest count quote-verified
+  claims. Only structured claims carrying `source_hash` + `verbatim_quote` count
+  toward Verified; markdown `[VERIFIED: …]` strings in narrative prose are not
+  counted. The master synthesis reflects the audit verdict (it warns
+  `WARNING_LOW_GROUNDING` instead of asserting certainty it lacks).
 
 ## Releases
 - Bump `package.json` (+ lockfile sync) **and `.claude-plugin/plugin.json`**
