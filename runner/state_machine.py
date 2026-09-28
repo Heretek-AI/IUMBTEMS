@@ -219,6 +219,41 @@ class ResearchStateMachine:
     def get_scope_dir(self, scope_id: str) -> Path:
         return self.scratchpads_dir / scope_id
 
+    def find_orphan_scopes(self) -> List[Dict[str, Any]]:
+        """Scope dirs not referenced by any manifest — marked, never deleted.
+
+        A dir may belong to a concurrently running session, so this reports
+        rather than prunes (issue #5 layer 6: 14 manifest-only leftovers).
+        """
+        referenced: set = set()
+        manifests = [self.manifest_file, *self.base_dir.glob("manifest.*.json")]
+        for manifest_path in manifests:
+            if not manifest_path.exists():
+                continue
+            try:
+                data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            for scope in data.get("scopes") or []:
+                if isinstance(scope, dict) and scope.get("scope_id"):
+                    referenced.add(scope["scope_id"])
+
+        orphans: List[Dict[str, Any]] = []
+        if not self.scratchpads_dir.is_dir():
+            return orphans
+        for scope_dir in sorted(self.scratchpads_dir.iterdir()):
+            if not scope_dir.is_dir() or scope_dir.name in referenced:
+                continue
+            orphans.append(
+                {
+                    "scope_id": scope_dir.name,
+                    "path": str(scope_dir),
+                    "alpha_dossier": (scope_dir / "alpha_dossier.json").exists(),
+                    "beta_dossier": (scope_dir / "beta_dossier.json").exists(),
+                }
+            )
+        return orphans
+
     def _read_scope_unlocked(self, scope_id: str) -> Dict[str, Any]:
         scope_manifest_file = self.get_scope_dir(scope_id) / MANIFEST_FILENAME
         if not scope_manifest_file.exists():

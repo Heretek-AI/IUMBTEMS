@@ -33,6 +33,17 @@ partial per capability), benchmark/API quotes, and per-feature harvest
 proposals. Every cell needs `[VERIFIED: <hash>]` from
 `.research/sources/<sha256>.md` or `file://<path>#L<start>-L<end>`.
 
+Discover and cache every cited source before you cite it (zero-key, no API keys):
+
+```bash
+python3 skills/epistemic_search/scripts/search.py "<query>"
+python3 skills/research_cache/hasher.py cache --url "<URL>" --content "$(cat fetched.md)" --title "<TITLE>"
+```
+
+Confirm a repository actually exists (`owner/repo`) before citing it. A run that
+never searches caches zero sources and is flagged `WARNING_LOW_GROUNDING` — the
+runner prints `retrieval: N queries, M results, K cached` as evidence either way.
+
 ### Beta — Red Team
 License gate (LICENSE file + package metadata → SPDX), transitive weight,
 CVE/takeover notes, staleness (`⚠️ STALE` when >12mo or solo-maintainer),
@@ -51,7 +62,9 @@ AND what we lack). Gates are warn-only: badge inline, never auto-skip.
 ## 4. OUTPUT SPECIFICATION
 
 Per scope write `alpha_dossier.json` / `beta_dossier.json` with
-`candidate_repositories[]` entries:
+`candidate_repositories[]` entries. Every entry MUST carry `source_hash` **and**
+`verbatim_quote` (an exact substring of the cached `.research/sources/<hash>.md`);
+entries without both are rejected as unverified by the audit.
 
 ```json
 {
@@ -59,6 +72,7 @@ Per scope write `alpha_dossier.json` / `beta_dossier.json` with
   "name": "owner/repo",
   "url": "https://github.com/owner/repo",
   "source_hash": "<sha256>",
+  "verbatim_quote": "<exact substring of the cached source>",
   "license": "Apache-2.0",
   "license_risk": "SAFE | COPYLEFT_WARNING | PROHIBITIVE",
   "harvest_policy": "depend-or-vendor | clean-room-rebuild-only",
@@ -89,3 +103,8 @@ candidates.
 3. No unverified harvest verdicts. Metadata ranks; only VERIFIED harvests.
 4. No unbounded expansion past `--max-repos` or per-repo caps without user
    confirmation. Firecrawl missing → gap note, never abort.
+5. **Do NOT self-report audit results.** Never emit `epistemic_audit`,
+   `confidence`, `verified_*`, `unverified_*`, `mean_epistemic_score`, or any
+   `*.verified` / `*.total_sources` field. The runner computes verification from
+   cached witnesses; agent-declared counts are ignored (renamed to
+   `self_reported_*`) and only mislead a human reader.

@@ -115,6 +115,16 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   toward Verified; markdown `[VERIFIED: …]` strings in narrative prose are not
   counted. The master synthesis reflects the audit verdict (it warns
   `WARNING_LOW_GROUNDING` instead of asserting certainty it lacks).
+- Darkharvest has its own contract: `candidate_repositories[]` is normalized into
+  the standard claim schema (auditor, PCRB, ledger share one shape), and the
+  alpha/beta **license cross-check** is a safety control — any license/risk/policy
+  disagreement is a blocking finding with the conservative resolution
+  (`clean-room-rebuild-only`), forcing `WARNING_LICENSE_CONFLICT`. Repo ground
+  truth (existence / license / archived) runs via `RepoValidator`, fail-open
+  offline (`IUMBTEMS_REPO_VALIDATE=0` disables). Agent-authored audit-shaped fields
+  (`epistemic_audit`, `confidence`, `verified_*`) are renamed to `self_reported_*`
+  and never counted. The per-scope §3 text follows the verdict, and orphaned scope
+  dirs are reported to `.research/orphans.json` (marked, never deleted).
 
 ## Releases
 - Bump `package.json` (+ lockfile sync) **and `.claude-plugin/plugin.json`**

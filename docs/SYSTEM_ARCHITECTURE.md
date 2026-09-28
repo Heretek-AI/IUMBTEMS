@@ -323,6 +323,16 @@ Scope completion is **derived from artifacts on disk** (`ResearchStateMachine.re
 
 **The summary must match the audit.** The master synthesis computes scope totals *before* writing its executive summary and warns (`WARNING_LOW_GROUNDING`) when nothing was verified, instead of asserting that every statement is backed by the source cache.
 
+### 6.4 Darkharvest Audit Contract
+
+Darkharvest dossiers carry `candidate_repositories[]` rather than the standard claim keys, so `runner/darkharvest_claims.py` supplies three things:
+
+- **Normalization** — `normalize_dossier_claims` folds candidates (and their verdicts) into `{claim_id, source_hash, verbatim_quote, statement}` so the auditor, PCRB, and ledger share one schema; entries lacking a witness are counted as rejected rather than silently absent.
+- **License cross-check** — `cross_check_repos` compares `license` / `license_risk` / `harvest_policy` across alpha and beta for each repo. Any disagreement is **blocking**, resolved conservatively to `clean-room-rebuild-only`; the scope verdict becomes `WARNING_LICENSE_CONFLICT`. This exists because a dialectic produced `MIT`/`depend-or-vendor` (alpha) against `NOASSERTION`/`clean-room-rebuild-only` (beta) for the same repo and nothing compared them.
+- **Ground truth** — `RepoValidator` checks existence (404), the GitHub license field, and `archived` status. It is injectable and fail-open: network failures yield `exists=None` and block nothing (`IUMBTEMS_REPO_VALIDATE=0` disables). Mock mode never validates.
+
+Agent-authored audit-shaped fields are renamed to `self_reported_*` and never counted. The per-scope §3 text is verdict-driven (no more static "100% of cited assertions verified"). Orphaned scope dirs are listed in `.research/orphans.json` and never auto-deleted.
+
 ### 6.3 Configuration Merge & Migration
 
 `load_config` deep-merges the `agents` block one role/key at a time over `DEFAULT_CONFIG`. Configs written before 0.7.6 that pinned `agents.<role>.backend = ["claude", "-p"]` are migrated to `null` on load (unless the top-level `backend` is an explicit `"claude"`), and the migration is persisted by the CLI and `iumbtems_config`.

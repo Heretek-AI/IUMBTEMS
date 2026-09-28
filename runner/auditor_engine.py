@@ -5,6 +5,7 @@ Verifies quote authenticity against content-addressed source cache,
 calculates divergence metrics, prunes ungrounded claims, and generates synthesis reports.
 """
 
+import os
 import sys
 import json
 from pathlib import Path
@@ -16,6 +17,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from skills.research_cache.hasher import SourceHasher
 from runner.state_machine import ResearchStateMachine, ScopeStatus
 from runner.refinement import compute_epistemic_score
+
+from runner.darkharvest_claims import (
+    RepoValidator,
+    cross_check_repos,
+    normalize_dossier_claims,
+    sanitize_self_reported,
+)
+
+
+def _repo_validation_enabled() -> bool:
+    return os.environ.get("IUMBTEMS_REPO_VALIDATE", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
 
 
 def _mark_rejected_claims(score_claims: list, *result_lists: list) -> None:
@@ -114,10 +131,16 @@ def _apply_living_dossiers_degradation(
 
 
 class EpistemicAuditorEngine:
-    def __init__(self, base_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        base_dir: Optional[Path] = None,
+        repo_validator: Optional[Any] = None,
+    ):
         self.base_dir = base_dir or Path(".research")
         self.hasher = SourceHasher(base_dir=self.base_dir)
         self.state_machine = ResearchStateMachine(base_dir=self.base_dir)
+        # Ground-truth repo checks for darkharvest; injectable for tests/offline.
+        self.repo_validator = repo_validator
 
     def audit_scope(
         self,
@@ -149,16 +172,26 @@ class EpistemicAuditorEngine:
         with open(beta_file, "r", encoding="utf-8") as f:
             beta_dossier = json.load(f)
 
+        # Darkharvest dossiers emit `candidate_repositories[]`, not the standard
+        # claim keys, and may self-report audit-shaped fields (#5 layers 1 & 3).
+        for label, dossier in (("alpha", alpha_dossier), ("beta", beta_dossier)):
+            _, renamed = sanitize_self_reported(dossier)
+            if renamed:
+                print(
+                    f"  [Audit] ignored agent self-reported audit fields "
+                    f"({label}): {', '.join(sorted(renamed))}"
+                )
+
         self.state_machine.update_scope_status(scope_id, ScopeStatus.AUDITING)
 
-        # 1. Audit Alpha Claims
+        # 1. Audit Alpha Claims (normalized from either schema)
         alpha_results, alpha_verified, alpha_rejected = self._verify_claims(
-            alpha_dossier.get("affirmative_claims", []), constitution=constitution
+            normalize_dossier_claims(alpha_dossier, "alpha"), constitution=constitution
         )
 
         # 2. Audit Beta Claims
         beta_results, beta_verified, beta_rejected = self._verify_claims(
-            beta_dossier.get("falsification_claims", []), constitution=constitution
+            normalize_dossier_claims(beta_dossier, "beta"), constitution=constitution
         )
 
         counts = {
@@ -196,6 +229,28 @@ class EpistemicAuditorEngine:
             alpha_dossier, beta_dossier
         )
 
+        # 4b. Darkharvest: license cross-check + repo ground truth. A dialectic
+        # that recommends `depend-or-vendor` on an unstated license must not pass
+        # as CERTIFIED (observed: MIT vs NOASSERTION for the same repo, #5).
+        harvest_findings: List[Dict[str, Any]] = []
+        if mode == "darkharvest":
+            validator = self.repo_validator
+            if validator is None:
+                validator = RepoValidator(enabled=_repo_validation_enabled())
+            harvest_findings = cross_check_repos(
+                alpha_dossier, beta_dossier, validator=validator
+            )
+
+        blocking_findings = [
+            f for f in harvest_findings if f.get("severity") == "BLOCKING"
+        ]
+        if blocking_findings:
+            verdict = "WARNING_LICENSE_CONFLICT"
+        elif epistemic_score >= accept_threshold:
+            verdict = "CERTIFIED"
+        else:
+            verdict = "WARNING_LOW_GROUNDING"
+
         # 5. Build Audit Report
         audit_report = {
             "auditor": "Epistemic Auditor Engine v1.0",
@@ -209,13 +264,13 @@ class EpistemicAuditorEngine:
                 "epistemic_score": epistemic_score,
                 "divergence_score": divergence_score,
                 "mode": mode,
-                "verdict": "CERTIFIED"
-                if epistemic_score >= accept_threshold
-                else "WARNING_LOW_GROUNDING",
+                "blocking_findings": len(blocking_findings),
+                "verdict": verdict,
             },
             "alpha_claims_audit": alpha_results,
             "beta_claims_audit": beta_results,
             "divergence_matrix": divergence_matrix,
+            "harvest_findings": harvest_findings,
             "degradation": degradation,
         }
 
@@ -397,7 +452,9 @@ class EpistemicAuditorEngine:
         return lines
 
     @staticmethod
-    def _render_rejected_section(claims: list) -> List[str]:
+    def _render_rejected_section(
+        claims: list, summary: Optional[Dict[str, Any]] = None
+    ) -> List[str]:
         lines = ["\n## 3. Rejected & Unverified Assertions"]
         rejected = [c for c in claims if c["audited_tag"] == "UNVERIFIED_REJECTED"]
         if rejected:
@@ -405,9 +462,26 @@ class EpistemicAuditorEngine:
                 lines.append(
                     f'- ⚠️ **PURGED**: "{r["statement"]}" — *Reason: {r["reason"]}*'
                 )
+            return lines
+
+        # No rejected claims is only "all verified" when the audit actually
+        # verified something. Otherwise this is static text contradicting the
+        # verdict (observed in darkharvest: 0 verified + "100% verified", #5).
+        summary = summary or {}
+        verified = summary.get("verified_passed", 0)
+        if summary.get("verdict") == "WARNING_LICENSE_CONFLICT":
+            lines.append(
+                f"No claims rejected, but {summary.get('blocking_findings', 0)} "
+                "blocking license/ground-truth finding(s) require review before acting."
+            )
+        elif verified:
+            lines.append(
+                f"No claims rejected. {verified} claim(s) verified against the source cache."
+            )
         else:
             lines.append(
-                "Zero claims rejected. 100% of cited assertions verified against source cache."
+                "No claims rejected — but **0 claims were verified** (empty source "
+                "cache). Treat every assertion above as unverified."
             )
         return lines
 
@@ -446,8 +520,25 @@ class EpistemicAuditorEngine:
         md.extend(self._render_tensions_section(audit.get("divergence_matrix", [])))
         md.extend(
             self._render_rejected_section(
-                audit["alpha_claims_audit"] + audit["beta_claims_audit"]
+                audit["alpha_claims_audit"] + audit["beta_claims_audit"],
+                summary,
             )
         )
         md.extend(self._render_negative_knowledge_section(alpha, beta))
+        md.extend(self._render_harvest_findings(audit.get("harvest_findings", [])))
         return "\n".join(md)
+
+    @staticmethod
+    def _render_harvest_findings(findings: list) -> List[str]:
+        if not findings:
+            return []
+        lines = ["\n## 5. Harvest Safety Findings"]
+        for f in findings:
+            icon = "⛔" if f.get("severity") == "BLOCKING" else "⚠️"
+            detail = f.get("detail") or f.get("kind", "")
+            resolution = f.get("resolution")
+            suffix = f" → **{resolution}**" if resolution else ""
+            lines.append(
+                f"- {icon} `{f.get('repo', '?')}` — {f.get('kind', '')}: {detail}{suffix}"
+            )
+        return lines

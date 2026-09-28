@@ -270,7 +270,17 @@ class SwarmRunner:
         self.state_machine = ResearchStateMachine(
             base_dir=self.base_dir, mode=self.mode
         )
-        self.auditor = EpistemicAuditorEngine(base_dir=self.base_dir)
+        from runner.auditor_engine import _repo_validation_enabled
+        from runner.darkharvest_claims import RepoValidator
+
+        self.auditor = EpistemicAuditorEngine(
+            base_dir=self.base_dir,
+            # Ground-truth repo checks are for real runs; mock dossiers are
+            # synthetic, so the unit suite must stay offline.
+            repo_validator=RepoValidator(
+                enabled=(not self.mock_mode) and _repo_validation_enabled()
+            ),
+        )
         self.hasher = SourceHasher(base_dir=self.base_dir)
         self.prompts_dir = PROJECT_ROOT / "prompts"
 
@@ -1252,10 +1262,29 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         )
         report_path = self._compile_master_synthesis(objective)
         self.state_machine.update_session_status(SessionStatus.COMPLETED)
+        self._write_orphan_report()
 
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         print(f"   {self._retrieval_banner()}")
         print(f"\n🎉 Swarm run completed in {duration:.1f}s. Report: {report_path}")
+
+    def _write_orphan_report(self) -> None:
+        """Record scope dirs absent from every manifest (mark-only, never delete)."""
+        try:
+            orphans = self.state_machine.find_orphan_scopes()
+        except Exception:  # noqa: BLE001 - hygiene must not fail the run
+            return
+        if not orphans:
+            return
+        path = self.base_dir / "orphans.json"
+        try:
+            path.write_text(json.dumps(orphans, indent=2), encoding="utf-8")
+        except OSError:
+            return
+        print(
+            f"   ⚠️ {len(orphans)} orphaned scope dir(s) not referenced by any "
+            f"manifest -> {path.name} (not deleted)"
+        )
 
     def _retrieval_banner(self) -> str:
         """One-line retrieval summary for the current run (issue #3).
