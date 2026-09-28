@@ -1,6 +1,6 @@
 {
   "name": "@heretek-ai/epistemic-swarm",
-  "version": "0.7.11",
+  "version": "0.7.12",
   "description": "IUMBTEMS (Epistemic Swarm) — High-Integrity Dialectic Research Agent Harness for Claude Code, OpenCode V2, Pi (pi.dev), OMP (oh-my-pi), Gemini CLI, Codex CLI, and AntiGravity",
   "main": "bin/cli.js",
   "bin": {
