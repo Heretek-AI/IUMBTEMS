@@ -15,11 +15,11 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
 - Hand-maintained (NOT generated): `README.md`, `MARKETPLACE.md`, `AGENTS.md`,
   `docs/*.md`, `.omp/*`, `.claude/*`, `plugins/*/README.md`, and the OpenCode
   plugin source `plugins/opencode/index.js`.
-- `python3 runner/mcp_server.py` — canonical programmatic surface (15 `iumbtems_*`
+- `python3 runner/mcp_server.py` — canonical programmatic surface (17 `iumbtems_*`
   tools: `config`, `swarm_research`, `code_audit`, `oss_scout`, `brainstorm`,
   `darkharvest`, `factory`, `verify_quote`, `socratic_frontier`, `export_brief`,
   `verify_brief`, `reindex_claims`, `report_retraction`, `check_staleness`,
-  `set_domain_pack`).
+  `set_domain_pack`, `doctor`, `test`).
 - GENERATED — never hand-edit: `plugins/{antigravity,gemini,codex}/skills/**`,
   `.agents/skills/**`, and the modular copies under
   `plugins/{research-cache,socratic-grilling,darkharvest,factory}/skills/**`.
@@ -29,9 +29,10 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
 - `iumbtems run|audit|scout|brainstorm|darkharvest|grill|config|doctor|test`
 - `iumbtems adapters|install|marketplace|help` — regenerate adapter stubs, install
   the Claude Code overlay, print the marketplace catalog, print usage.
-- `iumbtems factory <init|phase-add|qa-record|expansion|stop>` — factory
+- `iumbtems factory <init|phase-add|qa-record|expansion|stop|gate>` — factory
   run-state helper (state in `.factory/`, output in `.roadmap/`, evidence in
-  `.research/`).
+  `.research/`). Run-shaping flags: `--resume` (continue a session), `--dry-run`
+  (validate without spawning).
 - OpenCode slash commands: `/swarm /grill /swarm-config /audit /scout
   /brainstorming /darkharvest /factory /domainexpansion`.
 
@@ -46,6 +47,31 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
 - `factory` — Manager loop roles/gates/QA bounds; helper
   `skills/factory/scripts/factory.py` (3 QA failures escalate; expansion capped,
   STOP-file kill).
+- `research_cache` — content-addressed SHA-256 source cache + quote verification
+  (`hasher.py`).
+- `epistemic_search` — zero-key DuckDuckGo search, fetch, and cache-through
+  (`search.py`, `webcache.py`).
+- `swarm_config` — inspect/tune/persist research parameters
+  (`skills/swarm_config/configure.py`).
+- `code_audit` — structural architecture mapping + vulnerability red-teaming.
+
+## Contract invariants (do not break; detail lives in `docs/SYSTEM_ARCHITECTURE.md`)
+
+| Invariant | Detail |
+| :--- | :--- |
+| Manifests are per mode (`manifest.json` for research, `manifest.<mode>.json` otherwise) | §6.2.2 |
+| Manifest writes use unique temp names + `fcntl` lock (`.research/.manifest.lock`); readers use `find_any_manifest` | §6.2.2 |
+| Role dossier contract: agents get the **exact** dossier path; completion is **derived from files on disk** (`reconcile_scope_status`) | §6.2.3 |
+| Loader tolerates bounded mode aliases + manifest `outputs`, normalizing to the canonical name | §6.2.3 |
+| Grounding is observable (`.research/retrieval.jsonl` + `retrieval:` banner); scoring is per mode; only `source_hash` + `verbatim_quote` claims count toward Verified | §6.3 |
+| Darkharvest license cross-check is a safety control (`WARNING_LICENSE_CONFLICT`); `self_reported_*` fields are never counted | §6.4 |
+| Contracts are generated (`runner/schemas.py` → `schemas/`); validation is warn-on-load | §6.5 |
+| Agent runtime is host-native; spawned agents get matching OS `cwd` and `PWD`; `opencode run` passes `--auto` | §6.1–6.2 |
+| Config deep-merges `agents` per role; legacy `["claude", "-p"]` pins migrate to `null` unless `backend` is `"claude"` | §6.6 |
+| Preflight auto-runs at every swarm start (`iumbtems_doctor`); mode-aware fail-fast halts before spawning (exit 3) | §6.5 |
+| Frontier is tool-drivable (`--add-node/--settle/--export`); frontier writes are atomic + locked | §5, §6.5 |
+| Run-scoped layout is opt-in (`IUMBTEMS_RUN_SCOPED=1`); default is flat | §6.5 |
+| `factory` writes `phase.json` (never `GOAL.md`/`dossier.json`, refused unless `--force`); `gate open|settle|approve|waive|escalate|count` | §10 |
 
 ## Workflow rules
 - Writes go only to `.research/`, `.factory/` (runtime state), `.roadmap/`
@@ -75,73 +101,12 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   profiles with `update`; calling `add` made opencode v2.0.18 disable the whole
   plugin (`disabled plugin after transform failure`, state=agent). The shipped
   snippet is V2-shaped: `agents` (plural), `skills` as a list, `mcp.servers`.
-- Agent runtime backend is host-native by default (`claude -p` on Claude Code,
-  `opencode run` on OpenCode via `IUMBTEMS_HOST`). Override with
-  `--backend {auto,claude,opencode}`, `IUMBTEMS_BACKEND_<ROLE>`,
-  `IUMBTEMS_MODEL_<ROLE>`, or `.research/config.json` (`backend`,
-  `agents.<role>.backend/model/opencode_agent`). The OpenCode plugin cannot
-  intercept host webfetch/websearch (OpenCode V2's `tool.execute.before` hook
-  enables argument sanitization/mutation but lacks tool abort/redirection capabilities
-  analogous to Claude Code's PreToolUse) — accepted asymmetry; steering lives in
-  command templates.
-- Legacy config migration: pre-0.7.6 configs pinned
-  `agents.<role>.backend = ["claude", "-p"]`, which out-ranked the host-native
-  default and silently spawned Claude even on OpenCode. `load_config` now
-  deep-merges `agents` per role and migrates that pin to `null` (unless the
-  top-level `backend` is an explicit `"claude"`); `heal_config` persists it via
-  the CLI and `iumbtems_config` surfaces.
-- Spawned agents get both the OS `cwd` and `PWD` set to the project root: OpenCode
-  resolves its project from `$PWD`, and `subprocess.run(cwd=...)` does NOT update
-  `PWD`. A mismatch sends evidence into a different tree than the auditor reads.
-  Override the directory with `IUMBTEMS_AGENT_CWD` (`project` | `package` | path).
-- Spawned OpenCode agents pass `--auto` (auto-approve permissions that are not
-  explicitly denied) so a workspace mismatch cannot silently auto-reject the
-  dossier write as `external_directory`. Disable with `IUMBTEMS_OPENCODE_AUTO=0`
-  or `.research/config.json` → `"opencode_auto": false`.
-- Manifests are per mode: `manifest.json` for the default/research flow and
-  `manifest.<mode>.json` otherwise, so concurrently running tools (brainstorm,
-  darkharvest) cannot clobber each other's scope DAG. Writes use unique temp
-  names plus an `fcntl` advisory lock at `.research/.manifest.lock`; readers must
-  not assume `manifest.json` — use `state_machine.find_any_manifest`.
-- Role dossier contract: each agent is told the **exact** dossier path in its
-  prompt (`alpha_dossier.json` / `beta_dossier.json`) and must not write the
-  runner-owned `manifest.json`. Scope completion is **derived from those files on
-  disk** (`reconcile_scope_status`), never from stored booleans, so an agent
-  editing the manifest cannot forge `DOSSIERS_READY`. The loader tolerates a
-  bounded set of mode aliases (`brainstorm_dossier.json`) and the manifest
-  `outputs` list, normalizing any hit to the canonical filename.
-- Grounding is observable: agent-invoked `search.py` / `hasher.py` / `webcache.py`
-  append to `.research/retrieval.jsonl`, and every run prints and records
-  `retrieval: N queries, M results, K cached`. Scoring is per mode —
-  `compute_brainstorm_score_from_claims` credits well-formed hypotheses and
-  inferences, while research/audit/scout/darkharvest count quote-verified
-  claims. Only structured claims carrying `source_hash` + `verbatim_quote` count
-  toward Verified; markdown `[VERIFIED: …]` strings in narrative prose are not
-  counted. The master synthesis reflects the audit verdict (it warns
-  `WARNING_LOW_GROUNDING` instead of asserting certainty it lacks).
-- Darkharvest has its own contract: `candidate_repositories[]` is normalized into
-  the standard claim schema (auditor, PCRB, ledger share one shape), and the
-  alpha/beta **license cross-check** is a safety control — any license/risk/policy
-  disagreement is a blocking finding with the conservative resolution
-  (`clean-room-rebuild-only`), forcing `WARNING_LICENSE_CONFLICT`. Repo ground
-  truth (existence / license / archived) runs via `RepoValidator`, fail-open
-  offline (`IUMBTEMS_REPO_VALIDATE=0` disables). Agent-authored audit-shaped fields
-  (`epistemic_audit`, `confidence`, `verified_*`) are renamed to `self_reported_*`
-  and never counted. The per-scope §3 text follows the verdict, and orphaned scope
-  dirs are reported to `.research/orphans.json` (marked, never deleted).
-- Contracts are generated, not guessed: `runner/schemas.py` → `schemas/*.schema.json`
-  via `python3 scripts/gen_schemas.py` (`--check` fails CI on drift), validated
-  warn-on-load so a missing key is named without aborting a run. `scripts/check_docs.py`
-  fails on repo-relative doc references that don't resolve.
-- `iumbtems_doctor` (MCP) / preflight auto-runs at every swarm start: version,
-  backend + resolved binary, engine live probe, workspace write test. `iumbtems_test`
-  runs the suite in a subprocess. The frontier is tool-drivable
-  (`socratic_tree.py --add-node/--settle/--export`, and `iumbtems_socratic_frontier`
-  actions `add|export|settle|inspect`). `factory` writes `phase.json` (never
-  `GOAL.md`/`dossier.json`, refused unless `--force`) and exposes `gate
-  open|settle|approve|waive|escalate|count`. Runs support `--resume` and
-  `--dry-run`, write `.research/progress.json`, and resolve the workspace via a
-  run-scoped layout when `IUMBTEMS_RUN_SCOPED=1` (default: flat).
+- Dual QA gates the loop: diverged `qa-a` (functional) and `qa-b`
+  (adversarial) seats, manager tiebreak, 3 failures escalate. Waivers carry
+  conditions. When a fix's precondition changes, re-verify its blast radius
+  (see #7/#8).
+- You drive the installed package, not the worktree: fixes authored here take
+  effect only after release + reinstall.
 
 ## Releases
 - Bump `package.json` (+ lockfile sync) **and `.claude-plugin/plugin.json`**
