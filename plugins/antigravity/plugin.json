@@ -1,8 +1,8 @@
 {
   "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "epistemic-swarm",
-  "version": "0.7.17",
-  "description": "IUMBTEMS (Epistemic Swarm) — High-Integrity Dialectic Research, Architecture Auditing, Competitor Teardowns, and Socratic Planning for Antigravity.",
+  "version": "0.7.18",
+  "description": "IUMBTEMS (Epistemic Swarm) \u2014 High-Integrity Dialectic Research, Architecture Auditing, Competitor Teardowns, and Socratic Planning for Antigravity.",
   "author": {
     "name": "Heretek AI",
     "email": "dev@heretek.ai"
