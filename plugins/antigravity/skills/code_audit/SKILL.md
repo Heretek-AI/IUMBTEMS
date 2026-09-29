@@ -1,3 +1,9 @@
+---
+name: code-audit
+description: >-
+  Deep dialectic codebase auditing skill. Deploys architectural thesis vs adversarial red-team antithesis to discover security vulnerabilities, race conditions, resource leaks, and architectural flaws with exact line-level proof.
+---
+
 # Code Audit (thin adapter stub)
 
 This file is a POINTER, not the implementation. It exists so harness skill

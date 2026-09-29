@@ -1,3 +1,9 @@
+---
+name: grilling
+description: >-
+  Socratic grilling and assumption-inversion skill for deep research. Uses Matt Pocock-style design trees to explore the problem frontier divergently before committing to search queries.
+---
+
 # Socratic Grilling (thin adapter stub)
 
 This file is a POINTER, not the implementation. It exists so harness skill

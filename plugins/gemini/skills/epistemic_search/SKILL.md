@@ -1,3 +1,9 @@
+---
+name: epistemic_search
+description: >-
+  High-integrity web search and document fetch skill with automatic SHA-256 content caching. Use when searching the web, retrieving primary sources, or fetching documentation while enforcing epistemic integrity.
+---
+
 # Epistemic Search (thin adapter stub)
 
 This file is a POINTER, not the implementation. It exists so harness skill

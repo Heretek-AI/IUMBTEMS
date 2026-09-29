@@ -1,3 +1,9 @@
+---
+name: oss-scout
+description: >-
+  Open-source software discovery, dependency vetting, and clean-room implementation scouting. Evaluates GitHub repositories, package ecosystems, licenses, and architecture to discover code to adopt or borrow.
+---
+
 # OSS Scout (thin adapter stub)
 
 This file is a POINTER, not the implementation. It exists so harness skill

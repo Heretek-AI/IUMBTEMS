@@ -1,3 +1,9 @@
+---
+name: swarm-config
+description: >-
+  Dynamic configuration and settings skill for the IUMBTEMS (Epistemic Swarm) research harness. Manage search engines, research depth, dialectic iterations, operating modes (research, audit, scout, hybrid, brainstorm, darkharvest), agent backends, and license filters.
+---
+
 # Swarm Config (thin adapter stub)
 
 This file is a POINTER, not the implementation. It exists so harness skill

@@ -87,7 +87,13 @@ TARGETS = [
     (".agents/skills", "stub"),
 ]
 
-STUB_TEMPLATE = """# {title} (thin adapter stub)
+STUB_TEMPLATE = """---
+name: {skill_name}
+description: >-
+  {description}
+---
+
+# {title} (thin adapter stub)
 
 This file is a POINTER, not the implementation. It exists so harness skill
 discovery finds an entry; the real skill lives in the IUMBTEMS repo.
@@ -106,9 +112,33 @@ Epistemic rules apply regardless of harness: tag claims as
 SKILL_FILENAME = "SKILL.md"
 
 
+def _get_skill_frontmatter(skill: str) -> dict:
+    src = PROJECT_ROOT / "skills" / skill / SKILL_FILENAME
+    if not src.exists():
+        return {}
+    text = src.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return {}
+    end = text.find("---", 3)
+    if end < 0:
+        return {}
+    fm_lines = text[3:end].strip().splitlines()
+    data = {}
+    for line in fm_lines:
+        if ":" in line:
+            k, v = line.split(":", 1)
+            data[k.strip()] = v.strip()
+    return data
+
+
 def render_stub(skill: str) -> str:
     tools = ", ".join(f"`{t}`" for t in SKILL_TOOLS.get(skill, []))
+    fm = _get_skill_frontmatter(skill)
+    skill_name = fm.get("name", skill.replace("_", "-"))
+    description = fm.get("description", f"IUMBTEMS {skill} skill.")
     return STUB_TEMPLATE.format(
+        skill_name=skill_name,
+        description=description,
         title=SKILL_TITLES.get(skill, skill.replace("_", " ").title()),
         skill=skill,
         tools=tools,
@@ -243,6 +273,105 @@ def _check_package_json() -> List[str]:
     return errors
 
 
+ANTIGRAVITY_COMMANDS = [
+    "audit",
+    "brainstorming",
+    "darkharvest",
+    "domainexpansion",
+    "factory",
+    "grill",
+    "scout",
+    "swarm-config",
+    "swarm",
+]
+
+ANTIGRAVITY_AGENTS = [
+    "alpha-thesis",
+    "beta-antithesis",
+    "brainstormer",
+    "code-auditor",
+    "darkharvester",
+    "epistemic-auditor",
+    "manager",
+    "oss-scout",
+    "programmer",
+    "qa-a",
+    "qa-b",
+]
+
+
+def _check_antigravity_plugin() -> List[str]:
+    errors: List[str] = []
+    base = PROJECT_ROOT / "plugins" / "antigravity"
+
+    # 1. Manifest
+    p_json = base / "plugin.json"
+    if not p_json.exists():
+        errors.append("MISSING plugins/antigravity/plugin.json")
+    else:
+        try:
+            d = json.loads(p_json.read_text(encoding="utf-8"))
+            if d.get("name") != "epistemic-swarm":
+                errors.append(f"plugins/antigravity/plugin.json name expected 'epistemic-swarm', got {d.get('name')}")
+            pkg = json.loads((PROJECT_ROOT / "package.json").read_text())
+            if d.get("version") != pkg.get("version"):
+                errors.append(f"plugins/antigravity/plugin.json version {d.get('version')} out of sync with package.json {pkg.get('version')}")
+        except Exception as e:
+            errors.append(f"INVALID plugins/antigravity/plugin.json: {e}")
+
+    # 2. Hooks
+    h_json = base / "hooks.json"
+    if not h_json.exists():
+        errors.append("MISSING plugins/antigravity/hooks.json")
+    else:
+        try:
+            hd = json.loads(h_json.read_text(encoding="utf-8"))
+            if not any("PreToolUse" in v or "PreInvocation" in v for v in hd.values()):
+                errors.append("plugins/antigravity/hooks.json missing PreToolUse/PreInvocation hook groups")
+        except Exception as e:
+            errors.append(f"INVALID plugins/antigravity/hooks.json: {e}")
+
+    # 3. MCP Config
+    m_json = base / "mcp_config.json"
+    if not m_json.exists():
+        errors.append("MISSING plugins/antigravity/mcp_config.json")
+    else:
+        try:
+            md = json.loads(m_json.read_text(encoding="utf-8"))
+            if "iumbtems" not in md.get("mcpServers", {}):
+                errors.append("plugins/antigravity/mcp_config.json missing 'iumbtems' server definition")
+        except Exception as e:
+            errors.append(f"INVALID plugins/antigravity/mcp_config.json: {e}")
+
+    # 4. Commands
+    for cmd in ANTIGRAVITY_COMMANDS:
+        cmd_file = base / "commands" / f"{cmd}.md"
+        if not cmd_file.exists():
+            errors.append(f"MISSING plugins/antigravity/commands/{cmd}.md")
+        elif "description:" not in cmd_file.read_text(encoding="utf-8"):
+            errors.append(f"MISSING description in plugins/antigravity/commands/{cmd}.md")
+
+    # 5. Agents
+    for ag in ANTIGRAVITY_AGENTS:
+        ag_file = base / "agents" / f"{ag}.md"
+        if not ag_file.exists():
+            errors.append(f"MISSING plugins/antigravity/agents/{ag}.md")
+        else:
+            text = ag_file.read_text(encoding="utf-8")
+            if not text.startswith("---") or "tools:" not in text:
+                errors.append(f"INVALID frontmatter in plugins/antigravity/agents/{ag}.md")
+
+    # 6. Rules
+    for rf in ("AGENTS.md", "epistemic-integrity.md"):
+        r_file = base / "rules" / rf
+        if not r_file.exists():
+            errors.append(f"MISSING plugins/antigravity/rules/{rf}")
+        elif r_file.stat().st_size > 24000:
+            errors.append(f"plugins/antigravity/rules/{rf} exceeds 24KB limit: {r_file.stat().st_size} bytes")
+
+    return errors
+
+
 def check():
     """Verify stubs match the generated template (not the skill bodies)."""
     errors = []
@@ -251,6 +380,7 @@ def check():
             errors.extend(_check_skill_stub(target_rel, skill))
     errors.extend(_check_modular_plugins())
     errors.extend(_check_package_json())
+    errors.extend(_check_antigravity_plugin())
     if errors:
         print("❌ Adapter check failed:")
         for e in errors:

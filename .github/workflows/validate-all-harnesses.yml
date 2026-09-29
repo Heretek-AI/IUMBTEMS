@@ -173,9 +173,19 @@ jobs:
           test -f plugins/antigravity/plugin.json
           test -f plugins/antigravity/mcp_config.json
           test -f plugins/antigravity/hooks.json
-          test -f plugins/antigravity/skills/brainstorming/SKILL.md
-          test -f plugins/antigravity/agents/brainstormer.md
+          test -f runner/antigravity_hooks.py
+          test -f plugins/antigravity/rules/AGENTS.md
           test -f plugins/antigravity/rules/epistemic-integrity.md
+          for c in audit brainstorming darkharvest domainexpansion factory grill scout swarm-config swarm; do
+            test -f plugins/antigravity/commands/$c.md || (echo "missing commands/$c.md" && exit 1)
+          done
+          for a in alpha-thesis beta-antithesis brainstormer code-auditor darkharvester epistemic-auditor manager oss-scout programmer qa-a qa-b; do
+            test -f plugins/antigravity/agents/$a.md || (echo "missing agents/$a.md" && exit 1)
+          done
+          python3 -m unittest runner/tests/test_antigravity_plugin.py -v
+          if command -v agy >/dev/null 2>&1; then
+            agy plugin validate plugins/antigravity
+          fi
           echo "AntiGravity bundle OK"
 
       - name: Verify OMP bundle

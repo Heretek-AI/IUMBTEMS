@@ -1,22 +1,43 @@
 {
-  "hooks": {
-    "pre_tool": [
+  "epistemic-query-interceptor": {
+    "PreToolUse": [
       {
-        "matcher": "WebSearch",
-        "action": "deny",
-        "reason": "Intercepted by epistemic-swarm: use epistemic search (python3 skills/epistemic_search/scripts/search.py \"<query>\") for SHA-256 cached verification."
-      },
-      {
-        "matcher": "WebFetch",
-        "action": "deny",
-        "reason": "Intercepted by epistemic-swarm: use epistemic fetch (python3 skills/epistemic_search/scripts/fetch.py \"<url>\") for content-addressed caching."
+        "matcher": "search_web|read_url_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${extensionPath}/../../runner/antigravity_hooks.py\" pre_tool",
+            "timeout": 15
+          }
+        ]
       }
     ],
-    "post_tool": [
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python3 \"${extensionPath}/../../runner/antigravity_hooks.py\" pre_invocation",
+        "timeout": 15
+      }
+    ]
+  },
+  "epistemic-claim-auditor": {
+    "PostToolUse": [
       {
         "matcher": "*",
-        "action": "log",
-        "reason": "Epistemic audit trail: verify [VERIFIED:<hash>] quotes against .research/sources/<sha256>.md."
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${extensionPath}/../../runner/antigravity_hooks.py\" post_tool",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python3 \"${extensionPath}/../../runner/antigravity_hooks.py\" stop",
+        "timeout": 20
       }
     ]
   }

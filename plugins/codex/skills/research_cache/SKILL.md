@@ -1,3 +1,9 @@
+---
+name: research-cache
+description: >-
+  Content-addressed document caching and quote verification skill. Hashes retrieved web pages and academic papers to SHA-256 for mathematical auditability.
+---
+
 # Research Cache (thin adapter stub)
 
 This file is a POINTER, not the implementation. It exists so harness skill

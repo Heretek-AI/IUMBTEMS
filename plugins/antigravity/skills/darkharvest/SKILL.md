@@ -1,3 +1,9 @@
+---
+name: darkharvest
+description: >-
+  Product-level competitor teardown and clean-room harvest engine. Use when user wants to compete with or learn from existing products (e.g. Paseo, OpenChambers). Seed with inspiration URLs plus prompt, auto-expand to adjacents, clone-scan competitors, compare product plus code, and emit per-feature depend/vendor/clean-room/skip verdicts with SPDX attribution. Never copies GPL/AGPL code or UI assets.
+---
+
 # Darkharvest (thin adapter stub)
 
 This file is a POINTER, not the implementation. It exists so harness skill

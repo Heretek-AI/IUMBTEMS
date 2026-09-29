@@ -1,3 +1,9 @@
+---
+name: brainstorming
+description: >-
+  Lateral creative brainstorming and divergent ideation skill. Use when exploring what-if features, lateral architectures, speculative product directions, or when user invokes /brainstorming. Generates novel feature vectors, paradigm inversions, and falsifiable spike hypotheses instead of bug fixes.
+---
+
 # Brainstorming (thin adapter stub)
 
 This file is a POINTER, not the implementation. It exists so harness skill
