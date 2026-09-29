@@ -1313,6 +1313,143 @@ class TestInstallSearchGate(unittest.TestCase):
             # The keep-decision is reported, never silent.
             self.assertIn("Preserved resource-scoped websearch allow", res.stdout)
 
+    def test_wildcard_action_deny_is_never_downgraded(self):
+        # Under last-match-wins, appending a websearch ask after a wildcard
+        # deny ({action:"*"} or {action:"web*"}) would silently weaken it.
+        for action in ("*", "web*"):
+            with self.subTest(action=action):
+                with tempfile.TemporaryDirectory() as tmp:
+                    home = Path(tmp)
+                    oc = self._oc_path(home)
+                    oc.parent.mkdir(parents=True, exist_ok=True)
+                    deny = {"action": action, "resource": "*", "effect": "deny"}
+                    oc.write_text(
+                        json.dumps(
+                            {
+                                "$schema": "https://opencode.ai/config.json",
+                                "permissions": [deny],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    res = self._run_install(home, "--search-gate")
+                    self.assertNotEqual(res.returncode, 0)
+                    combined = (res.stdout + res.stderr).lower()
+                    self.assertIn("deny", combined)
+                    self.assertEqual(
+                        json.loads(oc.read_text(encoding="utf-8"))["permissions"],
+                        [deny],
+                    )
+
+    def test_malformed_effect_is_refused_not_rewritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            oc = self._oc_path(home)
+            oc.parent.mkdir(parents=True, exist_ok=True)
+            oc.write_text(
+                json.dumps(
+                    {
+                        "$schema": "https://opencode.ai/config.json",
+                        "permissions": [
+                            {"action": "websearch", "resource": "*", "effect": None}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            res = self._run_install(home, "--search-gate")
+            self.assertNotEqual(res.returncode, 0)
+
+    def test_existing_ask_with_extra_keys_is_preserved_verbatim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            oc = self._oc_path(home)
+            oc.parent.mkdir(parents=True, exist_ok=True)
+            rule = {
+                "action": "websearch",
+                "resource": "*",
+                "effect": "ask",
+                "note": "keep-me",
+            }
+            oc.write_text(
+                json.dumps(
+                    {
+                        "$schema": "https://opencode.ai/config.json",
+                        "permissions": [rule],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            res = self._run_install(home, "--search-gate")
+            self.assertEqual(res.returncode, 0, res.stderr)
+            rules = json.loads(oc.read_text(encoding="utf-8"))["permissions"]
+            # Verbatim — the unknown key must survive, not be rewritten away.
+            self.assertEqual(rules, [rule])
+
+    def test_existing_global_ask_followed_by_scoped_allow_moves_gate_last(self):
+        # Last-match-wins: [ask(*), allow("specific query")] would let the
+        # scoped allow bypass the gate. The gate must move last (verbatim).
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            oc = self._oc_path(home)
+            oc.parent.mkdir(parents=True, exist_ok=True)
+            ask = {"action": "websearch", "resource": "*", "effect": "ask"}
+            scoped = {
+                "action": "websearch",
+                "resource": "specific query",
+                "effect": "allow",
+            }
+            oc.write_text(
+                json.dumps(
+                    {
+                        "$schema": "https://opencode.ai/config.json",
+                        "permissions": [ask, scoped],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            res = self._run_install(home, "--search-gate")
+            self.assertEqual(res.returncode, 0, res.stderr)
+            rules = json.loads(oc.read_text(encoding="utf-8"))["permissions"]
+            # Scoped rule bytes preserved, but the gate is now last to win.
+            self.assertIn(scoped, rules)
+            self.assertEqual(rules[-1], ask)
+            self.assertIn("Moved websearch ask gate", res.stdout)
+
+    def test_broader_ask_followed_by_scoped_allow_appends_canonical(self):
+        # A broader wildcard ask ({action:"*"}) with a later scoped websearch
+        # allow is not "already gated" — the allow would win. Canonical ask
+        # must be appended last.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            oc = self._oc_path(home)
+            oc.parent.mkdir(parents=True, exist_ok=True)
+            broader = {"action": "*", "resource": "*", "effect": "ask"}
+            scoped = {
+                "action": "websearch",
+                "resource": "specific query",
+                "effect": "allow",
+            }
+            oc.write_text(
+                json.dumps(
+                    {
+                        "$schema": "https://opencode.ai/config.json",
+                        "permissions": [broader, scoped],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            res = self._run_install(home, "--search-gate")
+            self.assertEqual(res.returncode, 0, res.stderr)
+            rules = json.loads(oc.read_text(encoding="utf-8"))["permissions"]
+            self.assertIn(broader, rules)
+            self.assertIn(scoped, rules)
+            self.assertEqual(
+                rules[-1],
+                {"action": "websearch", "resource": "*", "effect": "ask"},
+            )
+            self.assertIn("appending canonical ask", res.stdout.lower())
+
     def test_help_and_unknown_flag(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)

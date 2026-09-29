@@ -293,6 +293,9 @@ Based on Matt Pocock's design tree and frontier methodology:
 ### Phase 2: Convergent Dialectic Falsification
 Once the frontier is resolved, the Orchestrator freezes the problem space and transitions to the dialectic multi-agent swarm for empirical retrieval, falsification, and epistemic auditing.
 
+### Frontier Tooling & Atomicity
+The frontier is fully tool-drivable: `skills/grilling/socratic_tree.py --add-node/--settle/--export` and `iumbtems_socratic_frontier` actions `add|export|settle|inspect`. Frontier writes are atomic (unique temp file + `os.replace`) and serialized by an advisory lock spanning the whole load→mutate→write transaction — parallel `add` calls cannot corrupt `.factory/frontier.json`.
+
 ---
 
 ## 6. Multi-Harness Runtime & Backends
@@ -379,7 +382,7 @@ Agent-authored audit-shaped fields are renamed to `self_reported_*` and never co
 
 **Factory gate.** `iumbtems_factory` (and the CLI) expose `gate open|settle|approve|waive|escalate|count` as first-class state, and `phase-add` writes its own `phase.json` — it never overwrites author-written `GOAL.md`/`dossier.json` (refused unless `--force`).
 
-### 6.3 Configuration Merge & Migration
+### 6.6 Configuration Merge & Migration
 
 `load_config` deep-merges the `agents` block one role/key at a time over `DEFAULT_CONFIG`. Configs written before 0.7.6 that pinned `agents.<role>.backend = ["claude", "-p"]` are migrated to `null` on load (unless the top-level `backend` is an explicit `"claude"`), and the migration is persisted by the CLI and `iumbtems_config`.
 
