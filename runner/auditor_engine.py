@@ -22,6 +22,7 @@ from runner.darkharvest_claims import (
     RepoValidator,
     cross_check_repos,
     normalize_dossier_claims,
+    normalize_license_whitelist,
     sanitize_self_reported,
 )
 
@@ -135,12 +136,23 @@ class EpistemicAuditorEngine:
         self,
         base_dir: Optional[Path] = None,
         repo_validator: Optional[Any] = None,
+        min_fuzzy_confidence: float = 0.88,
+        license_whitelist: Optional[Any] = None,
     ):
         self.base_dir = base_dir or Path(".research")
         self.hasher = SourceHasher(base_dir=self.base_dir)
         self.state_machine = ResearchStateMachine(base_dir=self.base_dir)
         # Ground-truth repo checks for darkharvest; injectable for tests/offline.
         self.repo_validator = repo_validator
+        # Config wiring (`verify.min_fuzzy_confidence`); 0.88 preserves the
+        # historical behavior byte-for-byte.
+        try:
+            self.min_fuzzy_confidence = float(min_fuzzy_confidence)
+        except (TypeError, ValueError):
+            self.min_fuzzy_confidence = 0.88
+        # Darkharvest license policy (`license_whitelist`); None keeps the
+        # built-in permissive set.
+        self.license_whitelist = normalize_license_whitelist(license_whitelist)
 
     def audit_scope(
         self,
@@ -238,7 +250,10 @@ class EpistemicAuditorEngine:
             if validator is None:
                 validator = RepoValidator(enabled=_repo_validation_enabled())
             harvest_findings = cross_check_repos(
-                alpha_dossier, beta_dossier, validator=validator
+                alpha_dossier,
+                beta_dossier,
+                validator=validator,
+                license_whitelist=self.license_whitelist,
             )
 
         blocking_findings = [
@@ -343,7 +358,9 @@ class EpistemicAuditorEngine:
                 rejected_count += 1
                 continue
 
-            passed, conf, msg = self.hasher.verify_quote(shash, quote)
+            passed, conf, msg = self.hasher.verify_quote(
+                shash, quote, min_fuzzy_confidence=self.min_fuzzy_confidence
+            )
 
             if passed and claim_gate is not None:
                 verdict = claim_gate(claim)

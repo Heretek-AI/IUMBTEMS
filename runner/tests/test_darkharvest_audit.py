@@ -285,6 +285,111 @@ class TestOrphanScopes(unittest.TestCase):
         # Marked, never deleted.
         self.assertTrue(stray.exists())
 
+class TestLicenseWhitelistPolicy(unittest.TestCase):
+    """`license_whitelist` (config) is the darkharvest policy source (phase 01).
+
+    Default-absent behavior must reproduce the built-in permissive set exactly;
+    a configured whitelist replaces it (an empty/invalid list falls back rather
+    than silently making every license clean-room-only).
+    """
+
+    @staticmethod
+    def _disagreeing_pair(alpha_license, beta_license):
+        return (
+            {
+                "candidate_repositories": [
+                    _candidate(alpha_license, "SAFE", "depend-or-vendor", "a", "q")
+                ]
+            },
+            {
+                "candidate_repositories": [
+                    _candidate(beta_license, "SAFE", "depend-or-vendor", "a", "q")
+                ]
+            },
+        )
+
+    def test_default_whitelist_matches_builtin_set(self):
+        from runner.darkharvest_claims import (
+            PERMISSIVE_LICENSES,
+            normalize_license_whitelist,
+        )
+
+        self.assertEqual(normalize_license_whitelist(None), PERMISSIVE_LICENSES)
+        self.assertEqual(normalize_license_whitelist([]), PERMISSIVE_LICENSES)
+        # Shape-invalid input (not a list, or all non-strings) falls back ...
+        self.assertEqual(normalize_license_whitelist("MPL-2.0"), PERMISSIVE_LICENSES)
+        self.assertEqual(normalize_license_whitelist([1, 2]), PERMISSIVE_LICENSES)
+        # ... while an explicit list REPLACES the set (case-normalized).
+        self.assertEqual(
+            normalize_license_whitelist(["mit", "MPL-2.0"]),
+            frozenset({"MIT", "MPL-2.0"}),
+        )
+        self.assertEqual(
+            normalize_license_whitelist(["MIT", "Apache-2.0", "BSD-3-Clause", "ISC"]),
+            PERMISSIVE_LICENSES,
+        )
+
+    def test_configured_whitelist_changes_the_resolution(self):
+        alpha, beta = self._disagreeing_pair("MIT", "MPL-2.0")
+        # Default: MPL-2.0 is not permissive -> conservative clean-room.
+        default_findings = cross_check_repos(alpha, beta)
+        self.assertEqual(default_findings[0]["resolution"], "clean-room-rebuild-only")
+        # Configured: the user accepts both licenses for depend/vendor.
+        licensed = cross_check_repos(
+            alpha, beta, license_whitelist=["MIT", "MPL-2.0"]
+        )
+        self.assertEqual(licensed[0]["resolution"], "depend-or-vendor")
+
+    def test_whitelist_changes_ground_truth_contradiction_findings(self):
+        """The whitelist drives the ground-truth license risk check too."""
+        alpha = {
+            "candidate_repositories": [
+                _candidate("MIT", "SAFE", "depend-or-vendor", "a", "q")
+            ]
+        }
+        validator = FakeValidator(
+            {"exists": True, "license": "MPL-2.0", "archived": False}
+        )
+        default_kinds = {
+            f["kind"] for f in cross_check_repos(alpha, {}, validator=validator)
+        }
+        self.assertIn("LICENSE_CONTRADICTS_GROUND_TRUTH", default_kinds)
+
+        allowed_kinds = {
+            f["kind"]
+            for f in cross_check_repos(
+                alpha, {}, validator=validator, license_whitelist=["MPL-2.0"]
+            )
+        }
+        self.assertNotIn("LICENSE_CONTRADICTS_GROUND_TRUTH", allowed_kinds)
+
+    def test_auditor_engine_passes_the_whitelist_through(self):
+        from runner.auditor_engine import EpistemicAuditorEngine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / ".research"
+            engine = EpistemicAuditorEngine(
+                base_dir=base, license_whitelist=["mpl-2.0"]
+            )
+            self.assertEqual(engine.license_whitelist, frozenset({"MPL-2.0"}))
+            engine_default = EpistemicAuditorEngine(base_dir=base)
+            from runner.darkharvest_claims import PERMISSIVE_LICENSES
+
+            self.assertEqual(engine_default.license_whitelist, PERMISSIVE_LICENSES)
+
+    def test_runner_config_reaches_the_auditor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / ".research"
+            base.mkdir(parents=True, exist_ok=True)
+            (base / "config.json").write_text(
+                json.dumps({"license_whitelist": ["mit", "MPL-2.0"]}),
+                encoding="utf-8",
+            )
+            runner = SwarmRunner(base_dir=base, mock_mode=True, mode="darkharvest")
+            self.assertEqual(
+                runner.auditor.license_whitelist, frozenset({"MIT", "MPL-2.0"})
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

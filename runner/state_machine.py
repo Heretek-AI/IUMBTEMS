@@ -231,9 +231,16 @@ class ResearchStateMachine:
         return manifest
 
     def record_preflight(
-        self, report: Dict[str, Any], backend: Optional[str] = None
+        self,
+        report: Dict[str, Any],
+        backend: Optional[str] = None,
+        divergence_threshold: Optional[float] = None,
     ) -> None:
-        """Persist the preflight report + plugin version into the manifest."""
+        """Persist the preflight report + plugin version into the manifest.
+
+        `divergence_threshold` is recorded for reference only (advisory — it
+        never gates a verdict; see `runner/schemas.py` CONFIG).
+        """
         with self._lock, _file_lock(self._lock_file):
             try:
                 manifest = self._read_manifest_unlocked()
@@ -246,6 +253,8 @@ class ResearchStateMachine:
                 manifest["plugin_version"] = version
             if backend:
                 manifest["backend"] = backend
+            if divergence_threshold is not None:
+                manifest["divergence_threshold"] = divergence_threshold
             self._write_manifest_unlocked(manifest)
 
     def _read_manifest_unlocked(self) -> Dict[str, Any]:
@@ -263,6 +272,23 @@ class ResearchStateMachine:
     def load_global_manifest(self) -> Dict[str, Any]:
         with self._lock:
             return self._read_manifest_unlocked()
+
+    def set_manifest_fields(self, **fields: Any) -> None:
+        """Set runner-owned top-level manifest fields under the cross-process lock.
+
+        Used for advisory bookkeeping (e.g. the recorded divergence threshold)
+        that must survive `init_session` re-initialization. Never invents a
+        manifest: when none exists yet, one is created with just these fields.
+        """
+        if not fields:
+            return
+        with self._lock, _file_lock(self._lock_file):
+            try:
+                manifest = self._read_manifest_unlocked()
+            except FileNotFoundError:
+                manifest = {}
+            manifest.update(fields)
+            self._write_manifest_unlocked(manifest)
 
     def save_global_manifest(self, manifest: Dict[str, Any]):
         with self._lock, _file_lock(self._lock_file):

@@ -715,6 +715,76 @@ class TestEngineAliasNormalization(unittest.TestCase):
             self.assertEqual(report["engine"], "duckduckgo")
             self.assertEqual(report["search_gate"]["action"], "halt")
 
+    def test_probe_timeout_defaults_to_5s(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch(
+                "runner.preflight._engine_probe",
+                return_value={"ok": True, "status": "ok", "results": 1},
+            ) as probe:
+                preflight(
+                    Path(tmp),
+                    mode="research",
+                    mock_mode=True,
+                    config={"search_engine": "duckduckgo"},
+                    env={},
+                )
+            probe.assert_called_with("duckduckgo", True, 5.0)
+
+    def test_probe_timeout_reads_config_search_timeout_s(self):
+        for configured, expected in ((2.5, 2.5), (0, 5.0), ("soon", 5.0), (None, 5.0)):
+            with self.subTest(configured=configured):
+                with tempfile.TemporaryDirectory() as tmp:
+                    with mock.patch(
+                        "runner.preflight._engine_probe",
+                        return_value={"ok": True, "status": "ok", "results": 1},
+                    ) as probe:
+                        preflight(
+                            Path(tmp),
+                            mode="research",
+                            mock_mode=True,
+                            config={"search_timeout_s": configured},
+                            env={},
+                        )
+                    probe.assert_called_with("duckduckgo", True, expected)
+
+    def test_searxng_url_config_reaches_the_provider_resolver(self):
+        """config `searxng_url` is a real consumer input for the doctor/gate path."""
+        with tempfile.TemporaryDirectory() as tmp:
+            report = preflight(
+                Path(tmp),
+                mode="research",
+                mock_mode=True,
+                probe=False,
+                config={
+                    "search_engine": "searxng",
+                    "searxng_url": "http://localhost:8080",
+                },
+                env={},
+            )
+            self.assertEqual(report["search"]["provider"], "searxng")
+            self.assertTrue(report["search"]["available"])
+            self.assertEqual(report["search_gate"]["action"], "ok")
+
+    def test_env_searxng_url_beats_config(self):
+        from runner.preflight import _env_with_config_searxng
+
+        merged = _env_with_config_searxng(
+            {"searxng_url": "http://from-config:1"},
+            {"SEARXNG_URL": "http://from-env:2"},
+        )
+        self.assertEqual(merged["SEARXNG_URL"], "http://from-env:2")
+        # Absent/null config leaves the env untouched.
+        self.assertNotIn(
+            "SEARXNG_URL",
+            _env_with_config_searxng({"searxng_url": None}, {"PATH": "/bin"}),
+        )
+        self.assertEqual(
+            _env_with_config_searxng({"searxng_url": "http://cfg:1"}, {})[
+                "SEARXNG_URL"
+            ],
+            "http://cfg:1",
+        )
+
     def test_probe_timeout_is_wired_through(self):
         sys.path.insert(
             0, str(PROJECT_ROOT / "skills" / "epistemic_search" / "scripts")

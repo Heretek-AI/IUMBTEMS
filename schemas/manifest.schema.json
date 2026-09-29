@@ -30,6 +30,12 @@
     "backend": {
       "type": "string"
     },
+    "divergence_threshold": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
     "preflight": {
       "type": "object"
     },

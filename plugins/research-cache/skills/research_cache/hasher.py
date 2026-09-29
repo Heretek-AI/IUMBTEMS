@@ -132,12 +132,30 @@ class SourceHasher:
         return re.sub(r"\s+", " ", text).strip().lower()
 
     def verify_quote(
-        self, content_hash: str, quote: str
+        self,
+        content_hash: str,
+        quote: str,
+        min_fuzzy_confidence: float = 0.88,
     ) -> Tuple[bool, float, Optional[str]]:
         """
         Verifies whether quote exists in cached document.
         Returns: (is_verified, confidence_score, context_match)
+
+        ``min_fuzzy_confidence`` is the word-overlap threshold for the fuzzy
+        fallback (config `verify.min_fuzzy_confidence`). The default 0.88 keeps
+        the historical decision boundary; callers that pass a value opt into a
+        stricter/looser match. Exact and normalized matches are unaffected.
+
+        The value is clamped into [0, 1] here — the single enforcement point —
+        so MCP/auditor layers may parse config freely; malformed input falls back
+        to the strict default.
         """
+        try:
+            threshold = float(min_fuzzy_confidence)
+        except (TypeError, ValueError):
+            threshold = 0.88
+        threshold = max(0.0, min(1.0, threshold))
+
         source_text = self.get_source_content(content_hash)
         if not source_text:
             return False, 0.0, f"Source hash '{content_hash}' not found in cache."
@@ -160,6 +178,10 @@ class SourceHasher:
         window_size = len(quote_words)
         source_words = norm_source.split()
         best_score = 0.0
+        # Early-exit floor: 0.90 historically, raised when a caller asks for a
+        # stricter threshold (breaking at 0.90 would under-report a window that
+        # could reach 0.99).
+        early_exit = max(0.90, threshold)
 
         for i in range(max(1, len(source_words) - window_size + 1)):
             window = source_words[i : i + window_size]
@@ -167,10 +189,10 @@ class SourceHasher:
             score = matches / window_size
             if score > best_score:
                 best_score = score
-                if best_score >= 0.90:
+                if best_score >= early_exit:
                     break
 
-        if best_score >= 0.88:
+        if best_score >= threshold:
             return True, best_score, f"High-confidence fuzzy match ({best_score:.2f})."
 
         return (

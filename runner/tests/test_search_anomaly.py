@@ -30,6 +30,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -271,6 +272,70 @@ class TestCliStatusSurface(unittest.TestCase):
         self.assertTrue(output_status)
         self.assertIsNone(allowed)
         self.assertIsNone(blocked)
+
+
+class TestSearchTimeoutEnv(unittest.TestCase):
+    """`search_timeout_s` -> IUMBTEMS_SEARCH_TIMEOUT_S honored by search.py.
+
+    The runner exports the env var to spawned children; an explicit call-site
+    timeout (e.g. the preflight probe) always wins.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.search = _load_search()
+
+    def setUp(self):
+        self.seen = {}
+        self._original_fetch = self.search._fetch_ddg_html
+        self._research = tempfile.mkdtemp()
+
+        def capture(_query, timeout=15.0):
+            self.seen["timeout"] = timeout
+            return RESULTS_HTML
+
+        self.search._fetch_ddg_html = capture
+        self._old_env = {
+            key: os.environ.get(key)
+            for key in ("IUMBTEMS_SEARCH_TIMEOUT_S", "IUMBTEMS_RESEARCH_DIR")
+        }
+        os.environ["IUMBTEMS_RESEARCH_DIR"] = self._research
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        self.search._fetch_ddg_html = self._original_fetch
+        for key, value in self._old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_env_override_is_honored(self):
+        os.environ["IUMBTEMS_SEARCH_TIMEOUT_S"] = "2.5"
+        self.search.search_duckduckgo_detailed("q", log=False)
+        self.assertEqual(self.seen["timeout"], 2.5)
+
+    def test_absent_and_invalid_env_keep_the_15s_default(self):
+        for value in (None, "soon", "0", "-1"):
+            with self.subTest(value=value):
+                if value is None:
+                    os.environ.pop("IUMBTEMS_SEARCH_TIMEOUT_S", None)
+                else:
+                    os.environ["IUMBTEMS_SEARCH_TIMEOUT_S"] = value
+                self.seen.clear()
+                self.search.search_duckduckgo_detailed("q", log=False)
+                self.assertEqual(self.seen["timeout"], 15.0)
+
+    def test_explicit_timeout_beats_env(self):
+        os.environ["IUMBTEMS_SEARCH_TIMEOUT_S"] = "2.5"
+        self.search.search_duckduckgo_detailed("q", log=False, timeout=9.0)
+        self.assertEqual(self.seen["timeout"], 9.0)
+
+    def test_legacy_list_contract_unchanged(self):
+        os.environ["IUMBTEMS_SEARCH_TIMEOUT_S"] = "3"
+        results = self.search.search_duckduckgo("q", log=False)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(self.seen["timeout"], 3)
 
 
 if __name__ == "__main__":

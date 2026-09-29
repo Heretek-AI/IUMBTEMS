@@ -32,7 +32,13 @@ from runner.errors import DossierNotFound
 from runner.retrieval_log import current_offset as _retrieval_offset
 from runner.retrieval_log import summarize as _retrieval_summary
 from skills.research_cache.hasher import SourceHasher
+from skills.swarm_config.configure import DEFAULT_CONFIG as _DEFAULT_CONFIG
 from skills.swarm_config.configure import load_config
+
+# Advisory divergence reference default (runner/schemas.py CONFIG_DEFAULTS).
+# Emissions (manifest field, synthesis bullet, banner line) are gated on a
+# NON-DEFAULT configured value so default runs stay byte-identical (R3).
+_DEFAULT_DIVERGENCE_THRESHOLD = _DEFAULT_CONFIG["divergence_threshold"]
 
 # Exit code for a fail-fast preflight refusal (search gate HALT). Deliberately
 # distinct from argparse's usage-error code (2) so a script or CI can tell a
@@ -122,6 +128,60 @@ def _opencode_auto(config: Optional[Dict[str, Any]] = None) -> bool:
     if val is not None:
         return bool(val)
     return True
+
+
+def _advisory_number(value: Any, default: float) -> float:
+    """Config number for advisory recording; malformed values keep the default."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return float(value)
+
+
+def _verify_threshold(config: Optional[Dict[str, Any]]) -> float:
+    """`verify.min_fuzzy_confidence` with the historical 0.88 default/clamp."""
+    verify = (config or {}).get("verify")
+    raw = verify.get("min_fuzzy_confidence") if isinstance(verify, dict) else None
+    value = _advisory_number(raw, 0.88)
+    return max(0.0, min(1.0, value))
+
+
+def _config_child_env(
+    base_dir: Path, agent_cwd: str, config: Optional[Dict[str, Any]]
+) -> Dict[str, str]:
+    """Environment for a spawned agent child: base env + config passthrough.
+
+    Follows the `IUMBTEMS_RESEARCH_DIR` precedent: config-sourced env overrides
+    the inherited value, and null/default config keys are NOT exported (so
+    absent defaults behave byte-identically to before these keys existed):
+
+    * `cache_raw_markdown`      -> IUMBTEMS_CACHE_RAW_MARKDOWN=1/0 (webcache)
+    * `cache_ttl_days`          -> IUMBTEMS_FETCH_TTL_DAYS (webcache, when set)
+    * `search_timeout_s`        -> IUMBTEMS_SEARCH_TIMEOUT_S (search.py, when set)
+    * `searxng_url`             -> SEARXNG_URL (search provider + searxng_mcp)
+    """
+    cfg = config or {}
+    env: Dict[str, str] = {
+        **os.environ,
+        "PWD": agent_cwd,
+        "IUMBTEMS_RESEARCH_DIR": str(base_dir),
+        "IUMBTEMS_CACHE_RAW_MARKDOWN": (
+            "0" if cfg.get("cache_raw_markdown") is False else "1"
+        ),
+    }
+    ttl = cfg.get("cache_ttl_days")
+    if isinstance(ttl, int) and not isinstance(ttl, bool) and ttl >= 0:
+        env["IUMBTEMS_FETCH_TTL_DAYS"] = str(ttl)
+    timeout = cfg.get("search_timeout_s")
+    if (
+        isinstance(timeout, (int, float))
+        and not isinstance(timeout, bool)
+        and timeout > 0
+    ):
+        env["IUMBTEMS_SEARCH_TIMEOUT_S"] = str(timeout)
+    searxng = cfg.get("searxng_url")
+    if isinstance(searxng, str) and searxng.strip():
+        env["SEARXNG_URL"] = searxng.strip()
+    return env
 
 
 def _build_opencode_cmd(
@@ -272,6 +332,15 @@ class SwarmRunner:
         self.mode = _first(mode, cfg.get("mode"), "research")
         self.engine = _first(engine, cfg.get("search_engine"), "duckduckgo")
         self.depth = _first(depth, cfg.get("max_iterations"), 2)
+        # Advisory divergence reference: recorded (manifest + summary) only when
+        # configured to a non-default value; it never gates a verdict. Default
+        # runs emit nothing here (byte-identical-defaults rule, R3).
+        self.divergence_threshold = _advisory_number(
+            cfg.get("divergence_threshold"), _DEFAULT_DIVERGENCE_THRESHOLD
+        )
+        self.divergence_threshold_configured = (
+            self.divergence_threshold != _DEFAULT_DIVERGENCE_THRESHOLD
+        )
         # Stream F: "dag" (legacy default) or "auction" (Frontier Markets).
         self.allocation = _first(allocation, cfg.get("allocation"), "dag")
         # Stream G: optional Domain Pack (constitution) for the auditor.
@@ -295,6 +364,10 @@ class SwarmRunner:
             repo_validator=RepoValidator(
                 enabled=(not self.mock_mode) and _repo_validation_enabled()
             ),
+            # Config wiring: default-absent values reproduce the historical
+            # 0.88 fuzzy threshold and built-in license whitelist exactly.
+            min_fuzzy_confidence=_verify_threshold(cfg),
+            license_whitelist=cfg.get("license_whitelist"),
         )
         self.hasher = SourceHasher(base_dir=self.base_dir)
         self.prompts_dir = PROJECT_ROOT / "prompts"
@@ -449,12 +522,9 @@ class SwarmRunner:
                 # runner evidence dir 5da7ec/sunny-otter, worker cwd
                 # /home/john/Projects/STC). Keep PWD consistent with cwd.
                 # IUMBTEMS_RESEARCH_DIR points agent-invoked skill scripts
-                # (search.py/hasher.py) at this workspace for retrieval telemetry.
-                env={
-                    **os.environ,
-                    "PWD": agent_cwd,
-                    "IUMBTEMS_RESEARCH_DIR": str(self.base_dir),
-                },
+                # (search.py/hasher.py) at this workspace for retrieval telemetry;
+                # the cache/search keys ride the same env channel.
+                env=_config_child_env(self.base_dir, agent_cwd, self.config),
                 # stdin MUST be DEVNULL: `opencode run` reads piped stdin to
                 # EOF before starting, and the MCP server's inherited stdin
                 # pipe is held open by the harness — every agent hung forever
@@ -1305,6 +1375,8 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         print(
             f"   Engine: {self.engine.upper()} | Depth: {self.depth} | Dir: {self.base_dir}"
         )
+        if self.divergence_threshold_configured:
+            print(f"   Divergence threshold (advisory): {self.divergence_threshold}")
         print(
             f"   Workspace: {self.base_dir} | Manifest: "
             f"{self.state_machine.manifest_file.name} | Agent cwd: "
@@ -1339,7 +1411,14 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
         print(format_report(self._preflight))
         print("=" * 70)
         self.state_machine.record_preflight(
-            self._preflight, backend=self._preflight.get("backend", {}).get("family")
+            self._preflight,
+            backend=self._preflight.get("backend", {}).get("family"),
+            # Advisory only, and only when configured non-default (R3).
+            divergence_threshold=(
+                self.divergence_threshold
+                if self.divergence_threshold_configured
+                else None
+            ),
         )
 
         # Mode-aware search availability gate (deliverable 7): fail fast BEFORE
@@ -1378,6 +1457,17 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
                 print(f"   ↻ resume: {len(existing)} scope(s) already recorded")
         if not resumed:
             self.orchestrate_objective(objective, frontier_file)
+
+        # Advisory divergence reference: re-assert after orchestration, which
+        # (re)initializes the manifest and would otherwise drop the field
+        # recorded with record_preflight. Only when configured non-default (R3).
+        if self.divergence_threshold_configured:
+            try:
+                self.state_machine.set_manifest_fields(
+                    divergence_threshold=self.divergence_threshold
+                )
+            except Exception:  # noqa: BLE001 - advisory bookkeeping never fails a run
+                pass
 
         # 2. Execute scopes according to DAG
         if not self._run_scope_batches():
@@ -1573,8 +1663,16 @@ Output ONLY valid JSON representing the scope decomposition conforming to prompt
             f"- **Total Verified Primary Citations**: `{total_verified}`",
             f"- **Total Unverified Claims Purged**: `{total_rejected}`",
             f"- **Mean Swarm Divergence Score**: `{avg_div}`",
-            f"- **Scopes Flagged WARNING_LOW_GROUNDING**: `{warnings}`",
         ]
+        # Only emitted when the threshold is configured non-default (R3).
+        if self.divergence_threshold_configured:
+            synthesis_lines.append(
+                f"- **Advisory Divergence Threshold**: `{self.divergence_threshold}` "
+                "(recorded for reference; never gates a verdict)"
+            )
+        synthesis_lines.append(
+            f"- **Scopes Flagged WARNING_LOW_GROUNDING**: `{warnings}`"
+        )
 
         final_path = self._write_report("final_synthesis.md", synthesis_lines)
 

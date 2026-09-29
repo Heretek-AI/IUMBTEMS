@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -34,8 +35,13 @@ from runner.research_swarm import (  # noqa: E402
 )
 from skills.swarm_config.configure import (  # noqa: E402
     DEFAULT_CONFIG,
+    ConfigHashError,
+    ConfigStaleError,
+    ConfigValidationError,
+    config_hash,
     heal_config,
     load_config,
+    merge_config,
     migrate_legacy_agent_backends,
     save_config,
 )
@@ -141,6 +147,55 @@ class TestLegacyAgentPinMigration(unittest.TestCase):
             self.assertIsNone(on_disk["agents"]["alpha"]["backend"])
             # Second pass has nothing left to migrate.
             self.assertFalse(heal_config(str(base)))
+
+    def test_heal_config_refuses_to_persist_schema_rejected_values(self):
+        """R1 repro: a file with an invalid value must never be healed/written.
+
+        `{"max_iterations": 99, agents.alpha.backend == ["claude","-p"]}` used to
+        be rewritten by `heal_config(validate=False)`, legitimising the 99 and
+        feeding it to SwarmRunner. It must now stay in memory only.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / ".research"
+            cfg_file = _write_config(
+                base,
+                {
+                    "max_iterations": 99,
+                    "agents": {"alpha": {"backend": ["claude", "-p"]}},
+                },
+            )
+            before = cfg_file.read_bytes()
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                healed = heal_config(str(base))
+            self.assertFalse(healed)
+            self.assertEqual(cfg_file.read_bytes(), before)
+            self.assertIn("max_iterations", buf.getvalue())
+
+            # The in-memory migration still protects this process ...
+            cfg = load_config(str(base))
+            self.assertIsNone(cfg["agents"]["alpha"]["backend"])
+            self.assertEqual(cfg["max_iterations"], 99)
+            # ... and the invalid value survives on disk until fixed.
+            on_disk = json.loads(cfg_file.read_text(encoding="utf-8"))
+            self.assertEqual(on_disk["max_iterations"], 99)
+
+    def test_heal_config_persists_once_invalid_value_is_fixed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / ".research"
+            cfg_file = _write_config(
+                base,
+                {
+                    "max_iterations": 99,
+                    "agents": {"alpha": {"backend": ["claude", "-p"]}},
+                },
+            )
+            # The typed path (MCP/CLI): effective config + the corrected value.
+            candidate = merge_config(load_config(str(base)), {"max_iterations": 2})
+            save_config(candidate, str(base))
+            on_disk = json.loads(cfg_file.read_text(encoding="utf-8"))
+            self.assertEqual(on_disk["max_iterations"], 2)
+            self.assertIsNone(on_disk["agents"]["alpha"]["backend"])
 
 
 class TestConfigMergeSemantics(unittest.TestCase):
@@ -260,6 +315,184 @@ class TestBackendHostMismatchWarning(unittest.TestCase):
                     runner.build_agent_cmd("objective", role="alpha")
             self.assertIn("IUMBTEMS_HOST", buf.getvalue())
             self.assertIn("alpha", buf.getvalue())
+
+
+class TestSingleWriter(unittest.TestCase):
+    """`save_config`: atomic, locked, validated, unknown-key preserving."""
+
+    def test_crash_between_temp_write_and_rename_keeps_original(self):
+        # F9 (recorded limitation): this proves the in-process failure path
+        # (patched os.replace) leaves the original byte-identical and cleans up
+        # the temp file. A real SIGKILL between write and rename can still leave
+        # a `config.json.*.tmp` behind — inherent to temp+rename; the config
+        # itself is never torn.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            original = json.dumps({"search_engine": "brave", "custom_key": 1})
+            cfg_file = _write_config(base, json.loads(original))
+            before = cfg_file.read_bytes()
+            with mock.patch("os.replace", side_effect=OSError("simulated crash")):
+                with self.assertRaises(OSError):
+                    save_config({"mode": "audit"}, str(base))
+            self.assertEqual(cfg_file.read_bytes(), before)
+            self.assertEqual(load_config(str(base))["mode"], "research")
+            # The failed write must not leave temp litter behind.
+            self.assertEqual(list(base.glob("config.json.*.tmp")), [])
+
+    def test_unknown_keys_on_disk_survive_a_partial_save(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            cfg_file = _write_config(
+                base,
+                {
+                    "search_engine": "brave",
+                    "custom_key": {"nested": [1, 2]},
+                    "agents": {"beta": {"model": "keep-me"}},
+                    "websearch": {"provider": "searxng"},
+                },
+            )
+            save_config({"mode": "audit"}, str(base))
+            data = json.loads(cfg_file.read_text(encoding="utf-8"))
+            self.assertEqual(data["custom_key"], {"nested": [1, 2]})
+            self.assertEqual(data["websearch"], {"provider": "searxng"})
+            self.assertEqual(data["agents"]["beta"]["model"], "keep-me")
+            self.assertEqual(data["mode"], "audit")
+            self.assertEqual(data["search_engine"], "brave")
+
+    def test_nested_unknown_keys_merge_instead_of_clobber(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            cfg_file = _write_config(
+                base, {"agents": {"beta": {"model": "keep-me", "extra": 1}}}
+            )
+            save_config({"agents": {"alpha": {"model": "new"}}}, str(base))
+            data = json.loads(cfg_file.read_text(encoding="utf-8"))
+            self.assertEqual(data["agents"]["beta"]["model"], "keep-me")
+            self.assertEqual(data["agents"]["alpha"]["model"], "new")
+
+    def test_expected_hash_mismatch_rejects_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            _write_config(base, {"mode": "research"})
+            stale_hash = config_hash(str(base))
+            # A concurrent writer lands a newer version.
+            cfg_file = _write_config(base, {"mode": "scout"})
+            before = cfg_file.read_bytes()
+
+            with self.assertRaises(ConfigStaleError) as ctx:
+                save_config({"mode": "audit"}, str(base), expected_hash=stale_hash)
+            self.assertEqual(cfg_file.read_bytes(), before)
+            details = ctx.exception.details
+            self.assertEqual(details["expected_hash"], stale_hash)
+            self.assertEqual(details["current_hash"], config_hash(str(base)))
+            self.assertEqual(details["config"]["mode"], "scout")
+            self.assertFalse(details["written"])
+            self.assertEqual(ctx.exception.code, "CONFIG_STALE")
+            # R5: the stale payload carries no absolute workspace path.
+            self.assertNotIn("path", details)
+
+    def test_expected_hash_prefix_match_proceeds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            _write_config(base, {"mode": "research"})
+            prefix = config_hash(str(base))[:8]
+            save_config({"mode": "audit"}, str(base), expected_hash=prefix)
+            self.assertEqual(load_config(str(base))["mode"], "audit")
+
+    def test_expected_hash_requires_at_least_eight_hex(self):
+        """R4: a 4-hex guard is too collision-prone and is rejected outright."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            cfg_file = _write_config(base, {"mode": "research"})
+            before = cfg_file.read_bytes()
+            for bad in ("abcd", "abc", "deadbeefz", "zzzzzzzz", "12 34"):
+                with self.subTest(expected_hash=bad):
+                    with self.assertRaises(ConfigHashError) as ctx:
+                        save_config({"mode": "audit"}, str(base), expected_hash=bad)
+                    self.assertEqual(ctx.exception.code, "CONFIG_INVALID_EXPECTED_HASH")
+                    self.assertEqual(cfg_file.read_bytes(), before)
+            # 64-hex, 8-hex, and uppercase spellings proceed.
+            live = config_hash(str(base))
+            save_config({"mode": "audit"}, str(base), expected_hash=live.upper())
+            self.assertEqual(load_config(str(base))["mode"], "audit")
+            # None / empty string mean "no guard" (documented).
+            save_config({"mode": "scout"}, str(base), expected_hash="")
+            self.assertEqual(load_config(str(base))["mode"], "scout")
+
+    def test_expected_hash_rejects_before_any_directory_side_effect(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "fresh"
+            with self.assertRaises(ConfigHashError):
+                save_config({"mode": "audit"}, str(base), expected_hash="beef")
+            self.assertFalse(base.exists())
+
+    def test_expected_hash_for_absent_file_is_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            base.mkdir(parents=True, exist_ok=True)
+            with self.assertRaises(ConfigStaleError):
+                save_config({"mode": "audit"}, str(base), expected_hash="a" * 8)
+            self.assertFalse((base / "config.json").exists())
+
+    def test_invalid_config_is_rejected_without_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with self.assertRaises(ConfigValidationError) as ctx:
+                save_config({"max_iterations": 99}, str(base))
+            self.assertFalse((base / "config.json").exists())
+            self.assertTrue(any("maximum" in e for e in ctx.exception.errors))
+            self.assertEqual(
+                ctx.exception.to_dict()["code"], "CONFIG_VALIDATION_FAILED"
+            )
+
+    def test_non_object_config_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with self.assertRaises(ConfigValidationError):
+                save_config([1, 2, 3], str(base))
+            self.assertFalse((base / "config.json").exists())
+
+    def test_concurrent_writers_never_tear_or_lose_keys(self):
+        script = (
+            "import json, sys, time\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from skills.swarm_config.configure import save_config\n"
+            "base, name = sys.argv[2], sys.argv[3]\n"
+            "for i in range(20):\n"
+            "    save_config({'search_engine': 'brave', 'probe_' + name: i}, base)\n"
+            "    time.sleep(0.002)\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            cfg_file = _write_config(base, {"mode": "research"})
+            procs = [
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        script,
+                        str(PROJECT_ROOT),
+                        str(base),
+                        name,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                for name in ("a", "b")
+            ]
+            # While the writers race, every observable state must be complete JSON.
+            deadline = time.time() + 30
+            while any(p.poll() is None for p in procs):
+                self.assertLess(time.time(), deadline, "writers did not finish")
+                json.loads(cfg_file.read_text(encoding="utf-8"))
+            for proc in procs:
+                _, err = proc.communicate()
+                self.assertEqual(proc.returncode, 0, err)
+            data = json.loads(cfg_file.read_text(encoding="utf-8"))
+            self.assertEqual(data["probe_a"], 19)
+            self.assertEqual(data["probe_b"], 19)
+            self.assertEqual(list(base.glob("config.json.*.tmp")), [])
 
 
 if __name__ == "__main__":

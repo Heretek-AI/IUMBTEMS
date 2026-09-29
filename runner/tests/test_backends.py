@@ -340,5 +340,118 @@ class TestOpencodePluginBackend(unittest.TestCase):
             self.assertEqual(enum, ["auto", "claude", "opencode"], name)
 
 
+class TestConfigEnvPassthrough(unittest.TestCase):
+    """Config-sourced env for spawned children (phase 01 field dispositions).
+
+    `_config_child_env` follows the IUMBTEMS_RESEARCH_DIR precedent: config wins
+    for the spawned child, and null/default keys are NOT exported so absent
+    defaults behave exactly as before these keys existed.
+    """
+
+    @staticmethod
+    def _env_for(config):
+        from runner.research_swarm import _config_child_env
+
+        return _config_child_env(Path("/tmp/proj/.research"), "/tmp/proj", config)
+
+    def test_raw_markdown_flag_always_reflects_config(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                self._env_for({"cache_raw_markdown": False})[
+                    "IUMBTEMS_CACHE_RAW_MARKDOWN"
+                ],
+                "0",
+            )
+            # Default true keeps webcache archiving exactly as before, and beats
+            # a stale inherited value (config is the canonical source).
+            with mock.patch.dict(
+                os.environ, {"IUMBTEMS_CACHE_RAW_MARKDOWN": "0"}, clear=True
+            ):
+                self.assertEqual(
+                    self._env_for({"cache_raw_markdown": True})[
+                        "IUMBTEMS_CACHE_RAW_MARKDOWN"
+                    ],
+                    "1",
+                )
+
+    def test_null_defaults_export_nothing(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            env = self._env_for(
+                {
+                    "cache_ttl_days": None,
+                    "search_timeout_s": None,
+                    "searxng_url": None,
+                }
+            )
+            self.assertNotIn("IUMBTEMS_FETCH_TTL_DAYS", env)
+            self.assertNotIn("IUMBTEMS_SEARCH_TIMEOUT_S", env)
+            self.assertNotIn("SEARXNG_URL", env)
+
+    def test_configured_values_are_exported(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            env = self._env_for(
+                {
+                    "cache_ttl_days": 30,
+                    "search_timeout_s": 2.5,
+                    "searxng_url": "http://localhost:8080",
+                }
+            )
+            self.assertEqual(env["IUMBTEMS_FETCH_TTL_DAYS"], "30")
+            self.assertEqual(env["IUMBTEMS_SEARCH_TIMEOUT_S"], "2.5")
+            self.assertEqual(env["SEARXNG_URL"], "http://localhost:8080")
+            # The pre-existing channels are unchanged.
+            self.assertEqual(env["PWD"], "/tmp/proj")
+            self.assertEqual(env["IUMBTEMS_RESEARCH_DIR"], "/tmp/proj/.research")
+
+    def test_spawn_uses_the_config_env(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / ".research"
+            base.mkdir(parents=True, exist_ok=True)
+            (base / "config.json").write_text(
+                json.dumps({"searxng_url": "http://searx.local:8888"}),
+                encoding="utf-8",
+            )
+            runner = SwarmRunner(base_dir=base, mock_mode=False, mode="research")
+            fake = mock.Mock()
+            fake.stdout = "ok"
+            with mock.patch.dict(os.environ, {}, clear=True):
+                with mock.patch("subprocess.run", return_value=fake) as run_mock:
+                    runner.run_claude_process("objective text")
+            kwargs = run_mock.call_args.kwargs
+            self.assertEqual(kwargs["env"]["SEARXNG_URL"], "http://searx.local:8888")
+
+    def test_auditor_receives_verify_and_license_config(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / ".research"
+            base.mkdir(parents=True, exist_ok=True)
+            (base / "config.json").write_text(
+                json.dumps(
+                    {
+                        "verify": {"min_fuzzy_confidence": 0.95},
+                        "license_whitelist": ["mpl-2.0"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            runner = SwarmRunner(base_dir=base, mock_mode=True, mode="darkharvest")
+            self.assertEqual(runner.auditor.min_fuzzy_confidence, 0.95)
+            self.assertEqual(runner.auditor.license_whitelist, frozenset({"MPL-2.0"}))
+
+    def test_auditor_defaults_match_builtin_behavior(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / ".research"
+            runner = SwarmRunner(base_dir=base, mock_mode=True, mode="research")
+            from runner.darkharvest_claims import PERMISSIVE_LICENSES
+
+            self.assertEqual(runner.auditor.min_fuzzy_confidence, 0.88)
+            self.assertEqual(runner.auditor.license_whitelist, PERMISSIVE_LICENSES)
+
+
 if __name__ == "__main__":
     unittest.main()

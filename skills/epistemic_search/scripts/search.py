@@ -5,6 +5,7 @@ DuckDuckGo HTML/lite parser with domain filtering and Claude Code XML formatting
 """
 
 import json
+import os
 import re
 import sys
 import urllib.parse
@@ -240,6 +241,22 @@ def _build_search_query(
     return effective_query
 
 
+def _env_search_timeout(default: float = 15.0) -> float:
+    """Search HTTP timeout: `IUMBTEMS_SEARCH_TIMEOUT_S` env > built-in default.
+
+    The runner exports the env var from config `search_timeout_s` to spawned
+    children; unset/invalid keeps the historical 15s default.
+    """
+    raw = os.environ.get("IUMBTEMS_SEARCH_TIMEOUT_S", "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 def _fetch_ddg_html(effective_query: str, timeout: float = 15.0) -> str:
     url = "https://lite.duckduckgo.com/lite/"
     data = urllib.parse.urlencode({"q": effective_query}).encode("utf-8")
@@ -323,7 +340,7 @@ def search_duckduckgo_detailed(
     blocked_domains: Optional[List[str]] = None,
     max_results: int = 10,
     log: bool = True,
-    timeout: float = 15.0,
+    timeout: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Search DuckDuckGo Lite and report *why* a run produced no results.
 
@@ -336,9 +353,13 @@ def search_duckduckgo_detailed(
     empty success). ``"empty"`` is a genuine no-hits query. ``"error"`` is a
     network/HTTP failure. Only this function preserves the distinction;
     :func:`search_duckduckgo` keeps the legacy list contract for callers that
-    do not need it. ``timeout`` bounds the HTTP fetch (the preflight probe wires
-    its own bound through here instead of the hardcoded default).
+    do not need it. ``timeout`` bounds the HTTP fetch; when omitted (None) the
+    `IUMBTEMS_SEARCH_TIMEOUT_S` env override (config `search_timeout_s`) is
+    honored, else the historical 15s default. An explicit value always wins —
+    the preflight probe wires its own bound through here.
     """
+    if timeout is None:
+        timeout = _env_search_timeout()
     effective_query = _build_search_query(query, allowed_domains, blocked_domains)
     try:
         html = _fetch_ddg_html(effective_query, timeout=timeout)
@@ -376,7 +397,7 @@ def search_duckduckgo(
     blocked_domains: Optional[List[str]] = None,
     max_results: int = 10,
     log: bool = True,
-    timeout: float = 15.0,
+    timeout: Optional[float] = None,
 ) -> List[Dict[str, str]]:
     """Execute search query against DuckDuckGo Lite without API keys.
 
@@ -399,7 +420,7 @@ def require_search_duckduckgo(
     blocked_domains: Optional[List[str]] = None,
     max_results: int = 10,
     log: bool = True,
-    timeout: float = 15.0,
+    timeout: Optional[float] = None,
 ) -> List[Dict[str, str]]:
     """Like :func:`search_duckduckgo` but raises :class:`SearchBlocked`.
 

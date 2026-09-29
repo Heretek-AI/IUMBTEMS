@@ -1,0 +1,299 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "config",
+  "type": "object",
+  "description": "Canonical .research/config.json contract. Unknown keys are allowed and preserved on write; saves are validated, locked, and atomic. null is accepted only for nullable keys (type includes \"null\") and means 'follow the default policy'; non-nullable keys reject null.",
+  "properties": {
+    "search_engine": {
+      "type": "string",
+      "enum": [
+        "duckduckgo",
+        "brave",
+        "firecrawl",
+        "searxng"
+      ],
+      "default": "duckduckgo",
+      "x-label": "Primary Search Engine",
+      "x-scope": "retrieval",
+      "x-restart": "next-run",
+      "description": "Primary retrieval engine. duckduckgo is the zero-key default; searxng additionally needs searxng_url (or SEARXNG_URL in the environment)."
+    },
+    "max_iterations": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4,
+      "default": 2,
+      "x-label": "Research Depth",
+      "x-scope": "run",
+      "x-restart": "next-run",
+      "description": "Dialectic depth / max iterations (1-4)."
+    },
+    "divergence_threshold": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.75,
+      "x-label": "Divergence Threshold",
+      "x-scope": "audit",
+      "x-restart": "next-run",
+      "description": "ADVISORY only: recorded in the run manifest and the master synthesis; it never gates audit verdicts or quote verification."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "research",
+        "audit",
+        "scout",
+        "hybrid",
+        "brainstorm",
+        "darkharvest"
+      ],
+      "default": "research",
+      "x-label": "Operating Mode",
+      "x-scope": "run",
+      "x-restart": "next-run",
+      "description": "Default operating mode when --mode is not passed."
+    },
+    "backend": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "claude",
+        "opencode"
+      ],
+      "default": "auto",
+      "x-label": "Agent Backend",
+      "x-scope": "dispatch",
+      "x-restart": "next-run",
+      "description": "Agent runtime backend. auto = host-native (claude -p on Claude Code, opencode run on OpenCode)."
+    },
+    "cache_raw_markdown": {
+      "type": "boolean",
+      "default": true,
+      "x-label": "Raw Markdown Caching",
+      "x-scope": "cache",
+      "x-restart": "next-run",
+      "description": "When false, spawned WebFetch-cache children archive nothing (IUMBTEMS_CACHE_RAW_MARKDOWN=0 is exported to the child env); true (default) keeps raw markdown copies in .research/sources."
+    },
+    "cache_ttl_days": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "default": null,
+      "x-label": "Cache TTL (days)",
+      "x-scope": "cache",
+      "x-restart": "next-run",
+      "description": "WebFetch cache TTL override exported as IUMBTEMS_FETCH_TTL_DAYS when set. null keeps webcache's per-domain policy (7 days general, 30 days documentation domains)."
+    },
+    "search_timeout_s": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 1,
+      "default": null,
+      "x-label": "Search Timeout (s)",
+      "x-scope": "retrieval",
+      "x-restart": "next-run",
+      "description": "HTTP timeout for search fetches, exported as IUMBTEMS_SEARCH_TIMEOUT_S when set. null keeps each surface's built-in default (search.py 15s, preflight probe 5s)."
+    },
+    "searxng_url": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^https?://",
+      "default": null,
+      "x-label": "SearXNG URL",
+      "x-scope": "retrieval",
+      "x-restart": "next-run",
+      "description": "Base URL of a self-hosted SearXNG; exported to spawned children as SEARXNG_URL when set (preflight also reads the env var). Must include an http:// or https:// scheme; null leaves the environment untouched."
+    },
+    "license_whitelist": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [
+        "MIT",
+        "Apache-2.0",
+        "BSD-3-Clause",
+        "ISC"
+      ],
+      "x-label": "License Whitelist",
+      "x-scope": "audit",
+      "x-restart": "next-run",
+      "description": "SPDX ids darkharvest may depend on or vendor. Missing/empty falls back to the built-in permissive set (MIT, Apache-2.0, BSD-3-Clause, ISC); anything else is clean-room-rebuild-only."
+    },
+    "output_dir": {
+      "type": "string",
+      "default": ".research",
+      "deprecated": true,
+      "x-label": "Output Directory (deprecated)",
+      "x-scope": "layout",
+      "x-restart": "none",
+      "description": "DEPRECATED: display-only. The workspace is selected by base_dir / --dir, never by this key. Kept for backward-compatible loading; slated for removal in a future major."
+    },
+    "allocation": {
+      "type": "string",
+      "enum": [
+        "dag",
+        "auction"
+      ],
+      "default": "dag",
+      "x-label": "Scope Allocation",
+      "x-scope": "run",
+      "x-restart": "next-run",
+      "description": "Scope allocation policy: dag = legacy dependency order, auction = Frontier Markets (highest expected-information gain)."
+    },
+    "domain_pack": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "default": null,
+      "x-label": "Domain Pack",
+      "x-scope": "audit",
+      "x-restart": "next-run",
+      "description": "Regulated Domain Pack id (config/domain_packs/) or null for the legacy constitution. The empty string is rejected; a pack id that does not resolve fails loudly when the constitution loads."
+    },
+    "verify": {
+      "type": "object",
+      "default": {
+        "min_fuzzy_confidence": 0.88
+      },
+      "x-label": "Verification Policy",
+      "x-scope": "audit",
+      "x-restart": "next-run",
+      "description": "Quote-verification policy. Applies to the next audit run and to iumbtems_verify_quote; the proof-carrying brief verifier always re-checks at the strict default.",
+      "properties": {
+        "min_fuzzy_confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.88,
+          "x-label": "Min Fuzzy Confidence",
+          "description": "Minimum word-overlap confidence for the fuzzy quote match in SourceHasher.verify_quote (default 0.88)."
+        }
+      }
+    },
+    "agents": {
+      "type": "object",
+      "default": {
+        "alpha": {
+          "backend": null,
+          "model": null,
+          "opencode_agent": null
+        },
+        "beta": {
+          "backend": null,
+          "model": null,
+          "opencode_agent": null
+        }
+      },
+      "x-label": "Agent Backends",
+      "x-scope": "dispatch",
+      "x-restart": "next-run",
+      "description": "Per-role backend overrides; unknown roles and role keys are preserved. Asymmetry is deliberate: Alpha and Beta on different model families probe divergence prompt-level red-teaming cannot.",
+      "properties": {
+        "alpha": {
+          "type": "object",
+          "x-label": "Agent Role",
+          "properties": {
+            "backend": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "default": null,
+              "x-label": "Backend Command",
+              "description": "Argv list for this role (e.g. ['claude','-p'] or ['opencode','run']); null falls through to the host-native default. Resolved by SwarmRunner._resolve_agent_backend."
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null,
+              "x-label": "Model",
+              "description": "Model id passed to the backend as --model."
+            },
+            "opencode_agent": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null,
+              "x-label": "OpenCode Agent",
+              "description": "Optional named opencode agent profile for `opencode run --agent`; null inlines the prompt instead."
+            }
+          }
+        },
+        "beta": {
+          "type": "object",
+          "x-label": "Agent Role",
+          "properties": {
+            "backend": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "default": null,
+              "x-label": "Backend Command",
+              "description": "Argv list for this role (e.g. ['claude','-p'] or ['opencode','run']); null falls through to the host-native default. Resolved by SwarmRunner._resolve_agent_backend."
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null,
+              "x-label": "Model",
+              "description": "Model id passed to the backend as --model."
+            },
+            "opencode_agent": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null,
+              "x-label": "OpenCode Agent",
+              "description": "Optional named opencode agent profile for `opencode run --agent`; null inlines the prompt instead."
+            }
+          }
+        }
+      }
+    },
+    "opencode_auto": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "default": null,
+      "x-label": "OpenCode --auto",
+      "x-scope": "dispatch",
+      "x-restart": "next-run",
+      "description": "Whether spawned `opencode run` children get --auto; null uses the default (enabled; env IUMBTEMS_OPENCODE_AUTO wins)."
+    },
+    "opencode_agent": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-label": "Default OpenCode Agent",
+      "x-scope": "dispatch",
+      "x-restart": "next-run",
+      "description": "Default named opencode agent profile for all roles; per-role agents.<role>.opencode_agent wins."
+    }
+  }
+}

@@ -54,7 +54,10 @@ AUDIT_SHAPED_KEYS = frozenset(
 )
 
 # Licenses that may be `depend`ed on or `vendor`ed. Everything else (incl.
-# unknown / NOASSERTION) resolves to clean-room-rebuild-only.
+# unknown / NOASSERTION) resolves to clean-room-rebuild-only. This is the
+# built-in fallback: `license_whitelist` in .research/config.json (normalized by
+# `normalize_license_whitelist`) replaces it when non-empty, so the default
+# config reproduces this set exactly.
 PERMISSIVE_LICENSES = frozenset({"MIT", "APACHE-2.0", "BSD-3-CLAUSE", "ISC"})
 
 UNKNOWN_LICENSES = frozenset({"", "UNKNOWN", "NOASSERTION", "NONE", "OTHER"})
@@ -64,8 +67,29 @@ def _norm_license(value: Any) -> str:
     return str(value or "").strip().upper()
 
 
-def _is_permissive(value: Any) -> bool:
-    return _norm_license(value) in PERMISSIVE_LICENSES
+def normalize_license_whitelist(whitelist: Any) -> frozenset:
+    """Config `license_whitelist` -> normalized SPDX set.
+
+    Missing, empty, or shape-invalid input falls back to the built-in permissive
+    set (an empty whitelist must not silently make every license
+    clean-room-only). Non-string entries are dropped rather than crashing the
+    audit; a fully-unusable list also falls back.
+    """
+    if isinstance(whitelist, (list, tuple, set, frozenset)):
+        normalized = {
+            _norm_license(item)
+            for item in whitelist
+            if isinstance(item, str) and item.strip()
+        }
+        if normalized:
+            return frozenset(normalized)
+    return PERMISSIVE_LICENSES
+
+
+def _is_permissive(value: Any, whitelist: Optional[frozenset] = None) -> bool:
+    return _norm_license(value) in (
+        whitelist if whitelist is not None else PERMISSIVE_LICENSES
+    )
 
 
 def sanitize_self_reported(dossier: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
@@ -145,7 +169,11 @@ def normalize_dossier_claims(
     return out
 
 
-def _resolved_policy(alpha: Dict[str, Any], beta: Dict[str, Any]) -> str:
+def _resolved_policy(
+    alpha: Dict[str, Any],
+    beta: Dict[str, Any],
+    whitelist: Optional[frozenset] = None,
+) -> str:
     """Conservative harvest policy when the two dossiers disagree."""
     for side in (alpha, beta):
         policy = str(side.get("harvest_policy") or "").lower()
@@ -156,7 +184,7 @@ def _resolved_policy(alpha: Dict[str, Any], beta: Dict[str, Any]) -> str:
         ):
             return "clean-room-rebuild-only"
     for side in (alpha, beta):
-        if not _is_permissive(side.get("license")):
+        if not _is_permissive(side.get("license"), whitelist):
             return "clean-room-rebuild-only"
     return "depend-or-vendor"
 
@@ -219,13 +247,17 @@ def cross_check_repos(
     alpha_dossier: Dict[str, Any],
     beta_dossier: Dict[str, Any],
     validator: Optional[RepoValidator] = None,
+    license_whitelist: Any = None,
 ) -> List[Dict[str, Any]]:
     """Blocking findings for license disagreement and ground-truth failures.
 
     A dialectic that produces a `depend-or-vendor` verdict on an unstated license
     must not reach a human as `divergence: 0`. Each finding carries the
-    conservative resolution.
+    conservative resolution. `license_whitelist` (config `license_whitelist`)
+    replaces the built-in permissive set when non-empty; absent/default input
+    reproduces `PERMISSIVE_LICENSES` exactly.
     """
+    whitelist = normalize_license_whitelist(license_whitelist)
     alpha = {
         key: c
         for c in (alpha_dossier.get("candidate_repositories") or [])
@@ -260,7 +292,7 @@ def cross_check_repos(
                             "license": b.get("license"),
                             "risk": b.get("license_risk"),
                         },
-                        "resolution": _resolved_policy(a, b),
+                        "resolution": _resolved_policy(a, b, whitelist),
                     }
                 )
             elif str(a.get("harvest_policy") or "") != str(
@@ -273,7 +305,7 @@ def cross_check_repos(
                         "severity": "BLOCKING",
                         "alpha": {"policy": a.get("harvest_policy")},
                         "beta": {"policy": b.get("harvest_policy")},
-                        "resolution": _resolved_policy(a, b),
+                        "resolution": _resolved_policy(a, b, whitelist),
                     }
                 )
 
@@ -309,8 +341,8 @@ def cross_check_repos(
                 if (
                     truth.get("exists")
                     and truth_license
-                    and not _is_permissive(truth.get("license"))
-                    and _is_permissive(side.get("license"))
+                    and not _is_permissive(truth.get("license"), whitelist)
+                    and _is_permissive(side.get("license"), whitelist)
                 ):
                     findings.append(
                         {

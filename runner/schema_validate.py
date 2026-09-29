@@ -3,12 +3,21 @@
 
 The package must not pull in `jsonschema` (no auto-installing deps), so this
 supports the subset `runner/schemas.py` actually uses: `type` (incl. unions),
-`required`, `properties`, `items`, `enum`. Unknown keys are allowed on purpose —
-contracts evolve and a new optional field must not fail a run.
+`required`, `properties`, `items`, `enum`, `additionalProperties`,
+`minimum`, `maximum`, `minLength`, `pattern`. Unknown keys are allowed on
+purpose — contracts evolve and a new optional field must not fail a run.
+
+Range checks reject non-finite floats explicitly: Python's `json` module accepts
+bare `NaN`/`Infinity` literals, and a NaN would otherwise slip past ordinary
+comparisons.
 
 Validation is advisory: `_load_agent_dossier` warns and keeps going (#6 item 2.1).
+`skills/swarm_config/configure.py` uses it as the save-time gate, where it is
+enforced.
 """
 
+import math
+import re
 from typing import Any, Dict, List
 
 _TYPE_MAP = {
@@ -74,6 +83,35 @@ def validate(data: Any, schema: Dict[str, Any], path: str = "") -> List[str]:
         enum = schema.get("enum")
         if enum is not None and data not in enum:
             problems.append(f"{path or '<root>'}: value {data!r} not in enum {enum}")
+
+    if isinstance(data, (int, float)) and not isinstance(data, bool):
+        if isinstance(data, float) and not math.isfinite(data):
+            # Python's json accepts bare NaN/Infinity literals; a non-finite
+            # number can never satisfy a bounded contract.
+            problems.append(f"{path or '<root>'}: value {data!r} is not finite")
+        else:
+            minimum = schema.get("minimum")
+            if minimum is not None and data < minimum:
+                problems.append(
+                    f"{path or '<root>'}: value {data!r} is below minimum {minimum!r}"
+                )
+            maximum = schema.get("maximum")
+            if maximum is not None and data > maximum:
+                problems.append(
+                    f"{path or '<root>'}: value {data!r} is above maximum {maximum!r}"
+                )
+
+    if isinstance(data, str):
+        min_length = schema.get("minLength")
+        if min_length is not None and len(data) < min_length:
+            problems.append(
+                f"{path or '<root>'}: string shorter than minLength {min_length!r}"
+            )
+        pattern = schema.get("pattern")
+        if isinstance(pattern, str) and re.search(pattern, data) is None:
+            problems.append(
+                f"{path or '<root>'}: value {data!r} does not match pattern {pattern!r}"
+            )
 
     return problems
 

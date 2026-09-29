@@ -125,6 +125,30 @@ class TestGate(unittest.TestCase):
             self.assertEqual(res.returncode, 0)
             self.assertEqual(res.stdout.strip(), "")
 
+    def test_ttl_env_override_marks_entries_stale(self):
+        """`cache_ttl_days` -> IUMBTEMS_FETCH_TTL_DAYS drives gate freshness."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            three_days_ago = (
+                datetime.now(timezone.utc) - timedelta(days=3)
+            ).isoformat()
+            seed_source(
+                root / ".research" / "sources",
+                "https://example.com/recent",
+                "recent body",
+                cached_at=three_days_ago,
+            )
+            url = "https://example.com/recent"
+            # Default 7-day TTL: the entry is fresh and served from cache.
+            fresh = run_webcache("gate", hook_input(url, root))
+            self.assertTrue(fresh.stdout.strip())
+            # Configured TTL of 0 days: the same entry is stale -> live fetch.
+            stale = run_webcache(
+                "gate", hook_input(url, root), env={"IUMBTEMS_FETCH_TTL_DAYS": "0"}
+            )
+            self.assertEqual(stale.returncode, 0)
+            self.assertEqual(stale.stdout.strip(), "")
+
     def test_malformed_input_fails_open(self):
         for raw in ["", "not json{{{", '{"tool_input": {}}']:
             res = run_webcache("gate", raw=raw)
@@ -158,6 +182,31 @@ class TestArchive(unittest.TestCase):
             # Idempotent: archiving again writes the same pair.
             res2 = run_webcache("archive", payload)
             self.assertEqual(res2.returncode, 0)
+            self.assertEqual(len(list(sources.glob("*.md"))), 1)
+
+    def test_archive_honors_raw_markdown_disabled(self):
+        """`cache_raw_markdown: false` -> IUMBTEMS_CACHE_RAW_MARKDOWN=0 skips archiving."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            payload = {
+                "tool_input": {"url": "https://example.com/uncached"},
+                "tool_response": "Body that must not be persisted.",
+                "cwd": str(root),
+            }
+            res = run_webcache(
+                "archive", payload, env={"IUMBTEMS_CACHE_RAW_MARKDOWN": "0"}
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+            sources = root / ".research" / "sources"
+            self.assertEqual(list(sources.glob("*.md")), [])
+            self.assertEqual(list(sources.glob("*.json")), [])
+            self.assertIn("raw markdown caching disabled", res.stderr)
+
+            # Explicit "1" (and the unset default) archives exactly as before.
+            ok = run_webcache(
+                "archive", payload, env={"IUMBTEMS_CACHE_RAW_MARKDOWN": "1"}
+            )
+            self.assertEqual(ok.returncode, 0, ok.stderr)
             self.assertEqual(len(list(sources.glob("*.md"))), 1)
 
     def test_archive_round_trip_gate_hit(self):

@@ -21,6 +21,9 @@ cause silent misses.
 TTL: sidecar `cached_at`; default 7 days (IUMBTEMS_FETCH_TTL_DAYS), 30 days
 for stable documentation domains. Inline cap for served hits: 12000 chars
 (IUMBTEMS_FETCH_MAX_INLINE), remainder via file pointer.
+
+Raw bodies: archived unless `IUMBTEMS_CACHE_RAW_MARKDOWN=0` (config
+`cache_raw_markdown: false`, exported by the runner to spawned children).
 """
 
 import hashlib
@@ -221,11 +224,32 @@ def extract_url(stdin_data):
     return ""
 
 
+def raw_markdown_enabled():
+    """Whether raw markdown bodies may be archived.
+
+    Honored env override (config `cache_raw_markdown` -> spawned children):
+    `IUMBTEMS_CACHE_RAW_MARKDOWN=0|false|no|off` disables archiving entirely.
+    Unset (the default) preserves the historical archive-everything behavior.
+    """
+    return os.environ.get("IUMBTEMS_CACHE_RAW_MARKDOWN", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
 def cmd_archive(stdin_data):
     """PostToolUse: store the live response as md + json sidecar."""
     url = extract_url(stdin_data)
     text = extract_response_text(stdin_data)
     if not url or not text:
+        return None
+    if not raw_markdown_enabled():
+        log(
+            f"raw markdown caching disabled (IUMBTEMS_CACHE_RAW_MARKDOWN=0); "
+            f"not archiving {domain_of(url)}"
+        )
         return None
     try:
         sources_dir = research_dir(stdin_data) / "sources"

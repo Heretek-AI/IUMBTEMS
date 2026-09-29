@@ -20,6 +20,7 @@ Zero external dependencies by design: protocol loop is runner/mcp_protocol.py.
 """
 
 import argparse
+import copy
 import io
 import json
 import os
@@ -66,6 +67,57 @@ def _capture_stdout(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> str:
 
 DEFAULT_RESEARCH_DIR = ".research"
 
+# `iumbtems_config` arguments that are not config keys.
+CONFIG_TOOL_CONTROL_ARGS = ("base_dir", "dir", "show", "expected_hash", "expectedHash")
+
+# Legacy aliases accepted for the corresponding canonical key (kept for the
+# slash-command/CLI vocabulary; the advertised schema uses canonical names).
+CONFIG_KEY_ALIASES = {
+    "engine": "search_engine",
+    "depth": "max_iterations",
+    "divergence": "divergence_threshold",
+}
+
+
+def config_tool_input_schema() -> Dict[str, Any]:
+    """Advertised `iumbtems_config` input schema, derived from the canonical CONFIG.
+
+    Generated from `runner.schemas.CONFIG` so the MCP surface cannot drift from
+    the persisted contract (a parity fixture asserts this).
+    """
+    from runner.schemas import CONFIG
+
+    props: Dict[str, Any] = {
+        "base_dir": {
+            "type": "string",
+            "description": "Path to .research workspace (default .research)",
+        },
+        "show": {
+            "type": "boolean",
+            "description": (
+                "Inspect only; equivalent to calling with no update keys "
+                "(reads are always safe)."
+            ),
+        },
+        "expected_hash": {
+            "type": "string",
+            "description": (
+                "Optimistic-concurrency guard: SHA-256 (or a unique prefix of at "
+                "least 8 hex chars) of the config file you read. A mismatch "
+                "returns a structured stale error with a fresh snapshot and "
+                "writes nothing. Alias: `expectedHash`; if both spellings are "
+                "present they must be equal or the call is rejected."
+            ),
+        },
+        "expectedHash": {
+            "type": "string",
+            "description": "Alias of `expected_hash` (camelCase); must not conflict with it.",
+        },
+    }
+    for key, subschema in CONFIG["properties"].items():
+        props[key] = copy.deepcopy(subschema)
+    return {"type": "object", "properties": props}
+
 
 def _resolve_base_dir(args: Dict[str, Any]) -> Path:
     raw = args.get("base_dir") or args.get("dir")
@@ -80,52 +132,151 @@ def _resolve_base_dir(args: Dict[str, Any]) -> Path:
     return Path(os.path.realpath(DEFAULT_RESEARCH_DIR))
 
 
+def _canonical_config_keys() -> List[str]:
+    from runner.schemas import CONFIG
+
+    return list(CONFIG["properties"].keys())
+
+
+def _allows_null(schema: Dict[str, Any]) -> bool:
+    types = schema.get("type")
+    if isinstance(types, list):
+        return "null" in types
+    return types == "null"
+
+
 def _handle_config(args: Dict[str, Any]) -> str:
-    """Inspect or modify swarm parameters in .research/config.json."""
+    """Inspect or modify swarm parameters in .research/config.json.
+
+    Every canonical key is accepted; invalid values, unknown keys, and `null`
+    for non-nullable keys are rejected with a structured error before anything
+    is written. Writes go through the single canonical writer (`save_config`:
+    locked, validated, atomic, unknown-key-preserving) with an optional
+    `expected_hash` guard (both `expected_hash` and `expectedHash` spellings).
+    """
     from skills.swarm_config.configure import (
-        display_config,
+        ConfigError,
+        config_hash,
         heal_config,
         load_config,
+        merge_config,
         save_config,
+        validate_config,
     )
+    from runner.schemas import CONFIG
 
     base_dir = str(_resolve_base_dir(args))
     cfg = load_config(base_dir)
     # Persist a legacy ["claude", "-p"] agent pin migration so an OpenCode host
-    # stops silently spawning Claude on every run.
+    # stops silently spawning Claude on every run. `heal_config` refuses to
+    # persist a schema-rejected file (R1).
     healed = heal_config(base_dir)
 
-    updates = {}
-    for key in (
-        "search_engine",
-        "engine",
-        "max_iterations",
-        "depth",
-        "mode",
-        "divergence_threshold",
-        "backend",
-        "agents",
-    ):
-        if key in args and args[key] is not None:
-            canon = {
-                "engine": "search_engine",
-                "depth": "max_iterations",
-                "divergence": "divergence_threshold",
-            }.get(key, key)
-            updates[canon] = args[key]
-
-    if updates:
-        cfg.update(updates)
-        save_config(cfg, base_dir)
+    # R4: both spellings must agree; never silently prefer one.
+    snake = args.get("expected_hash")
+    camel = args.get("expectedHash")
+    if snake is not None and camel is not None and str(snake) != str(camel):
         return _tool_text(
             {
-                "status": "updated",
-                "config": cfg,
-                "written_to": str(Path(base_dir) / "config.json"),
+                "status": "error",
+                "code": "CONFLICTING_EXPECTED_HASH",
+                "written": False,
+                "errors": [
+                    "expected_hash and expectedHash were both provided with "
+                    "different values; provide one spelling (or two equal values)."
+                ],
+                "expected_hash": str(snake),
+                "expectedHash": str(camel),
+            }
+        )
+    expected = snake if snake is not None else camel
+
+    accepted = _canonical_config_keys()
+    nullable = [key for key in accepted if _allows_null(CONFIG["properties"][key])]
+    unknown: List[str] = []
+    null_for_non_nullable: List[str] = []
+    updates: Dict[str, Any] = {}
+    for key, value in args.items():
+        if key in CONFIG_TOOL_CONTROL_ARGS:
+            continue
+        canon = CONFIG_KEY_ALIASES.get(key, key)
+        if canon not in accepted:
+            unknown.append(str(key))
+            continue
+        if value is None:
+            if _allows_null(CONFIG["properties"][canon]):
+                # Nullable key: explicit clear / follow-the-default-policy.
+                updates[canon] = None
+            else:
+                # R8: never mask a null for a non-nullable key as a no-op.
+                null_for_non_nullable.append(str(canon))
+            continue
+        updates[canon] = value
+
+    if unknown:
+        return _tool_text(
+            {
+                "status": "error",
+                "code": "UNKNOWN_CONFIG_KEY",
+                "written": False,
+                "errors": [f"unknown config key(s): {', '.join(sorted(unknown))}"],
+                "accepted_keys": accepted,
+            }
+        )
+    if null_for_non_nullable:
+        return _tool_text(
+            {
+                "status": "error",
+                "code": "NULL_FOR_NON_NULLABLE_KEY",
+                "written": False,
+                "errors": [
+                    f"null is not accepted for non-nullable key(s): "
+                    f"{', '.join(sorted(null_for_non_nullable))}; omit the key to "
+                    "leave it unchanged, or pass a valid value"
+                ],
+                "nullable_keys": nullable,
+                "accepted_keys": accepted,
             }
         )
 
-    return _tool_text({"status": "current", "config": cfg, "migrated": healed})
+    if not updates:
+        return _tool_text({"status": "current", "config": cfg, "migrated": healed})
+
+    candidate = merge_config(cfg, updates)
+    problems = validate_config(candidate)
+    if problems:
+        return _tool_text(
+            {
+                "status": "error",
+                "code": "CONFIG_VALIDATION_FAILED",
+                "written": False,
+                "errors": problems,
+                "config": cfg,
+            }
+        )
+
+    try:
+        save_config(
+            candidate,
+            base_dir,
+            expected_hash=str(expected) if expected is not None else None,
+        )
+    except ConfigError as exc:
+        payload: Dict[str, Any] = {"status": "error", "written": False}
+        payload.update(exc.to_dict())
+        if exc.code == "CONFIG_STALE":
+            payload["status"] = "stale"
+            payload.update(exc.details)
+        return _tool_text(payload)
+
+    return _tool_text(
+        {
+            "status": "updated",
+            "config": load_config(base_dir),
+            "written_to": str(Path(base_dir) / "config.json"),
+            "hash": config_hash(base_dir),
+        }
+    )
 
 
 def _run_swarm_mode(mode: Optional[str], args: Dict[str, Any]) -> str:
@@ -307,9 +458,25 @@ def _handle_factory(args: Dict[str, Any]) -> str:
     return _tool_text(payload)
 
 
+def _verify_min_fuzzy_confidence(cfg: Any) -> float:
+    """Configured `verify.min_fuzzy_confidence`, defaulting to 0.88.
+
+    The value is clamped into [0, 1]; a malformed hand-edited file falls back to
+    the strict default instead of crashing the tool.
+    """
+    verify = cfg.get("verify") if isinstance(cfg, dict) else None
+    raw = verify.get("min_fuzzy_confidence") if isinstance(verify, dict) else None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0.88
+    return max(0.0, min(1.0, value))
+
+
 def _handle_verify_quote(args: Dict[str, Any]) -> str:
     """Verify a verbatim quote against the content-addressed source cache."""
     from skills.research_cache.hasher import SourceHasher
+    from skills.swarm_config.configure import load_config
 
     content_hash = (
         args.get("hash") or args.get("content_hash") or args.get("source_hash")
@@ -318,14 +485,19 @@ def _handle_verify_quote(args: Dict[str, Any]) -> str:
     if not content_hash or quote is None:
         raise ValueError("hash and quote are required")
 
-    hasher = SourceHasher(_resolve_base_dir(args))
-    is_verified, confidence, message = hasher.verify_quote(content_hash, quote)
+    base_dir = _resolve_base_dir(args)
+    threshold = _verify_min_fuzzy_confidence(load_config(str(base_dir)))
+    hasher = SourceHasher(base_dir)
+    is_verified, confidence, message = hasher.verify_quote(
+        content_hash, quote, min_fuzzy_confidence=threshold
+    )
     return _tool_text(
         {
             "verified": bool(is_verified),
             "confidence": float(confidence),
             "message": message,
             "content_hash": content_hash,
+            "min_fuzzy_confidence": threshold,
         }
     )
 
@@ -577,36 +749,16 @@ def build_tools() -> List[ToolSpec]:
     return [
         ToolSpec(
             name="iumbtems_config",
-            description="Inspect or dynamically adjust Epistemic Swarm parameters (search engine, depth, mode) in .research/config.json.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "base_dir": {
-                        "type": "string",
-                        "description": "Path to .research workspace (default .research)",
-                    },
-                    "search_engine": {
-                        "type": "string",
-                        "enum": ["duckduckgo", "brave", "firecrawl", "searxng"],
-                    },
-                    "max_iterations": {
-                        "type": "integer",
-                        "description": "Dialectic depth 1-4",
-                    },
-                    "mode": {
-                        "type": "string",
-                        "enum": [
-                            "research",
-                            "audit",
-                            "scout",
-                            "hybrid",
-                            "brainstorm",
-                            "darkharvest",
-                        ],
-                    },
-                    "divergence_threshold": {"type": "number"},
-                },
-            },
+            description=(
+                "Inspect or modify the active Epistemic Swarm configuration "
+                "(.research/config.json). Accepts every canonical key; writes are "
+                "schema-validated, locked, atomic, and preserve unknown keys. "
+                "null is accepted only for nullable keys (it clears them / "
+                "follows the default policy); null for a non-nullable key is "
+                "rejected. Pass expected_hash (alias expectedHash; min 8 hex "
+                "chars) to guard against a stale write."
+            ),
+            input_schema=config_tool_input_schema(),
             handler=_handle_config,
         ),
         ToolSpec(

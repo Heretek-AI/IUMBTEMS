@@ -869,13 +869,48 @@ def _scratchpad_write_test(base_dir: Path) -> Dict[str, Any]:
         return {"ok": False, "path": str(base_dir), "error": str(exc)}
 
 
+def _resolve_probe_timeout(
+    config: Optional[Dict[str, Any]], explicit: Optional[float]
+) -> float:
+    """Probe timeout: explicit arg > config `search_timeout_s` > 5.0 default.
+
+    The config key is a single knob shared with the search CLI
+    (`IUMBTEMS_SEARCH_TIMEOUT_S`); absent/null keeps the historical 5s probe.
+    """
+    if explicit is not None:
+        return explicit
+    raw = (config or {}).get("search_timeout_s")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return 5.0
+    value = float(raw)
+    return value if value > 0 else 5.0
+
+
+def _env_with_config_searxng(
+    config: Optional[Dict[str, Any]], env: Optional[Dict[str, str]]
+) -> Dict[str, str]:
+    """Seed `SEARXNG_URL` from config `searxng_url` when the env does not set it.
+
+    Precedence: the environment wins (file < env), so an exported SEARXNG_URL is
+    never overridden; a configured URL makes the in-process preflight/doctor
+    path see the same self-hosted engine the spawned children get.
+    """
+    merged = dict(os.environ) if env is None else dict(env)
+    if str(merged.get(SEARXNG_URL_ENV) or "").strip():
+        return merged
+    value = (config or {}).get("searxng_url")
+    if isinstance(value, str) and value.strip():
+        merged[SEARXNG_URL_ENV] = value.strip()
+    return merged
+
+
 def preflight(
     base_dir: Path,
     mode: str = "research",
     config: Optional[Dict[str, Any]] = None,
     mock_mode: bool = False,
     probe: bool = True,
-    timeout: float = 5.0,
+    timeout: Optional[float] = None,
     env: Optional[Dict[str, str]] = None,
     host_provider: Optional[str] = None,
     since: Optional[int] = None,
@@ -883,6 +918,8 @@ def preflight(
 ) -> Dict[str, Any]:
     """Assemble the preflight report. Never raises."""
     config = config or {}
+    timeout = _resolve_probe_timeout(config, timeout)
+    env = _env_with_config_searxng(config, env)
     engine = canonical_engine(config.get("search_engine")) or "duckduckgo"
     report: Dict[str, Any] = {
         "plugin_version": _plugin_version(),
