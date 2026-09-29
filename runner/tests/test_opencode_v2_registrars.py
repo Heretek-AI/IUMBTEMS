@@ -256,5 +256,261 @@ class TestV2Registration(unittest.TestCase):
         self.assertEqual(last_json_object(res.stdout)["cleanupFn"], "function")
 
 
+class TestConfigValidatorParity(unittest.TestCase):
+    """B4: the shared fixture corpus yields 100% identical verdicts in JS/Python."""
+
+    FIXTURE = (
+        PROJECT_ROOT / "runner" / "tests" / "fixtures" / "config_validation_cases.json"
+    )
+
+    def _js_verdicts(self, cases):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8"
+        ) as f:
+            json.dump(cases, f)
+            tmp = f.name
+        try:
+            res = run_node(
+                f"""
+                import fs from "node:fs";
+                import {{ validateConfig }} from "./plugins/opencode/config-io.js";
+                const cases = JSON.parse(fs.readFileSync({tmp!r}, "utf-8"));
+                const out = cases.map((c) => {{
+                  const problems = validateConfig(c.config);
+                  return {{name: c.name, valid: problems.length === 0, problems}};
+                }});
+                console.log(JSON.stringify({{results: out}}));
+                """
+            )
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+        self.assertEqual(res.returncode, 0, f"js validator run failed: {res.stderr}")
+        return {r["name"]: r for r in last_json_object(res.stdout)["results"]}
+
+    def test_js_python_verdict_parity_100_percent(self):
+        from runner.schema_validate import validate
+        from runner.schemas import CONFIG
+
+        cases = json.loads(self.FIXTURE.read_text(encoding="utf-8"))["cases"]
+        self.assertGreater(len(cases), 0, "parity corpus must not be empty")
+        # The R7 additions (minLength/pattern) must be in the corpus, or B4
+        # parity would silently skip the newest validator subset.
+        names = {c["name"] for c in cases}
+        self.assertIn("vert_domain_pack_empty", names)
+        self.assertIn("vert_searxng_url_missing_scheme", names)
+
+        by_name = self._js_verdicts(cases)
+        matches = 0
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                py_problems = validate(case["config"], CONFIG)
+                py_valid = not py_problems
+                js = by_name[case["name"]]
+                self.assertEqual(
+                    js["valid"],
+                    py_valid,
+                    f"{case['name']}: js={js} py={py_problems}",
+                )
+                self.assertEqual(
+                    js["valid"],
+                    case["valid"],
+                    f"{case['name']}: both validators disagree with the fixture",
+                )
+                if not case["valid"] and case.get("expect"):
+                    self.assertTrue(
+                        any(case["expect"] in p for p in js["problems"]),
+                        f"{case['name']}: {case['expect']!r} not in {js['problems']}",
+                    )
+                    self.assertTrue(
+                        any(case["expect"] in p for p in py_problems),
+                        f"{case['name']}: {case['expect']!r} not in {py_problems}",
+                    )
+                matches += js["valid"] == py_valid
+        self.assertEqual(matches, len(cases), "parity must be 100%")
+
+    def test_js_fallback_defaults_match_canonical(self):
+        """The schema-unreadable fallback must equal CONFIG_DEFAULTS."""
+        from runner.schemas import CONFIG_DEFAULTS
+
+        res = run_node(
+            """
+            import { FALLBACK_DEFAULTS } from "./plugins/opencode/config-io.js";
+            console.log(JSON.stringify({defaults: FALLBACK_DEFAULTS}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(last_json_object(res.stdout)["defaults"], CONFIG_DEFAULTS)
+
+
+class TestConfigToolCatalogSurface(unittest.TestCase):
+    """B4: the plugin TOOL_CATALOG advertises the full canonical surface."""
+
+    CONTROL_ARGS = {"base_dir", "show", "expected_hash", "expectedHash"}
+    KEYWORDS = ("type", "enum", "minimum", "maximum", "minLength", "pattern")
+
+    def _advertised(self):
+        res = run_node(
+            """
+            import { TOOL_CATALOG } from "./plugins/opencode/index.js";
+            const entry = TOOL_CATALOG.find((t) => t.name === "iumbtems_config");
+            console.log(JSON.stringify({input: entry.input}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return last_json_object(res.stdout)["input"]
+
+    def _compare(self, canonical, advertised, prefix, problems):
+        for key, sub in (canonical.get("properties") or {}).items():
+            adv = (advertised.get("properties") or {}).get(key)
+            if adv is None:
+                problems.append(f"missing advertised key: {prefix}{key}")
+                continue
+            for keyword in self.KEYWORDS:
+                if keyword in sub and sub.get(keyword) != adv.get(keyword):
+                    problems.append(
+                        f"{prefix}{key}: {keyword} {sub.get(keyword)!r} != "
+                        f"{adv.get(keyword)!r}"
+                    )
+            if isinstance(sub.get("properties"), dict):
+                self._compare(sub, adv, f"{prefix}{key}.", problems)
+
+    def test_plugin_catalog_covers_canonical_surface(self):
+        artifact = json.loads(
+            (PROJECT_ROOT / "schemas" / "config.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        advertised = self._advertised()
+        problems = []
+        self._compare(artifact, advertised, "", problems)
+        self.assertEqual(problems, [])
+        advertised_keys = set(advertised["properties"]) - self.CONTROL_ARGS
+        self.assertEqual(advertised_keys, set(artifact["properties"]))
+        # Phase 03 owns mcp_servers: it must stay out of the schema AND the ad.
+        self.assertNotIn("mcp_servers", advertised["properties"])
+        self.assertNotIn("mcp_servers", artifact["properties"])
+        # R4: both expected-hash spellings are advertised and documented.
+        self.assertIn("expected_hash", advertised["properties"])
+        self.assertIn("expectedHash", advertised["properties"])
+        self.assertIn(
+            "expected_hash",
+            advertised["properties"]["expectedHash"]["description"],
+        )
+
+
+class TestWizardSlashRegistration(unittest.TestCase):
+    """B1: `swarm-config` slash + palette entries on the mock host."""
+
+    SLASH_SETUP = """
+            import { registerWizardSlashCommand, setupTui } from "./plugins/opencode/tui.js";
+            import { OPENCODE_COMMANDS } from "./plugins/opencode/index.js";
+    """
+
+    def test_slash_registers_and_opens_wizard(self):
+        res = run_node(
+            self.SLASH_SETUP
+            + """
+            const added = [];
+            const host = {
+              options: {}, directory: "/tmp/oc-wizard-slash",
+              command: {
+                list: async () => ({data: []}),
+                transform: async (fn) => { fn({add: (d) => added.push(d)}); return {dispose: () => {}}; },
+                reload: async () => {}
+              },
+              ui: { toast: { show: () => {} } },
+              keymap: { layer: () => {} },
+            };
+            await registerWizardSlashCommand(host);
+            // A pre-existing swarm-config wins (same dedupe rule as index.js).
+            const added2 = [];
+            const host2 = {
+              options: {},
+              command: {
+                list: async () => ({data: [{name: "swarm-config"}]}),
+                transform: async (fn) => { fn({add: (d) => added2.push(d)}); return {dispose: () => {}}; },
+                reload: async () => {}
+              },
+              ui: {},
+            };
+            await registerWizardSlashCommand(host2);
+            // Bare TUI api without the command domain: nothing to register.
+            const bare = await registerWizardSlashCommand({ui: {}});
+            console.log(JSON.stringify({
+              added: added.map((a) => a.name),
+              exec: typeof (added[0] && added[0].execute),
+              skipped: added2.length,
+              bare,
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"slash test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertEqual(data["added"], ["swarm-config"])
+        self.assertEqual(data["exec"], "function")
+        self.assertEqual(data["skipped"], 0)
+        self.assertIsNone(data["bare"])
+
+    def test_palette_entries_and_panel_feature_detect(self):
+        res = run_node(
+            self.SLASH_SETUP
+            + """
+            import { openSettingsPanel } from "./plugins/opencode/tui.js";
+            let factory = null;
+            const host = {
+              theme: {}, directory: "/tmp/oc-wizard-palette",
+              ui: {
+                slot: () => () => {},
+                toast: { show: () => {} },
+              },
+              keymap: { layer: (fn) => { factory = fn; } },
+            };
+            setupTui(host);
+            const renders = [];
+            // Re-render the app slot to capture the keymap spec.
+            const slots = [];
+            const host2 = {
+              theme: {}, directory: "/tmp/oc-wizard-palette",
+              ui: { slot: (arg) => { slots.push(arg); return () => {}; }, toast: { show: () => {} } },
+              keymap: { layer: (fn) => { factory = fn; } },
+            };
+            setupTui(host2);
+            slots.find((r) => r && r.append === "app").render();
+            const spec = factory();
+            const ids = spec.commands.map((c) => c.id);
+            // Panel feature-detect both ways (no workspace needed).
+            const toasts = [];
+            const noPanel = await openSettingsPanel(
+              { directory: "/tmp/oc-wizard-empty-nonexistent", ui: { toast: { show: (t) => toasts.push(t) } } },
+              "/tmp/oc-wizard-empty-nonexistent", { env: {} }
+            );
+            const panels = [];
+            const withPanel = await openSettingsPanel(
+              { directory: "/tmp/oc-wizard-empty-nonexistent", ui: { panel: async (p) => { panels.push(p); } } },
+              "/tmp/oc-wizard-empty-nonexistent", { env: {} }
+            );
+            console.log(JSON.stringify({
+              ids,
+              palette: spec.commands.filter((c) => c.palette).length,
+              noPanel: { ok: noPanel.ok, degraded: noPanel.degraded, toasts: toasts.length },
+              withPanel: { ok: withPanel.ok, degraded: withPanel.degraded, panels: panels.length },
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"palette test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertIn("iumbtems.swarm-config", data["ids"])
+        self.assertIn("iumbtems.swarm-settings", data["ids"])
+        self.assertTrue(data["palette"] >= 2)
+        self.assertTrue(data["noPanel"]["ok"])
+        self.assertTrue(data["noPanel"]["degraded"])
+        self.assertGreater(data["noPanel"]["toasts"], 0)
+        self.assertTrue(data["withPanel"]["ok"])
+        self.assertFalse(data["withPanel"]["degraded"])
+        self.assertEqual(data["withPanel"]["panels"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

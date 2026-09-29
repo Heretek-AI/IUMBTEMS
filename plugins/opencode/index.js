@@ -128,14 +128,33 @@ export const IUMBTEMS_TOOL_NAMES = [
 // Deprecated misspelled alias (pre-A2b export). Remove in a semver-major.
 export const IUMBEMS_TOOL_NAMES = IUMBTEMS_TOOL_NAMES;
 
-const TOOL_CATALOG = [
+export const TOOL_CATALOG = [
   {
     name: 'iumbtems_config',
     description:
-      'Inspect or modify the active Epistemic Swarm configuration (search engine, depth/iterations, operating mode, divergence threshold) in .research/config.json.',
+      'Inspect or modify the active Epistemic Swarm configuration in .research/config.json. Accepts every canonical config key (search engine, depth/iterations, operating mode, divergence threshold, backends, cache policy, SearXNG URL, license whitelist, allocation, domain pack, verification policy, agent overrides); invalid values and unknown keys are rejected before anything is written. Pass expected_hash (alias expectedHash; min 8 hex chars) to guard against stale overwrites.',
     input: {
       type: 'object',
       properties: {
+        base_dir: {
+          type: 'string',
+          description: 'Path to .research workspace (default .research)',
+        },
+        show: {
+          type: 'boolean',
+          description:
+            'Inspect only; equivalent to calling with no update keys (reads are always safe).',
+          default: false,
+        },
+        expected_hash: {
+          type: 'string',
+          description:
+            'Optimistic-concurrency guard: SHA-256 (or a unique prefix of at least 8 hex chars) of the config file you read. A mismatch returns a structured stale error with a fresh snapshot and writes nothing. Alias: `expectedHash`; if both spellings are present they must be equal or the call is rejected.',
+        },
+        expectedHash: {
+          type: 'string',
+          description: 'Alias of `expected_hash` (camelCase); must not conflict with it.',
+        },
         search_engine: {
           type: 'string',
           enum: ['duckduckgo', 'brave', 'firecrawl', 'searxng'],
@@ -147,21 +166,121 @@ const TOOL_CATALOG = [
           maximum: 4,
           description: 'Maximum dialectic research iterations / depth (1-4)',
         },
+        divergence_threshold: {
+          type: 'number',
+          minimum: 0.0,
+          maximum: 1.0,
+          description: 'Auditor divergence threshold (default 0.75; advisory only)',
+        },
         mode: {
           type: 'string',
           enum: ['research', 'audit', 'scout', 'hybrid', 'brainstorm', 'darkharvest'],
           description: 'Operating mode: research (literature), audit (codebase), scout (OSS), hybrid, brainstorm (lateral ideation), darkharvest (competitor teardown)',
         },
-        divergence_threshold: {
-          type: 'number',
-          minimum: 0.0,
-          maximum: 1.0,
-          description: 'Auditor divergence threshold (default 0.75)',
+        backend: {
+          type: 'string',
+          enum: ['auto', 'claude', 'opencode'],
+          description: 'Agent runtime backend (default auto = host-native)',
         },
-        show: {
+        cache_raw_markdown: {
           type: 'boolean',
-          description: 'Just inspect current configuration without modifying',
-          default: false,
+          description: 'When false, spawned WebFetch-cache children archive nothing; true (default) keeps raw markdown copies in .research/sources.',
+        },
+        cache_ttl_days: {
+          type: ['integer', 'null'],
+          minimum: 0,
+          description: 'WebFetch cache TTL override exported as IUMBTEMS_FETCH_TTL_DAYS when set; null keeps webcache per-domain policy.',
+        },
+        search_timeout_s: {
+          type: ['number', 'null'],
+          minimum: 1,
+          description: 'HTTP timeout for search fetches, exported as IUMBTEMS_SEARCH_TIMEOUT_S when set; null keeps each surface built-in default.',
+        },
+        searxng_url: {
+          type: ['string', 'null'],
+          pattern: '^https?://',
+          description: 'Base URL of a self-hosted SearXNG, exported as SEARXNG_URL when set; must include an http:// or https:// scheme; null leaves the environment untouched.',
+        },
+        license_whitelist: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'SPDX ids darkharvest may depend on or vendor (default MIT, Apache-2.0, BSD-3-Clause, ISC).',
+        },
+        output_dir: {
+          type: 'string',
+          description: 'DEPRECATED: display-only. The workspace is selected by base_dir, never by this key.',
+        },
+        allocation: {
+          type: 'string',
+          enum: ['dag', 'auction'],
+          description: 'Scope allocation policy: dag = legacy dependency order, auction = Frontier Markets.',
+        },
+        domain_pack: {
+          type: ['string', 'null'],
+          minLength: 1,
+          description: 'Regulated Domain Pack id (config/domain_packs/) or null for the legacy constitution; the empty string is rejected.',
+        },
+        verify: {
+          type: 'object',
+          description: 'Quote-verification policy (applies to the next audit run and iumbtems_verify_quote).',
+          properties: {
+            min_fuzzy_confidence: {
+              type: 'number',
+              minimum: 0.0,
+              maximum: 1.0,
+              description: 'Minimum word-overlap confidence for the fuzzy quote match (default 0.88).',
+            },
+          },
+        },
+        agents: {
+          type: 'object',
+          description: 'Per-role backend overrides; unknown roles and role keys are preserved.',
+          properties: {
+            alpha: {
+              type: 'object',
+              properties: {
+                backend: {
+                  type: ['array', 'null'],
+                  items: { type: 'string' },
+                  description: "Argv list for this role (e.g. ['claude','-p'] or ['opencode','run']); null falls through to the host-native default.",
+                },
+                model: {
+                  type: ['string', 'null'],
+                  description: 'Model id passed to the backend as --model.',
+                },
+                opencode_agent: {
+                  type: ['string', 'null'],
+                  description: 'Optional named opencode agent profile for `opencode run --agent`; null inlines the prompt instead.',
+                },
+              },
+            },
+            beta: {
+              type: 'object',
+              properties: {
+                backend: {
+                  type: ['array', 'null'],
+                  items: { type: 'string' },
+                  description: "Argv list for this role (e.g. ['claude','-p'] or ['opencode','run']); null falls through to the host-native default.",
+                },
+                model: {
+                  type: ['string', 'null'],
+                  description: 'Model id passed to the backend as --model.',
+                },
+                opencode_agent: {
+                  type: ['string', 'null'],
+                  description: 'Optional named opencode agent profile for `opencode run --agent`; null inlines the prompt instead.',
+                },
+              },
+            },
+          },
+        },
+        opencode_auto: {
+          type: ['boolean', 'null'],
+          description: 'Whether spawned `opencode run` children get --auto; null uses the default (enabled; env IUMBTEMS_OPENCODE_AUTO wins).',
+        },
+        opencode_agent: {
+          type: ['string', 'null'],
+          description: 'Default named opencode agent profile for all roles; per-role agents.<role>.opencode_agent wins.',
         },
       },
     },

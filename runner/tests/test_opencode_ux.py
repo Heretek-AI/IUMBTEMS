@@ -435,13 +435,15 @@ class TestOpenCodeTui(unittest.TestCase):
             appSlot.render();
             const spec = factory();
             const palette = spec.commands.filter(c => c.palette);
-            for (const c of palette) c.run();
+            const ids = spec.commands.map(c => c.id);
+            for (const c of palette) await c.run();
             console.log(JSON.stringify({
               total: spec.commands.length,
               palette: palette.length,
               groups: [...new Set(palette.map(c => c.group))],
               toasts: toasts.length,
-              expected: OPENCODE_COMMANDS.length + 1
+              ids,
+              expected: OPENCODE_COMMANDS.length + 3
             }));
             """
         )
@@ -451,6 +453,13 @@ class TestOpenCodeTui(unittest.TestCase):
         self.assertEqual(data["palette"], data["expected"])
         self.assertEqual(data["groups"], ["IUMBTEMS"])
         self.assertEqual(data["toasts"], data["expected"])
+        # Phase 02: the dialog wizard and the read-only settings status panel
+        # each own a palette entry (the wizard runs degrade to toast guidance
+        # here because the mock has no ui.dialog/ui.panel — still one toast
+        # per palette run, which is why the toast count above holds).
+        self.assertIn("iumbtems.swarm-status", data["ids"])
+        self.assertIn("iumbtems.swarm-config", data["ids"])
+        self.assertIn("iumbtems.swarm-settings", data["ids"])
 
 
 class TestOpenCodeLifecycle(unittest.TestCase):
@@ -974,6 +983,751 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
             data["mentionsFailure"],
             f"a swallowed error must be logged, not dropped: {data['logged']}",
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 02 (opencode-settings-menu): dialog wizard + status panel + atomic
+# JS write path. The node mock host below scripts ui.dialog/prompt/confirm
+# queues (the S1 spike shape from the phase dossier) and drives the exact
+# trajectories the acceptance criteria demand.
+# ---------------------------------------------------------------------------
+
+WIZARD_HARNESS = """
+import { openSettingsWizard, openSettingsPanel } from "./plugins/opencode/tui.js";
+import fs from "node:fs";
+import path from "node:path";
+function scriptHost(root, queues, opts = {}) {
+  const toasts = [];
+  const pop = (arr) => ((!arr || arr.length === 0) ? null : arr.shift());
+  const host = {
+    directory: root,
+    ui: { toast: { show: (t) => toasts.push(t) } },
+  };
+  if (!opts.noDialog) {
+    host.ui.dialog = {
+      select: async (a) => pop(queues.select),
+      prompt: async (a) => pop(queues.prompt),
+      confirm: async (a) => pop(queues.confirm),
+    };
+  }
+  if (!opts.noPanel) {
+    host.ui.panel = async (p) => { host._panel = p; return {}; };
+  }
+  return { host, toasts };
+}
+function toastText(toasts) { return toasts.map((t) => JSON.stringify(t)).join("\\n"); }
+"""
+
+
+def _walk_files(root):
+    out = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            out.append(os.path.relpath(os.path.join(dirpath, name), root))
+    return sorted(out)
+
+
+class TestSettingsWizardTrajectories(unittest.TestCase):
+    def _expected_bytes(self, change):
+        """Byte-exact expectation built with the PYTHON writer's primitives."""
+        from skills.swarm_config.configure import load_config, merge_config
+
+        with tempfile.TemporaryDirectory() as empty:
+            draft = load_config(os.path.join(empty, "x"))
+        draft.update(change)
+        return json.dumps(merge_config({}, draft), indent=2)
+
+    def test_edit_confirm_writes_byte_exact_config(self):
+        # B2: edit search_engine -> brave, confirm -> byte-exact config.json.
+        expected = self._expected_bytes({"search_engine": "brave"})
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                WIZARD_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const h = scriptHost(root, {{select: ["search_engine", "brave", "__iumbtems_save__"], confirm: [true]}});
+                const r = await openSettingsWizard(h.host, root, {{env: {{}}}});
+                const bytes = fs.readFileSync(path.join(root, ".research", "config.json"), "utf-8");
+                console.log(JSON.stringify({{ok: r.ok, written: r.written, bytes}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"wizard test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["ok"])
+            self.assertTrue(data["written"])
+            self.assertEqual(data["bytes"], expected)
+
+    def test_inspect_only_writes_zero_files(self):
+        # B2: open + cancel on a fresh workspace -> .research never appears.
+        with tempfile.TemporaryDirectory() as tmp:
+            before = _walk_files(tmp)
+            res = run_node(
+                WIZARD_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const h = scriptHost(root, {{select: ["__iumbtems_cancel__"]}});
+                const r = await openSettingsWizard(h.host, root, {{env: {{}}}});
+                console.log(JSON.stringify({{ok: r.ok, cancelled: r.cancelled, written: r.written}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"inspect test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["ok"])
+            self.assertTrue(data["cancelled"])
+            self.assertFalse(data["written"])
+            self.assertEqual(_walk_files(tmp), before)
+
+    def test_edit_cancel_writes_zero_files(self):
+        # B2: edit a field, then cancel -> populated workspace byte-identical.
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            seed = json.dumps({"mode": "audit", "search_engine": "brave"})
+            research.joinpath("config.json").write_text(seed, encoding="utf-8")
+            res = run_node(
+                WIZARD_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const h = scriptHost(root, {{select: ["mode", "research", "__iumbtems_cancel__"]}});
+                const r = await openSettingsWizard(h.host, root, {{env: {{}}}});
+                console.log(JSON.stringify({{cancelled: r.cancelled, written: r.written}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"cancel test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["cancelled"])
+            self.assertFalse(data["written"])
+            self.assertEqual(
+                research.joinpath("config.json").read_text(encoding="utf-8"), seed
+            )
+            self.assertEqual(_walk_files(tmp), [".research/config.json"])
+
+    def test_invalid_value_reprompts_with_structured_message(self):
+        # B2: 99 is above maximum -> structured error toast, re-prompt, then 3.
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                WIZARD_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const h = scriptHost(root, {{select: ["max_iterations", "__iumbtems_save__"], prompt: ["99", "3"], confirm: [true]}});
+                const r = await openSettingsWizard(h.host, root, {{env: {{}}}});
+                const saved = JSON.parse(fs.readFileSync(path.join(root, ".research", "config.json"), "utf-8"));
+                console.log(JSON.stringify({{written: r.written, depth: saved.max_iterations, toasts: toastText(h.toasts)}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"reprompt test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["written"])
+            self.assertEqual(data["depth"], 3)
+            self.assertIn("above maximum", data["toasts"])
+
+    def test_malformed_config_warns_and_never_throws(self):
+        # B2: garbage config.json -> warning toast, defaults shown, cancel
+        # leaves the garbage bytes untouched.
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            research.joinpath("config.json").write_text(
+                "{oops not json", encoding="utf-8"
+            )
+            res = run_node(
+                WIZARD_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const h = scriptHost(root, {{select: ["__iumbtems_cancel__"]}});
+                const r = await openSettingsWizard(h.host, root, {{env: {{}}}});
+                console.log(JSON.stringify({{cancelled: r.cancelled, written: r.written, toasts: toastText(h.toasts)}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"malformed test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["cancelled"])
+            self.assertFalse(data["written"])
+            self.assertIn("Could not parse", data["toasts"])
+            self.assertEqual(
+                research.joinpath("config.json").read_text(encoding="utf-8"),
+                "{oops not json",
+            )
+
+    def test_legacy_pin_migrates_on_save(self):
+        # Phase-01 carry-over: a stale ["claude", "-p"] pin with backend auto
+        # is shown migrated and persists healed on confirm.
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            research.joinpath("config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "auto",
+                        "agents": {"alpha": {"backend": ["claude", "-p"]}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            res = run_node(
+                WIZARD_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const h = scriptHost(root, {{select: ["__iumbtems_save__"], confirm: [true]}});
+                const r = await openSettingsWizard(h.host, root, {{env: {{}}}});
+                const saved = JSON.parse(fs.readFileSync(path.join(root, ".research", "config.json"), "utf-8"));
+                console.log(JSON.stringify({{written: r.written, alphaBackend: saved.agents.alpha.backend, toasts: toastText(h.toasts)}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"legacy test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["written"])
+            self.assertIsNone(data["alphaBackend"])
+            self.assertIn("Migrated", data["toasts"])
+
+    def test_wizard_without_dialog_degrades_to_toast(self):
+        # Feature-detect: no ui.dialog -> guidance toast, never throws.
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                WIZARD_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const h = scriptHost(root, {{}}, {{noDialog: true}});
+                const r = await openSettingsWizard(h.host, root, {{env: {{}}}});
+                console.log(JSON.stringify({{ok: r.ok, reason: r.reason, written: r.written, toasts: h.toasts.length}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"no-dialog test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertFalse(data["ok"])
+            self.assertEqual(data["reason"], "no-dialog")
+            self.assertFalse(data["written"])
+            self.assertGreater(data["toasts"], 0)
+            self.assertEqual(_walk_files(tmp), [])
+
+
+class TestSettingsPanel(unittest.TestCase):
+    def test_panel_renders_rows_with_source_and_next_run_badges(self):
+        # B3: populated workspace -> live panel with file badges + next-run.
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            research.joinpath("config.json").write_text(
+                json.dumps({"mode": "audit", "search_engine": "brave"}),
+                encoding="utf-8",
+            )
+            res = run_node(
+                WIZARD_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const h = scriptHost(root, {{}});
+                const r = await openSettingsPanel(h.host, root, {{env: {{}}}});
+                console.log(JSON.stringify({{ok: r.ok, degraded: r.degraded, body: h.host._panel.body}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"panel test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["ok"])
+            self.assertFalse(data["degraded"])
+            body = data["body"]
+            self.assertIn("Operating Mode", body)
+            self.assertIn("audit", body)
+            self.assertIn("[file]", body)
+            self.assertIn("applies to next swarm run", body)
+
+    def test_panel_on_empty_workspace(self):
+        # B3: empty workspace -> default badges, never throws.
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                WIZARD_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const h = scriptHost(root, {{}});
+                const r = await openSettingsPanel(h.host, root, {{env: {{}}}});
+                console.log(JSON.stringify({{ok: r.ok, degraded: r.degraded, body: h.host._panel.body}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"empty panel failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["ok"])
+            self.assertFalse(data["degraded"])
+            self.assertIn("[default]", data["body"])
+            self.assertIn("applies to next swarm run", data["body"])
+
+    def test_panel_without_ui_panel_degrades_to_toast(self):
+        # Feature-detect: no ui.panel/session.panel -> toast guidance, no throw.
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                WIZARD_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const h = scriptHost(root, {{}}, {{noPanel: true}});
+                const r = await openSettingsPanel(h.host, root, {{env: {{}}}});
+                console.log(JSON.stringify({{ok: r.ok, degraded: r.degraded, toasts: h.toasts.length}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"degraded panel failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["ok"])
+            self.assertTrue(data["degraded"])
+            self.assertGreater(data["toasts"], 0)
+
+
+class TestConfigIoWrites(unittest.TestCase):
+    """B5: atomic JS write + lockfile discipline, driven failure-injection."""
+
+    CONFIG_IO = """
+            import { saveConfig, loadConfig } from "./plugins/opencode/config-io.js";
+            import fs from "node:fs";
+            import path from "node:path";
+    """
+
+    def test_failure_between_temp_and_rename_leaves_original(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            seed = json.dumps({"mode": "audit"})
+            research.joinpath("config.json").write_text(seed, encoding="utf-8")
+            res = run_node(
+                self.CONFIG_IO
+                + f"""
+                const dir = {str(research)!r};
+                const before = fs.readFileSync(path.join(dir, "config.json"), "utf-8");
+                let code = null;
+                try {{
+                  saveConfig({{...loadConfig(dir), mode: "scout"}}, dir, {{injectFailure: "after-temp-write"}});
+                }} catch (e) {{ code = "threw"; }}
+                const after = fs.readFileSync(path.join(dir, "config.json"), "utf-8");
+                const leftovers = fs.readdirSync(dir).filter((n) => n.endsWith(".tmp") || n === ".config.lock");
+                console.log(JSON.stringify({{threw: code === "threw", intact: before === after && after === {seed!r}, leftovers}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"atomic test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["threw"])
+            self.assertTrue(data["intact"])
+            self.assertEqual(data["leftovers"], [])
+
+    def test_live_lock_is_respected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            seed = json.dumps({"mode": "audit"})
+            research.joinpath("config.json").write_text(seed, encoding="utf-8")
+            res = run_node(
+                self.CONFIG_IO
+                + f"""
+                const dir = {str(research)!r};
+                // A live lockfile from another writer (fresh pid+timestamp).
+                fs.writeFileSync(path.join(dir, ".config.lock"), JSON.stringify({{pid: 99999, ts: Date.now(), token: "other"}}));
+                let code = null;
+                try {{
+                  saveConfig({{...loadConfig(dir), mode: "scout"}}, dir);
+                }} catch (e) {{ code = e.code; }}
+                const after = fs.readFileSync(path.join(dir, "config.json"), "utf-8");
+                console.log(JSON.stringify({{code, intact: after === {seed!r}}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"lock test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertEqual(data["code"], "CONFIG_LOCKED")
+            self.assertTrue(data["intact"])
+
+    def test_stale_lock_is_taken_over(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            research.joinpath("config.json").write_text(
+                json.dumps({"mode": "audit"}), encoding="utf-8"
+            )
+            res = run_node(
+                self.CONFIG_IO
+                + f"""
+                const dir = {str(research)!r};
+                fs.writeFileSync(path.join(dir, ".config.lock"), JSON.stringify({{pid: 1, ts: Date.now() - 60000, token: "old"}}));
+                const r = saveConfig({{...loadConfig(dir), mode: "scout"}}, dir);
+                const saved = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf-8"));
+                const lockGone = !fs.existsSync(path.join(dir, ".config.lock"));
+                console.log(JSON.stringify({{written: r.written, mode: saved.mode, lockGone}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"takeover failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["written"])
+            self.assertEqual(data["mode"], "scout")
+            self.assertTrue(data["lockGone"])
+
+    def test_expected_hash_guard_conflict_and_stale(self):
+        # Phase-01 semantics: both spellings must agree; mismatch writes nothing.
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            seed = json.dumps({"mode": "audit"})
+            research.joinpath("config.json").write_text(seed, encoding="utf-8")
+            res = run_node(
+                self.CONFIG_IO
+                + f"""
+                const dir = {str(research)!r};
+                const codes = {{}};
+                try {{ saveConfig({{...loadConfig(dir)}}, dir, {{expected_hash: "abcdef12", expectedHash: "12345678"}}); }}
+                catch (e) {{ codes.conflict = e.code; }}
+                try {{ saveConfig({{...loadConfig(dir)}}, dir, {{expectedHash: "deadbeef"}}); }}
+                catch (e) {{ codes.stale = e.code; codes.staleWritten = e.details.written; }}
+                try {{ saveConfig({{...loadConfig(dir)}}, dir, {{expected_hash: "xyz"}}); }}
+                catch (e) {{ codes.malformed = e.code; }}
+                const after = fs.readFileSync(path.join(dir, "config.json"), "utf-8");
+                console.log(JSON.stringify({{codes, intact: after === {seed!r}}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"guard test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertEqual(data["codes"]["conflict"], "CONFLICTING_EXPECTED_HASH")
+            self.assertEqual(data["codes"]["stale"], "CONFIG_STALE")
+            self.assertFalse(data["codes"]["staleWritten"])
+            self.assertEqual(data["codes"]["malformed"], "CONFIG_INVALID_EXPECTED_HASH")
+            self.assertTrue(data["intact"])
+
+
+class TestEnvShadowedCells(unittest.TestCase):
+    """R1 (M1): env-shadowed rows never present the file value as effective."""
+
+    PANEL_HARNESS = """
+            import { openSettingsPanel, openSettingsWizard } from "./plugins/opencode/tui.js";
+            import fs from "node:fs";
+            import path from "node:path";
+    """
+
+    # file value -> (env var, env secret). Secrets are distinctive so their
+    # absence from the render is a meaningful assertion.
+    ENV_CASES = [
+        ("searxng_url", "http://file:8080", "SEARXNG_URL", "http://secret-xyz:9999/x"),
+        ("cache_ttl_days", 17, "IUMBTEMS_FETCH_TTL_DAYS", "SECRET-TTL"),
+        ("search_timeout_s", 5.5, "IUMBTEMS_SEARCH_TIMEOUT_S", "SECRET-TIMEOUT"),
+        ("cache_raw_markdown", False, "IUMBTEMS_CACHE_RAW_MARKDOWN", "SECRET-RAW"),
+        ("opencode_auto", False, "IUMBTEMS_OPENCODE_AUTO", "SECRET-AUTO"),
+    ]
+
+    def test_panel_masks_every_env_honored_key(self):
+        import re
+
+        for key, file_value, env_var, secret in self.ENV_CASES:
+            with self.subTest(key=key):
+                with tempfile.TemporaryDirectory() as tmp:
+                    research = Path(tmp) / ".research"
+                    research.mkdir()
+                    research.joinpath("config.json").write_text(
+                        json.dumps({key: file_value}), encoding="utf-8"
+                    )
+                    res = run_node(
+                        self.PANEL_HARNESS
+                        + f"""
+                        const root = {tmp!r};
+                        const shown = [];
+                        const host = {{directory: root, ui: {{panel: async (p) => shown.push(p)}}}};
+                        const r = await openSettingsPanel(host, root, {{env: {{{env_var!r}: {secret!r}}}}});
+                        console.log(JSON.stringify({{ok: r.ok, degraded: r.degraded, body: shown[0].body}}));
+                        """
+                    )
+                    self.assertEqual(res.returncode, 0, f"panel failed: {res.stderr}")
+                    data = last_json_object(res.stdout)
+                    self.assertTrue(data["ok"])
+                    self.assertFalse(data["degraded"])
+                    body = data["body"]
+                    row = next(l for l in body.split("\n") if f"({key})" in l)
+                    # Masked cell + badge, never the bare file value as effective.
+                    self.assertIn("[env-override]", row)
+                    self.assertIn("~~", row)
+                    self.assertIn("set via environment", row)
+                    remainder = re.sub(r"~~.*?~~", "", body)
+                    self.assertNotIn(str(file_value), remainder)
+                    # The env value itself is never rendered (secrets stay in env).
+                    self.assertNotIn(secret, body)
+
+    def test_panel_masks_agents_row_on_role_env(self):
+        import re
+
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            research.joinpath("config.json").write_text(
+                json.dumps({"agents": {"alpha": {"backend": ["file-backend-bin"]}}}),
+                encoding="utf-8",
+            )
+            res = run_node(
+                self.PANEL_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const shown = [];
+                const host = {{directory: root, ui: {{panel: async (p) => shown.push(p)}}}};
+                const r = await openSettingsPanel(host, root, {{env: {{IUMBTEMS_BACKEND_ALPHA: "SECRET-BACKEND"}}}});
+                console.log(JSON.stringify({{body: shown[0].body}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"panel failed: {res.stderr}")
+            body = last_json_object(res.stdout)["body"]
+            row = next(l for l in body.split("\n") if "(agents)" in l)
+            self.assertIn("[env-override]", row)
+            self.assertIn("~~", row)
+            self.assertIn("set via environment", row)
+            remainder = re.sub(r"~~.*?~~", "", body)
+            self.assertNotIn("file-backend-bin", remainder)
+            self.assertNotIn("SECRET-BACKEND", body)
+
+    def test_wizard_menu_masks_env_shadowed_row(self):
+        # The wizard's field menu shows the same masked cell, never the bare
+        # file value under an effective-value framing.
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            research.joinpath("config.json").write_text(
+                json.dumps({"searxng_url": "http://file:8080"}), encoding="utf-8"
+            )
+            res = run_node(
+                self.PANEL_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const titles = [];
+                const host = {{
+                  directory: root,
+                  ui: {{
+                    toast: {{show: () => {{}}}},
+                    dialog: {{
+                      select: async (a) => {{ titles.push(...a.options.map((o) => o.title)); return "__iumbtems_cancel__"; }},
+                      prompt: async () => null,
+                      confirm: async () => false,
+                    }},
+                  }},
+                }};
+                const r = await openSettingsWizard(host, root, {{env: {{SEARXNG_URL: "http://secret-xyz:9999/x"}}}});
+                console.log(JSON.stringify({{cancelled: r.cancelled, titles}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"wizard failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["cancelled"])
+            row = next(t for t in data["titles"] if "SearXNG URL" in t)
+            self.assertIn('~~"http://file:8080"~~', row)
+            self.assertIn("set via environment", row)
+            self.assertNotIn("http://secret-xyz:9999/x", "\n".join(data["titles"]))
+
+
+class TestWizardLoopBound(unittest.TestCase):
+    """R3 (L2): N consecutive row errors abort to the menu — no hangs."""
+
+    BOUND_HARNESS = """
+            import { openSettingsWizard, MAX_ROW_ERRORS } from "./plugins/opencode/tui.js";
+            import fs from "node:fs";
+            import path from "node:path";
+    """
+
+    def test_persistently_invalid_input_aborts_with_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                self.BOUND_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const toasts = [];
+                let picks = 0;
+                const host = {{
+                  directory: root,
+                  ui: {{
+                    toast: {{show: (t) => toasts.push(t)}},
+                    dialog: {{
+                      select: async (a) => {{
+                        if (!a.options.some((o) => o.value === "__iumbtems_save__")) return null;
+                        picks += 1;
+                        return picks === 1 ? "max_iterations" : null;
+                      }},
+                      prompt: async () => "99",
+                      confirm: async () => true,
+                    }},
+                  }},
+                }};
+                const r = await openSettingsWizard(host, root, {{env: {{}}}});
+                const text = toasts.map((t) => JSON.stringify(t)).join("\\n");
+                console.log(JSON.stringify({{
+                  cancelled: r.cancelled, written: r.written, maxErrors: MAX_ROW_ERRORS,
+                  warned: text.includes("TooMany") || text.includes("Too many invalid attempts"),
+                }}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"bound test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertEqual(data["maxErrors"], 3)
+            self.assertTrue(data["cancelled"])
+            self.assertFalse(data["written"])
+            self.assertTrue(data["warned"])
+            # Zero writes: .research never materialized.
+            self.assertEqual(_walk_files(tmp), [])
+
+    def test_persistently_throwing_select_terminates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                self.BOUND_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const host = {{
+                  directory: root,
+                  ui: {{
+                    toast: {{show: () => {{}}}},
+                    dialog: {{
+                      select: async () => {{ throw new Error("boom"); }},
+                      prompt: async () => "x",
+                      confirm: async () => true,
+                    }},
+                  }},
+                }};
+                const r = await openSettingsWizard(host, root, {{env: {{}}}});
+                console.log(JSON.stringify({{ok: r.ok, reason: r.reason, written: r.written}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"throw test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertFalse(data["ok"])
+            self.assertEqual(data["reason"], "dialog-error")
+            self.assertFalse(data["written"])
+
+
+class TestEditWarnings(unittest.TestCase):
+    """R4 (L3): env-shadow + deprecated advisories fire; writes still proceed."""
+
+    WARN_HARNESS = """
+            import { openSettingsWizard } from "./plugins/opencode/tui.js";
+            import fs from "node:fs";
+            import path from "node:path";
+    """
+
+    def _edit_once(self, tmp, field, prompt_value, env):
+        res = run_node(
+            self.WARN_HARNESS
+            + f"""
+            const root = {tmp!r};
+            const toasts = [];
+            let picks = 0;
+            const host = {{
+              directory: root,
+              ui: {{
+                toast: {{show: (t) => toasts.push(t)}},
+                dialog: {{
+                  select: async (a) => {{
+                    if (!a.options.some((o) => o.value === "__iumbtems_save__")) return null;
+                    picks += 1;
+                    return picks === 1 ? {field!r} : "__iumbtems_save__";
+                  }},
+                  prompt: async () => {prompt_value!r},
+                  confirm: async () => true,
+                }},
+              }},
+            }};
+            const r = await openSettingsWizard(host, root, {{env: {json.dumps(env)}}});
+            const saved = JSON.parse(fs.readFileSync(path.join(root, ".research", "config.json"), "utf-8"));
+            console.log(JSON.stringify({{written: r.written, saved, toasts: toasts.map((t) => JSON.stringify(t)).join("\\n")}}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"edit failed: {res.stderr}")
+        return last_json_object(res.stdout)
+
+    def test_env_shadowed_edit_warns_but_still_saves(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = self._edit_once(
+                tmp, "searxng_url", "http://new:8080", {"SEARXNG_URL": "http://env:1"}
+            )
+            self.assertTrue(data["written"])
+            self.assertEqual(data["saved"]["searxng_url"], "http://new:8080")
+            self.assertRegex(
+                data["toasts"],
+                r"(?i)environment shadows.*no runtime effect until.*unset",
+            )
+
+    def test_deprecated_output_dir_edit_warns_but_still_saves(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = self._edit_once(tmp, "output_dir", ".renamed", {})
+            self.assertTrue(data["written"])
+            self.assertEqual(data["saved"]["output_dir"], ".renamed")
+            self.assertIn("eprecat", data["toasts"])
+
+
+class TestLockOwnership(unittest.TestCase):
+    """R2 (M2): release() unlinks ONLY self-created locks (pid-gated)."""
+
+    LOCK_HARNESS = """
+            import { saveConfig, loadConfig, acquireLock, getLockPath } from "./plugins/opencode/config-io.js";
+            import fs from "node:fs";
+            import path from "node:path";
+    """
+
+    def test_foreign_live_lock_respected_with_file_intact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            seed = json.dumps({"mode": "audit"})
+            research.joinpath("config.json").write_text(seed, encoding="utf-8")
+            res = run_node(
+                self.LOCK_HARNESS
+                + f"""
+                const dir = {str(research)!r};
+                const lockFile = getLockPath(dir);
+                const foreign = JSON.stringify({{pid: process.pid + 1000000, ts: Date.now(), token: "live-holder"}});
+                fs.writeFileSync(lockFile, foreign);
+                let code = null;
+                try {{ saveConfig({{...loadConfig(dir), mode: "scout"}}, dir); }}
+                catch (e) {{ code = e.code; }}
+                console.log(JSON.stringify({{
+                  code,
+                  configIntact: fs.readFileSync(path.join(dir, "config.json"), "utf-8") === {seed!r},
+                  lockIntact: fs.readFileSync(lockFile, "utf-8") === foreign,
+                }}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"live test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertEqual(data["code"], "CONFIG_LOCKED")
+            self.assertTrue(data["configIntact"])
+            self.assertTrue(data["lockIntact"])
+
+    def test_stale_foreign_lock_adopted_by_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            research.joinpath("config.json").write_text(
+                json.dumps({"mode": "audit"}), encoding="utf-8"
+            )
+            res = run_node(
+                self.LOCK_HARNESS
+                + f"""
+                const dir = {str(research)!r};
+                const lockFile = getLockPath(dir);
+                fs.writeFileSync(lockFile, JSON.stringify({{pid: 1, ts: Date.now() - 60000, token: "old"}}));
+                const r = saveConfig({{...loadConfig(dir), mode: "scout"}}, dir);
+                const saved = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf-8"));
+                console.log(JSON.stringify({{written: r.written, mode: saved.mode, lockGone: !fs.existsSync(lockFile)}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"adopt test failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["written"])
+            self.assertEqual(data["mode"], "scout")
+            self.assertTrue(data["lockGone"])
+
+    def test_release_unlinks_own_but_preserves_foreign(self):
+        res = run_node(
+            self.LOCK_HARNESS
+            + """
+            import os from "node:os";
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), "own-foreign-"));
+            const lockFile = getLockPath(dir);
+            const own = acquireLock(dir);
+            own.release();
+            const ownGone = !fs.existsSync(lockFile);
+            const h = acquireLock(dir);
+            const foreign = JSON.stringify({pid: 99999999, ts: Date.now(), token: "foreign"});
+            fs.writeFileSync(lockFile, foreign);
+            h.release();
+            console.log(JSON.stringify({
+              ownGone,
+              foreignKept: fs.existsSync(lockFile) && fs.readFileSync(lockFile, "utf-8") === foreign,
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"ownership test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertTrue(data["ownGone"])
+        self.assertTrue(data["foreignKept"])
 
 
 # One-shot REPLAY_SETUP equivalent that also yields the cleanup function.
