@@ -2,29 +2,29 @@
   "mcpServers": {
     "iumbtems": {
       "command": "python3",
-      "args": ["${extensionPath}/../../runner/mcp_server.py"],
+      "args": ["${extensionPath}/mcp_launcher.py", "iumbtems"],
       "env": {
-        "PYTHONPATH": "${extensionPath}/../.."
+        "IUMBTEMS_WORKSPACE": "${workspacePath}"
       }
     },
     "brave-search": {
       "command": "python3",
-      "args": ["${extensionPath}/../../config/mcp_launcher.py", "brave-search"],
+      "args": ["${extensionPath}/mcp_launcher.py", "brave-search"],
       "env": {
         "BRAVE_SEARCH_API_KEY": "${BRAVE_SEARCH_API_KEY}"
       }
     },
     "firecrawl": {
       "command": "python3",
-      "args": ["${extensionPath}/../../config/mcp_launcher.py", "firecrawl"],
+      "args": ["${extensionPath}/mcp_launcher.py", "firecrawl"],
       "env": {
         "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}",
-        "FIRECRAWL_API_URL": "${FIRECRAWL_API_URL:-http://localhost:3002}"
+        "FIRECRAWL_API_URL": "${FIRECRAWL_API_URL:-https://api.firecrawl.dev}"
       }
     },
     "searxng": {
       "command": "python3",
-      "args": ["${extensionPath}/../../config/mcp_launcher.py", "searxng"],
+      "args": ["${extensionPath}/mcp_launcher.py", "searxng"],
       "env": {
         "SEARXNG_URL": "${SEARXNG_URL:-http://localhost:8080}"
       }
