@@ -348,9 +348,8 @@ if search_gate == "1":
     ]
     # Resource-scoped websearch rules (resource != "*") are the user's explicit
     # per-query decisions. NEVER silently drop them: keep every one and report
-    # it. Note the appended '*' ask rule is evaluated later and wins overlapping
-    # queries under last-match-wins — the scoped rules below are preserved
-    # verbatim for documentation, not as overrides.
+    # it. Effective precedence is resolved below under last-match-wins — these
+    # rules are preserved verbatim, never rewritten.
     scoped_ws = [
         r
         for r in rules
@@ -360,9 +359,8 @@ if search_gate == "1":
         if rule.get("effect") == "allow":
             print(
                 "   ⚠️ Preserved resource-scoped websearch allow "
-                f"({json.dumps(rule)}): kept verbatim; note the appended '*' "
-                "ask rule below takes precedence for overlapping queries "
-                "under last-match-wins."
+                f"({json.dumps(rule)}): kept verbatim; effective precedence "
+                "is resolved below under last-match-wins."
             )
         else:
             print(
@@ -385,6 +383,24 @@ if search_gate == "1":
                 )
             drop_ids = {id(r) for r in dropped}
             rules[:] = [r for r in rules if id(r) not in drop_ids]
+            # Ordering matters under last-match-wins: a later matching `allow`
+            # (scoped or wildcard-action) would override the preserved ask for
+            # overlapping queries. Move the gate last so it takes precedence,
+            # and say so loudly — this overrides an explicit per-query allow.
+            kept_index = next(i for i, r in enumerate(rules) if r is kept)
+            later_allow = [
+                r
+                for r in rules[kept_index + 1 :]
+                if _action_matches_websearch(r) and r.get("effect") == "allow"
+            ]
+            if later_allow:
+                rules.remove(kept)
+                rules.append(kept)
+                print(
+                    "   ⚠️ Moved websearch ask gate after later matching allow "
+                    f"({json.dumps(later_allow)}): the gate now takes "
+                    "precedence for overlapping queries under last-match-wins."
+                )
             if kept == canonical:
                 print("   ℹ️ websearch ask-gate permission already configured")
             else:
@@ -401,20 +417,42 @@ if search_gate == "1":
             rules.append(canonical)
     else:
         # No literal global websearch rule. A broader ask already covering
-        # websearch means the gate is effectively in place — don't duplicate it.
-        broader_ask = any(
-            _action_matches_websearch(r)
-            and not _is_websearch(r)
-            and r.get("resource") == "*"
-            and r.get("effect") == "ask"
-            for r in rules
+        # websearch means the gate is effectively in place — don't duplicate
+        # it, unless a later resource-scoped allow would override it.
+        global_matches = [
+            (i, r)
+            for i, r in enumerate(rules)
+            if _action_matches_websearch(r) and r.get("resource") == "*"
+        ]
+        last_global_index, last_global = (
+            global_matches[-1] if global_matches else (None, None)
         )
-        if broader_ask:
+        later_scoped_allow = (
+            last_global is not None
+            and any(
+                i > last_global_index
+                and _action_matches_websearch(r)
+                and r.get("resource") != "*"
+                and r.get("effect") == "allow"
+                for i, r in enumerate(rules)
+            )
+        )
+        if (
+            last_global is not None
+            and last_global.get("effect") == "ask"
+            and not later_scoped_allow
+        ):
             print(
                 "   ℹ️ websearch is already gated by a broader ask rule; "
                 "nothing to add"
             )
         else:
+            if later_scoped_allow:
+                print(
+                    "   ⚠️ Resource-scoped websearch allow follows the broader "
+                    "ask gate; appending canonical ask so the gate takes "
+                    "precedence for overlapping queries under last-match-wins."
+                )
             rules.append(canonical)
             print("   + Added websearch ask-gate permission (--search-gate)")
 else:
