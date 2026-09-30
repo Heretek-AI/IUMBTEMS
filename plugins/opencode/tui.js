@@ -165,19 +165,33 @@ function formatSettingRows(rows) {
  * otherwise. Never throws.
  */
 async function effectiveSettingsBody(host, baseDir, env) {
+  let body = null;
   const rpc = getSettingsRpcClient(host);
   if (rpc) {
     try {
       const snap = await rpc.get();
       if (snap && snap.config && typeof snap.config === 'object') {
-        const rows = buildSettingRows({ ...snap.config }, snap.config, env);
-        if (rows.length > 0) return formatSettingRows(rows);
+        // Provenance comes from the ON-DISK `raw`, not the merged effective
+        // `config` (every key is present there, which made every row `file`).
+        const rows = buildSettingRows({ ...snap.config }, snap.raw, env);
+        if (rows.length > 0) body = formatSettingRows(rows);
       }
     } catch {
       /* fall through to the direct-fs read */
     }
   }
-  return formatSettingsText(baseDir, env);
+  if (body === null) body = formatSettingsText(baseDir, env);
+  // R10: a malformed file must not render as silent defaults. Advisory local-fs
+  // check (the same rule the wizard warns on); surfaced in the panel body —
+  // never throws, never writes.
+  try {
+    if (isConfigMalformed(baseDir)) {
+      body = `⚠️ Could not parse ${baseDir}/config.json — showing defaults.\n\n${body}`;
+    }
+  } catch {
+    /* advisory only — a failed check must not break the panel */
+  }
+  return body;
 }
 
 /** Palette command opening the read-only settings status panel. */
@@ -1009,7 +1023,9 @@ export async function openSettingsWizard(host, root, opts = {}) {
       try {
         const snap = await rpc.get();
         if (!snap || typeof snap.config !== 'object') throw new Error('empty snapshot');
-        raw = snap.config;
+        // R1: provenance uses the RPC's on-disk `raw` (null/absent -> {}),
+        // never the merged effective `config`.
+        raw = snap.raw && typeof snap.raw === 'object' ? snap.raw : {};
         draft = JSON.parse(JSON.stringify(snap.config));
         startHash = typeof snap.hash === 'string' ? snap.hash : null;
       } catch {

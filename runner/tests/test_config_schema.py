@@ -321,6 +321,71 @@ class TestMcpConfigSurface(unittest.TestCase):
             self.assertFalse((Path(tmp) / "config.json").exists())
             shown = self._call({"base_dir": tmp, "show": True})
             self.assertEqual(shown["status"], "current")
+            # R11: the legacy-pin case must NOT write (the old test was vacuous
+            # here). Seed a pin, snapshot the bytes, and prove the show leg
+            # leaves them byte-identical while still reporting the migration.
+            cfg_file = _write_config(
+                Path(tmp), {"agents": {"alpha": {"backend": ["claude", "-p"]}}}
+            )
+            before = cfg_file.read_bytes()
+            pinned = self._call({"base_dir": tmp})
+            self.assertEqual(pinned["status"], "current")
+            self.assertTrue(pinned["migrated"])
+            self.assertEqual(cfg_file.read_bytes(), before)
+
+    def test_write_leg_heals_legacy_pin_and_persists(self):
+        # R11 preserves phase-01 A6: a write still migrates the legacy pin on disk.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            cfg_file = _write_config(
+                base, {"agents": {"alpha": {"backend": ["claude", "-p"]}}}
+            )
+            payload = self._call({"max_iterations": 2, "base_dir": tmp})
+            self.assertEqual(payload["status"], "updated", payload)
+            healed = json.loads(cfg_file.read_text(encoding="utf-8"))
+            self.assertIsNone(healed["agents"]["alpha"]["backend"])
+            self.assertEqual(healed["max_iterations"], 2)
+
+    def test_guarded_write_on_legacy_pin_succeeds_and_heals(self):
+        # F1/R12: the wizard always sends `expected_hash`. With no heal-before-
+        # save, the guard still matches so the write is `updated` (never a false
+        # `stale`) and the pin is migrated on disk.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            cfg_file = _write_config(
+                base, {"agents": {"alpha": {"backend": ["claude", "-p"]}}}
+            )
+            start_hash = config_hash(tmp)
+            payload = self._call(
+                {"max_iterations": 3, "expected_hash": start_hash, "base_dir": tmp}
+            )
+            self.assertEqual(payload["status"], "updated", payload)
+            healed = json.loads(cfg_file.read_text(encoding="utf-8"))
+            self.assertIsNone(healed["agents"]["alpha"]["backend"])
+            self.assertEqual(healed["max_iterations"], 3)
+
+    def test_invalid_pin_file_show_reports_no_migration_and_write_blocked(self):
+        # R12/R11: an invalid file is never healed, and a write that would leave
+        # it invalid is rejected without touching the bytes.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            cfg_file = _write_config(
+                base,
+                {
+                    "max_iterations": 99,
+                    "agents": {"alpha": {"backend": ["claude", "-p"]}},
+                },
+            )
+            before = cfg_file.read_bytes()
+            shown = self._call({"base_dir": tmp})
+            self.assertEqual(shown["status"], "current")
+            self.assertFalse(shown["migrated"])
+            self.assertEqual(cfg_file.read_bytes(), before)
+            blocked = self._call({"mode": "audit", "base_dir": tmp})
+            self.assertEqual(blocked["status"], "error")
+            self.assertEqual(blocked["code"], "CONFIG_VALIDATION_FAILED")
+            self.assertFalse(blocked["written"])
+            self.assertEqual(cfg_file.read_bytes(), before)
 
     def test_null_clears_a_nullable_key(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -694,15 +694,38 @@ def _save_or_report(cfg: Dict[str, Any]) -> Optional[Path]:
         return None
 
 
+def _legacy_pin_pending(base_dir: str = DEFAULT_RESEARCH_DIR) -> bool:
+    """Would the legacy-pin migration apply on the next save? (read-only)
+
+    R12/F2: the CLI read paths (`--show` / bare) must never write, so this
+    reports a pending migration without persisting it. Mirrors `heal_config`'s
+    decision — a legacy ``["claude", "-p"]`` pin is present AND the
+    would-be-persisted config passes canonical validation — but never writes.
+    """
+    try:
+        raw = _read_raw_config(get_config_path(base_dir))
+        if not isinstance(raw, dict):
+            return False
+        if not migrate_legacy_agent_backends(raw):
+            return False
+        return not validate_config(load_config(base_dir))
+    except Exception:
+        return False
+
+
 def main():
     cfg = load_config()
-    if heal_config():
-        print(
-            "ℹ️  Migrated legacy ['claude', '-p'] agent backend pin → host-native default."
-        )
     args = sys.argv[1:]
+    # R12/F2: compute the pending migration READ-ONLY. Heal only when an update
+    # is actually saved; a read (`--show` / bare) must never write.
+    pending_migration = _legacy_pin_pending()
 
     if not args or "--show" in args:
+        if pending_migration:
+            print(
+                "ℹ️  A legacy ['claude', '-p'] agent backend pin is present; it "
+                "will migrate to the host-native default on the next save."
+            )
         display_config(cfg)
         if not args:
             print("To edit settings, run:")
@@ -717,6 +740,10 @@ def main():
         cfg_path = _save_or_report(cfg)
         if cfg_path is None:
             raise SystemExit(1)
+        if pending_migration:
+            print(
+                "ℹ️  Migrated legacy ['claude', '-p'] agent backend pin → host-native default."
+            )
         print(f"✅ Configuration saved to {cfg_path}")
         display_config(cfg)
         return
@@ -726,6 +753,10 @@ def main():
         cfg_path = _save_or_report(cfg)
         if cfg_path is None:
             raise SystemExit(1)
+        if pending_migration:
+            print(
+                "ℹ️  Migrated legacy ['claude', '-p'] agent backend pin → host-native default."
+            )
         print(f"✅ Configuration updated and saved to {cfg_path}")
     display_config(cfg)
 

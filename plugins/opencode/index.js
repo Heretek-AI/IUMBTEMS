@@ -2097,6 +2097,7 @@ export const SettingsRpc = {
         type: 'object',
         properties: {
           config: { type: 'object' },
+          raw: { type: ['object', 'null'] },
           hash: { type: ['string', 'null'] },
           migrated: { type: 'boolean' },
         },
@@ -2308,11 +2309,12 @@ export function createSettingsHandlers(opts = {}) {
         throw sanitized;
       }
       // Single-read (phase-03 R5): the raw bytes are read EXACTLY ONCE below;
-      // the returned config is merged from those bytes and the hash is
-      // computed over those bytes, so an era-A config with an era-B hash is
+      // the returned effective `config` is merged from those bytes, the `raw`
+      // on-disk subset is parsed from those bytes, and the hash is computed
+      // over those bytes — so an era-A config with an era-B hash (or raw) is
       // impossible. The Python surface still supplies the `migrated` flag
-      // (and keeps its heal-on-read side effect); the returned triple is one
-      // snapshot regardless of what either side read on its own clock.
+      // (computed in memory; the show leg never writes); the returned payload
+      // is one snapshot regardless of what either side read on its own clock.
       const snap = readConfigSnapshot(researchDir);
       const config = loadConfigFromRaw(snap.raw);
       // Refresh-on-read (phase-03 R1): a direct-fs fallback-leg write bypasses
@@ -2330,7 +2332,10 @@ export function createSettingsHandlers(opts = {}) {
       } catch {
         /* the storage mirror is best-effort */
       }
-      return { config, hash: snap.hash, migrated: Boolean(payload.migrated) };
+      // `raw` (phase-04 R1) is the parsed ON-DISK file config (null when
+      // absent/malformed) so the TUI can compute provenance: a key present in
+      // `raw` is `file`, otherwise `default` (env-override still wins).
+      return { config, raw: snap.raw, hash: snap.hash, migrated: Boolean(payload.migrated) };
     },
     validate: async (input = {}) => {
       const updates = input?.updates;

@@ -693,6 +693,7 @@ class TestSettingsRpcDomain(unittest.TestCase):
               rpcId: SETTINGS_RPC_ID,
               methods,
               getIn: SettingsRpc.methods.get.input,
+              getOut: SettingsRpc.methods.get.output,
               setOutRequired: SettingsRpc.methods.set.output.required,
               events: Object.keys(SettingsRpc.events),
               changedRequired: SettingsRpc.events.changed.schema.required,
@@ -708,6 +709,10 @@ class TestSettingsRpcDomain(unittest.TestCase):
         self.assertEqual(d["methods"], ["get", "set", "validate"])
         # JSON-Schema I/O per the v2 RPC pattern; event data is an object.
         self.assertEqual(d["getIn"]["type"], "object")
+        # R1: `get` carries the on-disk `raw` alongside the effective `config`.
+        self.assertEqual(d["getOut"]["type"], "object")
+        self.assertIn("raw", d["getOut"]["properties"])
+        self.assertIn("config", d["getOut"]["required"])
         self.assertIn("config", d["setOutRequired"])
         self.assertIn("hash", d["setOutRequired"])
         self.assertEqual(d["events"], ["changed"])
@@ -1435,6 +1440,52 @@ class TestSingleReadSnapshot(unittest.TestCase):
             # The mirror converges to the same coherent pair.
             self.assertEqual(d["mirrorMode"], d["gotMode"])
             self.assertEqual(d["mirrorHash"], d["gotHash"])
+
+    def test_get_payload_carries_raw_and_effective_from_one_read(self):
+        """R1: `get` carries the on-disk `raw` alongside the merged effective
+        `config`, and the hash covers the same bytes (single-read preserved)."""
+        import hashlib
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            cfg = research / "config.json"
+            on_disk = {"mode": "scout"}
+            cfg.write_text(json.dumps(on_disk), encoding="utf-8")
+            res = run_node(
+                PHASE3_HOST
+                + f"""
+                const box = makePhase3Host({tmp!r});
+                const stub = async () => ({{
+                  content: JSON.stringify({{ status: "current", config: {{}}, migrated: false }}),
+                  status: "success",
+                }});
+                const handlers = createSettingsHandlers({{
+                  root: {tmp!r},
+                  callMcpImpl: stub,
+                  storage: box.host.storage,
+                }});
+                const got = await handlers.get({{}}, rpcCtx());
+                console.log(JSON.stringify({{
+                  raw: got.raw,
+                  effectiveMode: got.config.mode,
+                  effectiveHasDefaults: ("search_engine" in got.config) && ("max_iterations" in got.config),
+                  rawHasSearchEngine: Boolean(got.raw && ("search_engine" in got.raw)),
+                  hash: got.hash,
+                }}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+            d = last_json_object(res.stdout)
+            # `raw` is exactly the on-disk file config (not the merged result).
+            self.assertEqual(d["raw"], on_disk)
+            self.assertFalse(d["rawHasSearchEngine"])
+            # `config` is the merged effective config.
+            self.assertEqual(d["effectiveMode"], "scout")
+            self.assertTrue(d["effectiveHasDefaults"])
+            # Single-read: the hash is of the same bytes `raw` was parsed from.
+            self.assertEqual(d["hash"], hashlib.sha256(cfg.read_bytes()).hexdigest())
 
 
 class TestRpcGetSanitizedError(unittest.TestCase):

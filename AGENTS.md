@@ -109,13 +109,23 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   effect only after release + reinstall.
 
 ## Releases
-- Bump `package.json` (+ lockfile sync) **and `.claude-plugin/plugin.json`**
-  (0.7.5 shipped with a stale plugin manifest — keep all three in lockstep),
-  commit, push to `main`, then
+- **Version lockstep is the four ENFORCED manifests** — `package.json`,
+  `package-lock.json`, `.claude-plugin/plugin.json`, and
+  `plugins/antigravity/plugin.json` — bumped together. 0.7.5 shipped a stale
+  plugin manifest, and v0.7.18 missed the AntiGravity manifest and failed
+  `Validate All Harnesses` + `Publish to npm` twice before it was re-cut.
+  Enforcement: `python3 scripts/build_adapters.py --check` and
+  `runner/tests/test_antigravity_plugin.py::test_manifest_metadata_and_version_lockstep`
+  cover the AntiGravity manifest; `.claude-plugin/plugin.json` is validated by
+  the marketplace / harness / eval workflows. **Not** covered by the lockstep
+  check: `plugins/gemini/gemini-extension.json` carries its own independent
+  version. Then commit, push to `main`, and
   `gh release create vX.Y.Z`. The `Publish to npm` workflow (OIDC trusted
   publishing) runs on release-published. Verify with
-  `curl https://registry.npmjs.org/@heretek-ai%2Fepistemic-swarm`
-  (allow propagation time).
+  `curl https://registry.npmjs.org/@heretek-ai%2Fepistemic-swarm` (allow
+  propagation time; the replica can serve dist-tags/version before the tarball
+  does — confirm the tarball too, and reinstall with `--prefer-online` if you
+  get an `ETARGET`).
 - **After every push to `main` or release, check *all* workflows, not just the
   publisher:** `gh run list --limit 10` and inspect `Validate All Harnesses`,
   `Validate Claude Code Marketplace`, `Plugin Evals`, `CodeQL`, and
@@ -123,3 +133,9 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   releases (a committed symlink under `skills/` broke `plugin validate --strict`,
   and an OpenCode tool-parity gap went unnoticed) — the release is not done until
   every workflow is green.
+- **Single-writer discipline before any re-spawn or commit:** confirm the tree is
+  quiescent — hash the target set and re-check `git status` immediately before
+  committing. A concurrent session once committed into this checkout and ran
+  `git stash push/pop` mid-audit (verified byte-identical restore, but a standing
+  hazard). Never `git add -A`; stage explicit paths so a foreign edit cannot ride
+  a release.

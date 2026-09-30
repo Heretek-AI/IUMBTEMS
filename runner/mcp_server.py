@@ -145,6 +145,35 @@ def _allows_null(schema: Dict[str, Any]) -> bool:
     return types == "null"
 
 
+def _legacy_pin_migration_pending(base_dir: str) -> bool:
+    """Would the legacy-pin migration apply on the next write? (read-only)
+
+    Phase-04 R11: the `show` leg reports this WITHOUT persisting, so a read API
+    stays side-effect free. Mirrors `heal_config`'s decision — the on-disk file
+    carries a legacy ``["claude", "-p"]`` pin AND the would-be-persisted config
+    passes canonical validation (an invalid file is never healed, R1) — but
+    never writes.
+    """
+    try:
+        from skills.swarm_config.configure import (
+            load_config,
+            migrate_legacy_agent_backends,
+            validate_config,
+        )
+
+        cfg_file = Path(base_dir) / "config.json"
+        if not cfg_file.is_file():
+            return False
+        raw = json.loads(cfg_file.read_bytes().decode("utf-8"))
+        if not isinstance(raw, dict):
+            return False
+        if not migrate_legacy_agent_backends(raw):
+            return False
+        return not validate_config(load_config(base_dir))
+    except Exception:
+        return False
+
+
 def _handle_config(args: Dict[str, Any]) -> str:
     """Inspect or modify swarm parameters in .research/config.json.
 
@@ -159,7 +188,6 @@ def _handle_config(args: Dict[str, Any]) -> str:
     from skills.swarm_config.configure import (
         DEFAULT_CONFIG,
         ConfigError,
-        heal_config,
         load_config,
         merge_config,
         save_config,
@@ -169,10 +197,6 @@ def _handle_config(args: Dict[str, Any]) -> str:
 
     base_dir = str(_resolve_base_dir(args))
     cfg = load_config(base_dir)
-    # Persist a legacy ["claude", "-p"] agent pin migration so an OpenCode host
-    # stops silently spawning Claude on every run. `heal_config` refuses to
-    # persist a schema-rejected file (R1).
-    healed = heal_config(base_dir)
 
     # R4: both spellings must agree; never silently prefer one.
     snake = args.get("expected_hash")
@@ -242,7 +266,16 @@ def _handle_config(args: Dict[str, Any]) -> str:
         )
 
     if not updates:
-        return _tool_text({"status": "current", "config": cfg, "migrated": healed})
+        # R11: the show leg is strictly read-only — a settings panel reads
+        # through it, so it must never persist the legacy-pin migration. Report
+        # whether a migration is pending; only the write leg below heals.
+        return _tool_text(
+            {
+                "status": "current",
+                "config": cfg,
+                "migrated": _legacy_pin_migration_pending(base_dir),
+            }
+        )
 
     candidate = merge_config(cfg, updates)
     problems = validate_config(candidate)
@@ -257,6 +290,11 @@ def _handle_config(args: Dict[str, Any]) -> str:
             }
         )
 
+    # R12 (F1): do NOT heal before saving. The candidate is already migrated in
+    # memory (`load_config`) and `save_config` merges it over the on-disk bytes,
+    # so the legacy-pin migration persists as a side effect — while the caller's
+    # `expected_hash` guard still matches the bytes they read. A heal-before-save
+    # rewrote the file and turned a valid guarded write into a false `stale`.
     try:
         save_config(
             candidate,

@@ -109,9 +109,11 @@ or `[NEGATIVE_KNOWLEDGE: <query>]`. Never present parametric recall as verified.
   effect only after release + reinstall.
 
 ## Releases
-- Bump `package.json` (+ lockfile sync) **and `.claude-plugin/plugin.json`**
-  (0.7.5 shipped with a stale plugin manifest — keep all three in lockstep),
-  commit, push to `main`, then
+- Bump the **four enforced manifests** in lockstep — `package.json`,
+  `package-lock.json`, `.claude-plugin/plugin.json`, and
+  `plugins/antigravity/plugin.json` (0.7.5 shipped a stale plugin manifest and
+  v0.7.18 missed the AntiGravity manifest, failing `Validate All Harnesses` +
+  `Publish to npm` twice). Then commit, push to `main`, then
   `gh release create vX.Y.Z`. The `Publish to npm` workflow (OIDC trusted
   publishing) runs on release-published. Verify with
   `curl https://registry.npmjs.org/@heretek-ai%2Fepistemic-swarm`

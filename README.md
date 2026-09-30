@@ -157,7 +157,7 @@ Related environment variables:
 
 Spawned agents inherit `PWD` set to their working directory, so harnesses that resolve their project root from `$PWD` (OpenCode) land in the same tree the runner reads from.
 
-> **Legacy config migration:** configs written before 0.7.6 could pin `agents.<role>.backend = ["claude", "-p"]`, which silently overrode the host-native default. That pin is now migrated to `null` on load (only when the top-level `backend` is not an explicit `"claude"`), and the migration is persisted by `iumbtems config`. To deliberately keep Claude on an OpenCode host, set `"backend": "claude"`.
+> **Legacy config migration:** configs written before 0.7.6 could pin `agents.<role>.backend = ["claude", "-p"]`, which silently overrode the host-native default. That pin is now migrated to `null` on load (only when the top-level `backend` is not an explicit `"claude"`), and the migration is persisted on the next config **write** (a read / `--show` never heals). To deliberately keep Claude on an OpenCode host, set `"backend": "claude"`.
 
 ---
 
@@ -265,6 +265,27 @@ Nine canonical skills live in `skills/*/SKILL.md`. Each maps to a slash command 
 
 ---
 
+## ⚙️ Settings Surface (`/swarm-config`)
+
+The settings surface is the recommended way to tune the harness from inside OpenCode V2. It has two parts:
+
+- **`/swarm-config` wizard** — a native dialog wizard (`ui.dialog.select/prompt/confirm`) showing every canonical key with a provenance badge (`default` / `file` / `env-override`), one editable row at a time, validated and written atomically on save.
+- **Status panel** — a read-only panel opened from the command palette / keymap (`iumbtems.swarm-settings`) rendering the effective rows with a **next-run** badge. It never writes.
+
+The canonical config it edits is **`.research/config.json`** — the TUI resolves `.research` from the OpenCode host root; `IUMBTEMS_PROJECT_DIR` / `--dir` / `base_dir` select the workspace for the CLI, MCP, and runner surfaces. Configurable values include the search engine, depth (`max_iterations`), operating `mode`, `backend`, per-role (`agents.*`) backend/model, `license_whitelist`, the cache / TTL / search-timeout knobs, `searxng_url`, `verify.min_fuzzy_confidence`, the persistence `mcp_servers` toggle map, `allocation`, `domain_pack`, and the deprecated display-only `output_dir`. (`divergence_threshold` is advisory: recorded, never gating a verdict.)
+
+**Honest boundaries**
+
+- **Values apply to the NEXT swarm run.** The Python runner reads `.research/config.json` once at run start, so a save never hot-swaps a running swarm — the wizard and panel both say "applies to the next swarm run".
+- **Per-role temperature does not govern spawned agents.** The OpenCode session `context` hook honors `IUMBTEMS_TEMPERATURE[_<ROLE>]` for sessions running inside OpenCode, but there is **no verified path** that sets per-role temperature for spawned swarm agents — that leg is recorded `[NEGATIVE_KNOWLEDGE]` (S3, dated 2026-09-29; waiver W3). The UI deliberately makes no temperature claim.
+- **No secrets in config.** API keys stay in the environment (`FIRECRAWL_API_KEY`, …). The surface only reports whether an env override is set for the keys it models; it never renders an env value, and it does not probe engine availability.
+
+Writes prefer the plugin's `iumbtems.settings` RPC (server-side validation + an `expectedHash` lost-update guard; the RPC surfaces a `conflict` error type, and Python's code is `CONFLICTING_EXPECTED_HASH`) and degrade to a direct-fs write with a visible toast when `client.rpc` is absent; `.research/config.json` stays the single source of truth. See [docs/SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md) §6.7 for the full data flow, the atomic-write + lock protocol, and the `ctx.storage` mirror.
+
+*Reviewed settings-surface patterns from Gemini CLI, Codex, Goose, Aider, Cline, OpenCode, and Crush (docs-only) informed this design; no code was copied.*
+
+---
+
 ## 🗂️ Workspace & Evidence Model
 
 All state lives in a local `.research/` directory (resolved from `IUMBTEMS_PROJECT_DIR` when set, else the process cwd):
@@ -366,7 +387,7 @@ The package is distributed on npm as `@heretek-ai/epistemic-swarm` using [npm Tr
 
 **Release flow** (see [AGENTS.md](AGENTS.md#releases)):
 
-1. Bump `package.json` **and** `.claude-plugin/plugin.json` **and** the lockfile in lockstep.
+1. Bump the **four enforced manifests** in lockstep: `package.json`, `package-lock.json`, `.claude-plugin/plugin.json`, and `plugins/antigravity/plugin.json` (`python3 scripts/build_adapters.py --check` guards the AntiGravity one).
 2. Commit and push to `main`.
 3. `gh release create vX.Y.Z` — the `Publish to npm` workflow
    (`.github/workflows/publish.yml`) runs on `release: published`, executes the

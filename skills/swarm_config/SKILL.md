@@ -124,6 +124,32 @@ prefix of **at least 8 hex characters**; conflicting spellings are rejected with
 canonical validation (the legacy-pin migration stays in memory until the
 invalid values are fixed).
 
+## 4. TUI Settings Surface (OpenCode V2)
+
+On OpenCode V2 hosts the plugin ships a native settings surface — the recommended
+path when you are already inside OpenCode:
+
+- **`/swarm-config` wizard** — `ui.dialog.select/prompt/confirm`, one row per
+  canonical key with a provenance badge (`default` / `file` / `env-override`);
+  edits validate on save.
+- **`iumbtems.swarm-settings` status panel** — a read-only panel opened from the
+  command palette / keymap showing the effective rows with a **next-run** badge;
+  it never writes.
+
+Both read and write the same canonical `.research/config.json`, preferring the
+server `iumbtems.settings` RPC (server-side validation + `expectedHash` guard) and
+degrading to a direct-fs write (`plugins/opencode/config-io.js`) with a visible
+toast when `client.rpc` is absent. Live refresh subscribes to the RPC `changed`
+event; the 5s poll remains the floor.
+
+The honest boundaries are unchanged from the CLI/MCP paths: values apply to the
+**next** swarm run (the runner reads config at run start); per-role temperature
+does **not** govern spawned agents (dated `[NEGATIVE_KNOWLEDGE]`, waiver W3);
+out-of-range `IUMBTEMS_TEMPERATURE[_<ROLE>]` values are DISCARDED (fail-closed),
+not clamped; secrets stay in the environment. See `docs/SYSTEM_ARCHITECTURE.md`
+§6.7 for the full data flow, the `.research/.config.lock` protocol, the
+`expectedHash` guard, and the `ctx.storage` mirror.
+
 ## 5. Known limitations (recorded by phase 01)
 
 - **Crash-safety scope (F9):** the atomic-write regression patches `os.replace`

@@ -1761,33 +1761,41 @@ import {
   SETTINGS_POLL_MS, UI_PREFS_KEY,
 } from "./plugins/opencode/tui.js";
 import { SettingsRpc } from "./plugins/opencode/index.js";
+import { loadConfigFromRaw } from "./plugins/opencode/config-io.js";
 import fs from "node:fs";
 import path from "node:path";
 
-function rpcState(config, hash) {
-  return { config: { ...config }, hash, setCalls: [], subs: [], unsubbed: false, staleAlways: false };
+// Realistic RPC snapshot (phase-04 R1): `raw` is the parsed ON-DISK file config;
+// `config` is the defaults-merged EFFECTIVE config (the production `get` builds
+// it with `loadConfigFromRaw`). A partial-config mock here is exactly what let
+// the RPC-path provenance defect ship.
+function rpcState(raw, hash) {
+  const onDisk = raw && typeof raw === "object" ? raw : {};
+  return {
+    raw: { ...onDisk },
+    config: loadConfigFromRaw(onDisk),
+    hash, setCalls: [], subs: [], unsubbed: false, staleAlways: false,
+  };
 }
 function rpcClient(state) {
+  const snapshot = () => ({ config: { ...state.config }, raw: { ...state.raw }, hash: state.hash });
   return {
-    get: async () => ({ config: { ...state.config }, hash: state.hash }),
+    get: async () => snapshot(),
     set: async (input) => {
       state.setCalls.push(input);
-      if (state.staleAlways) {
+      const stale = () => {
         const e = new Error("stale");
         e.type = "stale";
         e.data = { current_hash: state.hash, config: { ...state.config } };
         throw e;
-      }
+      };
+      if (state.staleAlways) stale();
       const exp = input?.expected_hash !== undefined ? input.expected_hash : input?.expectedHash;
-      if (exp !== undefined && exp !== null && exp !== state.hash) {
-        const e = new Error("stale");
-        e.type = "stale";
-        e.data = { current_hash: state.hash, config: { ...state.config } };
-        throw e;
-      }
-      state.config = { ...state.config, ...(input?.updates || {}) };
+      if (exp !== undefined && exp !== null && exp !== state.hash) stale();
+      state.raw = { ...state.raw, ...(input?.updates || {}) };
+      state.config = loadConfigFromRaw(state.raw);
       state.hash = `hash${state.setCalls.length}`;
-      return { config: { ...state.config }, hash: state.hash };
+      return snapshot();
     },
     events: {
       on: (name, fn) => { state.subs.push({ name, fn }); return () => { state.unsubbed = true; }; },
@@ -1971,6 +1979,118 @@ class TestRpcPreferredPath(unittest.TestCase):
             self.assertIn("Operating Mode", data["body"])
             self.assertIn("applies to next swarm run", data["body"])
             self.assertTrue(data["intact"])
+
+    def test_panel_rpc_path_provenance_distinguishes_sources(self):
+        # R1 (the shipped defect): on the PREFERRED RPC path, provenance must be
+        # default | file | env-override, derived from the RPC `raw` (on-disk)
+        # rather than the merged effective `config`. Pre-fix, every row was
+        # `[file]` and `[default]` was unreachable ({file: 18}).
+        res = run_node(
+            RPC_TUI_HARNESS
+            + """
+            const state = rpcState({ search_engine: "brave" }, "h0");
+            const shown = [];
+            const host = {
+              directory: "/tmp/oc-rpc-prov",
+              client: { rpc: (def) => rpcClient(state) },
+              ui: { panel: async (p) => shown.push(p) },
+            };
+            const r = await openSettingsPanel(host, "/tmp/oc-rpc-prov", {
+              env: { IUMBTEMS_SEARCH_TIMEOUT_S: "9" },
+            });
+            const body = shown[0].body;
+            const rowOf = (key) => body.split("\\n").find((l) => l.includes("(" + key + ")"));
+            console.log(JSON.stringify({
+              ok: r.ok,
+              searchEngine: rowOf("search_engine"),
+              mode: rowOf("mode"),
+              timeout: rowOf("search_timeout_s"),
+              fileCount: (body.match(/\\[file\\]/g) || []).length,
+              defaultCount: (body.match(/\\[default\\]/g) || []).length,
+              envCount: (body.match(/\\[env-override\\]/g) || []).length,
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"rpc provenance failed: {res.stderr}")
+        d = last_json_object(res.stdout)
+        self.assertTrue(d["ok"])
+        # The on-disk file sets only `search_engine` -> `file`, and exactly one row.
+        self.assertIn("[file]", d["searchEngine"])
+        self.assertEqual(d["fileCount"], 1)
+        # `default` is REACHABLE for keys the on-disk file does not set.
+        self.assertIn("[default]", d["mode"])
+        self.assertGreater(d["defaultCount"], 0)
+        # env-override wins for the mapped key.
+        self.assertIn("[env-override]", d["timeout"])
+        self.assertEqual(d["envCount"], 1)
+
+    def test_panel_rpc_path_warns_on_malformed_config(self):
+        # R10: the read-only panel must warn on a malformed config (the wizard
+        # already does), never render silent defaults, never throw, never write.
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            garbage = "{oops not json"
+            research.joinpath("config.json").write_text(garbage, encoding="utf-8")
+            res = run_node(
+                RPC_TUI_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const state = rpcState({{}}, null);
+                const shown = [];
+                const host = {{
+                  directory: root, client: {{ rpc: (def) => rpcClient(state) }},
+                  ui: {{ panel: async (p) => shown.push(p) }},
+                }};
+                const r = await openSettingsPanel(host, root, {{ env: {{}} }});
+                const body = (shown[0] && shown[0].body) || "";
+                const after = fs.readFileSync(path.join(root, ".research", "config.json"), "utf-8");
+                console.log(JSON.stringify({{
+                  ok: r.ok,
+                  warns: body.includes("Could not parse"),
+                  hasRows: body.includes("effective values"),
+                  intact: after === {garbage!r},
+                }}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"panel malformed failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["ok"])
+            self.assertTrue(data["warns"])
+            self.assertTrue(data["hasRows"])
+            self.assertTrue(data["intact"])
+
+    def test_panel_rpc_path_no_notice_for_valid_config(self):
+        # R10 companion: a valid config renders NO malformed notice.
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            seed = json.dumps({"mode": "audit"})
+            research.joinpath("config.json").write_text(seed, encoding="utf-8")
+            res = run_node(
+                RPC_TUI_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const state = rpcState({{ mode: "audit" }}, "h0");
+                const shown = [];
+                const host = {{
+                  directory: root, client: {{ rpc: (def) => rpcClient(state) }},
+                  ui: {{ panel: async (p) => shown.push(p) }},
+                }};
+                const r = await openSettingsPanel(host, root, {{ env: {{}} }});
+                const body = (shown[0] && shown[0].body) || "";
+                console.log(JSON.stringify({{
+                  ok: r.ok,
+                  warns: body.includes("Could not parse"),
+                  hasMode: body.includes("audit"),
+                }}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"panel valid failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["ok"])
+            self.assertFalse(data["warns"])
+            self.assertTrue(data["hasMode"])
 
     def test_wizard_rpc_path_warns_on_malformed_config(self):
         # Phase-03 R6 (phase-02 B2 on the primary path): corrupt config with

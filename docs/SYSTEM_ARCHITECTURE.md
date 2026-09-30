@@ -384,7 +384,41 @@ Agent-authored audit-shaped fields are renamed to `self_reported_*` and never co
 
 ### 6.6 Configuration Merge & Migration
 
-`load_config` deep-merges the `agents` block one role/key at a time over `DEFAULT_CONFIG`. Configs written before 0.7.6 that pinned `agents.<role>.backend = ["claude", "-p"]` are migrated to `null` on load (unless the top-level `backend` is an explicit `"claude"`), and the migration is persisted by the CLI and `iumbtems_config`.
+`load_config` deep-merges the `agents` block one role/key at a time over `DEFAULT_CONFIG`. Configs written before 0.7.6 that pinned `agents.<role>.backend = ["claude", "-p"]` are migrated to `null` on load (unless the top-level `backend` is an explicit `"claude"`), and the migration is persisted by the CLI and `iumbtems_config` on a config **write** (a read / `--show` never heals).
+
+### 6.7 Settings Surface: TUI → RPC → Canonical Writer
+
+The interactive settings surface (`/swarm-config`, phases 01-03) is a thin control plane over the same canonical file the runner already reads — it adds no second config dialect.
+
+```mermaid
+flowchart TD
+    Wizard["/swarm-config wizard (ui.dialog.select/prompt/confirm)"] --> RPC["iumbtems.settings RPC (plugins/opencode/index.js: get/set/validate + changed)"]
+    Panel["Status panel (iumbtems.swarm-settings, read-only)"] --> RPC
+    RPC -->|set: validate + expectedHash guard| MCP["iumbtems_config (runner/mcp_server.py::_handle_config)"]
+    MCP --> Writer["save_config (skills/swarm_config/configure.py: lock + validate + atomic os.replace)"]
+    Writer --> File[".research/config.json"]
+    File -->|read once at run start| Runner["SwarmRunner (reads config at construction)"]
+    RPC --> Mirror["ctx.storage mirror (iumbtems.settings.snapshot: last effective config + hash)"]
+    RPC -->|changed event| Subscribers["TUI subscribers (live refresh)"]
+    Fallback["direct-fs fallback (plugins/opencode/config-io.js) + degraded toast"] -.->|client.rpc absent or read failed| File
+    Poll["5s mtime poll (floor)"] -.-> Subscribers
+```
+
+**Data flow.** The wizard writes through the server `iumbtems.settings` RPC (`get`/`set`/`validate`, plus a `changed` event), which delegates the actual write to the canonical Python surface `iumbtems_config` (`runner/mcp_server.py::_handle_config` → `save_config`). The runner (`runner/research_swarm.py`) reads `.research/config.json` **once at construction**, so every change is "next run": the wizard/panel carry that badge and the runner never hot-swaps a live swarm.
+
+**Fallback path.** When `client.rpc` is absent (or an RPC read fails), the TUI writes directly via `plugins/opencode/config-io.js` and shows a visible degraded toast; the same schema validation and `expectedHash` guard apply. Live refresh subscribes to the RPC `changed` event, with the plugin's existing 5s refresh poll (`SETTINGS_POLL_MS`, shared with the swarm sidebar) as the floor.
+
+**Atomic write + lock protocol.** `save_config` holds the `.research/.config.lock` advisory lock across read-merge-write, validates against the canonical schema, preserves unknown keys already on disk, and publishes via a unique temp file + `os.replace` (a crash between write and rename leaves the original byte-identical; a `SIGKILL` can leave a `config.json.*.tmp`, which is inherent to the protocol — the config is never torn). The JS fallback mirrors the lock: create with `O_EXCL` + a pid/timestamp payload; a live lock is respected (`CONFIG_LOCKED`, nothing written); a lock older than **5s** (`LOCK_STALE_MS`) is taken over. Release is **own-lock-only** — a foreign live lock is never removed and an adopted-away lock is left intact. *Known asymmetry (NK1, waived):* the Python writer holds its lock via `fcntl.flock` on the same path but never writes a payload or unlinks, so simultaneity is advisory-only (human-paced TUI writes).
+
+**Lost-update guard (`expectedHash`).** `set` accepts a full SHA-256 or a unique prefix of **at least 8 hex chars** (alias `expectedHash`). Conflicting spellings are rejected: the canonical Python surface returns the code `CONFLICTING_EXPECTED_HASH`, and the RPC surfaces the same failure as error type `conflict`. A hash mismatch returns a structured `stale` error carrying a fresh snapshot and **writes nothing**.
+
+**`ctx.storage` mirror.** The server stores the last effective config + hash under `iumbtems.settings.snapshot`. `get` is a **single read** (effective config, on-disk `raw`, and hash all derived from the same bytes) and is **refresh-on-read**: every server-mediated read re-converges the mirror to disk truth after a direct-fs fallback-leg write. It is a convergence cache, never a second source of truth. TUI preferences use the host's `api.storage.store` — a separate store that is never run-affecting; run-affecting values only ever live in `.research/config.json`.
+
+**MCP toggles.** The persisted `mcp_servers` map is applied through `ctx.mcp.transform`: the plugin sets `disabled` for the plugin-controllable set (the bundled `iumbtems` server plus research servers declared in `config/mcp-research-servers.json`) and only for servers already in the host registry — it never adds or removes servers, and the catalog file stays byte-identical.
+
+**Temperature boundary (dated).** The in-host `session.hook("context")` is registered on setup, keys off `event.agent`, and applies `IUMBTEMS_TEMPERATURE[_<ROLE>]` only when the value is in range `[0, 2]` (an out-of-range value is **DISCARDED**, fail-closed — never clamped to a boundary); the runner exports `IUMBTEMS_AGENT_ROLE` into every spawned child env. There is **no verified path** that sets per-role temperature for spawned agents — the live-child leg is recorded `[NEGATIVE_KNOWLEDGE]` (S3, 2026-09-29), and W3 is reframed to "stay claim-free until a live child observes the hook" (upgrade trigger: one bounded live `opencode run` child). The TUI contains zero temperature strings.
+
+**Attribution.** The surface's patterns were reviewed from Gemini CLI (one schema → validation + dialog + generated docs), Codex (saved-vs-effective + optimistic concurrency), Goose (wizard-first secret handling), Crush (scoped MCP toggles; FSL, docs-only), Aider/Cline (the simple `/settings` ends), and OpenCode V2 (host dialog/RPC/storage APIs). No code was copied.
 
 ---
 
