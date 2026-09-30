@@ -465,7 +465,7 @@ CONFIG: Dict[str, Any] = {
         },
         "searxng_url": {
             "type": ["string", "null"],
-            "pattern": "^https?://",
+            "pattern": "^https?://[^\\s/]+\\S*$",
             "default": CONFIG_DEFAULTS["searxng_url"],
             "x-label": "SearXNG URL",
             "x-scope": "retrieval",
@@ -473,7 +473,8 @@ CONFIG: Dict[str, Any] = {
             "description": (
                 "Base URL of a self-hosted SearXNG; exported to spawned children "
                 "as SEARXNG_URL when set (preflight also reads the env var). Must "
-                "include an http:// or https:// scheme; null leaves the "
+                "include an http:// or https:// scheme AND a host "
+                "(`http://` with no host is rejected); null leaves the "
                 "environment untouched."
             ),
         },
@@ -518,14 +519,18 @@ CONFIG: Dict[str, Any] = {
         "domain_pack": {
             "type": ["string", "null"],
             "minLength": 1,
+            "pattern": "^\\S(.*\\S)?$",
             "default": CONFIG_DEFAULTS["domain_pack"],
             "x-label": "Domain Pack",
             "x-scope": "audit",
             "x-restart": "next-run",
             "description": (
                 "Regulated Domain Pack id (config/domain_packs/) or null for the "
-                "legacy constitution. The empty string is rejected; a pack id "
-                "that does not resolve fails loudly when the constitution loads."
+                "legacy constitution. The empty string, whitespace-only strings, "
+                "and ids with leading/trailing whitespace are rejected; a pack "
+                "id that does not resolve fails loudly when the constitution "
+                "loads. UI entry points (iumbtems_set_domain_pack) strip "
+                "surrounding whitespace before resolving."
             ),
         },
         "verify": {

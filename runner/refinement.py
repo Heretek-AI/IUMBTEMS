@@ -87,10 +87,15 @@ def load_domain_pack(pack: str) -> Constitution:
 
     Unknown/unloadable packs raise FileNotFoundError — silent fallback to
     legacy would hide a regulatory misconfiguration.
+
+    Surrounding whitespace is stripped before resolving (H3), so a padded id
+    from a UI affordance resolves like the clean id; blank ids still raise.
     """
+
     import json
     from pathlib import Path
 
+    pack = pack.strip() if isinstance(pack, str) else pack
     candidates = []
     p = Path(pack)
     if p.suffix == ".json" or "/" in pack:

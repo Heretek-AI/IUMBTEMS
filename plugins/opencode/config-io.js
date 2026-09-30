@@ -31,7 +31,8 @@
  *   a foreign live lock is never removed, and a lock adopted away from us by
  *   a concurrent takeover is left intact.
  * - Optional expected-hash guard (both `expected_hash` and `expectedHash`
- *   spellings; both present must agree or the call is rejected with
+ *   spellings; both present must agree after strip+lowercase normalization
+ *   or the call is rejected with
  *   CONFLICTING_EXPECTED_HASH). Full SHA-256 or a prefix of at least 8 hex
  *   chars; a mismatch raises CONFIG_STALE with a fresh snapshot and writes
  *   nothing. A malformed guard raises CONFIG_INVALID_EXPECTED_HASH.
@@ -164,6 +165,31 @@ export class ConfigHashError extends ConfigError {
     );
     this.name = 'ConfigHashError';
     this.code = 'CONFIG_INVALID_EXPECTED_HASH';
+  }
+}
+
+/**
+ * A caller-supplied null targets a schema-known non-nullable key (R2).
+ * Structural unification: `saveConfig` throws this (NULL_FOR_NON_NULLABLE_KEY)
+ * instead of the generic CONFIG_VALIDATION_FAILED, mirroring the Python
+ * `save_config`/`_handle_config` pre-check. Scoping: only schema-known paths
+ * are reported; nulls under unknown keys/roles stay preserved-verbatim.
+ */
+export class ConfigNullError extends ConfigError {
+  constructor(paths) {
+    const names = [...new Set((paths || []).map(String))].sort();
+    super(
+      'null is not accepted for non-nullable key(s): ' +
+        names.join(', ') +
+        '; omit the key to leave it unchanged, or pass a valid value',
+      { errors: names }
+    );
+    this.name = 'ConfigNullError';
+    this.code = 'NULL_FOR_NON_NULLABLE_KEY';
+  }
+
+  get errors() {
+    return [...(this.details.errors || [])];
   }
 }
 
@@ -390,6 +416,71 @@ export function validateConfig(cfg) {
     const schema = loadConfigSchema();
     if (!schema) return [];
     return validateAgainstSchema(cfg, schema);
+  } catch {
+    return [];
+  }
+}
+
+function schemaAllowsNull(subschema) {
+  if (!subschema || typeof subschema !== 'object') return false;
+  const t = subschema.type;
+  if (Array.isArray(t)) return t.includes('null');
+  return t === 'null';
+}
+
+/**
+ * Dotted paths in caller-supplied `caller` where null is banned (R2).
+ * Shared nested-null pre-check: `saveConfig` throws `ConfigNullError` for
+ * these paths so ALL writers emit `NULL_FOR_NON_NULLABLE_KEY` for
+ * schema-known paths. Only schema-known paths are reported; nulls under
+ * unknown top-level keys or unknown roles (e.g. `agents.gamma`) carry no
+ * nullability info and are preserved-verbatim. Returns [] when the schema
+ * is unreadable. Never throws.
+ */
+export function findCallerNullViolations(caller) {
+  try {
+    if (!caller || typeof caller !== 'object' || Array.isArray(caller)) return [];
+    const schema = loadConfigSchema();
+    if (!schema || !schema.properties) return [];
+    const props = schema.properties;
+    const found = [];
+    const walk = (value, subschema, at) => {
+      if (value === null || value === undefined) {
+        if (subschema && typeof subschema === 'object' && !schemaAllowsNull(subschema)) {
+          found.push(at);
+        }
+        return;
+      }
+      if (value && typeof value === 'object' && !Array.isArray(value) && subschema && typeof subschema === 'object') {
+        const subProps = subschema.properties || {};
+        const additional = subschema.additionalProperties;
+        for (const [k, child] of Object.entries(value)) {
+          if (Object.prototype.hasOwnProperty.call(subProps, k)) {
+            walk(child, subProps[k], at ? `${at}.${k}` : String(k));
+          } else if (additional && typeof additional === 'object') {
+            walk(child, additional, at ? `${at}.${k}` : String(k));
+          }
+        }
+        return;
+      }
+      if (Array.isArray(value) && subschema && typeof subschema === 'object') {
+        const items = subschema.items;
+        if (items && typeof items === 'object') {
+          for (let i = 0; i < value.length; i += 1) {
+            walk(value[i], items, `${at}[${i}]`);
+          }
+        }
+      }
+    };
+    for (const [key, value] of Object.entries(caller)) {
+      if (!Object.prototype.hasOwnProperty.call(props, key)) continue;
+      if (value === null || value === undefined) {
+        if (!schemaAllowsNull(props[key])) found.push(String(key));
+      } else if (value && typeof value === 'object') {
+        walk(value, props[key], String(key));
+      }
+    }
+    return [...new Set(found)].sort();
   } catch {
     return [];
   }
@@ -873,15 +964,23 @@ export function normalizeExpectedHash(expectedHash) {
 
 /**
  * Resolve the guard from `expected_hash`/`expectedHash` spellings. Both
- * present must agree (mirror the MCP R4 rule) or a CONFLICTING_EXPECTED_HASH
- * ConfigError is raised and nothing is written.
+ * present must agree AFTER normalization (strip + lowercase, mirroring
+ * normalizeExpectedHash — Phase-05 H2) or a CONFLICTING_EXPECTED_HASH
+ * ConfigError is raised and nothing is written. Case/whitespace-only
+ * differences are one guard; empty/whitespace-only spellings count as absent
+ * on both sides (R3: "" never conflicts); the winner is validated by
+ * normalizeExpectedHash below (malformed -> ConfigHashError).
  */
 export function resolveExpectedHash(opts = {}) {
   const snake = opts ? opts.expected_hash : undefined;
   const camel = opts ? opts.expectedHash : undefined;
-  const hasSnake = snake !== null && snake !== undefined;
-  const hasCamel = camel !== null && camel !== undefined;
-  if (hasSnake && hasCamel && String(snake) !== String(camel)) {
+  const hasSnake = snake !== null && snake !== undefined && String(snake).trim() !== '';
+  const hasCamel = camel !== null && camel !== undefined && String(camel).trim() !== '';
+  if (
+    hasSnake &&
+    hasCamel &&
+    String(snake).trim().toLowerCase() !== String(camel).trim().toLowerCase()
+  ) {
     throw new ConfigError(
       'expected_hash and expectedHash were both provided with different ' +
         'values; provide one spelling (or two equal values).',
@@ -993,10 +1092,15 @@ let tempCounter = 0;
  * Atomically persist cfg into `<baseDir>/config.json`.
  *
  * - Merges over whatever is on disk (unknown keys survive); cfg wins.
+ * - Caller-supplied null for a schema-known non-nullable key (any depth)
+ *   throws ConfigNullError (NULL_FOR_NON_NULLABLE_KEY) with dotted paths
+ *   before anything is written — the same code as the Python writer; nulls
+ *   under unknown keys/roles stay preserved-verbatim for generic validation.
  * - Validates the merged dict (disable only with validate:false when the
- *   exact dict was already validated); failures raise
+ *   exact dict was already validated); other failures raise
  *   ConfigValidationError and write nothing.
- * - Honors the expected-hash guard (both spellings); mismatches raise
+ * - Honors the expected-hash guard (both spellings; empty/whitespace-only
+ *   spellings count as absent); mismatches raise
  *   ConfigStaleError with a fresh snapshot (no absolute path, mirroring the
  *   Python R5 rule) and write nothing.
  * - Publishes via a unique temp file + rename; `injectFailure:
@@ -1008,6 +1112,10 @@ export function saveConfig(cfg, baseDir = DEFAULT_RESEARCH_DIR, opts = {}) {
     throw new ConfigValidationError([
       `<root>: expected object, got ${typeName(cfg)} (config must be a JSON object)`,
     ]);
+  }
+  const nullPaths = findCallerNullViolations(cfg);
+  if (nullPaths.length > 0) {
+    throw new ConfigNullError(nullPaths);
   }
   const expected = resolveExpectedHash(opts || {});
   const dir = String(baseDir || DEFAULT_RESEARCH_DIR);

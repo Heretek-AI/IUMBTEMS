@@ -96,7 +96,11 @@ def config_tool_input_schema() -> Dict[str, Any]:
             "type": "boolean",
             "description": (
                 "Inspect only; equivalent to calling with no update keys "
-                "(reads are always safe)."
+                "(reads are always safe). When true, the call is read-only "
+                "even if update keys are present: they are listed under "
+                "`ignored_updates` and nothing is written (the expected_hash "
+                "guard, including the dual-spelling conflict check, is not "
+                "evaluated)."
             ),
         },
         "expected_hash": {
@@ -105,8 +109,10 @@ def config_tool_input_schema() -> Dict[str, Any]:
                 "Optimistic-concurrency guard: SHA-256 (or a unique prefix of at "
                 "least 8 hex chars) of the config file you read. A mismatch "
                 "returns a structured stale error with a fresh snapshot and "
-                "writes nothing. Alias: `expectedHash`; if both spellings are "
-                "present they must be equal or the call is rejected."
+                "writes nothing. Empty/whitespace-only spellings count as absent. "
+                "Alias: `expectedHash`; if both spellings are "
+                "present they must be equal after normalization (strip + "
+                "lowercase) or the call is rejected."
             ),
         },
         "expectedHash": {
@@ -143,6 +149,131 @@ def _allows_null(schema: Dict[str, Any]) -> bool:
     if isinstance(types, list):
         return "null" in types
     return types == "null"
+
+
+def _normalize_hash_spelling(value: Any) -> str:
+    """Strip + lowercase a hash spelling for conflict comparison (H2).
+
+    Mirrors `normalize_expected_hash` in `skills/swarm_config/configure.py`
+    WITHOUT raising: malformed spellings still compare (so genuinely different
+    malformed guards conflict), and the single `save_config` writer later
+    validates the winner (malformed -> CONFIG_INVALID_EXPECTED_HASH).
+    Empty/whitespace-only spellings normalize to "" and are treated as absent
+    by the caller (R3: "" never conflicts).
+    """
+    return str(value).strip().lower()
+
+
+def _hash_spelling_present(value: Any) -> bool:
+    """True when an expected-hash spelling counts as provided (R3).
+
+    `None` and empty/whitespace-only strings mean "no guard" (mirroring
+    `normalize_expected_hash`); everything else is a guard spelling even if
+    malformed (malformed -> CONFIG_INVALID_EXPECTED_HASH on the write leg).
+    """
+    if value is None:
+        return False
+    return str(value).strip() != ""
+
+
+def _find_nested_null_violations(updates: Dict[str, Any]) -> List[str]:
+    """Dotted paths in `updates` carrying None where the schema bans null (H4).
+
+    The top-level loop in `_handle_config` already catches a direct
+    `{"mode": None}`; this extends the same `NULL_FOR_NON_NULLABLE_KEY` code
+    to nested nulls such as `{"verify": {"min_fuzzy_confidence": None}}`,
+    which previously surfaced as the generic `CONFIG_VALIDATION_FAILED`.
+    Contract: `NULL_FOR_NON_NULLABLE_KEY` wins for ANY caller-supplied null
+    at any depth; `CONFIG_VALIDATION_FAILED` covers every other schema
+    violation (including nulls already persisted on disk by a hand edit,
+    which the caller did not supply in this call).
+    """
+    from runner.schemas import CONFIG
+
+    found: List[str] = []
+
+    def walk(value: Any, subschema: Any, path: str) -> None:
+        if value is None:
+            if isinstance(subschema, dict) and not _allows_null(subschema):
+                found.append(path)
+            return
+        if isinstance(value, dict) and isinstance(subschema, dict):
+            props = subschema.get("properties") or {}
+            additional = subschema.get("additionalProperties")
+            for key, child in value.items():
+                if key in props:
+                    walk(child, props[key], f"{path}.{key}" if path else str(key))
+                elif isinstance(additional, dict):
+                    # e.g. `mcp_servers` values must be boolean; a null there
+                    # is a null-violation too, with the full dotted path.
+                    walk(
+                        child,
+                        additional,
+                        f"{path}.{key}" if path else str(key),
+                    )
+            # Unknown keys with no `additionalProperties` schema carry no
+            # nullability info; generic validation decides them (unknown
+            # object keys are preserved verbatim).
+            return
+        if isinstance(value, list) and isinstance(subschema, dict):
+            items = subschema.get("items")
+            if isinstance(items, dict):
+                for idx, child in enumerate(value):
+                    walk(child, items, f"{path}[{idx}]")
+
+    props = CONFIG.get("properties") or {}
+    for key, value in updates.items():
+        if value is None or not isinstance(value, (dict, list)):
+            continue  # top-level nulls are handled by the caller loop
+        canon = CONFIG_KEY_ALIASES.get(key, key)
+        if canon in props:
+            walk(value, props[canon], str(canon))
+    return sorted(found)
+
+
+def _config_updated_payload(
+    cfg_file: Path, candidate: Dict[str, Any], default_config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Success payload for the config write leg (H6).
+
+    `written_to` is ALWAYS an absolute path (via realpath, so symlinked
+    workspaces resolve to the true location). Both updated legs — the normal
+    single-read leg and the defensive branch where the just-written bytes
+    cannot be re-read — share this helper so the shape cannot diverge.
+    """
+    import hashlib
+
+    from skills.swarm_config.configure import merge_config
+
+    abs_path = str(Path(os.path.realpath(str(cfg_file))))
+    try:
+        raw_bytes = Path(cfg_file).read_bytes()
+    except OSError:
+        raw_bytes = None
+    if raw_bytes is None:
+        # A successful save always leaves bytes; keep the payload shape without
+        # a second read in this (unreachable) defensive branch.
+        return {
+            "status": "updated",
+            "config": candidate,
+            "written_to": abs_path,
+            "hash": None,
+        }
+    try:
+        parsed = json.loads(raw_bytes.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        parsed = None
+    effective = (
+        merge_config(default_config, parsed)
+        if isinstance(parsed, dict)
+        else merge_config(default_config, {})
+    )
+    return {
+        "status": "updated",
+        "config": effective,
+        "written_to": abs_path,
+        "hash": hashlib.sha256(raw_bytes).hexdigest(),
+    }
 
 
 def _legacy_pin_migration_pending(base_dir: str) -> bool:
@@ -182,9 +313,16 @@ def _handle_config(args: Dict[str, Any]) -> str:
     is written. Writes go through the single canonical writer (`save_config`:
     locked, validated, atomic, unknown-key-preserving) with an optional
     `expected_hash` guard (both `expected_hash` and `expectedHash` spellings).
-    """
-    import hashlib
 
+    Phase-05 H2 decisions: the two hash spellings compare NORMALIZED
+    (strip + lowercase, mirroring `normalize_expected_hash`), so
+    `"ABCDEF12"` vs `"abcdef12"` is one guard, not a conflict; empty or
+    whitespace-only spellings count as absent on both sides (R3), so `""`
+    never conflicts; and `show` forces the read-only leg even when update
+    keys are present (they are reported under `ignored_updates` and nothing
+    is written, without evaluating the guard or the dual-spelling conflict
+    check — R1 ordering).
+    """
     from skills.swarm_config.configure import (
         DEFAULT_CONFIG,
         ConfigError,
@@ -198,24 +336,10 @@ def _handle_config(args: Dict[str, Any]) -> str:
     base_dir = str(_resolve_base_dir(args))
     cfg = load_config(base_dir)
 
-    # R4: both spellings must agree; never silently prefer one.
     snake = args.get("expected_hash")
     camel = args.get("expectedHash")
-    if snake is not None and camel is not None and str(snake) != str(camel):
-        return _tool_text(
-            {
-                "status": "error",
-                "code": "CONFLICTING_EXPECTED_HASH",
-                "written": False,
-                "errors": [
-                    "expected_hash and expectedHash were both provided with "
-                    "different values; provide one spelling (or two equal values)."
-                ],
-                "expected_hash": str(snake),
-                "expectedHash": str(camel),
-            }
-        )
-    expected = snake if snake is not None else camel
+    snake_present = _hash_spelling_present(snake)
+    camel_present = _hash_spelling_present(camel)
 
     accepted = _canonical_config_keys()
     nullable = [key for key in accepted if _allows_null(CONFIG["properties"][key])]
@@ -249,6 +373,9 @@ def _handle_config(args: Dict[str, Any]) -> str:
                 "accepted_keys": accepted,
             }
         )
+    # H4: nested caller-supplied nulls share the top-level code, with dotted
+    # paths (e.g. `verify.min_fuzzy_confidence`).
+    null_for_non_nullable.extend(_find_nested_null_violations(updates))
     if null_for_non_nullable:
         return _tool_text(
             {
@@ -257,7 +384,7 @@ def _handle_config(args: Dict[str, Any]) -> str:
                 "written": False,
                 "errors": [
                     f"null is not accepted for non-nullable key(s): "
-                    f"{', '.join(sorted(null_for_non_nullable))}; omit the key to "
+                    f"{', '.join(sorted(set(null_for_non_nullable)))}; omit the key to "
                     "leave it unchanged, or pass a valid value"
                 ],
                 "nullable_keys": nullable,
@@ -265,17 +392,52 @@ def _handle_config(args: Dict[str, Any]) -> str:
             }
         )
 
-    if not updates:
-        # R11: the show leg is strictly read-only — a settings panel reads
-        # through it, so it must never persist the legacy-pin migration. Report
-        # whether a migration is pending; only the write leg below heals.
+    if args.get("show") or not updates:
+        # R11/H2/R1: the show leg is strictly read-only — a settings panel reads
+        # through it, so it must never persist the legacy-pin migration nor
+        # evaluate the expected_hash guard (including the dual-spelling
+        # conflict check, which lives BELOW this return). Report whether a
+        # migration is pending; only the write leg below heals. When `show`
+        # overrides present update keys, name them so the caller knows nothing
+        # was written.
+        payload: Dict[str, Any] = {
+            "status": "current",
+            "config": cfg,
+            "migrated": _legacy_pin_migration_pending(base_dir),
+        }
+        if args.get("show") and updates:
+            payload["ignored_updates"] = sorted(updates)
+        return _tool_text(payload)
+
+    # R1 ordering: the dual-spelling conflict check lives BELOW the show
+    # early-return so the show leg is fully read-only. R4/H2: both spellings
+    # must agree AFTER normalization; never silently prefer one.
+    # Case/whitespace-only differences are one guard; empty/whitespace-only
+    # spellings count as absent (R3).
+    if (
+        snake_present
+        and camel_present
+        and _normalize_hash_spelling(snake) != _normalize_hash_spelling(camel)
+    ):
         return _tool_text(
             {
-                "status": "current",
-                "config": cfg,
-                "migrated": _legacy_pin_migration_pending(base_dir),
+                "status": "error",
+                "code": "CONFLICTING_EXPECTED_HASH",
+                "written": False,
+                "errors": [
+                    "expected_hash and expectedHash were both provided with "
+                    "different values; provide one spelling (or two equal values)."
+                ],
+                "expected_hash": str(snake),
+                "expectedHash": str(camel),
             }
         )
+    if snake_present:
+        expected: Any = snake
+    elif camel_present:
+        expected = camel
+    else:
+        expected = None
 
     candidate = merge_config(cfg, updates)
     problems = validate_config(candidate)
@@ -315,39 +477,9 @@ def _handle_config(args: Dict[str, Any]) -> str:
     # `save_config` publishes a fully defaults-merged, validated object
     # atomically, so the bytes on disk are already the effective config; the
     # earlier `load_config()` + `config_hash()` were two independent reads.
+    # H6: the shared helper guarantees an absolute `written_to` on both legs.
     cfg_file = Path(base_dir) / "config.json"
-    try:
-        raw_bytes = cfg_file.read_bytes()
-    except OSError:
-        raw_bytes = None
-    if raw_bytes is None:
-        # A successful save always leaves bytes; keep the payload shape without
-        # a second read in this (unreachable) defensive branch.
-        return _tool_text(
-            {
-                "status": "updated",
-                "config": candidate,
-                "written_to": str(cfg_file),
-                "hash": None,
-            }
-        )
-    try:
-        parsed = json.loads(raw_bytes.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        parsed = None
-    effective = (
-        merge_config(DEFAULT_CONFIG, parsed)
-        if isinstance(parsed, dict)
-        else merge_config(DEFAULT_CONFIG, {})
-    )
-    return _tool_text(
-        {
-            "status": "updated",
-            "config": effective,
-            "written_to": str(cfg_file),
-            "hash": hashlib.sha256(raw_bytes).hexdigest(),
-        }
-    )
+    return _tool_text(_config_updated_payload(cfg_file, candidate, DEFAULT_CONFIG))
 
 
 def _run_swarm_mode(mode: Optional[str], args: Dict[str, Any]) -> str:
@@ -529,24 +661,28 @@ def _handle_factory(args: Dict[str, Any]) -> str:
     return _tool_text(payload)
 
 
-def _verify_min_fuzzy_confidence(cfg: Any) -> float:
-    """Configured `verify.min_fuzzy_confidence`, defaulting to 0.88.
+def _verify_min_fuzzy_confidence(cfg: Any) -> Any:
+    """Configured `verify.min_fuzzy_confidence`, defaulting to 0.88 (H5).
 
-    The value is clamped into [0, 1]; a malformed hand-edited file falls back to
-    the strict default instead of crashing the tool.
+    SINGLE-ENFORCEMENT-POINT CONTRACT: this returns the configured value
+    UNTOUCHED (no `float()` parse, no clamp) and `SourceHasher.verify_quote`
+    enforces it via `coerce_min_fuzzy_confidence` at call time. The persisted
+    schema stays strict (`type: number`); coercion exists only for
+    hand-edited files and direct library callers. The response echoes the
+    EFFECTIVE threshold (`coerce_min_fuzzy_confidence(configured)`), so the
+    reported value is always the one that governed the decision.
     """
     verify = cfg.get("verify") if isinstance(cfg, dict) else None
     raw = verify.get("min_fuzzy_confidence") if isinstance(verify, dict) else None
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return 0.88
-    return max(0.0, min(1.0, value))
+    return 0.88 if raw is None else raw
 
 
 def _handle_verify_quote(args: Dict[str, Any]) -> str:
     """Verify a verbatim quote against the content-addressed source cache."""
-    from skills.research_cache.hasher import SourceHasher
+    from skills.research_cache.hasher import (
+        SourceHasher,
+        coerce_min_fuzzy_confidence,
+    )
     from skills.swarm_config.configure import load_config
 
     content_hash = (
@@ -557,10 +693,10 @@ def _handle_verify_quote(args: Dict[str, Any]) -> str:
         raise ValueError("hash and quote are required")
 
     base_dir = _resolve_base_dir(args)
-    threshold = _verify_min_fuzzy_confidence(load_config(str(base_dir)))
+    configured = _verify_min_fuzzy_confidence(load_config(str(base_dir)))
     hasher = SourceHasher(base_dir)
     is_verified, confidence, message = hasher.verify_quote(
-        content_hash, quote, min_fuzzy_confidence=threshold
+        content_hash, quote, min_fuzzy_confidence=configured
     )
     return _tool_text(
         {
@@ -568,7 +704,7 @@ def _handle_verify_quote(args: Dict[str, Any]) -> str:
             "confidence": float(confidence),
             "message": message,
             "content_hash": content_hash,
-            "min_fuzzy_confidence": threshold,
+            "min_fuzzy_confidence": coerce_min_fuzzy_confidence(configured),
         }
     )
 
@@ -602,13 +738,19 @@ def _handle_check_staleness(args: Dict[str, Any]) -> str:
 
 
 def _handle_set_domain_pack(args: Dict[str, Any]) -> str:
-    """Activate a Regulated Domain Pack (epistemic constitution) in config."""
+    """Activate a Regulated Domain Pack (epistemic constitution) in config.
+
+    H3: surrounding whitespace is stripped before resolving — a blank or
+    whitespace-only id is rejected (the canonical schema additionally rejects
+    blank/padded ids at validation, so a padded id can never persist).
+    """
     from runner.refinement import load_domain_pack
     from skills.swarm_config.configure import load_config, save_config
 
-    pack = args.get("pack") or args.get("domain_pack") or args.get("pack_id")
-    if not pack:
-        raise ValueError("pack is required")
+    raw_pack = args.get("pack") or args.get("domain_pack") or args.get("pack_id")
+    pack = raw_pack.strip() if isinstance(raw_pack, str) else raw_pack
+    if not pack or (isinstance(pack, str) and not pack.strip()):
+        raise ValueError("pack is required (blank/whitespace-only ids are rejected)")
     constitution = load_domain_pack(pack)  # raises if unknown — fail loudly
     base_dir = str(_resolve_base_dir(args))
     cfg = load_config(base_dir)

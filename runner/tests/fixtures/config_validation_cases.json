@@ -211,6 +211,35 @@
       "valid": false,
       "expect": "pattern",
       "config": {"searxng_url": "localhost:8080"}
+    },
+    {
+      "name": "vert_searxng_url_scheme_without_host",
+      "valid": false,
+      "expect": "pattern",
+      "config": {"searxng_url": "http://"}
+    },
+    {
+      "name": "vert_searxng_url_scheme_without_host_slash",
+      "valid": false,
+      "expect": "pattern",
+      "config": {"searxng_url": "https:///path-only"}
+    },
+    {
+      "name": "vert_searxng_url_host_with_port_and_path",
+      "valid": true,
+      "config": {"searxng_url": "https://searx.local:8888/search"}
+    },
+    {
+      "name": "vert_domain_pack_whitespace_only",
+      "valid": false,
+      "expect": "pattern",
+      "config": {"domain_pack": "   "}
+    },
+    {
+      "name": "vert_domain_pack_padded",
+      "valid": false,
+      "expect": "pattern",
+      "config": {"domain_pack": " biopharma "}
     }
   ]
 }

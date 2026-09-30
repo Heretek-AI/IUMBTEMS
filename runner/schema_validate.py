@@ -14,6 +14,16 @@ comparisons.
 Validation is advisory: `_load_agent_dossier` warns and keeps going (#6 item 2.1).
 `skills/swarm_config/configure.py` uses it as the save-time gate, where it is
 enforced.
+
+`pattern` strings stay ECMA-anchored (`$`, never `\\Z`): the same strings ship
+in `schemas/*.schema.json` and `plugins/opencode/*`, where JS `new
+RegExp(pattern).test()` interprets them — and in JS `\\Z` is an identity
+escape matching a literal "Z", so a `\\Z` in the shared string would break
+the JS side. Python's `re` `$` instead also matches before a trailing
+newline ("https://example.com\n" would pass Python but fail JS), so at
+match time `_ecma_to_python_pattern` rewrites each unescaped `$` outside
+`[...]` to `\\Z` (JS `$` without the `m` flag == Python `\\Z`). Schema
+strings are untouched; `gen_schemas --check` stays green by construction.
 """
 
 import math
@@ -40,6 +50,44 @@ def _type_matches(value: Any, expected: str) -> bool:
         return isinstance(value, bool)
     py = _TYPE_MAP.get(expected)
     return py is not None and isinstance(value, py)
+
+
+def _ecma_to_python_pattern(pattern: str) -> str:
+    """Rewrite ECMA `$` anchors to Python `\\Z` for JS-identical verdicts.
+
+    Neither side uses multiline: JS `$` (no `m` flag) matches only at the
+    true end of input, while Python `$` also matches before a trailing
+    newline. Rewriting preserves `re.search` (JSON Schema `pattern` is an
+    unanchored search, like JS `RegExp.test`) and leaves the stored schema
+    string untouched. Escaped `\\$` and `$` inside `[...]` classes pass
+    through unchanged.
+    """
+    out: List[str] = []
+    escaped = False
+    in_class = False
+    i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if escaped:
+            out.append(ch)
+            escaped = False
+        elif ch == "\\":
+            out.append(ch)
+            escaped = True
+        elif ch == "[" and not in_class:
+            out.append(ch)
+            in_class = True
+        elif ch == "]" and in_class:
+            out.append(ch)
+            in_class = False
+        elif ch == "$" and not in_class:
+            out.append("\\Z")
+        else:
+            out.append(ch)
+        i += 1
+    if escaped:
+        out.append("\\")
+    return "".join(out)
 
 
 def validate(data: Any, schema: Dict[str, Any], path: str = "") -> List[str]:
@@ -108,7 +156,10 @@ def validate(data: Any, schema: Dict[str, Any], path: str = "") -> List[str]:
                 f"{path or '<root>'}: string shorter than minLength {min_length!r}"
             )
         pattern = schema.get("pattern")
-        if isinstance(pattern, str) and re.search(pattern, data) is None:
+        if (
+            isinstance(pattern, str)
+            and re.search(_ecma_to_python_pattern(pattern), data) is None
+        ):
             problems.append(
                 f"{path or '<root>'}: value {data!r} does not match pattern {pattern!r}"
             )

@@ -219,6 +219,38 @@ class ConfigStaleError(ConfigError):
         )
 
 
+class ConfigNullError(ConfigError):
+    """A caller-supplied null targets a schema-known non-nullable key.
+
+    Structural unification (R2): `save_config` emits the same
+    `NULL_FOR_NON_NULLABLE_KEY` code as the MCP `_handle_config` pre-check,
+    with dotted paths for nested nulls (e.g. `verify.min_fuzzy_confidence`).
+    Scoping: only schema-known paths are reported here; nulls under
+    unknown top-level keys or unknown roles (e.g. `agents.gamma`) carry no
+    nullability info and are preserved-verbatim for generic validation to
+    decide (unknown object keys are forward-compatible).
+    """
+
+    code = "NULL_FOR_NON_NULLABLE_KEY"
+
+    def __init__(self, paths: List[str]):
+        names = sorted(set(str(p) for p in paths))
+        super().__init__(
+            "null is not accepted for non-nullable key(s): "
+            + ", ".join(names)
+            + "; omit the key to leave it unchanged, or pass a valid value",
+            details={"errors": names},
+        )
+
+    @property
+    def null_errors(self) -> List[str]:
+        return list(self.details.get("errors") or [])
+
+    @property
+    def errors(self) -> List[str]:
+        return list(self.details.get("errors") or [])
+
+
 class ConfigHashError(ConfigError):
     """`expected_hash` is not a full sha256 / unique-prefix hex string."""
 
@@ -333,6 +365,67 @@ def _read_raw_config(cfg_file: Path) -> Optional[Dict[str, Any]]:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _caller_schema_allows_null(subschema: Any) -> bool:
+    """True when a canonical subschema accepts null (type includes "null")."""
+    if not isinstance(subschema, dict):
+        return False
+    types = subschema.get("type")
+    if isinstance(types, list):
+        return "null" in types
+    return types == "null"
+
+
+def collect_caller_null_violations(caller: Any) -> List[str]:
+    """Dotted paths in caller-supplied `caller` where null is banned (R2).
+
+    Shared nested-null pre-check: `save_config` raises `ConfigNullError` for
+    these paths so ALL writers emit `NULL_FOR_NON_NULLABLE_KEY` for
+    schema-known paths (unifying the MCP `_handle_config` pre-check). Only
+    schema-known paths are reported; nulls under unknown top-level keys or
+    unknown roles (e.g. `agents.gamma`) carry no nullability info and are
+    preserved-verbatim for generic validation to decide. Degrades to `[]`
+    when the canonical schema is unavailable (standalone skill copy).
+    """
+    if not isinstance(caller, dict):
+        return []
+    if _CONFIG_SCHEMA is None:
+        return []
+    props = _CONFIG_SCHEMA.get("properties") or {}
+    found: List[str] = []
+
+    def walk(value: Any, subschema: Any, path: str) -> None:
+        if value is None:
+            if isinstance(subschema, dict) and not _caller_schema_allows_null(
+                subschema
+            ):
+                found.append(path)
+            return
+        if isinstance(value, dict) and isinstance(subschema, dict):
+            sub_props = subschema.get("properties") or {}
+            additional = subschema.get("additionalProperties")
+            for key, child in value.items():
+                if key in sub_props:
+                    walk(child, sub_props[key], f"{path}.{key}" if path else str(key))
+                elif isinstance(additional, dict):
+                    walk(child, additional, f"{path}.{key}" if path else str(key))
+            return
+        if isinstance(value, list) and isinstance(subschema, dict):
+            items = subschema.get("items")
+            if isinstance(items, dict):
+                for idx, child in enumerate(value):
+                    walk(child, items, f"{path}[{idx}]")
+
+    for key, value in caller.items():
+        if key not in props:
+            continue  # unknown top-level keys: preserved verbatim
+        if value is None:
+            if not _caller_schema_allows_null(props[key]):
+                found.append(str(key))
+        elif isinstance(value, (dict, list)):
+            walk(value, props[key], str(key))
+    return sorted(set(found))
 
 
 # ---------------------------------------------------------------------------
@@ -486,7 +579,11 @@ def save_config(
     * Cross-process advisory lock over `.research/.config.lock` around the whole
       read-merge-write, so concurrent writers cannot lose each other's keys.
     * Unknown keys already on disk survive; `cfg` keys (deep-merged) win.
-    * Schema validation against `runner.schemas.CONFIG`; failures raise
+    * Caller-supplied null for a schema-known non-nullable key (any depth)
+      raises `ConfigNullError` (`NULL_FOR_NON_NULLABLE_KEY`) with dotted paths
+      before anything is written — the same code as the MCP surface; nulls
+      under unknown keys/roles stay preserved-verbatim for generic validation.
+    * Schema validation against `runner.schemas.CONFIG`; other failures raise
       `ConfigValidationError` with dotted paths and write nothing. `validate`
       may be disabled only by a caller that has already validated the exact
       dict it is persisting (see `heal_config`).
@@ -503,6 +600,9 @@ def save_config(
                 "(config must be a JSON object)"
             ]
         )
+    null_paths = collect_caller_null_violations(cfg)
+    if null_paths:
+        raise ConfigNullError(null_paths)
     guard = normalize_expected_hash(expected_hash)
     target_dir = Path(base_dir)
     target_dir.mkdir(parents=True, exist_ok=True)

@@ -152,13 +152,13 @@ export const TOOL_CATALOG = [
         show: {
           type: 'boolean',
           description:
-            'Inspect only; equivalent to calling with no update keys (reads are always safe).',
+            'Inspect only; equivalent to calling with no update keys (reads are always safe). When true, the call is read-only even if update keys are present (they are reported as ignored and nothing is written; the expected_hash guard, including the dual-spelling conflict check, is not evaluated).',
           default: false,
         },
         expected_hash: {
           type: 'string',
           description:
-            'Optimistic-concurrency guard: SHA-256 (or a unique prefix of at least 8 hex chars) of the config file you read. A mismatch returns a structured stale error with a fresh snapshot and writes nothing. Alias: `expectedHash`; if both spellings are present they must be equal or the call is rejected.',
+            'Optimistic-concurrency guard: SHA-256 (or a unique prefix of at least 8 hex chars) of the config file you read. A mismatch returns a structured stale error with a fresh snapshot and writes nothing. Empty/whitespace-only spellings count as absent. Alias: `expectedHash`; if both spellings are present they must be equal after normalization (strip + lowercase) or the call is rejected.',
         },
         expectedHash: {
           type: 'string',
@@ -207,8 +207,8 @@ export const TOOL_CATALOG = [
         },
         searxng_url: {
           type: ['string', 'null'],
-          pattern: '^https?://',
-          description: 'Base URL of a self-hosted SearXNG, exported as SEARXNG_URL when set; must include an http:// or https:// scheme; null leaves the environment untouched.',
+          pattern: '^https?://[^\\s/]+\\S*$',
+          description: 'Base URL of a self-hosted SearXNG, exported as SEARXNG_URL when set; must include an http:// or https:// scheme and a host, with no whitespace anywhere; null leaves the environment untouched.',
         },
         license_whitelist: {
           type: 'array',
@@ -227,7 +227,8 @@ export const TOOL_CATALOG = [
         domain_pack: {
           type: ['string', 'null'],
           minLength: 1,
-          description: 'Regulated Domain Pack id (config/domain_packs/) or null for the legacy constitution; the empty string is rejected.',
+          pattern: '^\\S(.*\\S)?$',
+          description: 'Regulated Domain Pack id (config/domain_packs/) or null for the legacy constitution; the empty string, whitespace-only strings, and ids with leading/trailing whitespace are rejected.',
         },
         verify: {
           type: 'object',

@@ -17,6 +17,35 @@ from typing import Dict, Any, Optional, Tuple
 DEFAULT_RESEARCH_DIR = ".research"
 BASE_DIR_HELP = "Base .research directory"
 
+#: Historical decision boundary for the fuzzy quote fallback (config
+#: `verify.min_fuzzy_confidence`). This is the default whenever no threshold
+#: is configured or the configured value is malformed.
+DEFAULT_MIN_FUZZY_CONFIDENCE = 0.88
+
+
+def coerce_min_fuzzy_confidence(value: Any) -> float:
+    """Coerce a `verify.min_fuzzy_confidence` candidate into [0, 1].
+
+    SINGLE-ENFORCEMENT-POINT CONTRACT (Phase 05 H5): this function is the one
+    definition of the coercion rule — string values are parsed with `float()`
+    (so a hand-edited `"0.95"` behaves like `0.95`), the result is clamped
+    into [0, 1], and anything malformed (None, non-numeric strings, NaN)
+    falls back to `DEFAULT_MIN_FUZZY_CONFIDENCE` (0.88, the strict
+    historical boundary). `SourceHasher.verify_quote` enforces it at call
+    time; every other layer (MCP `iumbtems_verify_quote`, the auditor, the
+    swarm runner) forwards its configured value untouched and must NOT
+    re-implement this rule. The persisted schema stays strict
+    (`type: number`): coercion exists only for hand-edited files and direct
+    library callers, never as an excuse to loosen validation.
+    """
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MIN_FUZZY_CONFIDENCE
+    if threshold != threshold:  # NaN: float("nan") parses but matches nothing
+        return DEFAULT_MIN_FUZZY_CONFIDENCE
+    return max(0.0, min(1.0, threshold))
+
 
 def _log_retrieval(base_dir, kind: str, **fields) -> None:
     """Best-effort retrieval telemetry (see runner/retrieval_log.py)."""
@@ -146,15 +175,11 @@ class SourceHasher:
         the historical decision boundary; callers that pass a value opt into a
         stricter/looser match. Exact and normalized matches are unaffected.
 
-        The value is clamped into [0, 1] here — the single enforcement point —
-        so MCP/auditor layers may parse config freely; malformed input falls back
-        to the strict default.
+        Coercion is NOT done here inline: `coerce_min_fuzzy_confidence` (the
+        single enforcement point — see its contract) parses, clamps, and
+        defaults the threshold.
         """
-        try:
-            threshold = float(min_fuzzy_confidence)
-        except (TypeError, ValueError):
-            threshold = 0.88
-        threshold = max(0.0, min(1.0, threshold))
+        threshold = coerce_min_fuzzy_confidence(min_fuzzy_confidence)
 
         source_text = self.get_source_content(content_hash)
         if not source_text:
