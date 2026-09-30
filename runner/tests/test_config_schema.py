@@ -86,6 +86,7 @@ VALID_UPDATES = {
     },
     "opencode_auto": False,
     "opencode_agent": "darkharvester",
+    "mcp_servers": {"searxng": False, "firecrawl": True},
 }
 
 # One clearly invalid value per canonical key.
@@ -107,6 +108,7 @@ INVALID_UPDATES = {
     "agents": "claude -p",
     "opencode_auto": "yes",
     "opencode_agent": 5,
+    "mcp_servers": "enabled",
 }
 
 
@@ -438,6 +440,45 @@ class TestMcpConfigSurface(unittest.TestCase):
             healed = json.loads(cfg_file.read_text(encoding="utf-8"))
             self.assertEqual(healed["max_iterations"], 2)
             self.assertIsNone(healed["agents"]["alpha"]["backend"])
+
+    def test_updated_payload_is_single_read_coherent(self):
+        """R10: `updated` config + hash come from ONE read of the written bytes.
+
+        Regression against the pre-R10 shape (`load_config()` then
+        `config_hash()` as two independent reads): a write landing between the
+        two would pair an era-A config with an era-B hash. We inject exactly
+        that write into `config_hash`; a single-read implementation never calls
+        it, so the returned config/hash stay coherent with the bytes on disk.
+        """
+        import hashlib
+
+        from skills.swarm_config import configure
+
+        with tempfile.TemporaryDirectory() as tmp:
+            original = configure.config_hash
+
+            def torn(base):
+                # Simulate a concurrent writer landing era-B between the old
+                # shape's two reads, immediately before the hash read.
+                cfg = Path(base) / "config.json"
+                data = json.loads(cfg.read_text(encoding="utf-8"))
+                data["mode"] = "audit"
+                cfg.write_text(json.dumps(data), encoding="utf-8")
+                return original(base)
+
+            configure.config_hash = torn
+            try:
+                payload = self._call({"mode": "scout", "base_dir": tmp})
+            finally:
+                configure.config_hash = original
+
+            self.assertEqual(payload["status"], "updated")
+            written = (Path(tmp) / "config.json").read_bytes()
+            # The hash covers the bytes the config was derived from ...
+            self.assertEqual(payload["hash"], hashlib.sha256(written).hexdigest())
+            # ... and the config is that same era (never scout + audit-hash).
+            self.assertEqual(payload["config"]["mode"], json.loads(written)["mode"])
+            self.assertEqual(payload["config"], load_config(tmp))
 
     def test_output_dir_deprecation_is_inert(self):
         with tempfile.TemporaryDirectory() as tmp:

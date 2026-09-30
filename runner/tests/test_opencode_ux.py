@@ -911,8 +911,8 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
             res = run_node(
                 f"""
                 import plugin from "./plugins/opencode/index.js";
-                let hookName = null;
-                let handler = null;
+                const hookNames = [];
+                let compactionHandler = null;
                 const host = {{
                   options: {{}},
                   location: {{directory: {str(root)!r}}},
@@ -920,16 +920,16 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
                   tool: {{transform: async () => ({{dispose: async () => {{}}}}), reload: async () => {{}}}},
                   session: {{
                     prompt: async () => ({{}}),
-                    hook: async (name, fn) => {{ hookName = name; handler = fn; return {{dispose: async () => {{}}}}; }}
+                    hook: async (name, fn) => {{ hookNames.push(name); if (name === "compaction") compactionHandler = fn; return {{dispose: async () => {{}}}}; }}
                   }}
                 }};
                 await plugin.setup(host);
                 const event = {{system: [], directory: {str(root)!r}}};
-                if (handler) await handler(event);
+                if (compactionHandler) await compactionHandler(event);
                 const emptyEvent = {{system: [], directory: "/tmp/oc-v2-compaction-empty-nonexistent"}};
-                if (handler) await handler(emptyEvent);
+                if (compactionHandler) await compactionHandler(emptyEvent);
                 console.log(JSON.stringify({{
-                  hookName,
+                  hookNames,
                   parts: event.system.map((p) => ({{type: p.type, text: p.text || ""}})),
                   emptySkipped: emptyEvent.system.length
                 }}));
@@ -939,7 +939,7 @@ class TestOpenCodeV2Transforms(unittest.TestCase):
                 res.returncode, 0, f"compaction hook test failed: {res.stderr}"
             )
             data = last_json_object(res.stdout)
-            self.assertEqual(data["hookName"], "compaction")
+            self.assertIn("compaction", data["hookNames"])
             self.assertEqual(
                 data["emptySkipped"], 0, "empty workspace must not push state"
             )
@@ -1745,6 +1745,341 @@ REPLAY_SINGLE = """
             };
             const cleanup = await plugin.setup(host);
 """
+
+
+# ---------------------------------------------------------------------------
+# Phase 03 (opencode-settings-menu): TUI prefers the `iumbtems.settings` RPC
+# (degraded direct-fs fallback with toast), `changed` subscription with the
+# 5s poll as floor, and UI-only prefs that never affect run-affecting values.
+# ---------------------------------------------------------------------------
+
+RPC_TUI_HARNESS = """
+import {
+  openSettingsWizard, openSettingsPanel,
+  subscribeSettingsChanged, getSettingsRpcClient,
+  readUiPrefs, writeUiPrefs,
+  SETTINGS_POLL_MS, UI_PREFS_KEY,
+} from "./plugins/opencode/tui.js";
+import { SettingsRpc } from "./plugins/opencode/index.js";
+import fs from "node:fs";
+import path from "node:path";
+
+function rpcState(config, hash) {
+  return { config: { ...config }, hash, setCalls: [], subs: [], unsubbed: false, staleAlways: false };
+}
+function rpcClient(state) {
+  return {
+    get: async () => ({ config: { ...state.config }, hash: state.hash }),
+    set: async (input) => {
+      state.setCalls.push(input);
+      if (state.staleAlways) {
+        const e = new Error("stale");
+        e.type = "stale";
+        e.data = { current_hash: state.hash, config: { ...state.config } };
+        throw e;
+      }
+      const exp = input?.expected_hash !== undefined ? input.expected_hash : input?.expectedHash;
+      if (exp !== undefined && exp !== null && exp !== state.hash) {
+        const e = new Error("stale");
+        e.type = "stale";
+        e.data = { current_hash: state.hash, config: { ...state.config } };
+        throw e;
+      }
+      state.config = { ...state.config, ...(input?.updates || {}) };
+      state.hash = `hash${state.setCalls.length}`;
+      return { config: { ...state.config }, hash: state.hash };
+    },
+    events: {
+      on: (name, fn) => { state.subs.push({ name, fn }); return () => { state.unsubbed = true; }; },
+    },
+  };
+}
+function tuiStore() {
+  const map = new Map();
+  return {
+    map,
+    storage: {
+      store: (key, { initial }) => {
+        const cur = map.has(key) ? map.get(key) : initial;
+        return [
+          { ...((cur || {})) },
+          async (mut) => {
+            const d = { ...(((map.has(key) ? map.get(key) : initial)) || {}) };
+            mut(d);
+            map.set(key, d);
+          },
+        ];
+      },
+    },
+  };
+}
+function dialogHost(queues) {
+  const toasts = [];
+  const pop = (arr) => ((!arr || arr.length === 0) ? null : arr.shift());
+  return {
+    toasts,
+    ui: {
+      toast: { show: (t) => toasts.push(t) },
+      dialog: {
+        select: async (a) => pop(queues.select),
+        prompt: async (a) => pop(queues.prompt),
+        confirm: async (a) => pop(queues.confirm),
+      },
+      panel: async (p) => { dialogHost._panel = p; return {}; },
+    },
+  };
+}
+"""
+
+
+class TestRpcPreferredPath(unittest.TestCase):
+    def test_wizard_prefers_rpc_and_writes_nothing_to_disk(self):
+        # C2 (preferred leg): with `client.rpc` the wizard round-trips through
+        # the RPC subclient; the workspace is never touched on disk.
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                RPC_TUI_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const state = rpcState({{ search_engine: "duckduckgo" }}, "h0");
+                const store = tuiStore();
+                const h = dialogHost({{ select: ["search_engine", "brave", "__iumbtems_save__"], confirm: [true] }});
+                const host = {{
+                  directory: root, client: {{ rpc: (def) => rpcClient(state) }},
+                  storage: store.storage, ui: h.ui,
+                }};
+                const r = await openSettingsWizard(host, root, {{ env: {{}} }});
+                const toasts = h.toasts.map((t) => JSON.stringify(t)).join("\\n");
+                console.log(JSON.stringify({{
+                  ok: r.ok, written: r.written, hash: r.hash,
+                  setCalls: state.setCalls,
+                  files: (function walk(d) {{
+                    try {{ return fs.readdirSync(d); }} catch {{ return []; }}
+                  }})(root),
+                  degraded: toasts.includes("degraded"),
+                  viaRpc: toasts.includes("server RPC"),
+                  prefs: store.map.get(UI_PREFS_KEY) || null,
+                }}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"rpc wizard failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["ok"])
+            self.assertTrue(data["written"])
+            self.assertEqual(len(data["setCalls"]), 1)
+            self.assertEqual(data["setCalls"][0]["updates"]["search_engine"], "brave")
+            self.assertEqual(data["setCalls"][0]["expectedHash"], "h0")
+            self.assertEqual(data["hash"], "hash1")
+            # Nothing written to disk: the RPC is the write path.
+            self.assertEqual(data["files"], [])
+            self.assertFalse(data["degraded"])
+            self.assertTrue(data["viaRpc"])
+            # UI prefs recorded the save; nothing else.
+            self.assertIn("lastSavedAt", data["prefs"])
+
+    def test_wizard_falls_back_without_client_with_toast(self):
+        # C2 (fallback leg): no `client.rpc` -> direct-fs write + toast, same
+        # validation and hash guard as before.
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                RPC_TUI_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const h = dialogHost({{ select: ["search_engine", "brave", "__iumbtems_save__"], confirm: [true] }});
+                const host = {{ directory: root, ui: h.ui }};
+                const r = await openSettingsWizard(host, root, {{ env: {{}} }});
+                const saved = JSON.parse(fs.readFileSync(path.join(root, ".research", "config.json"), "utf-8"));
+                const toasts = h.toasts.map((t) => JSON.stringify(t)).join("\\n");
+                console.log(JSON.stringify({{
+                  ok: r.ok, written: r.written,
+                  engine: saved.search_engine,
+                  degraded: toasts.includes("degraded path"),
+                }}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"fallback failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["ok"])
+            self.assertTrue(data["written"])
+            self.assertEqual(data["engine"], "brave")
+            self.assertTrue(data["degraded"])
+
+    def test_wizard_rpc_stale_maps_to_stale_result(self):
+        # C3 at the TUI: a stale RPC write surfaces the stale outcome and
+        # writes nothing anywhere.
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                RPC_TUI_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const state = rpcState({{ search_engine: "duckduckgo" }}, "h0");
+                state.staleAlways = true;
+                const h = dialogHost({{ select: ["search_engine", "brave", "__iumbtems_save__"], confirm: [true] }});
+                const host = {{
+                  directory: root, client: {{ rpc: (def) => rpcClient(state) }}, ui: h.ui,
+                }};
+                const r = await openSettingsWizard(host, root, {{ env: {{}} }});
+                const toasts = h.toasts.map((t) => JSON.stringify(t)).join("\\n");
+                let files = [];
+                try {{ files = fs.readdirSync(root); }} catch {{ files = []; }}
+                console.log(JSON.stringify({{
+                  ok: r.ok, reason: r.reason, written: r.written,
+                  staleToast: toasts.includes("refusing the stale write"),
+                  files,
+                }}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"stale wizard failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertFalse(data["ok"])
+            self.assertEqual(data["reason"], "stale")
+            self.assertFalse(data["written"])
+            self.assertTrue(data["staleToast"])
+            self.assertEqual(data["files"], [])
+
+    def test_panel_prefers_rpc_snapshot_without_writing(self):
+        # The panel never writes: seed a real file (the single-read snapshot
+        # serves it) and prove the bytes are untouched.
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            seed = json.dumps({"mode": "audit", "search_engine": "brave"})
+            research.joinpath("config.json").write_text(seed, encoding="utf-8")
+            res = run_node(
+                RPC_TUI_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const state = rpcState({{ mode: "audit", search_engine: "brave" }}, "h0");
+                const shown = [];
+                const host = {{
+                  directory: root, client: {{ rpc: (def) => rpcClient(state) }},
+                  ui: {{ panel: async (p) => shown.push(p) }},
+                }};
+                const r = await openSettingsPanel(host, root, {{ env: {{}} }});
+                const after = fs.readFileSync(path.join(root, ".research", "config.json"), "utf-8");
+                console.log(JSON.stringify({{
+                  ok: r.ok, degraded: r.degraded, body: shown[0].body,
+                  intact: after === {seed!r},
+                }}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"rpc panel failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["ok"])
+            self.assertFalse(data["degraded"])
+            self.assertIn("audit", data["body"])
+            self.assertIn("Operating Mode", data["body"])
+            self.assertIn("applies to next swarm run", data["body"])
+            self.assertTrue(data["intact"])
+
+    def test_wizard_rpc_path_warns_on_malformed_config(self):
+        # Phase-03 R6 (phase-02 B2 on the primary path): corrupt config with
+        # an RPC-preferred host warns instead of rendering silent defaults.
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            garbage = "{oops not json"
+            research.joinpath("config.json").write_text(garbage, encoding="utf-8")
+            res = run_node(
+                RPC_TUI_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const state = rpcState({{}}, null);
+                const h = dialogHost({{ select: ["__iumbtems_cancel__"] }});
+                const host = {{
+                  directory: root, client: {{ rpc: (def) => rpcClient(state) }}, ui: h.ui,
+                }};
+                const r = await openSettingsWizard(host, root, {{ env: {{}} }});
+                const toasts = h.toasts.map((t) => JSON.stringify(t)).join("\\n");
+                console.log(JSON.stringify({{
+                  cancelled: r.cancelled, written: r.written,
+                  warns: toasts.includes("Could not parse"),
+                  intact: fs.readFileSync(path.join(root, ".research", "config.json"), "utf-8") === {garbage!r},
+                }}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"malformed rpc failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["cancelled"])
+            self.assertFalse(data["written"])
+            self.assertTrue(data["warns"])
+            self.assertTrue(data["intact"])
+
+
+class TestChangedSubscription(unittest.TestCase):
+    def test_changed_event_reaches_subscriber_and_poll_floor_held(self):
+        res = run_node(
+            RPC_TUI_HARNESS
+            + """
+            const state = rpcState({}, "h0");
+            const withRpc = { client: { rpc: (def) => rpcClient(state) } };
+            const seen = [];
+            const unsub = subscribeSettingsChanged(withRpc, (e) => seen.push(e));
+            state.subs[0].fn({ hash: "hash9", keys: ["mode"] });
+            if (typeof unsub === "function") unsub();
+            const withoutRpc = subscribeSettingsChanged({ ui: {} }, () => {});
+            console.log(JSON.stringify({
+              subscribed: state.subs.map((s) => s.name),
+              seen,
+              unsubbed: state.unsubbed,
+              bare: withoutRpc,
+              pollMs: SETTINGS_POLL_MS,
+              rpcId: SettingsRpc.id,
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        data = last_json_object(res.stdout)
+        # Subscribed with the local event name; the received payload arrives.
+        self.assertEqual(data["subscribed"], ["changed"])
+        self.assertEqual(data["seen"], [{"hash": "hash9", "keys": ["mode"]}])
+        self.assertTrue(data["unsubbed"])
+        # No RPC -> null (the 5s mtime poll remains the floor).
+        self.assertIsNone(data["bare"])
+        self.assertEqual(data["pollMs"], 5000)
+        self.assertEqual(data["rpcId"], "iumbtems.settings")
+
+
+class TestUiPrefsBoundary(unittest.TestCase):
+    """C4 (TUI half): `storage.store` prefs never affect run-affecting values."""
+
+    def test_prefs_round_trip_without_touching_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            research.joinpath("config.json").write_text(
+                json.dumps({"mode": "research"}), encoding="utf-8"
+            )
+            res = run_node(
+                RPC_TUI_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const store = tuiStore();
+                const host = {{
+                  directory: root, storage: store.storage,
+                  ui: {{ panel: async (p) => {{ host._panel = p; }} }},
+                }};
+                // Prefs deliberately named like run-affecting keys.
+                const wrote = await writeUiPrefs(host, {{ mode: "audit", search_engine: "evil", lastSavedAt: "x" }});
+                const prefs = readUiPrefs(host);
+                const r = await openSettingsPanel(host, root, {{ env: {{}} }});
+                const onDisk = JSON.parse(fs.readFileSync(path.join(root, ".research", "config.json"), "utf-8"));
+                console.log(JSON.stringify({{
+                  wrote, prefs, body: host._panel.body, onDisk,
+                  bare: readUiPrefs({{ ui: {{}} }}),
+                }}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"prefs failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["wrote"])
+            self.assertEqual(data["prefs"]["mode"], "audit")
+            # Effective values still come from the file, never the prefs.
+            self.assertIn("research", data["body"])
+            self.assertNotIn("evil", data["body"])
+            self.assertEqual(data["onDisk"], {"mode": "research"})
+            # No TUI storage -> {} (never throws).
+            self.assertEqual(data["bare"], {})
 
 
 if __name__ == "__main__":

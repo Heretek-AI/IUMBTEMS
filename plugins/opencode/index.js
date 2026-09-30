@@ -25,6 +25,15 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  loadConfig,
+  loadConfigFromRaw,
+  mergeConfig,
+  readConfigSnapshot,
+  readRawConfig,
+  resolveExpectedHash,
+  validateConfig,
+} from './config-io.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -281,6 +290,11 @@ export const TOOL_CATALOG = [
         opencode_agent: {
           type: ['string', 'null'],
           description: 'Default named opencode agent profile for all roles; per-role agents.<role>.opencode_agent wins.',
+        },
+        mcp_servers: {
+          type: 'object',
+          additionalProperties: { type: 'boolean' },
+          description: 'Persisted toggle map for the plugin-controllable MCP server set (bundled `iumbtems` server plus research servers declared in the project OpenCode config). Keys are server names; values are booleans (true = enabled, false = disabled). Absent keys mean enabled. Applied via ctx.mcp.transform; the catalog file config/mcp-research-servers.json is never modified.',
         },
       },
     },
@@ -2048,6 +2062,581 @@ async function switchSessionAgent(host, sessionID, agentId) {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 03 (opencode-settings-menu): `iumbtems.settings` RPC domain, storage
+// mirror, MCP toggles, temperature hook.
+//
+// v2 RPC pattern (https://opencode.ai/v2/docs/build/plugins/rpc): the domain
+// is a portable `Rpc.define`-shaped definition (plain JSON-Schema I/O, no
+// dependency so the TUI entry can import it too), registered with
+// `ctx.rpc.register(Def, handlers)`; the TUI calls it via
+// `context.client.rpc(Def)`; implementations emit with
+// `registration.events.emit(name, data)`. Every registration below is
+// best-effort + feature-detected: a host without the domain yields null and
+// setup still succeeds (pinned by the graceful-degradation suites).
+// ---------------------------------------------------------------------------
+
+/** RPC domain id for the settings control plane. */
+export const SETTINGS_RPC_ID = 'iumbtems.settings';
+
+/** `ctx.storage` key mirroring the last effective config + hash. */
+export const SETTINGS_STORAGE_KEY = 'iumbtems.settings.snapshot';
+
+/**
+ * Portable `iumbtems.settings` RPC definition (`get`/`set`/`validate` plus
+ * the `changed` event). Shaped for `Rpc.define` (JSON-Schema I/O; event data
+ * is an object as the RPC contract requires) so it can be passed straight to
+ * a real `ctx.rpc.register` and to `context.client.rpc(...)` on the TUI side.
+ */
+export const SettingsRpc = {
+  id: SETTINGS_RPC_ID,
+  methods: {
+    get: {
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      output: {
+        type: 'object',
+        properties: {
+          config: { type: 'object' },
+          hash: { type: ['string', 'null'] },
+          migrated: { type: 'boolean' },
+        },
+        required: ['config'],
+        additionalProperties: false,
+      },
+    },
+    set: {
+      input: {
+        type: 'object',
+        properties: {
+          updates: { type: 'object' },
+          expected_hash: { type: 'string' },
+          expectedHash: { type: 'string' },
+        },
+        required: ['updates'],
+        additionalProperties: false,
+      },
+      output: {
+        type: 'object',
+        properties: {
+          config: { type: 'object' },
+          hash: { type: 'string' },
+        },
+        required: ['config', 'hash'],
+        additionalProperties: false,
+      },
+      errors: {
+        stale: {
+          type: 'object',
+          properties: {
+            expected_hash: { type: 'string' },
+            current_hash: { type: ['string', 'null'] },
+            written: { type: 'boolean' },
+          },
+          required: ['written'],
+          additionalProperties: false,
+        },
+        invalid: {
+          type: 'object',
+          properties: {
+            errors: { type: 'array', items: { type: 'string' } },
+            written: { type: 'boolean' },
+          },
+          required: ['written'],
+          additionalProperties: false,
+        },
+        conflict: {
+          type: 'object',
+          properties: {
+            expected_hash: { type: 'string' },
+            expectedHash: { type: 'string' },
+            written: { type: 'boolean' },
+          },
+          required: ['written'],
+          additionalProperties: false,
+        },
+      },
+    },
+    validate: {
+      input: {
+        type: 'object',
+        properties: { updates: { type: 'object' } },
+        required: ['updates'],
+        additionalProperties: false,
+      },
+      output: {
+        type: 'object',
+        properties: {
+          valid: { type: 'boolean' },
+          problems: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['valid', 'problems'],
+        additionalProperties: false,
+      },
+    },
+  },
+  events: {
+    changed: {
+      schema: {
+        type: 'object',
+        properties: {
+          hash: { type: 'string' },
+          keys: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['hash'],
+        additionalProperties: false,
+      },
+    },
+  },
+};
+
+function settingsResearchDir(root) {
+  try {
+    return path.join(root || process.cwd(), '.research');
+  } catch {
+    return path.join(process.cwd(), '.research');
+  }
+}
+
+function parseMcpContent(result) {
+  try {
+    return JSON.parse(String(result?.content ?? ''));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Declared-error return for an RPC method handler: uses the real
+ * `context.error(type, message, data)` when the host provides it, otherwise
+ * throws a structured error carrying the same type/data (the mock-host path
+ * in the suites). Never returns normally — always throws or returns the
+ * host's error value.
+ */
+function rpcFail(context, type, message, data) {
+  if (context && typeof context.error === 'function') {
+    return context.error(type, message, data);
+  }
+  const err = new Error(message);
+  err.rpcType = type;
+  err.rpcData = data || {};
+  throw err;
+}
+
+/** `iumbtems_config` control args are never config keys; strip them defensively. */
+const SETTINGS_CONTROL_ARGS = new Set(['base_dir', 'dir', 'show', 'expected_hash', 'expectedHash']);
+
+/**
+ * Leak signatures that must never reach the RPC transport (phase-03 R7/R9):
+ * tracebacks, `File "…", line N` frames, interpreter failure lines, and
+ * absolute filesystem paths of ANY root — POSIX (e.g. `/workspace/…`,
+ * `/srv/…`, `/Users/…`, `/app/…`), Windows drive (`C:\Users\…`), and UNC
+ * (`\\server\share`). Structured validation problems (e.g. `mode: value … not
+ * in enum …`, type/range violations carrying ordinary values) match none of
+ * these and pass through intact.
+ */
+const SETTINGS_ERROR_LEAK_PATTERNS = [
+  // Tracebacks and Python/Node interpreter failure lines.
+  /Traceback(?: \(most recent call last\))?/i,
+  /File\s+["'][^"']+["']\s*,\s*line\s+\d+/i,
+  /\b(?:ModuleNotFoundError|ImportError|SyntaxError|NameError|OSError|Errno \d+)\b/,
+  // Absolute POSIX path of any root: a bounded leading slash + >=2 segments.
+  /(?:^|[\s"'(=:,])\/(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+/,
+  // Windows drive-letter absolute path (`C:\Users\…`) or UNC share (`\\srv\share`).
+  /\b[A-Za-z]:[\\/](?:[^\\/\s"'<>|]+[\\/])*[^\\/\s"'<>|]+/,
+  /\\\\[^\\/\s"'<>|]+[\\/][^\\/\s"'<>|]+/,
+];
+
+/** Fixed reason when an individual failure item is unreadable/leaky (mirrors `get`). */
+const SETTINGS_WRITE_UNREADABLE = 'Config write rejected: canonical config surface returned an unreadable failure.';
+
+/**
+ * Sanitize a `set`-leg failure list PER ITEM (phase-03 R9): each structured
+ * problem passes through untouched; any single item carrying a leak signature
+ * is replaced by the fixed reason — one leaky entry never discards the rest of
+ * the list. Never throws; never returns an empty list.
+ */
+function sanitizeRpcErrors(errors) {
+  try {
+    const list = Array.isArray(errors) ? errors.map((e) => String(e)) : [];
+    if (list.length > 0) {
+      return list.map((item) =>
+        SETTINGS_ERROR_LEAK_PATTERNS.some((re) => re.test(item))
+          ? SETTINGS_WRITE_UNREADABLE
+          : item
+      );
+    }
+  } catch {
+    /* fall through to the fixed reason */
+  }
+  return [SETTINGS_WRITE_UNREADABLE];
+}
+
+/**
+ * Method handlers for the `iumbtems.settings` domain. `set` validates, applies
+ * the expected-hash guard (8-hex minimum, both `expected_hash`/`expectedHash`
+ * spellings, conflict -> error — the phase-01/02 semantics shared with
+ * `config-io.js`), and writes through the canonical Python surface
+ * (`callMcp('iumbtems_config')`) so the single-writer discipline holds. A stale
+ * guard returns the structured `stale` error with a fresh snapshot and writes
+ * nothing. `emitChanged` fires exactly once per successful write; the
+ * `ctx.storage` mirror and `mcp.reload()` are best-effort.
+ */
+export function createSettingsHandlers(opts = {}) {
+  const root = opts.root;
+  const researchDir = settingsResearchDir(root);
+  const callMcpImpl = opts.callMcpImpl || callMcp;
+  const storage = opts.storage || null;
+  const emitChanged = opts.emitChanged || null;
+  const reloadMcp = opts.reloadMcp || null;
+
+  return {
+    get: async () => {
+      let res;
+      try {
+        res = await callMcpImpl('iumbtems_config', { show: true, base_dir: researchDir }, root);
+      } catch (err) {
+        // Fail closed: a spawn failure (e.g. ENOENT) must never leak raw
+        // internals to the TUI — fixed message, stable code, nothing written.
+        const sanitized = new Error('iumbtems.settings.get failed: canonical config surface unavailable');
+        sanitized.code = 'SETTINGS_RPC_UNAVAILABLE';
+        throw sanitized;
+      }
+      const payload = parseMcpContent(res);
+      if (!payload || typeof payload.config !== 'object' || payload.config === null) {
+        const sanitized = new Error('iumbtems.settings.get failed: canonical config surface unavailable');
+        sanitized.code = 'SETTINGS_RPC_UNAVAILABLE';
+        throw sanitized;
+      }
+      // Single-read (phase-03 R5): the raw bytes are read EXACTLY ONCE below;
+      // the returned config is merged from those bytes and the hash is
+      // computed over those bytes, so an era-A config with an era-B hash is
+      // impossible. The Python surface still supplies the `migrated` flag
+      // (and keeps its heal-on-read side effect); the returned triple is one
+      // snapshot regardless of what either side read on its own clock.
+      const snap = readConfigSnapshot(researchDir);
+      const config = loadConfigFromRaw(snap.raw);
+      // Refresh-on-read (phase-03 R1): a direct-fs fallback-leg write bypasses
+      // the mirror, so every server-mediated read re-converges it to disk
+      // truth. The mirror can lag between writes, but it can no longer lie
+      // permanently after a fallback-leg success.
+      try {
+        if (storage && typeof storage.set === 'function') {
+          await storage.set(SETTINGS_STORAGE_KEY, {
+            config,
+            hash: snap.hash,
+            updated: new Date().toISOString(),
+          });
+        }
+      } catch {
+        /* the storage mirror is best-effort */
+      }
+      return { config, hash: snap.hash, migrated: Boolean(payload.migrated) };
+    },
+    validate: async (input = {}) => {
+      const updates = input?.updates;
+      if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+        return { valid: false, problems: ['updates: expected an object'] };
+      }
+      let merged;
+      try {
+        merged = mergeConfig(loadConfig(researchDir), updates);
+      } catch {
+        return { valid: false, problems: ['updates: could not be merged over the current config'] };
+      }
+      const problems = validateConfig(merged);
+      return { valid: problems.length === 0, problems };
+    },
+    set: async (input = {}, context = {}) => {
+      const updates = input?.updates;
+      if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+        return rpcFail(context, 'invalid', 'updates must be an object', {
+          written: false,
+          errors: ['updates: expected an object'],
+        });
+      }
+      let expected = null;
+      try {
+        expected = resolveExpectedHash({
+          expected_hash: input?.expected_hash,
+          expectedHash: input?.expectedHash,
+        });
+      } catch (err) {
+        if (err && err.code === 'CONFLICTING_EXPECTED_HASH') {
+          return rpcFail(context, 'conflict', String(err.message), { written: false });
+        }
+        return rpcFail(context, 'invalid', String((err && err.message) || err), { written: false });
+      }
+      const sanitized = {};
+      for (const [key, value] of Object.entries(updates)) {
+        if (!SETTINGS_CONTROL_ARGS.has(key)) sanitized[key] = value;
+      }
+      const args = { ...sanitized, base_dir: researchDir };
+      if (expected !== null) args.expected_hash = expected;
+      const res = await callMcpImpl('iumbtems_config', args, root);
+      const payload = parseMcpContent(res);
+      if (payload && payload.status === 'stale') {
+        return rpcFail(context, 'stale', 'Config changed on disk since it was read; refusing the stale write.', {
+          expected_hash: payload.expected_hash,
+          current_hash: payload.current_hash ?? null,
+          config: payload.config,
+          written: false,
+        });
+      }
+      if (!payload || payload.status !== 'updated' || typeof payload.config !== 'object') {
+        // Sanitize (phase-03 R7): raw transport text (tracebacks, absolute
+        // paths) must never reach the RPC transport — structured problems
+        // pass through, everything else becomes the fixed reason.
+        const errors = sanitizeRpcErrors(
+          (payload && payload.errors) || (res && res.content ? [String(res.content).slice(0, 300)] : [])
+        );
+        return rpcFail(context, 'invalid', 'Config write rejected.', { written: false, errors });
+      }
+      const hash = payload.hash || null;
+      try {
+        if (storage && typeof storage.set === 'function') {
+          await storage.set(SETTINGS_STORAGE_KEY, {
+            config: payload.config,
+            hash,
+            updated: new Date().toISOString(),
+          });
+        }
+      } catch {
+        /* the storage mirror is best-effort */
+      }
+      try {
+        if (typeof reloadMcp === 'function') await reloadMcp();
+      } catch {
+        /* mcp reload after a toggle change is best-effort */
+      }
+      try {
+        if (typeof emitChanged === 'function') {
+          await emitChanged({ hash, keys: Object.keys(sanitized) });
+        }
+      } catch {
+        /* event delivery is best-effort */
+      }
+      return { config: payload.config, hash };
+    },
+  };
+}
+
+/**
+ * Register the `iumbtems.settings` domain on a v2 host (`ctx.rpc.register`).
+ * Returns the registration, or null when the host has no RPC domain (the TUI
+ * then uses the direct-fs degraded path). Never throws.
+ */
+export async function registerSettingsRpc(host, opts = {}) {
+  try {
+    const register = host?.rpc?.register;
+    if (typeof register !== 'function') return null;
+    const root = opts.root || host?.location?.directory || undefined;
+    const storage = opts.storage || host?.storage || null;
+    let registration = null;
+    const emitChanged = async (data) => {
+      try {
+        if (registration && registration.events && typeof registration.events.emit === 'function') {
+          await registration.events.emit('changed', data);
+        }
+      } catch (err) {
+        log(host, 'warn', 'settings changed emit failed', errDetail(err));
+      }
+    };
+    const reloadMcp = async () => {
+      try {
+        if (host && host.mcp && typeof host.mcp.reload === 'function') {
+          await host.mcp.reload();
+        }
+      } catch (err) {
+        log(host, 'warn', 'mcp.reload() after settings write failed', errDetail(err));
+      }
+    };
+    const handlers = createSettingsHandlers({
+      root,
+      callMcpImpl: opts.callMcpImpl,
+      storage,
+      emitChanged,
+      reloadMcp,
+    });
+    registration = await register.call(host.rpc, SettingsRpc, handlers);
+    if (!registration) return null;
+    log(host, 'info', 'iumbtems.settings RPC registered', { id: SettingsRpc.id });
+    return registration;
+  } catch (err) {
+    log(host, 'warn', 'registering iumbtems.settings RPC failed', errDetail(err));
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MCP toggles (M1): `disabled` reconcile for the plugin-controllable set.
+// ---------------------------------------------------------------------------
+//
+// The persisted `mcp_servers` map (canonical config key) holds one boolean per
+// server (true = enabled). The transform applies `disabled` for names that are
+// (a) in the map, (b) in the plugin-controllable set (bundled `iumbtems` plus
+// research servers from `config/mcp-research-servers.json`), and (c) already
+// present in the host registry. It never `set`s new servers and never
+// `remove`s any — the catalog file stays byte-identical.
+
+/** Plugin-controllable MCP server names (the research-server catalog). */
+export function loadControllableMcpServers() {
+  try {
+    const catalog = JSON.parse(
+      readFileSync(path.join(PKG_ROOT, 'config', 'mcp-research-servers.json'), 'utf-8')
+    );
+    const names = Object.keys(catalog?.mcpServers || {});
+    if (names.length > 0) return names;
+  } catch {
+    /* fall through to the bundled default */
+  }
+  return ['iumbtems'];
+}
+
+/** Raw persisted toggle map (never throws; malformed workspace -> {}). */
+export function readPersistedMcpToggles(root) {
+  try {
+    const raw = readRawConfig(settingsResearchDir(root));
+    const map = raw?.mcp_servers;
+    if (!map || typeof map !== 'object' || Array.isArray(map)) return {};
+    return map;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Pure reconcile: persisted map x registry presence x controllable set ->
+ * `[{name, disabled}]`. Non-boolean values are ignored (never throw). Exported
+ * for tests.
+ */
+export function resolveMcpToggles(persistedMap, existingNames, controllable) {
+  const out = [];
+  try {
+    if (!persistedMap || typeof persistedMap !== 'object' || Array.isArray(persistedMap)) {
+      return out;
+    }
+    const existing = new Set(existingNames || []);
+    const allowed = new Set(controllable || []);
+    for (const [name, enabled] of Object.entries(persistedMap)) {
+      if (typeof enabled !== 'boolean') continue;
+      if (!allowed.has(name)) continue;
+      if (!existing.has(name)) continue;
+      out.push({ name, disabled: !enabled });
+    }
+  } catch {
+    /* reconcile never throws */
+  }
+  return out;
+}
+
+/**
+ * Apply the persisted toggle map through `ctx.mcp.transform`. Returns the
+ * registration, or null when the host has no MCP domain. Never throws.
+ */
+export async function registerMcpToggles(host, opts = {}) {
+  try {
+    const transform = host?.mcp?.transform;
+    if (typeof transform !== 'function') return null;
+    const root = opts.root || host?.location?.directory || undefined;
+    const controllable = opts.controllable || loadControllableMcpServers();
+    const registration = await transform.call(host.mcp, (editor) => {
+      let existing = [];
+      try {
+        existing = (editor.list() || []).map(([name]) => name);
+      } catch {
+        existing = [];
+      }
+      const toggles = resolveMcpToggles(readPersistedMcpToggles(root), existing, controllable);
+      for (const t of toggles) {
+        try {
+          editor.update(t.name, (cfg) => {
+            cfg.disabled = t.disabled;
+          });
+        } catch {
+          /* one bad entry never breaks the pass */
+        }
+      }
+      log(host, 'debug', 'mcp.transform pass', { toggles: toggles.map((t) => t.name) });
+    });
+    return registration || null;
+  } catch (err) {
+    log(host, 'warn', 'registering MCP toggles failed', errDetail(err));
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Temperature (S4): per-role `session.hook("context")`.
+// ---------------------------------------------------------------------------
+//
+// Configured via `IUMBTEMS_TEMPERATURE_<ROLE>` (e.g. IUMBTEMS_TEMPERATURE_ALPHA;
+// `IUMBTEMS_TEMPERATURE` is the fallback for every role) so no schema change
+// is needed. The hook keys off `event.agent` — type-guaranteed on the context
+// hook event (`SessionContext extends SessionRequest { readonly agent }` in
+// @opencode/plugin@2.0.18 dist/promise/session.d.ts) — never off the
+// `IUMBTEMS_AGENT_ROLE` env var, which only tells a spawned child its own role
+// (see the S3 spike record in the phase receipt).
+
+/** Configured temperature for a role, or undefined when unset/unparseable. */
+export function temperatureForRole(role, env = process.env) {
+  try {
+    const name = String(role || '').trim().toUpperCase();
+    if (!name) return undefined;
+    // Inheritance (phase-03 R4a): an agent id with no role-specific variable
+    // inherits the global IUMBTEMS_TEMPERATURE — unknown and future agent ids
+    // are deliberately NOT allowlisted (maintaining an id allowlist is riskier
+    // than the silent fallback: an unlisted id would silently keep host
+    // defaults either way, while a stale allowlist would misroute known
+    // roles). Behavior unchanged by this comment.
+    const raw = env?.[`IUMBTEMS_TEMPERATURE_${name}`] ?? env?.IUMBTEMS_TEMPERATURE;
+    if (raw === undefined || raw === null || String(raw).trim() === '') return undefined;
+    const num = Number(String(raw).trim());
+    if (!Number.isFinite(num) || num < 0 || num > 2) return undefined;
+    return num;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Apply the configured per-role temperature to one context-hook event.
+ * Returns true when `event.options.temperature` was set. Never throws.
+ */
+export function applyTemperatureToContext(event, env = process.env) {
+  try {
+    const role = event?.agent;
+    if (typeof role !== 'string' || !role) return false;
+    const temp = temperatureForRole(role, env);
+    if (temp === undefined) return false;
+    if (!event.options || typeof event.options !== 'object') event.options = {};
+    event.options.temperature = temp;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Register the temperature context hook (`session.hook("context")`). Returns
+ * the registration, or null when the host has no session-hook domain. Never
+ * throws.
+ */
+export async function registerTemperatureHook(host, opts = {}) {
+  try {
+    const hook = host?.session?.hook;
+    if (typeof hook !== 'function') return null;
+    const env = opts.env || process.env;
+    const registration = await hook.call(host.session, 'context', (event) => {
+      applyTemperatureToContext(event, env);
+    });
+    log(host, 'info', 'temperature context hook registered', {});
+    return registration || null;
+  } catch (err) {
+    log(host, 'warn', 'registering temperature hook failed', errDetail(err));
+    return null;
+  }
+}
+
 export function createOpenCodePlugin(context = {}) {
   return {
     id: 'heretek.iumbtems.epistemic-swarm',
@@ -2104,6 +2693,23 @@ export function createOpenCodePlugin(context = {}) {
         adopt(await registerCompactionHook(host, context));
       } catch (err) {
         log(host, 'error', 'registering compaction hook failed', errDetail(err));
+      }
+      const settingsRoot =
+        host.location?.directory || context.location?.directory || undefined;
+      try {
+        adopt(await registerSettingsRpc(host, { root: settingsRoot }));
+      } catch (err) {
+        log(host, 'error', 'registering settings RPC failed', errDetail(err));
+      }
+      try {
+        adopt(await registerMcpToggles(host, { root: settingsRoot }));
+      } catch (err) {
+        log(host, 'error', 'registering MCP toggles failed', errDetail(err));
+      }
+      try {
+        adopt(await registerTemperatureHook(host, {}));
+      } catch (err) {
+        log(host, 'error', 'registering temperature hook failed', errDetail(err));
       }
       // Slow work AFTER registration.
       try {

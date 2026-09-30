@@ -154,9 +154,11 @@ def _handle_config(args: Dict[str, Any]) -> str:
     locked, validated, atomic, unknown-key-preserving) with an optional
     `expected_hash` guard (both `expected_hash` and `expectedHash` spellings).
     """
+    import hashlib
+
     from skills.swarm_config.configure import (
+        DEFAULT_CONFIG,
         ConfigError,
-        config_hash,
         heal_config,
         load_config,
         merge_config,
@@ -269,12 +271,43 @@ def _handle_config(args: Dict[str, Any]) -> str:
             payload.update(exc.details)
         return _tool_text(payload)
 
+    # R10 (single read): derive BOTH the effective config and the hash from ONE
+    # read of the just-published bytes, so the storage mirror and the `changed`
+    # event can never receive an era-A config paired with an era-B hash.
+    # `save_config` publishes a fully defaults-merged, validated object
+    # atomically, so the bytes on disk are already the effective config; the
+    # earlier `load_config()` + `config_hash()` were two independent reads.
+    cfg_file = Path(base_dir) / "config.json"
+    try:
+        raw_bytes = cfg_file.read_bytes()
+    except OSError:
+        raw_bytes = None
+    if raw_bytes is None:
+        # A successful save always leaves bytes; keep the payload shape without
+        # a second read in this (unreachable) defensive branch.
+        return _tool_text(
+            {
+                "status": "updated",
+                "config": candidate,
+                "written_to": str(cfg_file),
+                "hash": None,
+            }
+        )
+    try:
+        parsed = json.loads(raw_bytes.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        parsed = None
+    effective = (
+        merge_config(DEFAULT_CONFIG, parsed)
+        if isinstance(parsed, dict)
+        else merge_config(DEFAULT_CONFIG, {})
+    )
     return _tool_text(
         {
             "status": "updated",
-            "config": load_config(base_dir),
-            "written_to": str(Path(base_dir) / "config.json"),
-            "hash": config_hash(base_dir),
+            "config": effective,
+            "written_to": str(cfg_file),
+            "hash": hashlib.sha256(raw_bytes).hexdigest(),
         }
     )
 

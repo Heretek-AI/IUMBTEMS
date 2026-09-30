@@ -429,6 +429,7 @@ export const FALLBACK_DEFAULTS = {
   },
   opencode_auto: null,
   opencode_agent: null,
+  mcp_servers: {},
 };
 
 /** Effective defaults, derived from the schema `default` keywords. */
@@ -590,13 +591,64 @@ export function isConfigMalformed(baseDir = DEFAULT_RESEARCH_DIR) {
 }
 
 /**
+ * Single-read snapshot of the config file (phase-03 R5): the raw bytes are
+ * read EXACTLY ONCE; `hash` is computed over those bytes and `raw` is parsed
+ * from those bytes, so a config parsed from one era can never pair with a
+ * hash of another. `malformed` is true when bytes exist but are not a JSON
+ * object. Never throws, never writes, never creates directories.
+ */
+export function readConfigSnapshot(baseDir = DEFAULT_RESEARCH_DIR) {
+  try {
+    const bytes = readBytes(getConfigPath(baseDir));
+    if (!bytes) return { hash: null, raw: null, malformed: false };
+    let hash = null;
+    try {
+      hash = createHash('sha256').update(bytes).digest('hex');
+    } catch {
+      hash = null;
+    }
+    const raw = parseJsonObject(bytes);
+    return { hash, raw, malformed: raw === null };
+  } catch {
+    return { hash: null, raw: null, malformed: false };
+  }
+}
+
+/**
+ * Effective config merged over defaults from an already-parsed raw object —
+ * the no-reread half of `loadConfig` (identical merge, migration, and
+ * fallback semantics; the caller owns the bytes). Never throws.
+ */
+export function loadConfigFromRaw(raw) {
+  try {
+    const base = configDefaults();
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return base;
+    const merged = { ...base, ...deepCopy(raw) };
+    merged.agents = mergeAgents(base.agents, raw.agents);
+    if (
+      raw.verify && typeof raw.verify === 'object' && !Array.isArray(raw.verify) &&
+      base.verify && typeof base.verify === 'object' && !Array.isArray(base.verify)
+    ) {
+      merged.verify = { ...base.verify, ...deepCopy(raw.verify) };
+    }
+    migrateLegacyAgentBackends(merged);
+    return merged;
+  } catch {
+    try {
+      return deepCopy(FALLBACK_DEFAULTS);
+    } catch {
+      return {};
+    }
+  }
+}
+
+/**
  * Load config merged over defaults. Pure — never writes. Applies the
  * legacy-pin migration in memory; unknown keys are preserved verbatim.
  * Never throws (malformed workspace falls back to defaults with a warning).
  */
 export function loadConfig(baseDir = DEFAULT_RESEARCH_DIR) {
   try {
-    const base = configDefaults();
     const raw = readRawConfig(baseDir);
     if (!raw) {
       if (isConfigMalformed(baseDir)) {
@@ -609,18 +661,9 @@ export function loadConfig(baseDir = DEFAULT_RESEARCH_DIR) {
           /* logging must never throw */
         }
       }
-      return base;
+      return configDefaults();
     }
-    const merged = { ...base, ...deepCopy(raw) };
-    merged.agents = mergeAgents(base.agents, raw.agents);
-    if (
-      raw.verify && typeof raw.verify === 'object' && !Array.isArray(raw.verify) &&
-      base.verify && typeof base.verify === 'object' && !Array.isArray(base.verify)
-    ) {
-      merged.verify = { ...base.verify, ...deepCopy(raw.verify) };
-    }
-    migrateLegacyAgentBackends(merged);
-    return merged;
+    return loadConfigFromRaw(raw);
   } catch {
     try {
       return deepCopy(FALLBACK_DEFAULTS);

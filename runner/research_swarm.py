@@ -146,7 +146,10 @@ def _verify_threshold(config: Optional[Dict[str, Any]]) -> float:
 
 
 def _config_child_env(
-    base_dir: Path, agent_cwd: str, config: Optional[Dict[str, Any]]
+    base_dir: Path,
+    agent_cwd: str,
+    config: Optional[Dict[str, Any]],
+    role: Optional[str] = None,
 ) -> Dict[str, str]:
     """Environment for a spawned agent child: base env + config passthrough.
 
@@ -158,6 +161,11 @@ def _config_child_env(
     * `cache_ttl_days`          -> IUMBTEMS_FETCH_TTL_DAYS (webcache, when set)
     * `search_timeout_s`        -> IUMBTEMS_SEARCH_TIMEOUT_S (search.py, when set)
     * `searxng_url`             -> SEARXNG_URL (search provider + searxng_mcp)
+    * `role`                    -> IUMBTEMS_AGENT_ROLE (S3 temperature spike: lets
+      a spawned `opencode run` child know its swarm role so the project
+      plugin's `session.hook("context")` can key per-role temperature off
+      `event.agent` — if the child loads the project plugin; absent/empty
+      role exports nothing)
     """
     cfg = config or {}
     env: Dict[str, str] = {
@@ -181,6 +189,8 @@ def _config_child_env(
     searxng = cfg.get("searxng_url")
     if isinstance(searxng, str) and searxng.strip():
         env["SEARXNG_URL"] = searxng.strip()
+    if role:
+        env["IUMBTEMS_AGENT_ROLE"] = str(role)
     return env
 
 
@@ -524,7 +534,7 @@ class SwarmRunner:
                 # IUMBTEMS_RESEARCH_DIR points agent-invoked skill scripts
                 # (search.py/hasher.py) at this workspace for retrieval telemetry;
                 # the cache/search keys ride the same env channel.
-                env=_config_child_env(self.base_dir, agent_cwd, self.config),
+                env=_config_child_env(self.base_dir, agent_cwd, self.config, role),
                 # stdin MUST be DEVNULL: `opencode run` reads piped stdin to
                 # EOF before starting, and the MCP server's inherited stdin
                 # pipe is held open by the harness — every agent hung forever

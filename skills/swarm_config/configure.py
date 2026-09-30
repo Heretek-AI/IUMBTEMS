@@ -88,8 +88,9 @@ except ImportError:  # pragma: no cover - standalone skill copy
     _file_lock = _fallback_file_lock
 
 
-# Literal fallback for standalone runs; `test_config_schema.py` asserts it stays
-# byte-identical to `runner.schemas.CONFIG_DEFAULTS` (drift guard).
+# Literal fallback for standalone runs (runner/ not importable). It must stay
+# in sync with the canonical `runner.schemas.CONFIG_DEFAULTS`; the drift test
+# `TestFallbackDrift` in `runner/tests/test_swarm_config.py` asserts equality.
 _FALLBACK_DEFAULT_CONFIG: Dict[str, Any] = {
     "search_engine": "duckduckgo",
     "max_iterations": 2,
@@ -124,6 +125,8 @@ _FALLBACK_DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "opencode_auto": None,  # None = enabled unless IUMBTEMS_OPENCODE_AUTO says no
     "opencode_agent": None,  # None = inline the prompt, no --agent
+    # Persisted MCP-server toggle map (phase 03); mirrors CONFIG_DEFAULTS.
+    "mcp_servers": {},
 }
 
 DEFAULT_CONFIG: Dict[str, Any] = copy.deepcopy(

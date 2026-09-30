@@ -26,10 +26,159 @@ import {
   saveConfig,
   validateConfig,
 } from './config-io.js';
-import { OPENCODE_COMMANDS } from './index.js';
+import { OPENCODE_COMMANDS, SettingsRpc } from './index.js';
 
 const PLUGIN_ID = 'heretek.iumbtems.epistemic-swarm.tui';
 const REFRESH_MS = 5000;
+
+// ---------------------------------------------------------------------------
+// Phase 03 (opencode-settings-menu): RPC-preferred reads/writes, `changed`
+// subscription, UI-only prefs.
+//
+// The server plugin's `iumbtems.settings` RPC domain is the preferred path:
+// `api.client.rpc(SettingsRpc)` (the v2 TUI context carries `client:
+// OpenCodeClient`). When absent — or when an RPC call fails with a transport
+// error — the wizard/panel fall back to the direct-fs `config-io.js` path
+// with a visible degraded-path toast. Both paths share validation and the
+// expected-hash guard. Live refresh subscribes to the `changed` event; the
+// existing 5s mtime poll stays as the floor.
+//
+// UI preferences live in `api.storage.store(...)` (durable, synced across TUI
+// instances) and are NEVER run-affecting: only dialog conveniences such as
+// the last-save timestamp. Effective values always come from the RPC snapshot
+// or `.research/config.json`.
+// ---------------------------------------------------------------------------
+
+/** Live-refresh floor: the sidebar poll interval, in ms (unchanged). */
+export const SETTINGS_POLL_MS = REFRESH_MS;
+
+/** UI-only preferences key (TUI storage; never run-affecting). */
+export const UI_PREFS_KEY = 'iumbtems.ui.prefs';
+
+// Invariant (phase-03 R4c): UI prefs are write-only conveniences (e.g. the
+// last-save timestamp). NO read path — wizard, panel, or otherwise — consults
+// them when computing effective settings: effective values come exclusively
+// from the RPC snapshot or `.research/config.json`. `TestUiPrefsBoundary`
+// pins this: prefs deliberately named like config keys never surface in the
+// panel body or on disk. No behavior change by this comment.
+
+/**
+ * RPC subclient for the settings domain, or null when the host has no
+ * `client.rpc` (degraded direct-fs path). Never throws.
+ */
+export function getSettingsRpcClient(api) {
+  try {
+    const rpc = api?.client?.rpc;
+    if (typeof rpc !== 'function') return null;
+    return rpc.call(api.client, SettingsRpc);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Subscribe to the server `changed` event for live refresh. Returns the
+ * unsubscribe function, or null when the host has no RPC events (the 5s poll
+ * remains the floor). Never throws.
+ */
+export function subscribeSettingsChanged(api, onChanged) {
+  try {
+    const client = getSettingsRpcClient(api);
+    if (!client || !client.events || typeof client.events.on !== 'function') {
+      return null;
+    }
+    const unsub = client.events.on('changed', (event) => {
+      try {
+        if (typeof onChanged === 'function') onChanged(event);
+      } catch {
+        /* refresh callbacks are best-effort */
+      }
+    });
+    return typeof unsub === 'function' ? unsub : () => {};
+  } catch {
+    return null;
+  }
+}
+
+/** Read UI-only prefs ({} when the host has no TUI storage). Never throws. */
+export function readUiPrefs(api) {
+  try {
+    const store = api?.storage?.store;
+    if (typeof store !== 'function') return {};
+    const [state] = store.call(api.storage, UI_PREFS_KEY, { initial: {} });
+    return { ...(state || {}) };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Merge UI-only prefs (never run-affecting; false when the host has no TUI
+ * storage). Never throws.
+ */
+export async function writeUiPrefs(api, patch) {
+  try {
+    const store = api?.storage?.store;
+    if (typeof store !== 'function') return false;
+    const parts = store.call(api.storage, UI_PREFS_KEY, { initial: {} });
+    const mutate = parts && parts[1];
+    if (typeof mutate !== 'function') return false;
+    await mutate((draft) => {
+      Object.assign(draft, patch || {});
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Visible toast marking the degraded direct-fs path. */
+function degradedRpcToast(host, reason) {
+  wizardToast(
+    host,
+    'IUMBTEMS settings',
+    `Server RPC ${reason} — using direct file write (degraded path). ` +
+      'Changes still validate and apply to the next swarm run.'
+  );
+}
+
+/** Human-readable settings text for already-loaded rows (the RPC path). */
+function formatSettingRows(rows) {
+  try {
+    if (!rows || rows.length === 0) return 'IUMBTEMS settings: no schema available.';
+    const lines = rows.map((row) => {
+      const restartNote =
+        row.restart === 'next-run'
+          ? 'applies to next swarm run'
+          : `restart: ${row.restart}`;
+      const stale = row.deprecated ? ' (deprecated, display-only)' : '';
+      return `- ${row.label} (${row.key}): ${displayCell(row)} [${row.source}] — ${restartNote}${stale}`;
+    });
+    return ['IUMBTEMS settings (effective values):', ...lines].join('\n');
+  } catch {
+    return 'IUMBTEMS settings: unavailable (workspace unreadable).';
+  }
+}
+
+/**
+ * Effective settings body: RPC snapshot when available, direct-fs text
+ * otherwise. Never throws.
+ */
+async function effectiveSettingsBody(host, baseDir, env) {
+  const rpc = getSettingsRpcClient(host);
+  if (rpc) {
+    try {
+      const snap = await rpc.get();
+      if (snap && snap.config && typeof snap.config === 'object') {
+        const rows = buildSettingRows({ ...snap.config }, snap.config, env);
+        if (rows.length > 0) return formatSettingRows(rows);
+      }
+    } catch {
+      /* fall through to the direct-fs read */
+    }
+  }
+  return formatSettingsText(baseDir, env);
+}
 
 /** Palette command opening the read-only settings status panel. */
 export const SETTINGS_PANEL_COMMAND_ID = 'iumbtems.swarm-settings';
@@ -206,6 +355,26 @@ function SwarmSidebar(api, root) {
       }
     }, REFRESH_MS);
     onCleanup(() => clearInterval(timer));
+    // Live refresh on the server `changed` event; the poll above is the floor.
+    let unsub = null;
+    try {
+      unsub = subscribeSettingsChanged(api, () => {
+        try {
+          setSnapshot(readSwarmStatus(root));
+        } catch {
+          /* keep last snapshot */
+        }
+      });
+    } catch {
+      /* poll remains the floor */
+    }
+    onCleanup(() => {
+      try {
+        if (typeof unsub === 'function') unsub();
+      } catch {
+        /* unsubscribe is best-effort */
+      }
+    });
   });
   return box({}, [
     () => {
@@ -829,8 +998,29 @@ export async function openSettingsWizard(host, root, opts = {}) {
       );
       return { ok: false, reason: 'no-dialog', written: false };
     }
-    const raw = readRawConfig(baseDir);
-    if (isConfigMalformed(baseDir)) {
+    // Preferred path: the server RPC snapshot. Absent `client.rpc` (or a
+    // failed RPC read) falls back to the direct-fs path with a visible toast.
+    let rpc = getSettingsRpcClient(host);
+    if (!rpc) degradedRpcToast(host, 'unavailable');
+    let raw;
+    let draft;
+    let startHash;
+    if (rpc) {
+      try {
+        const snap = await rpc.get();
+        if (!snap || typeof snap.config !== 'object') throw new Error('empty snapshot');
+        raw = snap.config;
+        draft = JSON.parse(JSON.stringify(snap.config));
+        startHash = typeof snap.hash === 'string' ? snap.hash : null;
+      } catch {
+        degradedRpcToast(host, 'read failed');
+        rpc = null;
+      }
+    }
+    // B2 (phase-03 R6): the malformed-config warning fires on the RPC path
+    // too — the server snapshot degrades to defaults for a corrupt file, and
+    // silent defaults are not B2-compliant. Local fs read, advisory only.
+    if (rpc && isConfigMalformed(baseDir)) {
       wizardToast(
         host,
         'IUMBTEMS settings',
@@ -838,8 +1028,19 @@ export async function openSettingsWizard(host, root, opts = {}) {
           'Saving will replace the malformed file; cancel writes nothing.'
       );
     }
-    const startHash = configHash(baseDir);
-    const draft = loadConfig(baseDir);
+    if (!rpc) {
+      raw = readRawConfig(baseDir);
+      if (isConfigMalformed(baseDir)) {
+        wizardToast(
+          host,
+          'IUMBTEMS settings',
+          `Could not parse ${baseDir}/config.json — showing defaults. ` +
+            'Saving will replace the malformed file; cancel writes nothing.'
+        );
+      }
+      startHash = configHash(baseDir);
+      draft = loadConfig(baseDir);
+    }
     if (raw && rawHasLegacyPin(raw, draft.backend)) {
       wizardToast(
         host,
@@ -893,6 +1094,56 @@ export async function openSettingsWizard(host, root, opts = {}) {
           return { ok: false, reason: 'dialog-error', written: false };
         }
         if (!confirmed) continue;
+        // Preferred write path: the server RPC (validates + hash-guards
+        // server-side, mirrors storage, emits `changed`). Transport failures
+        // fall back to the direct-fs write below.
+        if (rpc) {
+          try {
+            const rpcInput = { updates: draft };
+            if (opts && opts.expected_hash !== undefined) {
+              rpcInput.expected_hash = opts.expected_hash;
+            }
+            if (opts && opts.expectedHash !== undefined) {
+              rpcInput.expectedHash = opts.expectedHash;
+            }
+            if (rpcInput.expected_hash === undefined && rpcInput.expectedHash === undefined) {
+              rpcInput.expectedHash = startHash;
+            }
+            const res = await rpc.set(rpcInput);
+            wizardToast(
+              host,
+              'IUMBTEMS settings',
+              'Saved via server RPC — applies to the next swarm run.'
+            );
+            try {
+              await writeUiPrefs(host, { lastSavedAt: new Date().toISOString() });
+            } catch {
+              /* UI prefs are best-effort */
+            }
+            return { ok: true, written: true, hash: (res && res.hash) || null };
+          } catch (err) {
+            if (err && (err.type === 'stale' || (err.data && err.data.current_hash !== undefined))) {
+              wizardToast(
+                host,
+                'IUMBTEMS settings',
+                'Config changed on disk since it was read; refusing the stale write. ' +
+                  'Re-open the wizard for a fresh snapshot — nothing was written.'
+              );
+              return { ok: false, reason: 'stale', written: false };
+            }
+            const failure = err && (err.rpcType || err.type);
+            if (failure === 'invalid' || failure === 'conflict') {
+              wizardToast(
+                host,
+                'IUMBTEMS settings',
+                `Save failed: ${(err && err.message) || err} — nothing was written.`
+              );
+              return { ok: false, reason: 'save-failed', written: false };
+            }
+            degradedRpcToast(host, 'write failed');
+            rpc = null;
+          }
+        }
         const guard =
           opts && (opts.expected_hash !== undefined || opts.expectedHash !== undefined)
             ? { expected_hash: opts.expected_hash, expectedHash: opts.expectedHash }
@@ -904,6 +1155,11 @@ export async function openSettingsWizard(host, root, opts = {}) {
             'IUMBTEMS settings',
             `Saved ${res.path} — applies to the next swarm run.`
           );
+          try {
+            await writeUiPrefs(host, { lastSavedAt: new Date().toISOString() });
+          } catch {
+            /* UI prefs are best-effort */
+          }
           return { ok: true, written: true, hash: res.hash };
         } catch (err) {
           if (err && err.code === 'CONFIG_STALE') {
@@ -941,7 +1197,7 @@ export async function openSettingsPanel(host, root, opts = {}) {
   try {
     const baseDir = researchDirOf(host, root);
     const env = (opts && opts.env) || process.env;
-    const body = formatSettingsText(baseDir, env);
+    const body = await effectiveSettingsBody(host, baseDir, env);
     let show = null;
     try {
       if (typeof host?.ui?.panel === 'function') show = host.ui.panel.bind(host.ui);

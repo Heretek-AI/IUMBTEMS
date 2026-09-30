@@ -38,6 +38,7 @@ from skills.swarm_config.configure import (  # noqa: E402
     ConfigHashError,
     ConfigStaleError,
     ConfigValidationError,
+    _FALLBACK_DEFAULT_CONFIG,
     config_hash,
     heal_config,
     load_config,
@@ -52,6 +53,26 @@ def _write_config(base_dir: Path, payload: dict) -> Path:
     cfg_file = base_dir / "config.json"
     cfg_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return cfg_file
+
+
+class TestFallbackDrift(unittest.TestCase):
+    """Phase-03 R2: the standalone fallback literal tracks the canonical defaults.
+
+    Replaces the old comment-only "drift guard" (which named a test that never
+    existed): this is the real test. `_FALLBACK_DEFAULT_CONFIG` is the
+    standalone path of `DEFAULT_CONFIG`, so any key added to
+    `runner.schemas.CONFIG_DEFAULTS` without updating the literal fails here.
+    """
+
+    def test_fallback_literal_matches_canonical_defaults(self):
+        from runner.schemas import CONFIG_DEFAULTS
+
+        self.assertEqual(_FALLBACK_DEFAULT_CONFIG, CONFIG_DEFAULTS)
+
+    def test_fallback_literal_covers_every_schema_key(self):
+        from runner.schemas import CONFIG
+
+        self.assertEqual(set(_FALLBACK_DEFAULT_CONFIG), set(CONFIG["properties"]))
 
 
 class TestLegacyAgentPinMigration(unittest.TestCase):

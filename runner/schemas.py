@@ -311,6 +311,7 @@ CONFIG_DEFAULTS: Dict[str, Any] = {
     },
     "opencode_auto": None,
     "opencode_agent": None,
+    "mcp_servers": {},
 }
 
 
@@ -589,6 +590,23 @@ CONFIG: Dict[str, Any] = {
                 "Default named opencode agent profile for all roles; per-role "
                 "agents.<role>.opencode_agent wins."
             ),
+        },
+        "mcp_servers": {
+            "type": "object",
+            "default": copy.deepcopy(CONFIG_DEFAULTS["mcp_servers"]),
+            "x-label": "MCP Servers",
+            "x-scope": "dispatch",
+            "x-restart": "next-run",
+            "description": (
+                "Persisted toggle map for the plugin-controllable MCP server "
+                "set (bundled `iumbtems` server plus research servers declared "
+                "in the project OpenCode config). Keys are server names; "
+                "values are booleans (true = enabled, false = disabled). "
+                "Absent keys mean enabled. Applied via ctx.mcp.transform "
+                "(`disabled` reconcile); the catalog file "
+                "config/mcp-research-servers.json is never modified."
+            ),
+            "additionalProperties": {"type": "boolean"},
         },
     },
 }
