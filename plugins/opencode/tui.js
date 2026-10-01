@@ -504,9 +504,98 @@ const WIZARD_KEEP_VALUE = '__iumbtems_keep__';
 
 function wizardToast(host, title, message) {
   try {
-    host?.ui?.toast?.show?.({ title, message, variant: 'info', duration: 6000 });
+    const toast = host?.ui?.toast;
+    const show = toast?.show;
+    if (typeof show !== 'function') return false;
+    show.call(toast, { title, message, variant: 'info', duration: 6000 });
+    return true;
   } catch {
-    /* toast is best-effort */
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 07 (H8): keyed advisory dedup window for the repeating R4 advisories.
+//
+// Editing an env-shadowed or deprecated row fires its advisory on EVERY edit,
+// so a multi-edit wizard session spams one toast per row visit. `warnOnce`
+// collapses repeats of the SAME advisory key inside a TTL window: the first
+// shows, repeats within the window are suppressed (counted), expiry re-shows
+// (annotated with the suppressed count), and distinct keys stay independent.
+//
+// SAFETY: only the two repeating R4 advisories route here. Degraded-path,
+// malformed-config, validation-error, stale, and save-failure toasts call
+// `wizardToast` directly and are NEVER deduped (missed-action safety).
+// Durations are preserved: wizard advisories stay 6000ms via `wizardToast`
+// (the 4000ms keymap usage toast is untouched).
+// ---------------------------------------------------------------------------
+
+/** Dedup window for repeating R4 advisories, in ms. Exported for tests. */
+export const ADVISORY_DEDUP_MS = 30000;
+
+/** key -> { ts, suppressed }: last show time + repeats collapsed since. */
+const advisorySeen = new Map();
+
+/**
+ * Show a keyed advisory toast at most once per `ttlMs` window.
+ * Returns true when a toast was actually delivered, false when collapsed
+ * or when delivery failed (failed deliveries never arm the window).
+ * `opts.now` injects the clock (tests); `opts.ttlMs` overrides the window.
+ * Session scope: each `openSettingsWizard` call resets the window (fresh
+ * wizard session always warns at least once); repeats within one session
+ * still collapse. Never throws.
+ */
+export function warnOnce(host, key, title, message, opts = {}) {
+  try {
+    const ttl =
+      opts && opts.ttlMs !== undefined && opts.ttlMs !== null
+        ? Number(opts.ttlMs)
+        : ADVISORY_DEDUP_MS;
+    const now =
+      opts && opts.now !== undefined && opts.now !== null
+        ? Number(opts.now)
+        : Date.now();
+    const entry = advisorySeen.get(key);
+    if (entry && Number.isFinite(ttl) && ttl > 0) {
+      const dt = now - entry.ts;
+      if (Number.isFinite(dt) && dt >= 0 && dt < ttl) {
+        entry.suppressed += 1;
+        return false;
+      }
+      // dt < 0 (clock moved backwards) or dt >= ttl (expiry) fall through
+      // to reshow — a backwards clock must never suppress indefinitely.
+    }
+    let text = message;
+    if (entry && entry.suppressed > 0) {
+      text += ` (repeated ${entry.suppressed + 1}× since last notice)`;
+    }
+    // Arm the window ONLY on actual delivery: a failed toast (missing/broken
+    // host) leaves state untouched so the next real warning still delivers.
+    const delivered = wizardToast(host, title, text);
+    if (!delivered) return false;
+    advisorySeen.set(key, { ts: now, suppressed: 0 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Test hook: forget all dedup state. Never throws. */
+export function _resetAdvisoryDedup() {
+  try {
+    advisorySeen.clear();
+  } catch {
+    /* never throw */
+  }
+}
+
+/** Test hook: suppressed-repeat count pending for `key`. Never throws. */
+export function _advisorySuppressed(key) {
+  try {
+    const entry = advisorySeen.get(key);
+    return entry ? entry.suppressed : 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -715,23 +804,29 @@ async function editRow(dialog, host, draft, row) {
   try {
     const sub = row.schema || {};
     // R4 advisories (never block the edit; the write still proceeds):
-    // an env-shadowed value has no runtime effect until the override is
-    // unset, and a deprecated key is display-only.
+    // an env-shadowed value is not effective while the override is set, and
+    // a deprecated key is ignored at runtime. Both route through the keyed
+    // dedup window (per-key repeats collapse); every other toast stays
+    // un-deduped so no error or degraded-path notice is ever swallowed.
     if (row.source === 'env-override') {
-      wizardToast(
+      warnOnce(
         host,
+        `env:${row.key}`,
         'Environment override',
-        `The environment shadows '${row.key}' — editing the file value has ` +
-          'no runtime effect until the override is unset. The stored value is ' +
-          'still saved on confirm.'
+        `The environment shadows '${row.key}' — the file value is not ` +
+          'effective while the override is set and has no runtime effect ' +
+          'until the override is unset. The edited value is still stored ' +
+          'on save (cancel writes nothing).'
       );
     }
     if (row.deprecated) {
-      wizardToast(
+      warnOnce(
         host,
+        `deprecated:${row.key}`,
         'Deprecated field',
-        `'${row.key}' is deprecated and display-only — it never selects the ` +
-          'workspace. The stored value is still saved on confirm.'
+        `'${row.key}' is deprecated and ignored — it has no runtime ` +
+          'effect. The edited value is still stored on save for reference, ' +
+          'but changes nothing (cancel writes nothing).'
       );
     }
     const types = Array.isArray(sub.type) ? sub.type : [sub.type];
@@ -999,6 +1094,15 @@ async function editAgentsRow(dialog, host, draft, row) {
  */
 export async function openSettingsWizard(host, root, opts = {}) {
   try {
+    // R1 session scope: a fresh wizard session always warns at least once.
+    // The keyed R4 window collapses repeats WITHIN one session only; reset
+    // the boundary here so a prior session (same key, <30s ago) never leaks
+    // into the new session. Never throws.
+    try {
+      advisorySeen.clear();
+    } catch {
+      /* dedup reset is best-effort */
+    }
     const dialog = dialogOf(host);
     const baseDir = researchDirOf(host, root);
     const env = (opts && opts.env) || process.env;

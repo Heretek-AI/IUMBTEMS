@@ -21,7 +21,7 @@ npm cache in consuming projects, and relative paths broke live: the manager
 agent ran `find / -name factory.py`). The tool wraps the same helper and
 resolves the project via `project_dir` argument, `IUMBTEMS_PROJECT_DIR`, or
 the session cwd. It supports `init`, `phase-add`, `qa-record`, `expansion`,
-`stop`, and returns `status: escalated` (exit 2) on the 3rd QA failure.
+`stop`, `gate` (`--action open|settle|approve|waive|escalate|count`), and returns `status: escalated` (exit 2) on the 3rd QA failure.
 
 ## 2. Gate protocol (max 5 swarm cycles per gate)
 

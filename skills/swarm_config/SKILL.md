@@ -122,7 +122,12 @@ and enforced by `iumbtems_config` before any write. The write guard
 prefix of **at least 8 hex characters**; conflicting spellings are rejected with
 `CONFLICTING_EXPECTED_HASH`. `heal_config` refuses to persist a file that fails
 canonical validation (the legacy-pin migration stays in memory until the
-invalid values are fixed).
+invalid values are fixed). Non-healing reads (phase-08 R3 truth): no production
+read path calls `heal_config` — `--show` / bare CLI, the MCP `show` leg, and
+`load_config` itself never write. The migration is applied in memory on every
+load and persists opportunistically when a later write leg merges the loaded
+config; `heal_config` remains an exported, tested, explicit repair helper for
+persisting the migration outside any other write.
 
 ## 4. TUI Settings Surface (OpenCode V2)
 

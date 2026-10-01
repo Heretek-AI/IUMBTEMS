@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -264,6 +265,85 @@ class ConfigHashError(ConfigError):
         )
 
 
+class ConfigUnreadableError(ConfigError):
+    """The config file exists but is not a readable, bounded regular file.
+
+    Phase-08 R2 (W17): `save_config` raises this (fail-closed, nothing
+    written) instead of hanging on a FIFO/special device or silently merging
+    over an unreadable/oversize file.
+    """
+
+    code = "CONFIG_UNREADABLE"
+
+
+# ---------------------------------------------------------------------------
+# bounded reads (phase-08 R2 FIFO hardening)
+# ---------------------------------------------------------------------------
+
+#: Cap for any single `config.json` read. The file is ~1KB in practice; the
+#: cap exists only so a pathological workspace entry can never wedge a reader
+#: on an unbounded slurp (mirrors `runner/preflight.py::STATE_MAX_BYTES`).
+CONFIG_MAX_BYTES = 1024 * 1024
+
+
+def _read_bounded_bytes(
+    path: Path, max_bytes: int = CONFIG_MAX_BYTES
+) -> Optional[bytes]:
+    """Read at most `max_bytes` from `path` iff it is a regular file.
+
+    Phase-08 R2 (W17): a FIFO named `config.json` hung `load_config` /
+    `heal_config` on a plain `open`. Ports the `runner/preflight.py`
+    `_read_bounded_text` semantics — `S_ISREG` on BOTH the pre-open `stat`
+    and the post-open `fstat` (closing the stat->open race), an `O_NONBLOCK`
+    open, and a byte cap — so a pathological workspace entry (FIFO, device,
+    socket, directory, runaway file) can never block a config reader.
+    Returns `None` when the path is absent, unreadable, non-regular, or
+    over the cap.
+
+    Symlinks are FOLLOWED (`os.stat`, no `O_NOFOLLOW`): the pre-fix reader
+    followed them too, so a symlinked config keeps working; a symlink to a
+    non-regular target is still refused by the `S_ISREG` checks. Residual
+    (documented): a symlink swapped for a FIFO between the pre-open stat and
+    the open races the check — the post-open `fstat` still refuses anything
+    that is non-regular at read time.
+    """
+    try:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return None
+    except OSError:
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return None
+        except OSError:
+            return None
+        chunks = []
+        remaining = max_bytes + 1
+        while remaining > 0:
+            try:
+                chunk = os.read(fd, min(remaining, 65536))
+            except BlockingIOError:
+                break
+            except OSError:
+                return None
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    finally:
+        os.close(fd)
+    data = b"".join(chunks)
+    if len(data) > max_bytes:
+        return None
+    return data
+
+
 # ---------------------------------------------------------------------------
 # paths + snapshots
 # ---------------------------------------------------------------------------
@@ -282,11 +362,15 @@ def config_hash(base_dir: str = DEFAULT_RESEARCH_DIR) -> Optional[str]:
 
     The hash covers the file as written (whitespace included), so it doubles as
     an optimistic-concurrency version for `expected_hash` / the RPC bridge.
+    Phase-08 R2: read through the bounded reader, so a FIFO/special device
+    yields None (it has no stable bytes to hash; a guarded write then fails
+    closed as stale) instead of hanging the caller.
     """
     cfg_file = get_config_path(base_dir)
-    if not cfg_file.is_file():
+    raw = _read_bounded_bytes(cfg_file)
+    if raw is None:
         return None
-    return hashlib.sha256(cfg_file.read_bytes()).hexdigest()
+    return hashlib.sha256(raw).hexdigest()
 
 
 def snapshot(base_dir: str = DEFAULT_RESEARCH_DIR) -> Dict[str, Any]:
@@ -359,9 +443,17 @@ def validate_config(cfg: Any) -> List[str]:
 
 
 def _read_raw_config(cfg_file: Path) -> Optional[Dict[str, Any]]:
-    """Best-effort raw JSON object on disk (None when absent/malformed)."""
+    """Best-effort raw JSON object on disk (None when absent/malformed).
+
+    Phase-08 R2: read through the bounded reader, so a FIFO/special device
+    yields None (callers already treat None as absent/malformed) instead of
+    hanging the caller.
+    """
     try:
-        data = json.loads(cfg_file.read_text(encoding="utf-8"))
+        raw = _read_bounded_bytes(cfg_file)
+        if raw is None:
+            return None
+        data = json.loads(raw.decode("utf-8"))
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
@@ -485,17 +577,30 @@ def load_config(base_dir: str = DEFAULT_RESEARCH_DIR) -> Dict[str, Any]:
     """Load config merged over defaults. Pure — never writes to disk.
 
     Applies the legacy-pin migration in memory so a stale config stops forcing
-    Claude immediately; `heal_config` persists that migration on next touch.
-    Unknown keys are preserved verbatim (they are part of the contract's
-    forward-compatibility rule).
+    Claude immediately. No production read path persists that migration (reads
+    are non-healing by design, R12/F2): it is applied in memory on every load
+    and persisted opportunistically the next time a write leg merges the loaded
+    config (`configure.py` CLI save, the MCP `iumbtems_config` update leg);
+    `heal_config` remains available as an explicit opt-in repair helper but no
+    production read path calls it (phase-08 R3). Unknown keys are preserved
+    verbatim (they are part of the contract's forward-compatibility rule).
+
+    Phase-08 R2: the file is read through the bounded reader, so a FIFO /
+    special device / oversize file warns once and yields defaults instead of
+    hanging the caller.
     """
     base = copy.deepcopy(DEFAULT_CONFIG)
     cfg_file = get_config_path(base_dir)
-    if not cfg_file.exists():
+    raw_bytes = _read_bounded_bytes(cfg_file)
+    if raw_bytes is None:
+        if os.path.lexists(cfg_file):
+            sys.stderr.write(
+                f"[swarm-config] Warning: {cfg_file} is not a readable regular "
+                "file (or exceeds the read cap). Using defaults.\n"
+            )
         return base
     try:
-        with open(cfg_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = json.loads(raw_bytes.decode("utf-8"))
     except Exception as e:
         sys.stderr.write(
             f"[swarm-config] Warning: Failed to parse {cfg_file}: {e}. Using defaults.\n"
@@ -519,21 +624,30 @@ def load_config(base_dir: str = DEFAULT_RESEARCH_DIR) -> Dict[str, Any]:
 def heal_config(base_dir: str = DEFAULT_RESEARCH_DIR) -> bool:
     """Persist a legacy agent-backend migration to disk; True if rewritten.
 
-    `load_config` stays side-effect free; the CLI and MCP surfaces call this so
-    an affected install self-heals instead of re-pinning Claude on every save.
-    The write is guarded by the hash of the bytes this call read, so a migration
-    never clobbers a concurrent writer (it simply defers to the next touch).
+    Explicit opt-in repair helper (exported, tested). Phase-08 R3 truth: NO
+    production read path calls this — `--show` / bare CLI, the MCP `show`
+    leg, and `load_config` itself are strictly non-healing (R12/F2); the
+    migration persists opportunistically when a write leg merges the loaded
+    (in-memory-migrated) config. Call this directly when you want the
+    migration persisted outside any other write. The write is guarded by the
+    hash of the bytes this call read, so a migration never clobbers a
+    concurrent writer (it simply defers to the next touch).
 
     The would-be-persisted dict is validated first (R1): a file that already
     fails the canonical schema is NOT rewritten — persisting it would legitimise
     the invalid values and feed them to SwarmRunner. The migration then stays in
     memory only, and a warning names every violation.
+
+    Phase-08 R2: the pre-read goes through the bounded reader, so a FIFO /
+    special device returns False instead of hanging the caller.
     """
     cfg_file = get_config_path(base_dir)
     if not cfg_file.exists():
         return False
     try:
-        raw_bytes = cfg_file.read_bytes()
+        raw_bytes = _read_bounded_bytes(cfg_file)
+        if raw_bytes is None:
+            return False
         raw = json.loads(raw_bytes.decode("utf-8"))
     except Exception:
         return False
@@ -609,7 +723,30 @@ def save_config(
     cfg_file = target_dir / "config.json"
 
     with _file_lock(get_lock_path(base_dir)):
-        existing_bytes = cfg_file.read_bytes() if cfg_file.is_file() else b""
+        # Phase-08 R2: bounded pre-read — a FIFO/special device here hung the
+        # writer on a plain `read_bytes`. Fail closed (nothing written) rather
+        # than hang or silently merge over an unreadable/oversize file.
+        if cfg_file.is_file():
+            existing_bytes = _read_bounded_bytes(cfg_file)
+            if existing_bytes is None:
+                raise ConfigUnreadableError(
+                    f"{cfg_file} exists but is not a readable, bounded "
+                    "regular file (FIFO, device, or over the read cap); "
+                    "refusing to merge over it.",
+                    details={"written": False},
+                )
+        elif os.path.lexists(cfg_file):
+            # A non-file entry (FIFO, directory, dangling symlink): the old
+            # code silently replaced it via merge-over-{} + os.replace.
+            # Refuse instead — replacing a caller's FIFO/symlink out from
+            # under them is never the safe default.
+            raise ConfigUnreadableError(
+                f"{cfg_file} exists but is not a regular file; "
+                "refusing to merge over it.",
+                details={"written": False},
+            )
+        else:
+            existing_bytes = b""
         current_hash = (
             hashlib.sha256(existing_bytes).hexdigest() if existing_bytes else None
         )

@@ -441,13 +441,18 @@ export const TOOL_CATALOG = [
   {
     name: 'iumbtems_factory',
     description:
-      'Drive factory run state: init / phase-add / qa-record / expansion / stop. State goes to <project>/.factory and <project>/.roadmap; no helper-script path needed.',
+      'Drive factory run state: init / phase-add / qa-record / expansion / stop / gate. State goes to <project>/.factory and <project>/.roadmap; no helper-script path needed.',
     input: {
       type: 'object',
       properties: {
         command: {
           type: 'string',
-          enum: ['init', 'phase-add', 'qa-record', 'expansion', 'stop'],
+          enum: ['init', 'phase-add', 'qa-record', 'expansion', 'stop', 'gate'],
+        },
+        action: {
+          type: 'string',
+          enum: ['open', 'settle', 'approve', 'waive', 'escalate', 'count'],
+          description: 'Gate action (with command: gate)',
         },
         run: { type: 'string', description: 'Factory run name' },
         phase: { type: 'string', description: 'Phase id (e.g. 01-auth)' },
@@ -2228,13 +2233,16 @@ function rpcFail(context, type, message, data) {
 const SETTINGS_CONTROL_ARGS = new Set(['base_dir', 'dir', 'show', 'expected_hash', 'expectedHash']);
 
 /**
- * Leak signatures that must never reach the RPC transport (phase-03 R7/R9):
- * tracebacks, `File "…", line N` frames, interpreter failure lines, and
- * absolute filesystem paths of ANY root — POSIX (e.g. `/workspace/…`,
- * `/srv/…`, `/Users/…`, `/app/…`), Windows drive (`C:\Users\…`), and UNC
- * (`\\server\share`). Structured validation problems (e.g. `mode: value … not
- * in enum …`, type/range violations carrying ordinary values) match none of
- * these and pass through intact.
+ * Leak signatures that must never reach the RPC transport (phase-03 R7/R9,
+ * phase-08 R1): tracebacks, `File "…", line N` frames, interpreter failure
+ * lines, `file://` URIs, and absolute filesystem paths of ANY root — POSIX
+ * multi-segment (e.g. `/workspace/…`, `/srv/…`, `/Users/…`, `/app/…`),
+ * single-segment system roots (`/etc`, `/tmp`, `/lib`, `/lib64`, `/boot`,
+ * `/snap`, macOS `/System`, `/Library`, `/Volumes`, `/Applications`, …),
+ * Windows drive
+ * (`C:\Users\…`), and UNC (`\\server\share`). Structured validation problems
+ * (e.g. `mode: value … not in enum …`, type/range violations carrying
+ * ordinary values) match none of these and pass through intact.
  */
 const SETTINGS_ERROR_LEAK_PATTERNS = [
   // Tracebacks and Python/Node interpreter failure lines.
@@ -2242,7 +2250,39 @@ const SETTINGS_ERROR_LEAK_PATTERNS = [
   /File\s+["'][^"']+["']\s*,\s*line\s+\d+/i,
   /\b(?:ModuleNotFoundError|ImportError|SyntaxError|NameError|OSError|Errno \d+)\b/,
   // Absolute POSIX path of any root: a bounded leading slash + >=2 segments.
-  /(?:^|[\s"'(=:,])\/(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+/,
+  // Phase-08 R1 (W9) REWORK-2 L2: prefix class gains `[`, `{`, `-` so
+  // bracket/brace/dash-delimited absolutes (`[/etc]`, `{/etc}`, `-/etc`,
+  // `x-/lib64,y`) redact. Canonical values contain no `/`-root tokens
+  // (proven by the canonical-value corpus passing verbatim), so `-`-prefixed
+  // path tokens are disclosures, not user echoes.
+  /(?:^|[\s"'(=:,\[{-])\/(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+/,
+  // Phase-08 R1 (W9) REWORK-1: single-segment system-root absolutes
+  // (`/etc`, `/tmp`, plus `/lib`, `/lib64`, `/boot`, `/snap`, macOS `/System`,
+  // `/Library`, `/Volumes`, `/Applications`).
+  // The >=2-segment arm above lets these through, but a bare system root in
+  // a failure item is a local-filesystem disclosure (interpreter stderr
+  // echoes absolute paths of any depth). The root allowlist keeps ordinary
+  // user echoes intact: single-segment non-system values (`/v1`, `/nope`)
+  // still pass through, and sanitization stays per-item (R9).
+  // RESIDUAL (documented): truly exotic single-segment roots outside the
+  // mainstream Linux + macOS set (e.g. `/net`, `/nfs`, future mount points)
+  // still pass through by design to avoid over-redacting user echoes.
+  // TRIGGER (consumed for this class): qa-b repro `["error at /lib nope"]`
+  // passthrough + inspection-named `/lib64`, `/boot`, `/snap`, `/System`,
+  // `/Library`, `/Volumes`, `/Applications` are now covered. Revisit only
+  // with a NEW real leak repro naming the still-uncovered root.
+  // Phase-08 R1 (W9) REWORK-2 L1: suffix lookahead gains `.!?]}` so
+  // bare-root + sentence punctuation (`/lib.`, `/etc.`, `/lib!`, `/tmp?`,
+  // `/lib]`, `/lib}`) redacts. The >=2-segment arm is untouched (its trailing
+  // `[A-Za-z0-9._-]+` already consumes `/etc/foo.`). L2: prefix class gains
+  // `[`, `{`, `-` (same `-` safety proof as above) so `[/etc]`, `[/lib]`,
+  // `[/lib64]`, `{/etc}`, `-/etc`, `x-/lib64,y` redact.
+  /(?:^|[\s"'(=:,\[{-])\/(?:etc|var|tmp|srv|app|home|root|usr|opt|bin|sbin|proc|sys|dev|run|mnt|media|private|Users|workspace|lib64|lib|boot|snap|System|Library|Volumes|Applications)(?=\/|$|[\s"'<>|,;:().!?\]}])/,
+  // Phase-08 R1 (W9): `file://` URIs always disclose local filesystem
+  // layout, and no canonical config value is a file:// URI (`searxng_url`
+  // requires an http(s) scheme) — so a file:// URI in a failure item is
+  // never a legitimate user echo. Fail closed.
+  /file:\/\/[^\s"'<>|]+/i,
   // Windows drive-letter absolute path (`C:\Users\…`) or UNC share (`\\srv\share`).
   /\b[A-Za-z]:[\\/](?:[^\\/\s"'<>|]+[\\/])*[^\\/\s"'<>|]+/,
   /\\\\[^\\/\s"'<>|]+[\\/][^\\/\s"'<>|]+/,

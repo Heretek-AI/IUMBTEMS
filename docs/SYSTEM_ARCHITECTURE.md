@@ -454,5 +454,5 @@ The factory is the delivery-side loop that consumes research output:
 
 - Run state lives in `<project>/.factory/`; phase output in `<project>/.roadmap/`; evidence in `.research/`.
 - Phase flow: grill-gated brief → programmer spawn (one phase per spawn) → dual QA (`qa-a` functional, `qa-b` adversarial; 3 failures escalate) → explicit sign-off.
-- `iumbtems_factory` (and `iumbtems factory <init|phase-add|qa-record|expansion|stop>`) drives state; `.factory/STOP` is a kill-file honored by expansion loops.
+- `iumbtems_factory` (and `iumbtems factory <init|phase-add|qa-record|expansion|stop|gate>`) drives state; `.factory/STOP` is a kill-file honored by expansion loops.
 

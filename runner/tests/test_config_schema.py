@@ -60,6 +60,19 @@ VALIDATION_CASES = json.loads(
 
 CONTROL_ARGS = set(CONFIG_TOOL_CONTROL_ARGS)
 
+# H1: every keyword the parity comparator deep-compares at each schema node.
+# `items` / `additionalProperties` recurse as schema nodes; `default` compares
+# by value (deep: dict/list defaults compare element-wise via !=).
+COMPARE_KEYWORDS = (
+    "type",
+    "enum",
+    "minimum",
+    "maximum",
+    "minLength",
+    "pattern",
+    "default",
+)
+
 # One representative valid value per canonical key; the test asserts this map
 # covers the schema exactly, so a new key cannot slip in without a test.
 VALID_UPDATES = {
@@ -221,27 +234,45 @@ class TestMcpConfigSurface(unittest.TestCase):
             advertised["properties"]["expectedHash"]["description"],
         )
 
+    def _compare_schema_node(self, sub, advertised_node, path, problems):
+        """Deep-compare one schema node, recursing into subschemas.
+
+        H1: besides the scalar keywords, `properties` recurses per key,
+        `items` recurses as `{path}[]`, and `additionalProperties` recurses
+        as `{path}.*`. A canonical subschema missing on the advertised side
+        is a drift report, never a silent skip.
+        """
+        for keyword in COMPARE_KEYWORDS:
+            if sub.get(keyword) != advertised_node.get(keyword):
+                problems.append(
+                    f"{path}: {keyword} {sub.get(keyword)!r} != "
+                    f"{advertised_node.get(keyword)!r}"
+                )
+        if isinstance(sub.get("properties"), dict):
+            if not isinstance(advertised_node.get("properties"), dict):
+                problems.append(f"{path}: properties schema missing on advertised side")
+            else:
+                self._compare_properties(sub, advertised_node, f"{path}.", problems)
+        for keyword, suffix in (("items", "[]"), ("additionalProperties", ".*")):
+            sub_node = sub.get(keyword)
+            if isinstance(sub_node, dict):
+                adv_node = advertised_node.get(keyword)
+                if not isinstance(adv_node, dict):
+                    problems.append(
+                        f"{path}{suffix}: {keyword} schema missing on advertised side"
+                    )
+                else:
+                    self._compare_schema_node(
+                        sub_node, adv_node, f"{path}{suffix}", problems
+                    )
+
     def _compare_properties(self, canonical, advertised, path, problems):
         for key, sub in (canonical.get("properties") or {}).items():
             adv = (advertised.get("properties") or {}).get(key)
             if adv is None:
                 problems.append(f"missing advertised key: {path}{key}")
                 continue
-            for keyword in (
-                "type",
-                "enum",
-                "minimum",
-                "maximum",
-                "minLength",
-                "pattern",
-            ):
-                if sub.get(keyword) != adv.get(keyword):
-                    problems.append(
-                        f"{path}{key}: {keyword} {sub.get(keyword)!r} != "
-                        f"{adv.get(keyword)!r}"
-                    )
-            if isinstance(sub.get("properties"), dict):
-                self._compare_properties(sub, adv, f"{path}{key}.", problems)
+            self._compare_schema_node(sub, adv, f"{path}{key}", problems)
 
     def test_parity_comparator_is_not_vacuous(self):
         """R2: the comparator must bite when the advertised surface drifts."""
@@ -263,6 +294,79 @@ class TestMcpConfigSurface(unittest.TestCase):
         problems = []
         self._compare_properties(artifact, drifted, "", problems)
         self.assertTrue(any("searxng_url: pattern" in p for p in problems))
+
+    def test_parity_comparator_catches_items_additionalProperties_default_drift(self):
+        """H1: each newly walked keyword bites when the advertised side drifts.
+
+        Every sub-case mutates a FRESH advertised schema exactly once, so a
+        green sub-case proves its own keyword is compared (never vacuous via
+        a shared broken fixture).
+        """
+        from runner.mcp_server import config_tool_input_schema
+
+        artifact = json.loads(
+            (PROJECT_ROOT / "schemas" / "config.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        def complained_of(mutator, needle):
+            advertised = config_tool_input_schema()
+            mutator(advertised["properties"])
+            problems = []
+            self._compare_properties(artifact, advertised, "", problems)
+            self.assertTrue(
+                any(needle in p for p in problems),
+                f"{needle!r} not in {problems}",
+            )
+
+        # `items` drift: top-level (license_whitelist) and nested
+        # (agents.alpha.backend); then a dropped `items` subschema.
+        complained_of(
+            lambda props: props["license_whitelist"].__setitem__(
+                "items", {"type": "integer"}
+            ),
+            "license_whitelist[]: type",
+        )
+        complained_of(
+            lambda props: props["agents"]["properties"]["alpha"]["properties"][
+                "backend"
+            ].__setitem__("items", {"type": "integer"}),
+            "agents.alpha.backend[]: type",
+        )
+        complained_of(
+            lambda props: props["license_whitelist"].pop("items"),
+            "license_whitelist[]: items schema missing",
+        )
+
+        # `additionalProperties` drift (mcp_servers) and a dropped subschema.
+        complained_of(
+            lambda props: props["mcp_servers"].__setitem__(
+                "additionalProperties", {"type": "string"}
+            ),
+            "mcp_servers.*: type",
+        )
+        complained_of(
+            lambda props: props["mcp_servers"].pop("additionalProperties"),
+            "mcp_servers.*: additionalProperties schema missing",
+        )
+
+        # `default` drift: top-level (mode) and nested
+        # (verify.min_fuzzy_confidence); then a dropped `default`.
+        complained_of(
+            lambda props: props["mode"].__setitem__("default", "scout"),
+            "mode: default",
+        )
+        complained_of(
+            lambda props: props["verify"]["properties"][
+                "min_fuzzy_confidence"
+            ].__setitem__("default", 0.5),
+            "verify.min_fuzzy_confidence: default",
+        )
+        complained_of(
+            lambda props: props["mode"].pop("default"),
+            "mode: default",
+        )
 
     def test_valid_update_map_covers_every_canonical_key(self):
         self.assertEqual(set(VALID_UPDATES), set(CONFIG["properties"]))

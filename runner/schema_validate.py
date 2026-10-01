@@ -138,6 +138,17 @@ def validate(data: Any, schema: Dict[str, Any], path: str = "") -> List[str]:
             # number can never satisfy a bounded contract.
             problems.append(f"{path or '<root>'}: value {data!r} is not finite")
         else:
+            # WAIVER W22 (F2, Phase 06 `06-parity` REWORK retry 2/3, manager
+            # tiebreak binding): `{data!r}` here is CPython shortest-repr
+            # (`1e-05`, `1e+16`), while the JS side renders via `String()`
+            # (`0.00001`, `10000000000000000`) — the exponential float
+            # rendering class diverges on BOTH paths by repr SELECTION
+            # thresholds, not just padding, so the JS side must NOT pad
+            # (whack-a-mole per second opinion ses_f0b4aa769ffeE0zpoe9la477dw).
+            # Pinned by `test_w22_exponential_rendering_waiver`. TRIGGER:
+            # revisit only via a port of CPython shortest-repr switching,
+            # and only if exponential config values occur
+            # (see .roadmap/06-parity/waivers.md W22).
             minimum = schema.get("minimum")
             if minimum is not None and data < minimum:
                 problems.append(

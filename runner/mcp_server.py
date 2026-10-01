@@ -243,11 +243,15 @@ def _config_updated_payload(
     """
     import hashlib
 
-    from skills.swarm_config.configure import merge_config
+    from skills.swarm_config.configure import _read_bounded_bytes, merge_config
 
     abs_path = str(Path(os.path.realpath(str(cfg_file))))
     try:
-        raw_bytes = Path(cfg_file).read_bytes()
+        # Phase-08 R2 (W17): bounded re-read — the just-written file is
+        # regular by construction, but a single read primitive keeps the
+        # FIFO-hardening total (a concurrent swap can only fail into the
+        # defensive branch below, never hang the writer).
+        raw_bytes = _read_bounded_bytes(Path(cfg_file))
     except OSError:
         raw_bytes = None
     if raw_bytes is None:
@@ -287,15 +291,20 @@ def _legacy_pin_migration_pending(base_dir: str) -> bool:
     """
     try:
         from skills.swarm_config.configure import (
+            _read_bounded_bytes,
             load_config,
             migrate_legacy_agent_backends,
             validate_config,
         )
 
         cfg_file = Path(base_dir) / "config.json"
-        if not cfg_file.is_file():
+        # Phase-08 R2 (W17): bounded pre-read — a FIFO here hung the show leg
+        # on a plain `read_bytes`. Unreadable/non-regular yields "no pending
+        # migration" (fail-open read, matching `load_config` defaults).
+        raw_bytes = _read_bounded_bytes(cfg_file)
+        if raw_bytes is None:
             return False
-        raw = json.loads(cfg_file.read_bytes().decode("utf-8"))
+        raw = json.loads(raw_bytes.decode("utf-8"))
         if not isinstance(raw, dict):
             return False
         if not migrate_legacy_agent_backends(raw):
@@ -581,12 +590,18 @@ def _handle_darkharvest(args: Dict[str, Any]) -> str:
 
 
 def _handle_factory(args: Dict[str, Any]) -> str:
-    """Drive factory run state (init / phase-add / qa-record / expansion / stop).
+    """Drive factory run state (init / phase-add / qa-record / expansion / stop / gate).
 
     Wraps skills/factory/scripts/factory.py so agents never need a filesystem
     path to the helper: the npm-installed toolchain lives outside the project,
     and relative `skills/...` paths broke in consuming projects (observed
     live: the manager agent ran `find / -name factory.py`).
+
+    Phase-08 R4 (W6): the `gate` command forwards `--run/--phase/--action`
+    (+ optional `--reason`) to the helper's `gate` subcommand. Before this
+    fix the handler accepted `gate` but forwarded no gate args, so the helper
+    exited 2 (missing required `--run/--phase/--action`) and gate was
+    unreachable through the tool surface.
     """
     import subprocess
 
@@ -640,6 +655,17 @@ def _handle_factory(args: Dict[str, Any]) -> str:
             cmd += ["--max-loops", str(int(args["max_loops"]))]
     elif command == "stop":
         cmd += ["--run", str(args.get("run") or "")]
+    elif command == "gate":
+        cmd += [
+            "--run",
+            str(args.get("run") or ""),
+            "--phase",
+            str(args.get("phase") or ""),
+            "--action",
+            str(args.get("action") or ""),
+        ]
+        if args.get("reason"):
+            cmd += ["--reason", str(args["reason"])]
 
     proc = subprocess.run(
         cmd,

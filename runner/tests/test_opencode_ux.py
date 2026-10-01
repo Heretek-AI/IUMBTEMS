@@ -2202,5 +2202,237 @@ class TestUiPrefsBoundary(unittest.TestCase):
             self.assertEqual(data["bare"], {})
 
 
+# ---------------------------------------------------------------------------
+# Phase 07 (tui-polish, H8): R4 advisory wording polish + keyed toast dedup.
+# Mock-host tests per T1-T2. Fresh node process per test (run_node), so the
+# module-level dedup window never leaks between tests.
+# ---------------------------------------------------------------------------
+
+PHASE07_HARNESS = """
+import {
+  openSettingsWizard, warnOnce, _resetAdvisoryDedup, _advisorySuppressed,
+  ADVISORY_DEDUP_MS,
+} from "./plugins/opencode/tui.js";
+import fs from "node:fs";
+import path from "node:path";
+function mockHost(queues, opts = {}) {
+  const toasts = [];
+  const pop = (arr) => ((!arr || arr.length === 0) ? null : arr.shift());
+  const host = {
+    directory: opts.root || null,
+    ui: { toast: { show: (t) => toasts.push(t) } },
+  };
+  if (!opts.noDialog) {
+    host.ui.dialog = {
+      select: async (a) => pop(queues.select),
+      prompt: async (a) => pop(queues.prompt),
+      confirm: async (a) => pop(queues.confirm),
+    };
+  }
+  return { host, toasts };
+}
+"""
+
+
+class TestPhase07AdvisoryWording(unittest.TestCase):
+    """T1: advisories accurate without self-contradiction on all paths."""
+
+    def test_env_advisory_accurate_and_write_proceeds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                PHASE07_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const m = mockHost({{select: ["searxng_url", "__iumbtems_save__"], prompt: ["http://new:8080"], confirm: [true]}}, {{root}});
+                m.host.directory = root;
+                const r = await openSettingsWizard(m.host, root, {{env: {{SEARXNG_URL: "http://env:1"}}}});
+                const saved = JSON.parse(fs.readFileSync(path.join(root, ".research", "config.json"), "utf-8"));
+                const text = m.toasts.map((t) => JSON.stringify(t)).join("\\n");
+                console.log(JSON.stringify({{written: r.written, saved: saved.searxng_url, text}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"env wording failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["written"])
+            self.assertEqual(data["saved"], "http://new:8080")
+            # Accuracy phrases retained (blast-radius: existing R4 test regex).
+            self.assertRegex(
+                data["text"],
+                r"(?i)environment shadows.*no runtime effect until.*unset",
+            )
+            self.assertIn("cancel writes nothing", data["text"])
+            # No self-contradiction: the file value is "not effective", never
+            # presented as effective; no display-only claim on a saved value.
+            env_toasts = [
+                line for line in data["text"].split("\n") if "nvironment" in line
+            ]
+            self.assertTrue(env_toasts)
+            for line in env_toasts:
+                self.assertNotIn("display-only", line)
+
+    def test_deprecated_advisory_generic_and_write_proceeds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                PHASE07_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const m = mockHost({{select: ["output_dir", "__iumbtems_save__"], prompt: [".renamed"], confirm: [true]}}, {{root}});
+                m.host.directory = root;
+                const r = await openSettingsWizard(m.host, root, {{env: {{}}}});
+                const saved = JSON.parse(fs.readFileSync(path.join(root, ".research", "config.json"), "utf-8"));
+                const text = m.toasts.map((t) => JSON.stringify(t)).join("\\n");
+                console.log(JSON.stringify({{written: r.written, saved: saved.output_dir, text}}));
+                """
+            )
+            self.assertEqual(
+                res.returncode, 0, f"deprecated wording failed: {res.stderr}"
+            )
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["written"])
+            self.assertEqual(data["saved"], ".renamed")
+            self.assertIn("eprecat", data["text"])
+            self.assertIn("no runtime effect", data["text"])
+            self.assertIn("cancel writes nothing", data["text"])
+            # The old wording was output_dir-specific ("never selects the
+            # workspace") and self-contradictory ("display-only" + "still
+            # saved"): both must be gone from the deprecated advisory.
+            dep_toasts = [
+                line for line in data["text"].split("\n") if "eprecat" in line
+            ]
+            self.assertTrue(dep_toasts)
+            for line in dep_toasts:
+                self.assertNotIn("display-only", line)
+                self.assertNotIn("never selects the workspace", line)
+
+    def test_degraded_and_malformed_notices_retained_direct_fs(self):
+        # Degraded fallback + malformed advisories survive the polish.
+        with tempfile.TemporaryDirectory() as tmp:
+            research = Path(tmp) / ".research"
+            research.mkdir()
+            garbage = "{oops not json"
+            research.joinpath("config.json").write_text(garbage, encoding="utf-8")
+            res = run_node(
+                PHASE07_HARNESS
+                + f"""
+                const root = {tmp!r};
+                const m = mockHost({{select: ["__iumbtems_cancel__"]}}, {{root}});
+                m.host.directory = root;
+                const r = await openSettingsWizard(m.host, root, {{env: {{}}}});
+                const text = m.toasts.map((t) => JSON.stringify(t)).join("\\n");
+                console.log(JSON.stringify({{cancelled: r.cancelled, written: r.written, text}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"degraded path failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["cancelled"])
+            self.assertFalse(data["written"])
+            self.assertIn("degraded path", data["text"])
+            self.assertIn("Could not parse", data["text"])
+
+
+class TestPhase07ToastDedup(unittest.TestCase):
+    """T2: keyed window collapses repeats, re-shows after expiry, never
+    swallows errors/degraded; durations preserved."""
+
+    def test_warnonce_collapse_expiry_and_independence(self):
+        res = run_node(
+            PHASE07_HARNESS
+            + """
+            _resetAdvisoryDedup();
+            const toasts = [];
+            const host = { ui: { toast: { show: (t) => toasts.push(t) } } };
+            const t0 = 1000000;
+            const ttl = 5000;
+            const first = warnOnce(host, "env:searxng_url", "Environment override", "msg-a", { ttlMs: ttl, now: t0 });
+            const repeat = warnOnce(host, "env:searxng_url", "Environment override", "msg-a", { ttlMs: ttl, now: t0 + 1000 });
+            const repeat2 = warnOnce(host, "env:searxng_url", "Environment override", "msg-a", { ttlMs: ttl, now: t0 + 2000 });
+            const other = warnOnce(host, "deprecated:output_dir", "Deprecated field", "msg-b", { ttlMs: ttl, now: t0 + 2000 });
+            const pending = _advisorySuppressed("env:searxng_url");
+            const reshow = warnOnce(host, "env:searxng_url", "Environment override", "msg-a", { ttlMs: ttl, now: t0 + ttl + 1 });
+            console.log(JSON.stringify({
+              first, repeat, repeat2, other, pending, reshow,
+              shown: toasts.length,
+              durations: toasts.map((t) => t.duration),
+              variants: toasts.map((t) => t.variant),
+              lastText: toasts[toasts.length - 1].message,
+              windowMs: ADVISORY_DEDUP_MS,
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"warnOnce failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertTrue(data["first"])
+        self.assertFalse(data["repeat"])
+        self.assertFalse(data["repeat2"])
+        # Distinct keys are independent.
+        self.assertTrue(data["other"])
+        # Repeats within the window collapse with a count.
+        self.assertEqual(data["pending"], 2)
+        self.assertEqual(data["shown"], 3)  # first + other + reshow
+        # Expiry re-shows, annotated with the collapsed count (2 + this one).
+        self.assertTrue(data["reshow"])
+        self.assertIn("3×", data["lastText"])
+        # Durations preserved (wizard 6000), variant untouched.
+        self.assertTrue(all(d == 6000 for d in data["durations"]))
+        self.assertTrue(all(v == "info" for v in data["variants"]))
+        self.assertGreater(data["windowMs"], 0)
+
+    def test_wizard_repeats_collapse_but_errors_and_degraded_never_swallowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                PHASE07_HARNESS
+                + f"""
+                const root = {tmp!r};
+                _resetAdvisoryDedup();
+                const m = mockHost({{
+                  select: ["searxng_url", "searxng_url", "__iumbtems_save__"],
+                  prompt: ["http://a:1", "http://b:2"],
+                  confirm: [true],
+                }}, {{root}});
+                m.host.directory = root;
+                const r = await openSettingsWizard(m.host, root, {{env: {{SEARXNG_URL: "http://env:9"}}}});
+                const saved = JSON.parse(fs.readFileSync(path.join(root, ".research", "config.json"), "utf-8"));
+                const text = m.toasts.map((t) => JSON.stringify(t)).join("\\n");
+                const advisory = m.toasts.filter((t) => t.title === "Environment override").length;
+                const degraded = m.toasts.filter((t) => JSON.stringify(t).includes("degraded path")).length;
+                console.log(JSON.stringify({{written: r.written, saved: saved.searxng_url, advisory, degraded, text}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"wizard dedup failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["written"])
+            self.assertEqual(data["saved"], "http://b:2")
+            # Two edits of the same env-shadowed key -> one advisory toast.
+            self.assertEqual(data["advisory"], 1)
+            # The degraded-path toast is never deduped away.
+            self.assertEqual(data["degraded"], 1)
+
+    def test_wizard_error_toasts_never_deduped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_node(
+                PHASE07_HARNESS
+                + f"""
+                const root = {tmp!r};
+                _resetAdvisoryDedup();
+                const m = mockHost({{
+                  select: ["max_iterations", "__iumbtems_save__"],
+                  prompt: ["99", "98", "3"],
+                  confirm: [true],
+                }}, {{root}});
+                m.host.directory = root;
+                const r = await openSettingsWizard(m.host, root, {{env: {{}}}});
+                const saved = JSON.parse(fs.readFileSync(path.join(root, ".research", "config.json"), "utf-8"));
+                const invalid = m.toasts.filter((t) => t.title === "Invalid value").length;
+                console.log(JSON.stringify({{written: r.written, depth: saved.max_iterations, invalid}}));
+                """
+            )
+            self.assertEqual(res.returncode, 0, f"error dedup failed: {res.stderr}")
+            data = last_json_object(res.stdout)
+            self.assertTrue(data["written"])
+            self.assertEqual(data["depth"], 3)
+            # Both validation errors surface: error toasts bypass the window.
+            self.assertEqual(data["invalid"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -135,6 +135,37 @@
       "config": {"search_timeout_s": 0}
     },
     {
+      "name": "float_integral_divergence_above_maximum",
+      "valid": false,
+      "expect": "maximum",
+      "config": {"divergence_threshold": 2.0}
+    },
+    {
+      "name": "float_integral_search_timeout_below_minimum",
+      "valid": false,
+      "expect": "minimum",
+      "config": {"search_timeout_s": 0.0}
+    },
+    {
+      "name": "float_integral_min_fuzzy_above_maximum",
+      "valid": false,
+      "expect": "min_fuzzy_confidence",
+      "config": {"verify": {"min_fuzzy_confidence": 2.0}}
+    },
+    {
+      "name": "float_fractional_cache_ttl_type_error",
+      "valid": false,
+      "expect": "got float",
+      "config": {"cache_ttl_days": -1.5}
+    },
+    {
+      "name": "type_integral_float_in_integer_field",
+      "valid": false,
+      "expect": "got float",
+      "lexeme_sensitive": true,
+      "config": {"cache_ttl_days": 2.0}
+    },
+    {
       "name": "type_search_engine_integer",
       "valid": false,
       "expect": "search_engine",

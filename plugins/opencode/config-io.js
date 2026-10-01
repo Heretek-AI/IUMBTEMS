@@ -43,12 +43,19 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  closeSync,
   existsSync,
+  fstatSync,
+  lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
+  constants as fsConstants,
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -193,6 +200,20 @@ export class ConfigNullError extends ConfigError {
   }
 }
 
+/**
+ * The config file exists but is not a readable, bounded regular file
+ * (phase-08 R2, W17). `saveConfig` throws this fail-closed (nothing written)
+ * instead of hanging on a FIFO/special device or silently merging over an
+ * unreadable/oversize file — mirroring the Python `ConfigUnreadableError`.
+ */
+export class ConfigUnreadableError extends ConfigError {
+  constructor(message, details = {}) {
+    super(message, { written: false, ...(details || {}) });
+    this.name = 'ConfigUnreadableError';
+    this.code = 'CONFIG_UNREADABLE';
+  }
+}
+
 /** A live `.config.lock` is held by another writer; nothing was written. */
 export class ConfigLockedError extends ConfigError {
   constructor(details = {}) {
@@ -213,6 +234,13 @@ export class ConfigLockedError extends ConfigError {
 
 let cachedSchema = null;
 let schemaAttempted = false;
+/**
+ * H7: number lexemes (`0.0` vs `0`) of the canonical schema artifact, keyed
+ * by literal schema path (`properties.divergence_threshold.maximum`). Lets
+ * bound/enum renderings match Python `{bound!r}` exactly; `null` when the
+ * artifact is unreadable.
+ */
+let cachedSchemaLexemes = null;
 
 function schemaArtifactPath() {
   return path.join(PKG_ROOT, 'schemas', 'config.schema.json');
@@ -228,8 +256,11 @@ export function loadConfigSchema() {
   schemaAttempted = true;
   try {
     const raw = readFileSync(schemaArtifactPath(), 'utf-8');
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object') cachedSchema = parsed;
+    const parsed = parseJsonWithNumberLexemes(raw);
+    if (parsed.value && typeof parsed.value === 'object') {
+      cachedSchema = parsed.value;
+      cachedSchemaLexemes = parsed.lexemes;
+    }
   } catch {
     try {
       console.error(
@@ -240,6 +271,7 @@ export function loadConfigSchema() {
       /* logging must never throw */
     }
     cachedSchema = null;
+    cachedSchemaLexemes = null;
   }
   return cachedSchema;
 }
@@ -248,7 +280,149 @@ export function loadConfigSchema() {
 export function _resetSchemaCache() {
   cachedSchema = null;
   schemaAttempted = false;
+  cachedSchemaLexemes = null;
 }
+
+// ---------------------------------------------------------------------------
+// lexeme-preserving JSON parse (H7 verbatim-lexeme policy)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse JSON text like `JSON.parse` but also record every number's raw lexeme.
+ *
+ * Returns `{ value, lexemes }` where `lexemes` maps a literal path to the
+ * source text of the number there: object keys join with `.` (`verify.min_fuzzy_confidence`),
+ * array indices append `[i]` (`license_whitelist[1]`), and the root is `''`
+ * (`[0]` for a root-level array element). Values are identical to
+ * `JSON.parse` (same doubles, same strings); only the lexeme table is extra.
+ * Throws `SyntaxError` on malformed JSON, mirroring `JSON.parse`.
+ */
+export function parseJsonWithNumberLexemes(text) {
+  const src = String(text);
+  const lexemes = new Map();
+  let pos = 0;
+
+  const fail = (msg) => {
+    throw new SyntaxError(`${msg} at position ${pos}`);
+  };
+  const skipWs = () => {
+    while (pos < src.length) {
+      const ch = src[pos];
+      if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') pos += 1;
+      else break;
+    }
+  };
+  const expect = (word) => {
+    if (src.startsWith(word, pos)) {
+      pos += word.length;
+      return;
+    }
+    fail(`expected ${word}`);
+  };
+  const parseString = () => {
+    const start = pos;
+    pos += 1; // opening quote
+    while (pos < src.length) {
+      const ch = src[pos];
+      if (ch === '\\') {
+        pos += 2;
+        continue;
+      }
+      if (ch === '"') {
+        pos += 1;
+        return JSON.parse(src.slice(start, pos));
+      }
+      pos += 1;
+    }
+    fail('unterminated string');
+  };
+  const parseNumber = (at) => {
+    const rest = src.slice(pos);
+    const match = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/.exec(rest);
+    if (!match) fail('expected value');
+    pos += match[0].length;
+    lexemes.set(at, match[0]);
+    return Number(match[0]);
+  };
+  const parseArray = (at) => {
+    pos += 1; // [
+    const out = [];
+    skipWs();
+    if (src[pos] === ']') {
+      pos += 1;
+      return out;
+    }
+    let i = 0;
+    for (;;) {
+      out.push(parseValue(`${at}[${i}]`));
+      i += 1;
+      skipWs();
+      if (src[pos] === ',') {
+        pos += 1;
+        continue;
+      }
+      if (src[pos] === ']') {
+        pos += 1;
+        return out;
+      }
+      fail('expected , or ]');
+    }
+  };
+  const parseObject = (at) => {
+    pos += 1; // {
+    const out = {};
+    skipWs();
+    if (src[pos] === '}') {
+      pos += 1;
+      return out;
+    }
+    for (;;) {
+      skipWs();
+      if (src[pos] !== '"') fail('expected string key');
+      const key = parseString();
+      skipWs();
+      if (src[pos] !== ':') fail('expected colon');
+      pos += 1;
+      out[key] = parseValue(at ? `${at}.${key}` : String(key));
+      skipWs();
+      if (src[pos] === ',') {
+        pos += 1;
+        continue;
+      }
+      if (src[pos] === '}') {
+        pos += 1;
+        return out;
+      }
+      fail('expected , or }');
+    }
+  };
+  const parseValue = (at) => {
+    skipWs();
+    if (pos >= src.length) fail('unexpected end');
+    const ch = src[pos];
+    if (ch === '{') return parseObject(at);
+    if (ch === '[') return parseArray(at);
+    if (ch === '"') return parseString();
+    if (ch === 't') {
+      expect('true');
+      return true;
+    }
+    if (ch === 'f') {
+      expect('false');
+      return false;
+    }
+    if (ch === 'n') {
+      expect('null');
+      return null;
+    }
+    return parseNumber(at);
+  };
+
+  const value = parseValue('');
+  skipWs();
+  if (pos !== src.length) fail('unexpected trailing content');
+  return { value, lexemes };
+};
 
 // ---------------------------------------------------------------------------
 // dependency-free validator subset (port of runner/schema_validate.py)
@@ -257,6 +431,21 @@ export function _resetSchemaCache() {
 function typeMatches(value, expected) {
   switch (expected) {
     case 'integer':
+      // Object-path rule (lexeme-blind): JSON.parse erases the int/float
+      // distinction, so an integral float (`2.0`) passes here while Python
+      // rejects it (`got float`). See typeMatchesLex for the text-path rule
+      // (R3); distinguishing on the object path would change save-path
+      // verdicts on info JS cannot recover, so it stays as is by design.
+      // WAIVER W21 (F3, Phase 06 `06-parity` REWORK retry 2/3, manager
+      // tiebreak binding): object-path integer verdict lexeme-blindness is
+      // KEPT by design — `validateConfig({cache_ttl_days: 2.0})` (live JS
+      // number `2`) accepts while Python `validate({"cache_ttl_days": 2.0})`
+      // rejects (`expected integer|null, got float`); the text path
+      // (`validateConfigText('{"cache_ttl_days": 2.0}')`) is the exact
+      // surface and is corpus-pinned. Safety: Python load path stays
+      // lenient, next Python write re-validates (low harm). TRIGGER: flip
+      // deliberately only via a lexeme-aware save entrypoint threading TUI
+      // text to the validator (see .roadmap/06-parity/waivers.md W21).
       return typeof value === 'number' && Number.isInteger(value);
     case 'number':
       // NaN passes the type check and is rejected by the finiteness check,
@@ -290,15 +479,77 @@ function typeName(value) {
   return typeof value;
 }
 
-/** Python repr() for scalars/collections (single quotes, True/None). */
-function pyRepr(value) {
+/**
+ * R3: lexeme-aware integer typing for the TEXT path (`validateConfigText` /
+ * `validateAgainstSchema` with a data-lexeme table). `JSON.parse` erases the
+ * int/float distinction (`2.0` and `2` both become the double `2`), while
+ * Python's `json` keeps it — so `{"cache_ttl_days": 2.0}` is a float in
+ * Python (`expected integer|null, got float`) but looked like an int here.
+ * When the raw lexeme marks a float (`2.0`, `2e0`) but the value is
+ * integral, the value counts as a float: `integer` no longer matches and the
+ * type name renders `float`. With no lexeme (object path: `validateConfig` /
+ * `saveConfig` on live JS numbers) behavior is byte-identical to before —
+ * the int/float distinction is unrecoverable there (documented boundary;
+ * object-path verdicts unchanged by design).
+ */
+function isFloatLexeme(lexeme) {
+  return typeof lexeme === 'string' && /[.eE]/.test(lexeme);
+}
+
+function typeMatchesLex(value, expected, lexeme = null) {
+  if (expected === 'integer') {
+    if (typeof value !== 'number' || !Number.isInteger(value)) return false;
+    if (isFloatLexeme(lexeme)) return false;
+    return true;
+  }
+  return typeMatches(value, expected);
+}
+
+/** R3: `float` wins when the lexeme marks an integral value as a float. */
+function typeNameLex(value, lexeme = null) {
+  if (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    isFloatLexeme(lexeme)
+  ) {
+    return 'float';
+  }
+  return typeName(value);
+}
+
+/** Python repr() for scalars/collections (single quotes, True/None).
+ *
+ * H7 verbatim-lexeme policy (Python repr wins): JSON.parse erases the
+ * int/float distinction (`0.0` and `0` both become the double `0`), while
+ * Python's `json` keeps it (`{data!r}` renders `0.0` vs `0`). The optional
+ * `lexeme` is the raw JSON number text from `parseJsonWithNumberLexemes`;
+ * when it marks a float (`0.0`, `1.0`, `2e0`) but the value is integral,
+ * render Python-`repr` style (`0.0`, never `0`). Without a lexeme the
+ * fallback is plain `String(value)` — programmatic JS integral numbers
+ * correspond to Python ints, so default behavior is byte-identical.
+ *
+ * Residuals (documented, unavoidable without a lexeme): exponential lexemes
+ * render via `String()` (JS `1e-7` vs Python `1e-07`), and integers past
+ * 2^53 lose precision in both parsers differently (Python keeps the int).
+ * WAIVER W22 (F2, Phase 06 `06-parity` REWORK retry 2/3, manager tiebreak
+ * binding, second opinion agrees): the exponential float rendering class
+ * is WAIVED on BOTH paths — do NOT pad (whack-a-mole: `1e-5` -> JS
+ * `0.00001` vs Python `1e-05`, `1e16` -> JS `10000000000000000` vs Python
+ * `1e+16` differ by CPython shortest-repr SELECTION thresholds, not just
+ * zero-padding, so padding fixes one instance and breaks the next).
+ * Documented divergence pinned by
+ * `test_w22_exponential_rendering_waiver`. TRIGGER: revisit only via a
+ * port of CPython shortest-repr switching, and only if exponential config
+ * values occur (see .roadmap/06-parity/waivers.md W22).
+ */
+function pyRepr(value, lexeme = null) {
   if (typeof value === 'string') {
     return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
   }
   if (value === null || value === undefined) return 'None';
   if (value === true) return 'True';
   if (value === false) return 'False';
-  if (Array.isArray(value)) return `[${value.map(pyRepr).join(', ')}]`;
+  if (Array.isArray(value)) return `[${value.map((v) => pyRepr(v)).join(', ')}]`;
   if (typeof value === 'object') {
     const parts = Object.entries(value).map(
       ([k, v]) => `${pyRepr(k)}: ${pyRepr(v)}`
@@ -309,28 +560,135 @@ function pyRepr(value) {
     if (Number.isNaN(value)) return 'nan';
     if (value === Infinity) return 'inf';
     if (value === -Infinity) return '-inf';
+    if (
+      typeof lexeme === 'string' &&
+      /[.eE]/.test(lexeme) &&
+      Number.isInteger(value)
+    ) {
+      if (Object.is(value, -0)) return '-0.0';
+      const text = String(value);
+      if (text.includes('e') || text.includes('E') || text.includes('.')) {
+        return text;
+      }
+      return `${text}.0`;
+    }
   }
   return String(value);
 }
 
-function pyReprEnum(values) {
-  return `[${(values || []).map(pyRepr).join(', ')}]`;
+function pyReprEnum(values, lexemes = null) {
+  const list = values || [];
+  return `[${list.map((v, i) => pyRepr(v, lexemes ? lexemes[i] ?? null : null)).join(', ')}]`;
+}
+
+/**
+ * R2: schema-type-aware DATA rendering for the OBJECT path (`validateConfig`
+ * on live JS numbers — the path `saveConfig` uses). Without a lexeme an
+ * integral JS number is ambiguous (Python `2` is an int, `2.0` a float), so
+ * the schema node decides: a float/`number`-context node renders `2.0`-style
+ * (matching Python `{data!r}` for float values, e.g. `divergence_threshold:
+ * value 2.0 is above maximum 1.0`), while an integer-context node renders
+ * `2`. With a lexeme the verbatim text wins (H7 policy, unchanged).
+ * Rendering only — comparisons still use the parsed doubles, so no verdict
+ * changes in this fix. Schema-literal minima/maxima/enum keep their
+ * `loadConfigSchema` lexemes (never routed here).
+ * WAIVER W20 (F1, Phase 06 `06-parity` REWORK retry 2/3, manager tiebreak
+ * binding): object-path int-in-number-field message ambiguity is
+ * INFORMATION-THEORETIC and KEPT in the R2 float direction — live JS `2`
+ * === `2.0` (one double), while Python `int(2)` vs `float(2.0)` render
+ * `2` vs `2.0`, so `validateConfig({divergence_threshold: 2})` renders
+ * `value 2.0 is above maximum 1.0` where Python-on-int-`2` renders
+ * `value 2 is above maximum 1.0` (verdicts agree: both reject). The text
+ * path (`validateConfigText('{"divergence_threshold": 2}')` -> `2`,
+ * `... 2.0}` -> `2.0`) is the exact surface. Documented behavior pinned
+ * by `test_w20_object_path_number_context_float_rendering_waiver` — flip
+ * deliberately only via a future lexeme-aware entrypoint (see
+ * .roadmap/06-parity/waivers.md W20).
+ */
+function isFloatContext(schemaNode) {
+  const t = schemaNode && schemaNode.type;
+  const types = Array.isArray(t) ? t : t === undefined ? [] : [t];
+  return types.includes('number') && !types.includes('integer');
+}
+
+function pyReprData(value, lexeme, schemaNode) {
+  if (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    (lexeme === null || lexeme === undefined) &&
+    isFloatContext(schemaNode)
+  ) {
+    if (Object.is(value, -0)) return '-0.0';
+    const text = String(value);
+    if (text.includes('.') || text.includes('e') || text.includes('E')) {
+      return text;
+    }
+    return `${text}.0`;
+  }
+  return pyRepr(value, lexeme);
 }
 
 /**
  * Human-readable violations (dotted paths); [] == valid. Ports
  * `runner/schema_validate.py:validate` keyword for keyword.
+ *
+ * H7: the optional 4th argument carries number lexemes for Python-`repr`
+ * rendering — `{ data, schema, schemaPath }` where `data`/`schema` are
+ * `parseJsonWithNumberLexemes` tables (either may be null) and `schemaPath`
+ * is the literal path of `schema` within its document root (`''` at the
+ * root; recursion extends it with `.properties.<key>` / `.items` /
+ * `.additionalProperties`). Number *comparisons* always use the parsed
+ * doubles, so verdicts are unchanged with or without lexemes (except the R3
+ * int-vs-float typing rule, which needs a data lexeme); only message
+ * strings gain the `0.0` style. Omitted (or null) keeps the historical
+ * rendering for schema bounds, while DATA numbers without a lexeme render
+ * schema-type-aware (R2: `number`-context `2` reads `2.0`, integer-context
+ * reads `2`).
  */
-export function validateAgainstSchema(data, schema, currentPath = '') {
+export function validateAgainstSchema(data, schema, currentPath = '', lex = null) {
   if (!schema || typeof schema !== 'object') return [];
   const problems = [];
   const at = currentPath || '<root>';
+  const schemaPath =
+    lex && typeof lex.schemaPath === 'string' ? lex.schemaPath : '';
+  const childLex = (childSchemaPath) =>
+    lex ? { data: lex.data, schema: lex.schema, schemaPath: childSchemaPath } : null;
+  const propSchemaPath = (key) =>
+    schemaPath ? `${schemaPath}.properties.${key}` : `properties.${key}`;
+  const lookupDataLexeme = (dataPath) => {
+    if (!lex || !(lex.data instanceof Map)) return null;
+    if (lex.data.has(dataPath)) return lex.data.get(dataPath);
+    // Legacy display-prefix fallback: root-level arrays used to display as
+    // `<root>[i]` while the lexeme table keys them `[i]` (R4 now renders
+    // `[i]` directly, so this only fires for callers holding old paths).
+    if (dataPath.startsWith('<root>')) {
+      const stripped = dataPath.slice('<root>'.length);
+      if (lex.data.has(stripped)) return lex.data.get(stripped);
+    }
+    return null;
+  };
+  const lookupSchemaLexeme = (keyword) => {
+    if (!lex || !(lex.schema instanceof Map)) return null;
+    const key = schemaPath ? `${schemaPath}.${keyword}` : keyword;
+    return lex.schema.has(key) ? lex.schema.get(key) : null;
+  };
+  const lookupEnumLexemes = (count) => {
+    if (!lex || !(lex.schema instanceof Map)) return null;
+    const base = schemaPath ? `${schemaPath}.enum` : 'enum';
+    return Array.from({ length: count }, (_, i) => {
+      const key = `${base}[${i}]`;
+      return lex.schema.has(key) ? lex.schema.get(key) : null;
+    });
+  };
+  const dataLexeme = lookupDataLexeme(currentPath);
 
   const expected = schema.type;
   if (expected !== undefined) {
     const types = Array.isArray(expected) ? expected : [expected];
-    if (!types.some((t) => typeMatches(data, t))) {
-      return [`${at}: expected ${types.join('|')}, got ${typeName(data)}`];
+    // R3: lexeme-aware integer typing on the text path (object path passes
+    // lexeme null, so its verdicts are unchanged by design).
+    if (!types.some((t) => typeMatchesLex(data, t, dataLexeme))) {
+      return [`${at}: expected ${types.join('|')}, got ${typeNameLex(data, dataLexeme)}`];
     }
   }
 
@@ -344,46 +702,57 @@ export function validateAgainstSchema(data, schema, currentPath = '') {
     for (const key of Object.keys(props)) {
       if (Object.prototype.hasOwnProperty.call(data, key)) {
         const child = currentPath ? `${currentPath}.${key}` : key;
-        problems.push(...validateAgainstSchema(data[key], props[key], child));
+        problems.push(
+          ...validateAgainstSchema(data[key], props[key], child, childLex(propSchemaPath(key)))
+        );
       }
     }
     if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
       const known = new Set(Object.keys(props));
+      const childSchemaPath = schemaPath
+        ? `${schemaPath}.additionalProperties`
+        : 'additionalProperties';
       for (const key of Object.keys(data)) {
         if (!known.has(key)) {
           const child = currentPath ? `${currentPath}.${key}` : key;
           problems.push(
-            ...validateAgainstSchema(data[key], schema.additionalProperties, child)
+            ...validateAgainstSchema(data[key], schema.additionalProperties, child, childLex(childSchemaPath))
           );
         }
       }
     }
     if (schema.enum !== undefined && !(schema.enum || []).includes(data)) {
-      problems.push(`${at}: value ${pyRepr(data)} not in enum ${pyReprEnum(schema.enum)}`);
+      problems.push(`${at}: value ${pyReprData(data, dataLexeme, schema)} not in enum ${pyReprEnum(schema.enum, lookupEnumLexemes((schema.enum || []).length))}`);
     }
   }
 
   if (Array.isArray(data) && schema.items && typeof schema.items === 'object') {
+    const childSchemaPath = schemaPath ? `${schemaPath}.items` : 'items';
     for (let i = 0; i < data.length; i += 1) {
-      problems.push(...validateAgainstSchema(data[i], schema.items, `${at}[${i}]`));
+      // R4: Python renders root-level indices bare (`[1]`); building from the
+      // display prefix gave `<root>[1]`. Build from the DATA path ('' at the
+      // root), so top-level arrays agree byte-for-byte; nested paths are
+      // unchanged (`tags[0]`, `[0][1]`).
+      const child = currentPath ? `${at}[${i}]` : `[${i}]`;
+      problems.push(...validateAgainstSchema(data[i], schema.items, child, childLex(childSchemaPath)));
     }
   }
 
   if (data === null || typeof data !== 'object') {
     if (schema.enum !== undefined && !(schema.enum || []).includes(data)) {
-      problems.push(`${at}: value ${pyRepr(data)} not in enum ${pyReprEnum(schema.enum)}`);
+      problems.push(`${at}: value ${pyReprData(data, dataLexeme, schema)} not in enum ${pyReprEnum(schema.enum, lookupEnumLexemes((schema.enum || []).length))}`);
     }
   }
 
   if (typeof data === 'number') {
     if (!Number.isFinite(data)) {
-      problems.push(`${at}: value ${pyRepr(data)} is not finite`);
+      problems.push(`${at}: value ${pyReprData(data, dataLexeme, schema)} is not finite`);
     } else {
       if (schema.minimum !== undefined && data < schema.minimum) {
-        problems.push(`${at}: value ${pyRepr(data)} is below minimum ${pyRepr(schema.minimum)}`);
+        problems.push(`${at}: value ${pyReprData(data, dataLexeme, schema)} is below minimum ${pyRepr(schema.minimum, lookupSchemaLexeme('minimum'))}`);
       }
       if (schema.maximum !== undefined && data > schema.maximum) {
-        problems.push(`${at}: value ${pyRepr(data)} is above maximum ${pyRepr(schema.maximum)}`);
+        problems.push(`${at}: value ${pyReprData(data, dataLexeme, schema)} is above maximum ${pyRepr(schema.maximum, lookupSchemaLexeme('maximum'))}`);
       }
     }
   }
@@ -401,7 +770,7 @@ export function validateAgainstSchema(data, schema, currentPath = '') {
       }
       if (!matched) {
         problems.push(
-          `${at}: value ${pyRepr(data)} does not match pattern ${pyRepr(schema.pattern)}`
+          `${at}: value ${pyRepr(data, dataLexeme)} does not match pattern ${pyRepr(schema.pattern)}`
         );
       }
     }
@@ -415,10 +784,33 @@ export function validateConfig(cfg) {
   try {
     const schema = loadConfigSchema();
     if (!schema) return [];
-    return validateAgainstSchema(cfg, schema);
+    const lex =
+      cachedSchemaLexemes instanceof Map
+        ? { data: null, schema: cachedSchemaLexemes, schemaPath: '' }
+        : null;
+    return validateAgainstSchema(cfg, schema, '', lex);
   } catch {
     return [];
   }
+}
+
+/**
+ * H7: validate canonical-CONFIG JSON TEXT with verbatim lexemes.
+ *
+ * Parses `jsonText` with `parseJsonWithNumberLexemes` so float lexemes
+ * (`0.0`) survive erasure and messages match Python `{value!r}` exactly
+ * (verdicts are identical to `validateConfig` on the same text). Throws
+ * `SyntaxError` on malformed JSON, mirroring `JSON.parse`.
+ */
+export function validateConfigText(jsonText) {
+  const { value, lexemes } = parseJsonWithNumberLexemes(jsonText);
+  const schema = loadConfigSchema();
+  if (!schema) return [];
+  return validateAgainstSchema(value, schema, '', {
+    data: lexemes,
+    schema: cachedSchemaLexemes,
+    schemaPath: '',
+  });
 }
 
 function schemaAllowsNull(subschema) {
@@ -631,12 +1023,60 @@ export function getLockPath(baseDir = DEFAULT_RESEARCH_DIR) {
   return path.join(String(baseDir || DEFAULT_RESEARCH_DIR), CONFIG_LOCK_NAME);
 }
 
-function readBytes(file) {
+/** Cap for any single `config.json` read (mirrors the Python `CONFIG_MAX_BYTES`). */
+export const CONFIG_MAX_BYTES = 1024 * 1024;
+
+function readBytes(file, maxBytes = CONFIG_MAX_BYTES) {
+  // Phase-08 R2 (W17): a FIFO named `config.json` hung every reader on a
+  // plain `readFileSync`. Port of the `runner/preflight.py`
+  // `_read_bounded_text` semantics: refuse non-regular paths (`stat` +
+  // post-open `fstat`, closing the stat->open race), open `O_NONBLOCK`, and
+  // cap the read — so a pathological workspace entry (FIFO, device, socket,
+  // directory, runaway file) can never block the TUI/plugin. Returns null
+  // when the path is absent, unreadable, non-regular, or over the cap.
+  // Symlinks are FOLLOWED (behavior-preserving: the pre-fix reader followed
+  // them too); a symlink to a non-regular target is still refused.
   try {
-    if (!existsSync(file)) return null;
-    return readFileSync(file);
+    if (!statSync(file).isFile()) return null;
   } catch {
     return null;
+  }
+  let fd = null;
+  try {
+    fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  } catch {
+    return null;
+  }
+  try {
+    try {
+      if (!fstatSync(fd).isFile()) return null;
+    } catch {
+      return null;
+    }
+    const chunks = [];
+    let remaining = maxBytes + 1;
+    const buf = Buffer.alloc(Math.min(remaining, 65536));
+    for (;;) {
+      let n;
+      try {
+        n = readSync(fd, buf, 0, Math.min(remaining, buf.length), null);
+      } catch {
+        return null;
+      }
+      if (!n) break;
+      chunks.push(buf.subarray(0, n).toString('binary'));
+      remaining -= n;
+      if (remaining <= 0) break;
+    }
+    const data = Buffer.from(chunks.join(''), 'binary');
+    if (data.length > maxBytes) return null;
+    return data;
+  } finally {
+    try {
+      if (fd !== null) closeSync(fd);
+    } catch {
+      /* close is best-effort */
+    }
   }
 }
 
@@ -1125,6 +1565,25 @@ export function saveConfig(cfg, baseDir = DEFAULT_RESEARCH_DIR, opts = {}) {
   let tmp = null;
   try {
     const existing = readBytes(cfgFile);
+    let lexists = false;
+    try {
+      lstatSync(cfgFile);
+      lexists = true;
+    } catch {
+      lexists = false;
+    }
+    if (existing === null && lexists) {
+      // Phase-08 R2 (W17): fail closed (nothing written) rather than hang
+      // on a FIFO/special device or silently merge over an
+      // unreadable/oversize file — mirrors the Python save_config guard
+      // (which also refuses non-file entries such as directories and
+      // dangling symlinks instead of replacing them via os.replace).
+      throw new ConfigUnreadableError(
+        `${cfgFile} exists but is not a readable, bounded regular file ` +
+          '(FIFO, device, directory, dangling symlink, or over the read cap); ' +
+          'refusing to merge over it.'
+      );
+    }
     const currentHash = existing
       ? createHash('sha256').update(existing).digest('hex')
       : null;

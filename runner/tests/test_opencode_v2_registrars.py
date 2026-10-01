@@ -300,35 +300,372 @@ class TestConfigValidatorParity(unittest.TestCase):
         names = {c["name"] for c in cases}
         self.assertIn("vert_domain_pack_empty", names)
         self.assertIn("vert_searxng_url_missing_scheme", names)
+        # R3: the integral-float-in-integer-field case must be in the corpus,
+        # or parity would be vacuous for int-vs-float typing.
+        self.assertIn("type_integral_float_in_integer_field", names)
 
         by_name = self._js_verdicts(cases)
+        # R3: lexeme-sensitive cases route the JS verdict through the TEXT
+        # entrypoint (`validateConfigText`), where the `2.0` lexeme survives.
+        # The object entrypoint (`validateConfig`) is lexeme-blind by design
+        # (live JS numbers carry no int/float distinction) and keeps its old
+        # verdict — see test_r3_integer_field_lexeme_typing for the boundary.
+        sensitive = {
+            c["name"]: json.dumps(c["config"])
+            for c in cases
+            if c.get("lexeme_sensitive")
+        }
+        text_verdicts = self._js_text_verdicts(sensitive) if sensitive else {}
         matches = 0
         for case in cases:
             with self.subTest(case=case["name"]):
                 py_problems = validate(case["config"], CONFIG)
                 py_valid = not py_problems
-                js = by_name[case["name"]]
+                if case["name"] in text_verdicts:
+                    js_valid = text_verdicts[case["name"]]["valid"]
+                    js_problems = text_verdicts[case["name"]]["problems"]
+                else:
+                    js = by_name[case["name"]]
+                    js_valid = js["valid"]
+                    js_problems = js["problems"]
                 self.assertEqual(
-                    js["valid"],
+                    js_valid,
                     py_valid,
-                    f"{case['name']}: js={js} py={py_problems}",
+                    f"{case['name']}: js={js_problems} py={py_problems}",
                 )
                 self.assertEqual(
-                    js["valid"],
+                    js_valid,
                     case["valid"],
                     f"{case['name']}: both validators disagree with the fixture",
                 )
                 if not case["valid"] and case.get("expect"):
                     self.assertTrue(
-                        any(case["expect"] in p for p in js["problems"]),
-                        f"{case['name']}: {case['expect']!r} not in {js['problems']}",
+                        any(case["expect"] in p for p in js_problems),
+                        f"{case['name']}: {case['expect']!r} not in {js_problems}",
                     )
                     self.assertTrue(
                         any(case["expect"] in p for p in py_problems),
                         f"{case['name']}: {case['expect']!r} not in {py_problems}",
                     )
-                matches += js["valid"] == py_valid
+                matches += js_valid == py_valid
         self.assertEqual(matches, len(cases), "parity must be 100%")
+
+    def _js_text_verdicts(self, case_texts):
+        """JS verdicts via the lexeme-aware text entrypoint (R3 routing)."""
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8"
+        ) as f:
+            json.dump(case_texts, f)
+            tmp = f.name
+        try:
+            res = run_node(
+                f"""
+                import fs from "node:fs";
+                import {{ validateConfigText }} from "./plugins/opencode/config-io.js";
+                const cases = JSON.parse(fs.readFileSync({tmp!r}, "utf-8"));
+                const out = Object.entries(cases).map(([name, text]) => {{
+                  const problems = validateConfigText(text);
+                  return {{name, valid: problems.length === 0, problems}};
+                }});
+                console.log(JSON.stringify({{results: out}}));
+                """
+            )
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+        self.assertEqual(res.returncode, 0, f"js validator run failed: {res.stderr}")
+        return {r["name"]: r for r in last_json_object(res.stdout)["results"]}
+
+    def test_r2_object_path_float_rendering(self):
+        """R2: P2 holds on the path saves use (`validateConfig`, no lexemes).
+
+        An integral JS number in a float/`number`-context node renders
+        `2.0`-style (matching Python `{data!r}` for float values); in an
+        integer-context node it renders `2`. Rendering only — verdicts
+        unchanged.
+        """
+        from runner.schema_validate import validate
+        from runner.schemas import CONFIG
+
+        res = run_node(
+            """
+            import { validateConfig } from "./plugins/opencode/config-io.js";
+            const floatMsg = validateConfig({ divergence_threshold: 2.0 });
+            const intMsg = validateConfig({ cache_ttl_days: 2 });
+            const intBad = validateConfig({ cache_ttl_days: -1.5 });
+            console.log(JSON.stringify({ floatMsg, intMsg, intBad }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        d = last_json_object(res.stdout)
+        # The tiebreak repro, byte-exact on the save path.
+        self.assertEqual(
+            d["floatMsg"],
+            ["divergence_threshold: value 2.0 is above maximum 1.0"],
+        )
+        self.assertEqual(
+            d["floatMsg"],
+            validate({"divergence_threshold": 2.0}, CONFIG),
+        )
+        # Integer context still renders `2`, and stays valid.
+        self.assertEqual(d["intMsg"], [])
+        # Fractional float in an integer field still rejected as float.
+        self.assertEqual(
+            d["intBad"],
+            validate({"cache_ttl_days": -1.5}, CONFIG),
+        )
+
+    def test_r3_integer_field_lexeme_typing(self):
+        """R3: text-path uses the lexeme for int-vs-float typing.
+
+        `{"cache_ttl_days": 2.0}` text is REJECTED like Python (`expected
+        integer|null, got float`); `{"cache_ttl_days": 2}` text stays valid.
+        The object path keeps its old verdict (lexemes unavailable there —
+        documented boundary, not a bug).
+        """
+        from runner.schema_validate import validate
+        from runner.schemas import CONFIG
+
+        res = run_node(
+            """
+            import { validateConfig, validateConfigText } from "./plugins/opencode/config-io.js";
+            console.log(JSON.stringify({
+              textFloat: validateConfigText('{"cache_ttl_days": 2.0}'),
+              textInt: validateConfigText('{"cache_ttl_days": 2}'),
+              objectFloat: validateConfig({ cache_ttl_days: 2.0 }),
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        d = last_json_object(res.stdout)
+        self.assertEqual(
+            d["textFloat"],
+            ["cache_ttl_days: expected integer|null, got float"],
+        )
+        self.assertEqual(
+            d["textFloat"],
+            validate({"cache_ttl_days": 2.0}, CONFIG),
+        )
+        self.assertEqual(d["textInt"], [])
+        # Boundary: the object path cannot see the `2.0` lexeme (live JS
+        # number `2`), so it still accepts — verdicts unchanged there.
+        # WAIVER W21 (F3): this acceptance is by design; see `typeMatches`
+        # in plugins/opencode/config-io.js and .roadmap/06-parity/waivers.md.
+        self.assertEqual(d["objectFloat"], [])
+
+    def test_w20_object_path_number_context_float_rendering_waiver(self):
+        """W20 (F1) WAIVER: object-path int in a number field renders float-style.
+
+        WAIVER, not a bug: live JS `2` === `2.0` (one double), while Python
+        `int(2)` vs `float(2.0)` render `2` vs `2.0` — the message ambiguity
+        is INFORMATION-THEORETIC. R2 float-direction rendering is kept by
+        design (`validateConfig({divergence_threshold: 2})` reads `2.0`;
+        verdicts agree with Python: both reject). The text path
+        (`validateConfigText`) is the exact surface. See `pyReprData` in
+        plugins/opencode/config-io.js and .roadmap/06-parity/waivers.md W20.
+        TRIGGER: flip deliberately only via a future lexeme-aware entrypoint.
+        """
+        from runner.schema_validate import validate
+        from runner.schemas import CONFIG
+
+        res = run_node(
+            """
+            import { validateConfig, validateConfigText } from "./plugins/opencode/config-io.js";
+            console.log(JSON.stringify({
+              objectInt: validateConfig({ divergence_threshold: 2 }),
+              textInt: validateConfigText('{"divergence_threshold": 2}'),
+              textFloat: validateConfigText('{"divergence_threshold": 2.0}'),
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        d = last_json_object(res.stdout)
+        # Documented object behavior: R2 renders the lexeme-blind integral
+        # value float-style. Assert the CURRENT strings so a future
+        # lexeme-aware entrypoint flips this deliberately, not silently.
+        self.assertEqual(
+            d["objectInt"],
+            ["divergence_threshold: value 2.0 is above maximum 1.0"],
+        )
+        # Text path is exact: int lexeme renders `2` like Python-on-int.
+        self.assertEqual(d["textInt"], validate({"divergence_threshold": 2}, CONFIG))
+        self.assertEqual(
+            d["textInt"],
+            ["divergence_threshold: value 2 is above maximum 1.0"],
+        )
+        # Text-path float lexeme renders `2.0` like Python-on-float.
+        self.assertEqual(
+            d["textFloat"], validate({"divergence_threshold": 2.0}, CONFIG)
+        )
+
+    def test_w22_exponential_rendering_waiver(self):
+        """W22 (F2) WAIVER: exponential float rendering diverges on BOTH paths.
+
+        WAIVER, not a bug: `1e-5` -> JS `String()` gives `0.00001` while
+        CPython `repr()` gives `1e-05` (and `1e16` -> `10000000000000000`
+        vs `1e+16`) — repr SELECTION thresholds differ, not just padding,
+        so padding is whack-a-mole per second opinion
+        ses_f0b4aa769ffeE0zpoe9la477dw. Do NOT pad. See `pyRepr` in
+        plugins/opencode/config-io.js, `validate` in
+        runner/schema_validate.py, and .roadmap/06-parity/waivers.md W22.
+        TRIGGER: port of CPython shortest-repr switching; revisit only if
+        exponential config values occur.
+        """
+        import json
+
+        from runner.schema_validate import validate
+
+        schema_text = '{"type": "number", "minimum": 0.001}'
+        schema = json.loads(schema_text)
+        py_problems = validate(json.loads("1e-5"), schema)
+        self.assertEqual(py_problems, ["<root>: value 1e-05 is below minimum 0.001"])
+        res = run_node(
+            """
+            import { parseJsonWithNumberLexemes, validateAgainstSchema } from "./plugins/opencode/config-io.js";
+            const schema = parseJsonWithNumberLexemes('{"type": "number", "minimum": 0.001}');
+            const data = parseJsonWithNumberLexemes('1e-5');
+            const problems = validateAgainstSchema(data.value, schema.value, '', {
+              data: data.lexemes, schema: schema.lexemes, schemaPath: '',
+            });
+            console.log(JSON.stringify({ problems }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        js_problems = last_json_object(res.stdout)["problems"]
+        # Pin the DOCUMENTED divergence (assert it differs, with the exact
+        # current JS string) so a future repr port flips it deliberately.
+        self.assertEqual(js_problems, ["<root>: value 0.00001 is below minimum 0.001"])
+        self.assertNotEqual(js_problems, py_problems)
+
+    def _js_messages(self, case_texts):
+        """Exact JS message lists via the lexeme-aware text entrypoint.
+
+        `case_texts` maps name -> JSON text of the config (lexemes intact:
+        `2.0` stays a float lexeme). `validateConfigText` parses with
+        `parseJsonWithNumberLexemes`, so integral floats render Python-`repr`
+        style (`0.0`, never `0`).
+        """
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8"
+        ) as f:
+            json.dump(case_texts, f)
+            tmp = f.name
+        try:
+            res = run_node(
+                f"""
+                import fs from "node:fs";
+                import {{ validateConfigText }} from "./plugins/opencode/config-io.js";
+                const cases = JSON.parse(fs.readFileSync({tmp!r}, "utf-8"));
+                const out = Object.entries(cases).map(([name, text]) => ({{
+                  name, problems: validateConfigText(text),
+                }}));
+                console.log(JSON.stringify({{results: out}}));
+                """
+            )
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+        self.assertEqual(res.returncode, 0, f"js validator run failed: {res.stderr}")
+        return {
+            r["name"]: r["problems"] for r in last_json_object(res.stdout)["results"]
+        }
+
+    def test_js_python_messages_identical(self):
+        """H7: every corpus case yields byte-identical message STRINGS, not
+        just identical verdicts (Python `{value!r}` wins: `0.0`, not `0`)."""
+        from runner.schema_validate import validate
+        from runner.schemas import CONFIG
+
+        cases = json.loads(self.FIXTURE.read_text(encoding="utf-8"))["cases"]
+        names = {c["name"] for c in cases}
+        # The H7 float-lexeme cases must be in the corpus, or message parity
+        # would silently skip the unified rendering. R3 pins the int-vs-float
+        # typing case alongside them.
+        for required in (
+            "float_integral_divergence_above_maximum",
+            "float_integral_search_timeout_below_minimum",
+            "float_integral_min_fuzzy_above_maximum",
+            "float_fractional_cache_ttl_type_error",
+            "type_integral_float_in_integer_field",
+        ):
+            self.assertIn(required, names)
+        texts = {c["name"]: json.dumps(c["config"]) for c in cases}
+        js_messages = self._js_messages(texts)
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                py_problems = validate(case["config"], CONFIG)
+                self.assertEqual(js_messages[case["name"]], py_problems)
+
+    def test_js_python_float_message_parity_synthetic(self):
+        """H7: minima/maxima/enum/pattern renderings with float lexemes.
+
+        Synthetic schemas (no CONFIG float enums exist) driven from the SAME
+        JSON text on both sides: integral floats (`2.0`), int lexemes in
+        float fields (`0.0` vs bound `1`), nested `items` bounds, and a
+        string pattern case.
+        """
+        import tempfile
+
+        from runner.schema_validate import validate
+
+        pairs = [
+            # Float bounds, integral + non-integral data.
+            (
+                '{"type": "number", "minimum": 0.0, "maximum": 1.0}',
+                ["2.0", "0.0", "-1.5", "0", "1"],
+            ),
+            # Float enum members (integral and fractional).
+            (
+                '{"type": "number", "enum": [0.0, 0.5, 1.0]}',
+                ["0.5", "0.75", "2.0", "1"],
+            ),
+            # Int bound under a float-typed schema: `0.0` vs `1`.
+            ('{"type": "number", "minimum": 1}', ["0.0", "0", "2.0"]),
+            # R4: a REAL root-level array — Python renders indices bare
+            # (`[1]`); the JS branch used to render `<root>[1]`.
+            (
+                '{"type": "array", "items": {"type": "number", "maximum": 1.0}}',
+                ["[0.5, 2.0]", "[0.0, 1.0]", "[]"],
+            ),
+            # Pattern rendering pins the string side of the policy.
+            ('{"type": "string", "pattern": "^[0-9]+$"}', ['"abc"', '"42"']),
+        ]
+        payload = [{"schema": schema, "data": data_list} for schema, data_list in pairs]
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8"
+        ) as f:
+            json.dump(payload, f)
+            tmp = f.name
+        try:
+            res = run_node(
+                f"""
+                import fs from "node:fs";
+                import {{ parseJsonWithNumberLexemes, validateAgainstSchema }} from "./plugins/opencode/config-io.js";
+                const pairs = JSON.parse(fs.readFileSync({tmp!r}, "utf-8"));
+                const out = pairs.map((p) => {{
+                  const schema = parseJsonWithNumberLexemes(p.schema);
+                  return p.data.map((text) => {{
+                    const data = parseJsonWithNumberLexemes(text);
+                    return validateAgainstSchema(data.value, schema.value, '', {{
+                      data: data.lexemes, schema: schema.lexemes, schemaPath: '',
+                    }});
+                  }});
+                }});
+                console.log(JSON.stringify({{results: out}}));
+                """
+            )
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+        self.assertEqual(res.returncode, 0, f"js validator run failed: {res.stderr}")
+        js_results = last_json_object(res.stdout)["results"]
+        for (schema_text, data_list), js_problems_list in zip(pairs, js_results):
+            schema = json.loads(schema_text)
+            for data_text, js_problems in zip(data_list, js_problems_list):
+                with self.subTest(schema=schema_text, data=data_text):
+                    py_problems = validate(json.loads(data_text), schema)
+                    self.assertEqual(js_problems, py_problems)
 
     def test_js_fallback_defaults_match_canonical(self):
         """The schema-unreadable fallback must equal CONFIG_DEFAULTS."""
@@ -348,7 +685,62 @@ class TestConfigToolCatalogSurface(unittest.TestCase):
     """B4: the plugin TOOL_CATALOG advertises the full canonical surface."""
 
     CONTROL_ARGS = {"base_dir", "show", "expected_hash", "expectedHash"}
-    KEYWORDS = ("type", "enum", "minimum", "maximum", "minLength", "pattern")
+    # R1 twin of the canonical comparator (cf. COMPARE_KEYWORDS in
+    # runner/tests/test_config_schema.py): the same scalar keyword set —
+    # type/enum/min/max (minimum/maximum)/minLength/pattern/default — with
+    # items/additionalProperties recursing as schema nodes, so the JS twin
+    # cannot silently narrow what the Python comparator walks.
+    KEYWORDS = (
+        "type",
+        "enum",
+        "minimum",
+        "maximum",
+        "minLength",
+        "pattern",
+        "default",
+    )
+
+    # R1 accepted asymmetry (precedent pattern: the Accepted-asymmetry note at
+    # plugins/opencode/index.js:1116): the live TOOL_CATALOG omits `default`
+    # keywords — canonical defaults live in runner/schemas.py (mirrored to
+    # schemas/config.schema.json); the catalog is an input shape, not a
+    # defaults source, so syncing defaults into it would risk the host
+    # auto-injecting them. The twin therefore skips `default` comparison ONLY
+    # on these declared paths AND only when the advertised side omits the key
+    # entirely. Any other default drift still bites: a wrong advertised value
+    # on a listed path, or any default where the canonical node has none
+    # (undeclared asymmetry). Keep this set in sync with CONFIG defaults by
+    # hand — a new canonical default must be added here deliberately, never
+    # silently.
+    ACCEPTED_DEFAULT_OMISSIONS = frozenset(
+        [
+            "search_engine",
+            "max_iterations",
+            "divergence_threshold",
+            "mode",
+            "backend",
+            "cache_raw_markdown",
+            "cache_ttl_days",
+            "search_timeout_s",
+            "searxng_url",
+            "license_whitelist",
+            "output_dir",
+            "allocation",
+            "domain_pack",
+            "verify",
+            "verify.min_fuzzy_confidence",
+            "agents",
+            "agents.alpha.backend",
+            "agents.alpha.model",
+            "agents.alpha.opencode_agent",
+            "agents.beta.backend",
+            "agents.beta.model",
+            "agents.beta.opencode_agent",
+            "opencode_auto",
+            "opencode_agent",
+            "mcp_servers",
+        ]
+    )
 
     def _advertised(self):
         res = run_node(
@@ -361,20 +753,59 @@ class TestConfigToolCatalogSurface(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         return last_json_object(res.stdout)["input"]
 
+    def _compare_schema_node(self, canonical, advertised, path, problems):
+        """Deep-compare one schema node, recursing into subschemas (R1 twin).
+
+        Mirrors TestMcpConfigSurface._compare_schema_node: scalar KEYWORDS at
+        this node, `properties` recursing per key, `items` as `{path}[]` and
+        `additionalProperties` as `{path}.*`. A canonical subschema missing on
+        the advertised side is a drift report, never a silent skip. The sole
+        carve-out is the declared `default` omission (see
+        ACCEPTED_DEFAULT_OMISSIONS).
+        """
+        for keyword in self.KEYWORDS:
+            if (
+                keyword == "default"
+                and path in self.ACCEPTED_DEFAULT_OMISSIONS
+                and isinstance(advertised, dict)
+                and "default" not in advertised
+            ):
+                continue
+            if canonical.get(keyword) != (advertised or {}).get(keyword):
+                problems.append(
+                    f"{path}: {keyword} {canonical.get(keyword)!r} != "
+                    f"{(advertised or {}).get(keyword)!r}"
+                )
+        if isinstance(canonical.get("properties"), dict):
+            if not isinstance((advertised or {}).get("properties"), dict):
+                problems.append(f"{path}: properties schema missing on advertised side")
+            else:
+                self._compare_properties(
+                    canonical, advertised, f"{path}." if path else "", problems
+                )
+        for keyword, suffix in (("items", "[]"), ("additionalProperties", ".*")):
+            sub_node = canonical.get(keyword)
+            if isinstance(sub_node, dict):
+                adv_node = (advertised or {}).get(keyword)
+                if not isinstance(adv_node, dict):
+                    problems.append(
+                        f"{path}{suffix}: {keyword} schema missing on advertised side"
+                    )
+                else:
+                    self._compare_schema_node(
+                        sub_node, adv_node, f"{path}{suffix}", problems
+                    )
+
     def _compare(self, canonical, advertised, prefix, problems):
+        self._compare_properties(canonical, advertised, prefix, problems)
+
+    def _compare_properties(self, canonical, advertised, prefix, problems):
         for key, sub in (canonical.get("properties") or {}).items():
             adv = (advertised.get("properties") or {}).get(key)
             if adv is None:
                 problems.append(f"missing advertised key: {prefix}{key}")
                 continue
-            for keyword in self.KEYWORDS:
-                if keyword in sub and sub.get(keyword) != adv.get(keyword):
-                    problems.append(
-                        f"{prefix}{key}: {keyword} {sub.get(keyword)!r} != "
-                        f"{adv.get(keyword)!r}"
-                    )
-            if isinstance(sub.get("properties"), dict):
-                self._compare(sub, adv, f"{prefix}{key}.", problems)
+            self._compare_schema_node(sub, adv, f"{prefix}{key}", problems)
 
     def test_plugin_catalog_covers_canonical_surface(self):
         artifact = json.loads(
@@ -400,6 +831,107 @@ class TestConfigToolCatalogSurface(unittest.TestCase):
             "expected_hash",
             advertised["properties"]["expectedHash"]["description"],
         )
+
+    def test_twin_comparator_catches_undeclared_drift(self):
+        """R1: the twin bites on default/items drift outside the allowlist.
+
+        Each sub-case mutates a FRESH advertised surface exactly once, so a
+        green sub-case proves its own keyword is compared (never vacuous via
+        a shared broken fixture).
+        """
+        import copy
+
+        artifact = json.loads(
+            (PROJECT_ROOT / "schemas" / "config.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        def complained_of(mutator, needle):
+            advertised = copy.deepcopy(self._advertised())
+            mutator(advertised["properties"])
+            problems = []
+            self._compare(artifact, advertised, "", problems)
+            self.assertTrue(
+                any(needle in p for p in problems),
+                f"{needle!r} not in {problems}",
+            )
+
+        # Wrong advertised default on an allowlisted path still bites (the
+        # carve-out covers omission only, never a conflicting value).
+        complained_of(
+            lambda props: props["mode"].__setitem__("default", "scout"),
+            "mode: default",
+        )
+        # Undeclared asymmetry bites: the canonical role node carries no
+        # `default`, so an advertised one is drift, not the accepted omission.
+        complained_of(
+            lambda props: props["agents"]["properties"]["alpha"].__setitem__(
+                "default", {"backend": None}
+            ),
+            "agents.alpha: default",
+        )
+        # `items` drift bites (top-level and nested).
+        complained_of(
+            lambda props: props["license_whitelist"].__setitem__(
+                "items", {"type": "integer"}
+            ),
+            "license_whitelist[]: type",
+        )
+        complained_of(
+            lambda props: props["agents"]["properties"]["alpha"]["properties"][
+                "backend"
+            ].__setitem__("items", {"type": "integer"}),
+            "agents.alpha.backend[]: type",
+        )
+        complained_of(
+            lambda props: props["license_whitelist"].pop("items"),
+            "license_whitelist[]: items schema missing",
+        )
+        # `additionalProperties` drift bites.
+        complained_of(
+            lambda props: props["mcp_servers"].__setitem__(
+                "additionalProperties", {"type": "string"}
+            ),
+            "mcp_servers.*: type",
+        )
+        complained_of(
+            lambda props: props["mcp_servers"].pop("additionalProperties"),
+            "mcp_servers.*: additionalProperties schema missing",
+        )
+        # A dropped key still bites.
+        complained_of(
+            lambda props: props.pop("verify"),
+            "missing advertised key: verify",
+        )
+
+    def test_declared_default_asymmetry_passes(self):
+        """R1: the allowlisted `default` omissions — and ONLY they — pass."""
+        import copy
+
+        artifact = json.loads(
+            (PROJECT_ROOT / "schemas" / "config.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        advertised = copy.deepcopy(self._advertised())
+        # Every canonical default path is either present-and-equal or a
+        # declared omission; nothing else may differ on `default`.
+        problems = []
+        self._compare(artifact, advertised, "", problems)
+        self.assertEqual(
+            [p for p in problems if ": default" in p],
+            [],
+        )
+        # The allowlist skips omission only: restoring the CORRECT canonical
+        # default must compare equal (proves the skip is scoped to omission,
+        # not a blanket `default` ignore — a wrong value still bites, as
+        # test_twin_comparator_catches_undeclared_drift pins).
+        restored = copy.deepcopy(advertised)
+        restored["properties"]["mode"]["default"] = "research"
+        problems = []
+        self._compare(artifact, restored, "", problems)
+        self.assertEqual(problems, [])
 
 
 class TestWizardSlashRegistration(unittest.TestCase):

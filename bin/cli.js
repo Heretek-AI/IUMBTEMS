@@ -50,7 +50,7 @@ Commands:
   run "<objective>"     Run the dialectic multi-agent research swarm
   brainstorm "<prompt>"  Run lateral brainstorming (feature vectors + spikes)
   darkharvest "<arena>"  Product competitor teardown with harvest verdicts
-  factory <subcommand>  Factory run-state helper (init, phase-add, qa-record, expansion, stop)
+  factory <subcommand>  Factory run-state helper (init, phase-add, qa-record, expansion, stop, gate)
   grill                 Launch interactive Socratic decision tree framing
   adapters              Rebuild harness adapter mirrors (skills -> plugins/*, .agents)
   install               Install skills & MCP servers into ~/.claude/
@@ -183,12 +183,13 @@ switch (command) {
     //      iumbtems factory qa-record --run arena --phase 01-x --seat qa-a --verdict pass
     if (args[1] === '--help' || !args[1]) {
       console.log([
-        'Usage: iumbtems factory <init|phase-add|qa-record|expansion|stop> [options]',
+        'Usage: iumbtems factory <init|phase-add|qa-record|expansion|stop|gate> [options]',
         '  init --run <name>',
         '  phase-add --run <name> --phase <id> --goal "<goal>" --accept "a;b"',
         '  qa-record --run <name> --phase <id> --seat <qa-a|qa-b> --verdict <pass|fail|conditional> [--reason "..."]',
         '  expansion --run <name> --loops <n> [--max-loops 10]',
         '  stop --run <name>   (writes .factory/STOP kill-file)',
+        '  gate --run <name> --phase <id> --action <open|settle|approve|waive|escalate|count> [--reason "..."]',
       ].join('\n'));
       break;
     }

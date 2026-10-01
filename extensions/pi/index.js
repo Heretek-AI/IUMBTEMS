@@ -319,11 +319,12 @@ export default function initPiExtension(pi) {
     // Tool: iumbtems_factory (run-state helper, no script paths)
     pi.registerTool({
       name: 'iumbtems_factory',
-      description: 'Drive factory run state: init / phase-add / qa-record / expansion / stop',
+      description: 'Drive factory run state: init / phase-add / qa-record / expansion / stop / gate',
       parameters: {
         type: 'object',
         properties: {
-          command: { type: 'string', enum: ['init', 'phase-add', 'qa-record', 'expansion', 'stop'] },
+          command: { type: 'string', enum: ['init', 'phase-add', 'qa-record', 'expansion', 'stop', 'gate'] },
+          action: { type: 'string', enum: ['open', 'settle', 'approve', 'waive', 'escalate', 'count'], description: 'Gate action (with command: gate)' },
           run: { type: 'string', description: 'Factory run name' },
           phase: { type: 'string' },
           goal: { type: 'string' },
