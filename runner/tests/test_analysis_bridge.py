@@ -48,7 +48,7 @@ def last_json_object(stdout):
 
 BRIDGE_IMPORT = (
     'import { createHookBus } from "./plugins/opencode/hook-bus.js";\n'
-    'import { analyzePayload, createBridgeHandler, registerAnalysisBridge } from "./plugins/opencode/analysis-bridge.js";\n'
+    'import { analyzePayload, collectTargets, createBridgeHandler, registerAnalysisBridge } from "./plugins/opencode/analysis-bridge.js";\n'
 )
 
 MOCK_TWO_FINDINGS = """
@@ -350,6 +350,100 @@ class TestSetupAdoptsBridge(unittest.TestCase):
         self.assertEqual(
             data["closed"], data["before"], "cleanup must dispose bridge subscriptions"
         )
+
+
+class TestTargetHardeningAndArgv(unittest.TestCase):
+    def test_option_like_and_out_of_root_targets_rejected(self):
+        res = run_node(
+            BRIDGE_IMPORT
+            + """
+            const skipped = [];
+            const targets = collectTargets({
+              tool: "edit",
+              args: {
+                flag1: "--config-path=/tmp/evil.js",
+                flag2: "-x.js",
+                normal: "src/valid.ts",
+                outside: "/etc/passwd.js",
+                traversal: "../../outside.ts",
+                nullbyte: "bad\\0file.ts",
+              }
+            }, { root: "/repo", skipped });
+            console.log(JSON.stringify({ targets, skipped }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"collectTargets test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertEqual(data["targets"], ["src/valid.ts"])
+        self.assertIn("/etc/passwd.js", data["skipped"])
+        self.assertIn("../../outside.ts", data["skipped"])
+        self.assertNotIn("--config-path=/tmp/evil.js", data["targets"])
+        self.assertNotIn("-x.js", data["targets"])
+        self.assertNotIn("--config-path=/tmp/evil.js", data["skipped"])
+
+    def test_out_of_root_yields_skipped_annotation(self):
+        res = run_node(
+            BRIDGE_IMPORT
+            + """
+            const direct = await analyzePayload(
+              { tool: "edit", eventId: "e-skip", file: "/etc/passwd.js" },
+              { root: "/repo", runAnalyzer: async () => ({ status: "ok", findings: [] }) }
+            );
+            const bus = createHookBus();
+            const notices = [];
+            const notify = (s) => { notices.push(s); };
+            const reg = await registerAnalysisBridge(null, {
+              bus,
+              runAnalyzer: async () => ({ status: "ok", findings: [] }),
+              notify,
+              root: "/repo",
+            });
+            const r = await bus.emit("pre-tool-use", {
+              tool: "edit",
+              eventId: "e-skip",
+              file: "/etc/passwd.js"
+            });
+            const audit = bus.getAuditLog();
+            const skippedAudit = audit.filter((a) => a.event === "notification" && a.reason && a.reason.includes("skipped"));
+            console.log(JSON.stringify({
+              allowed: r.allowed,
+              notices: notices.length,
+              directAnnotations: direct.annotations,
+              skippedAudit: skippedAudit.length,
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"skipped annotation test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertTrue(data["allowed"])
+        self.assertEqual(data["notices"], 0, "skipped target must not trigger finding toast")
+        self.assertGreaterEqual(len(data["directAnnotations"]), 1)
+        self.assertEqual(data["directAnnotations"][0]["rule"], "analysis-bridge/skipped-target")
+        self.assertGreaterEqual(data["skippedAudit"], 1)
+
+    def test_malformed_findings_entries_filtered(self):
+        res = run_node(
+            BRIDGE_IMPORT
+            + """
+            const runAnalyzer = async () => ({
+              status: "ok",
+              findings: [null, 1, "junk", { rule: "rule1", file: "src/app.ts", message: "ok" }]
+            });
+            const direct = await analyzePayload(
+              { tool: "edit", eventId: "e-filter", file: "src/app.ts" },
+              { runAnalyzer }
+            );
+            console.log(JSON.stringify({
+              allowed: direct.allowed,
+              annotations: direct.annotations
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"findings filter test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertTrue(data["allowed"])
+        self.assertEqual(len(data["annotations"]), 1)
+        self.assertEqual(data["annotations"][0]["rule"], "rule1")
 
 
 if __name__ == "__main__":

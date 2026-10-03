@@ -1,6 +1,6 @@
 # Hook-Bus Parity: Claude hooks ↔ IUMBTEMS bus (Phase 01-hook-bus-spec)
 
-Minimal six-event blockable hook bus with tiered enforcement, wired to the
+Six-event hook bus with tiered enforcement (3 enforced on host paths, 1 advisory, 2 bus-level only), wired to the
 existing OpenCode v2 `command.transform + tool.transform + session.hook + rpc`
 shape. North star is Claude Code parity (hooks.json-style pre/post tool,
 commit, stop, notification, session-start guards); the table below maps each
@@ -18,10 +18,10 @@ and `131bcb343879bfadcba9a40719ddd0b77540eb21f4cdc937d18b1b2943579afa`.
 ## Tier table (H2+H6)
 
 - `fast` tier: budget `FAST_TIMEOUT_MS` = 500 ms
-  (see plugins/opencode/hook-bus.js:54). A fast deny **blocks**; a fast
+  (see plugins/opencode/hook-bus.js:54 (FAST_TIMEOUT_MS)). A fast deny **blocks**; a fast
   timeout degrades to fail-open allow + audit entry.
 - `slow` tier: budget `SLOW_TIMEOUT_MS` = 5000 ms
-  (see plugins/opencode/hook-bus.js:55). A slow deny blocks **only when it
+  (see plugins/opencode/hook-bus.js:55 (SLOW_TIMEOUT_MS)). A slow deny blocks **only when it
   lands inside the slow budget**; a slow overrun degrades to an advisory
   annotation (fail-open allow) + audit entry, so a hung slow check can never
   brick the fast path (tiers run concurrently).
@@ -37,12 +37,12 @@ blocking without an emit site.
 
 | Claude hook | Bus event | Payload | Blocking semantics | Enforcement point | Timeout | Fallback | Pointer |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| PreToolUse | pre-tool-use | `{ tool, args, sessionID }` | fast deny blocks; slow deny blocks inside slow budget | ENFORCED for this plugin's own tools in `registerHostTools` execute (deny blocks `callMcp` dispatch). Host-native tools (webfetch/websearch) are NOT gated — no `tool.execute.before` point exists (see gap 1) | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/hook-bus.js:38 |
-| PostToolUse | post-tool-use | `{ tool, result, sessionID }` | fast deny blocks; slow deny blocks inside slow budget | ENFORCED for this plugin's own tools: a deny blocks DELIVERY (result suppressed, notice returned). Same host-native scope limit as pre-tool-use | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/hook-bus.js:38 |
-| PreCommit (settings write) | pre-commit | `{ updates, root, expected_hash? }` | deny blocks the write (structured invalid / not-written, nothing written) | ENFORCED on BOTH legs: settings-RPC `set` AND the TUI direct-fs fallback (`gateDirectFsPreCommit`). Stale-write guard still enforced downstream in both | fast 500 ms / slow 5000 ms | fail-open allow; stale-write guard still enforced by the MCP write / `saveConfig` | plugins/opencode/hook-bus.js:377 |
-| Stop | stop | `{ sessionID, reason? }` | deny blocks at `bus.emit` (direct subscribers) | BUS-LEVEL ONLY: no host interception point exists yet, so no host action is gated. Deny-blocks holds for bus participants, exactly like the six bus unit tests pin | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/hook-bus.js:38 |
-| Notification | notification | `{ message, level?, sessionID? }` | deny blocks at `bus.emit` (direct subscribers) | BUS-LEVEL ONLY: same scope as `stop` — no host toast/log interception point, no host action gated | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/hook-bus.js:38 |
-| SessionStart (compaction restore) | session-start | `{ root, eventId }` | advisory BY DESIGN: a deny is audit-logged but never drops the compaction state push | ADVISORY emit inside the compaction hook. Explicitly NOT counted as a deny-blocks host path — the bus unit test pins `bus.emit` returning `allowed: false` while the host push still proceeds | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/index.js:1846 |
+| PreToolUse | pre-tool-use | `{ tool, args, sessionID }` | fast deny blocks; slow deny blocks inside slow budget | ENFORCED for this plugin's own tools in `registerHostTools` execute (deny blocks `callMcp` dispatch). Host-native tools (webfetch/websearch) are NOT gated — no `tool.execute.before` point exists (see gap 1) | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/hook-bus.js:38 (HOOK_EVENTS) |
+| PostToolUse | post-tool-use | `{ tool, result, sessionID }` | fast deny blocks; slow deny blocks inside slow budget | ENFORCED for this plugin's own tools: a deny blocks DELIVERY (result suppressed, notice returned). Same host-native scope limit as pre-tool-use | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/hook-bus.js:38 (HOOK_EVENTS) |
+| PreCommit (settings write) | pre-commit | `{ updates, root, expected_hash? }` | deny blocks the write (structured invalid / not-written, nothing written) | ENFORCED on BOTH legs: settings-RPC `set` AND the TUI direct-fs fallback (`gateDirectFsPreCommit`). Stale-write guard still enforced downstream in both | fast 500 ms / slow 5000 ms | fail-open allow; stale-write guard still enforced by the MCP write / `saveConfig` | plugins/opencode/hook-bus.js:445 (gatePreCommit) |
+| Stop | stop | `{ sessionID, reason? }` | deny blocks at `bus.emit` (direct subscribers) | BUS-LEVEL ONLY: no host interception point exists yet, so no host action is gated. Deny-blocks holds for bus participants, exactly like the six bus unit tests pin | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/hook-bus.js:38 (HOOK_EVENTS) |
+| Notification | notification | `{ message, level?, sessionID? }` | deny blocks at `bus.emit` (direct subscribers) | BUS-LEVEL ONLY: same scope as `stop` — no host toast/log interception point, no host action gated | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/hook-bus.js:38 (HOOK_EVENTS) |
+| SessionStart (compaction restore) | session-start | `{ root, eventId }` | advisory BY DESIGN: a deny is audit-logged but never drops the compaction state push | ADVISORY emit inside the compaction hook. Explicitly NOT counted as a deny-blocks host path — the bus unit test pins `bus.emit` returning `allowed: false` while the host push still proceeds | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/index.js:1849 (session-start) |
 
 ## Caller-latency contract (GOAL §5/§6)
 
@@ -50,7 +50,7 @@ blocking without an emit site.
 by its tier budget, so a call resolves within
 `max(fastBudget, slowBudget)` + scheduling epsilon. A hung slow handler
 delays the caller by at most the slow budget (default 5000 ms, see
-plugins/opencode/hook-bus.js:55) — never indefinitely, never bricking the
+plugins/opencode/hook-bus.js:55 (SLOW_TIMEOUT_MS)) — never indefinitely, never bricking the
 fast path. Pinned by `test_emit_latency_bounded_by_slow_budget` in
 runner/tests/test_hook_bus.py (a never-settling slow handler with a small
 `slowTimeoutMs` still resolves on budget with a `timeout` audit entry).
@@ -61,41 +61,41 @@ runner/tests/test_hook_bus.py (a never-settling slow handler with a small
   timeout / error / fallback, each with latency.
 - Unrecognised handler verdicts degrade to fail-open allow but are TAGGED
   with `fallback: true` + a `note` (never silent) — see
-  `normalizeVerdictEx` (plugins/opencode/hook-bus.js:87).
+  `normalizeVerdictEx` (plugins/opencode/hook-bus.js:95 (normalizeVerdictEx)).
 - Every entry ALWAYS carries `tool` and `eventId` keys (`null` when the
   payload has none), so consumers can rely on shape.
-- The ring cap (`MAX_AUDIT_ENTRIES`, plugins/opencode/hook-bus.js:61)
+- The ring cap (`MAX_AUDIT_ENTRIES`, plugins/opencode/hook-bus.js:61 (MAX_AUDIT_ENTRIES))
   evictions are COUNTED (`getAuditStats()` →
-  `{ entries, dropped, capacity }`, plugins/opencode/hook-bus.js:348);
+  `{ entries, dropped, capacity }`, plugins/opencode/hook-bus.js:416 (getAuditStats));
   `clearAuditLog()` leaves a tombstone entry whose note carries the
-  discarded count (plugins/opencode/hook-bus.js:322).
+  discarded count (plugins/opencode/hook-bus.js:389 (clearAuditLog)).
 
 ## Wire-in pointers
 
 - Bus registry `on(event, handler, { tier })` and `emit(event, payload)` with
-  per-tier timeouts: plugins/opencode/hook-bus.js:192
+  per-tier timeouts: plugins/opencode/hook-bus.js:231 (createHookBus)
 - `pre-tool-use` deny-blocks-execution emit in plugin-tool `execute`:
-  plugins/opencode/index.js:1190
+  plugins/opencode/index.js:1193 (pre-tool-use)
 - `post-tool-use` deny-suppresses-delivery emit in plugin-tool `execute`:
-  plugins/opencode/index.js:1213
+  plugins/opencode/index.js:1216 (post-tool-use)
 - `pre-commit` gate helper (stale-write guards preserved downstream):
-  plugins/opencode/hook-bus.js:377
+  plugins/opencode/hook-bus.js:445 (gatePreCommit)
 - Direct-fs `pre-commit` gate helper (fallback leg):
-  plugins/opencode/tui.js:120
+  plugins/opencode/tui.js:130 (gateDirectFsPreCommit)
 - Bus adoption alongside existing registrations (same adopt/best-effort
-  pattern): plugins/opencode/index.js:2885
-- Shared bus instance: plugins/opencode/index.js:73
+  pattern): plugins/opencode/index.js:2888 (registerHookBus)
+- Shared bus instance: plugins/opencode/index.js:82 (hookBus)
 - `pre-commit` gate inside the settings-RPC `set` leg:
-  plugins/opencode/index.js:2526
+  plugins/opencode/index.js:2529 (gatePreCommit)
 - Direct-fs `pre-commit` gate inside the wizard fallback leg:
-  plugins/opencode/tui.js:1322
+  plugins/opencode/tui.js:1346 (gateDirectFsPreCommit)
 - `session-start` (advisory) emit inside the compaction hook:
-  plugins/opencode/index.js:1846
+  plugins/opencode/index.js:1849 (session-start)
 - Audit ledger (ring-cap counter + clear tombstone):
-  plugins/opencode/hook-bus.js:322
-- Mock-host bus tests (order, timeouts, fail-open, audit completeness, six
+  plugins/opencode/hook-bus.js:389 (clearAuditLog)
+- Mock-host bus tests (order, timeouts, fail-open, audit completeness, per-event
   deny-blocks, registrar-adopt, doc pointers):
-  runner/tests/test_hook_bus.py
+  runner/tests/test_hook_bus.py:55 (TestHookBusSixDenyBlocks)
 
 ## Gap list
 
@@ -105,7 +105,7 @@ runner/tests/test_hook_bus.py (a never-settling slow handler with a small
    cannot be intercepted the way Claude Code hooks do
    [VERIFIED: sha256:52ac5b4d26062cfc6093440faa415ab152f8acd0d18c4496eb0087ed18a27d76].
    Consequence: `pre-tool-use` / `post-tool-use` enforce on THIS plugin's own
-   tool executions (see plugins/opencode/index.js:1190); they cannot yet veto
+   tool executions (see plugins/opencode/index.js:1193 (pre-tool-use)); they cannot yet veto
    arbitrary host tool executions. The bus degrades gracefully (advisory
    annotations + audit) until the upstream guard API exists.
 2. `session-start` verdicts are advisory-only BY DESIGN (a deny never drops
@@ -116,9 +116,9 @@ runner/tests/test_hook_bus.py (a never-settling slow handler with a small
    deny-blocks holds at `bus.emit` for direct subscribers.
 4. The host may lack RPC/MCP/session-hook domains; every registrar is
    best-effort and the bus attaches fail-open (`host.iumbtemsHookBus`,
-   see plugins/opencode/hook-bus.js:394). The TUI direct-fs fallback leg is
+   see plugins/opencode/hook-bus.js:468 (host.iumbtemsHookBus)). The TUI direct-fs fallback leg is
    gated through the bus anyway (`gateDirectFsPreCommit`,
-   plugins/opencode/tui.js:120) — on RPC-null hosts the bus is still the
+   plugins/opencode/tui.js:130 (gateDirectFsPreCommit)) — on RPC-null hosts the bus is still the
    enforcement point; a null bus fails open with an audit entry on the next
    emit that does run.
 
@@ -295,5 +295,5 @@ Body:
 > notification are bus-level only.
 >
 > Repro/pointer: the accepted-asymmetry comment in the plugin
-> (see plugins/opencode/index.js:1137) and the parity gap list in
+> (see plugins/opencode/index.js:1163 (tool.execute.before)) and the parity gap list in
 > docs/HOOK_BUS_PARITY.md.

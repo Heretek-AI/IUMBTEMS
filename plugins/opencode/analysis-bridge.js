@@ -22,8 +22,8 @@
  * pinned devDependency (Biome, single dep, zero-config, lint+format JS/TS).
  *
  * Phase evidence (cited per programmer brief):
- * - Bus contract (six blockable events, tiered enforcement, fail-open,
- *   tool/eventId audit guarantees)
+ * - Bus contract (six events, 3 host-enforced / 1 advisory / 2 bus-level,
+ *   tiered enforcement, fail-open, tool/eventId audit guarantees)
  *   [VERIFIED: sha256:f2c0843b598ba6f19cc0e208f8d02e0250c70615e3c484474d50635d0b5cdef8
  *   `file:///home/john/Projects/IUMBTEMS/plugins/opencode/hook-bus.js`]
  * - Host emit points (pre/post-tool-use own-tools scope, pre-commit both
@@ -44,7 +44,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FAST_TIMEOUT_MS } from './hook-bus.js';
@@ -84,10 +84,32 @@ export function isJsTsFile(p) {
   return typeof p === 'string' && /\.(m|c)?[jt]sx?$/i.test(p.trim());
 }
 
-function pushCandidate(out, seen, v) {
+function pushCandidate(out, seen, v, root, skipped) {
   if (typeof v !== 'string') return;
   const t = v.trim();
-  if (!t || !isJsTsFile(t) || seen.has(t)) return;
+  if (!t || t.includes('\0') || t.startsWith('-')) return;
+  if (!isJsTsFile(t)) return;
+  const resolvedRoot = root ? path.resolve(root) : process.cwd();
+  const abs = path.resolve(resolvedRoot, t);
+  const rel = path.relative(resolvedRoot, abs);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    if (skipped) skipped.push(t);
+    return;
+  }
+  try {
+    if (existsSync(abs)) {
+      const real = realpathSync(abs);
+      const realRoot = realpathSync(resolvedRoot);
+      const realRel = path.relative(realRoot, real);
+      if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+        if (skipped) skipped.push(t);
+        return;
+      }
+    }
+  } catch {
+    /* fail safe */
+  }
+  if (seen.has(t)) return;
   seen.add(t);
   out.push(t);
 }
@@ -97,28 +119,31 @@ function pushCandidate(out, seen, v) {
  * conventional locator fields (`file`, `files`, `path`, `paths`,
  * `filename`, `filenames`) plus a one-level scan of `args` values (plain
  * strings or arrays of strings, e.g. an edit tool's file argument).
- * De-duplicated, capped at `MAX_TARGET_FILES`. Never throws.
+ * Confines targets to the project root, rejects option-like flags (`-x`),
+ * de-duplicates, and caps at `MAX_TARGET_FILES`. Never throws.
  */
-export function collectTargets(payload) {
+export function collectTargets(payload, opts = {}) {
   try {
     const out = [];
     const seen = new Set();
+    const skipped = Array.isArray(opts?.skipped) ? opts.skipped : null;
+    const root = opts?.root || opts?.cwd || process.cwd();
     if (!payload || typeof payload !== 'object') return out;
     for (const key of ['file', 'files', 'path', 'paths', 'filename', 'filenames']) {
       const v = payload[key];
       if (Array.isArray(v)) {
-        for (const item of v) pushCandidate(out, seen, item);
+        for (const item of v) pushCandidate(out, seen, item, root, skipped);
       } else {
-        pushCandidate(out, seen, v);
+        pushCandidate(out, seen, v, root, skipped);
       }
     }
     const args = payload.args;
     if (args && typeof args === 'object') {
       for (const v of Object.values(args)) {
         if (Array.isArray(v)) {
-          for (const item of v) pushCandidate(out, seen, item);
+          for (const item of v) pushCandidate(out, seen, item, root, skipped);
         } else {
-          pushCandidate(out, seen, v);
+          pushCandidate(out, seen, v, root, skipped);
         }
       }
     }
@@ -187,8 +212,16 @@ function errorFinding(tool, eventId, targets, message) {
   });
 }
 
-/** Locate the Biome binary: repo devDep first, then PATH fallback. */
-export function findAnalyzerBin() {
+/** Locate the Biome binary: project devDep first, then repo devDep, then PATH fallback. */
+export function findAnalyzerBin(root) {
+  try {
+    if (root) {
+      const projectLocal = path.join(root, 'node_modules', '.bin', 'biome');
+      if (existsSync(projectLocal)) return projectLocal;
+    }
+  } catch {
+    /* fall through */
+  }
   try {
     const local = path.join(PKG_ROOT, 'node_modules', '.bin', 'biome');
     if (existsSync(local)) return local;
@@ -241,7 +274,7 @@ export function defaultRunAnalyzer(files, opts = {}) {
     let child;
     try {
       child = spawn(
-        findAnalyzerBin(),
+        findAnalyzerBin(opts.root || opts.cwd),
         [
           'lint',
           '--reporter=json',
@@ -249,6 +282,7 @@ export function defaultRunAnalyzer(files, opts = {}) {
           '--diagnostic-level=info',
           '--colors=off',
           '--files-ignore-unknown=true',
+          '--',
           ...files,
         ],
         { cwd: opts.cwd || process.cwd() },
@@ -319,37 +353,50 @@ export async function analyzePayload(payload, opts = {}) {
   try {
     const tool = resolveTool(payload);
     const eventId = resolveEventId(payload);
-    const targets = collectTargets(payload);
-    if (targets.length === 0) return { allowed: true, annotations: [] };
+    const root = opts.root || opts.cwd || process.cwd();
+    const skipped = [];
+    const targets = collectTargets(payload, { root, skipped });
+    const skippedAnnotations = skipped.slice(0, 10).map((s) => toFinding({
+      tool,
+      eventId,
+      rule: 'analysis-bridge/skipped-target',
+      file: s,
+      line: null,
+      message: `target path outside project root or invalid: ${s} (skipped)`,
+      severity: 'info',
+    }));
+
+    if (targets.length === 0) return { allowed: true, annotations: skippedAnnotations };
     const timeoutMs = Number(opts.timeoutMs ?? ANALYZER_TIMEOUT_MS);
     const budget = Number.isFinite(timeoutMs) && timeoutMs >= 0 ? timeoutMs : ANALYZER_TIMEOUT_MS;
     const runAnalyzer = typeof opts.runAnalyzer === 'function' ? opts.runAnalyzer : defaultRunAnalyzer;
     const res = await runBounded(
-      runAnalyzer(targets, { timeoutMs: budget, cwd: opts.cwd }),
+      runAnalyzer(targets, { timeoutMs: budget, cwd: opts.cwd, root }),
       budget,
     );
     if (!res || typeof res !== 'object') {
-      return { allowed: true, annotations: [errorFinding(tool, eventId, targets, 'malformed analyzer result')] };
+      return { allowed: true, annotations: [...skippedAnnotations, errorFinding(tool, eventId, targets, 'malformed analyzer result')] };
     }
-    if (res.status === 'missing') return { allowed: true, annotations: [] };
+    if (res.status === 'missing') return { allowed: true, annotations: skippedAnnotations };
     if (res.status === 'timeout') {
-      return { allowed: true, annotations: [timeoutFinding(tool, eventId, targets, budget)] };
+      return { allowed: true, annotations: [...skippedAnnotations, timeoutFinding(tool, eventId, targets, budget)] };
     }
     if (res.status === 'error') {
-      return { allowed: true, annotations: [errorFinding(tool, eventId, targets, res.message || 'unknown error')] };
+      return { allowed: true, annotations: [...skippedAnnotations, errorFinding(tool, eventId, targets, res.message || 'unknown error')] };
     }
     if (res.status === 'ok' && Array.isArray(res.findings)) {
       const findings = res.findings
+        .filter((f) => f && typeof f === 'object' && !Array.isArray(f))
         .slice(0, MAX_FINDINGS)
         .map((f) => toFinding({ ...f, tool: f?.tool ?? tool, eventId: f?.eventId ?? eventId }));
-      return { allowed: true, annotations: findings };
+      return { allowed: true, annotations: [...skippedAnnotations, ...findings] };
     }
     if (typeof res.stdout === 'string') {
       // Default-runner raw form: parse Biome JSON reporter output here so
       // injected mocks may return either parsed findings or raw stdout.
-      return { allowed: true, annotations: parseBiomeJson(res.stdout, tool, eventId) };
+      return { allowed: true, annotations: [...skippedAnnotations, ...parseBiomeJson(res.stdout, tool, eventId)] };
     }
-    return { allowed: true, annotations: [errorFinding(tool, eventId, targets, 'malformed analyzer result')] };
+    return { allowed: true, annotations: [...skippedAnnotations, errorFinding(tool, eventId, targets, 'malformed analyzer result')] };
   } catch (err) {
     // Last resort: fail-open allow with a single error annotation.
     try {
@@ -433,7 +480,7 @@ export function createBridgeHandler(bus, opts = {}) {
       const result = await analyzePayload(payload, runOpts);
       const annotations = Array.isArray(result?.annotations) ? result.annotations : [];
       if (annotations.length === 0) {
-        const targets = collectTargets(payload);
+        const targets = collectTargets(payload, runOpts);
         if (targets.length === 0) {
           return { verdict: 'allow', reason: 'analysis-bridge: no js/ts targets; skipped' };
         }
@@ -461,14 +508,21 @@ export function createBridgeHandler(bus, opts = {}) {
           }
         }
       }
-      const files = new Set(annotations.map((f) => f.file).filter(Boolean));
-      notifySummary(runOpts, {
-        title: 'IUMBTEMS analysis',
-        message: `analysis-bridge: ${annotations.length} finding(s) in ${files.size} file(s) (advisory; action allowed)`,
-      });
+      const nonSkipped = annotations.filter((f) => f.rule !== 'analysis-bridge/skipped-target');
+      if (nonSkipped.length > 0) {
+        const files = new Set(nonSkipped.map((f) => f.file).filter(Boolean));
+        notifySummary(runOpts, {
+          title: 'IUMBTEMS analysis',
+          message: `analysis-bridge: ${nonSkipped.length} finding(s) in ${files.size} file(s) (advisory; action allowed)`,
+        });
+        return {
+          verdict: 'advisory',
+          reason: `analysis-bridge: ${nonSkipped.length} finding(s) in ${files.size} file(s) (advisory; action allowed)`,
+        };
+      }
       return {
-        verdict: 'advisory',
-        reason: `analysis-bridge: ${annotations.length} finding(s) in ${files.size} file(s) (advisory; action allowed)`,
+        verdict: 'allow',
+        reason: `analysis-bridge: ${annotations.length} target(s) skipped (advisory; action allowed)`,
       };
     } catch {
       return { verdict: 'allow', reason: 'analysis-bridge: internal fault; fail-open allow' };

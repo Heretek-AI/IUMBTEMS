@@ -50,8 +50,8 @@ import {
 } from './weight-signals.js';
 
 /**
- * Shared hook bus (Phase 01-hook-bus-spec). Six blockable events with tiered
- * fast-short/slow-long enforcement + audit log; fail-open, never throws.
+ * Shared hook bus (Phase 01-hook-bus-spec). Six events with tiered enforcement
+ * (3 enforced on host paths, 1 advisory, 2 bus-level only) + audit log; fail-open.
  *
  * Phase evidence: transform-shaped registrations + the `tool.execute.before`
  * gap [VERIFIED: sha256:52ac5b4d26062cfc6093440faa415ab152f8acd0d18c4496eb0087ed18a27d76
@@ -864,12 +864,6 @@ function buildToolMap(hostRoot = undefined) {
       {
         ...tool,
         options: { codemode: false },
-        execute: async (args = {}, toolContext = undefined) =>
-          callMcp(
-            tool.name,
-            normalizeArgs(tool.name, args),
-            toolContext?.cwd || hostRoot
-          ),
       },
     ])
   );
@@ -2900,7 +2894,10 @@ export function createOpenCodePlugin(context = {}) {
       // adopt/best-effort pattern). Analyzer-missing degrades to a silent
       // skip inside the bridge; this adoption never throws.
       try {
-        adopt([await registerAnalysisBridge(host, { bus: hookBus })]);
+        adopt([await registerAnalysisBridge(host, {
+          bus: hookBus,
+          root: host.location?.directory || undefined,
+        })]);
       } catch (err) {
         log(host, 'error', 'registering analysis bridge failed', errDetail(err));
       }

@@ -1,6 +1,6 @@
 /**
- * IUMBTEMS hook bus (Phase 01-hook-bus-spec): minimal six-event blockable
- * event bus with tiered enforcement + audit log.
+ * IUMBTEMS hook bus (Phase 01-hook-bus-spec): six-event hook bus with tiered
+ * enforcement (3 enforced on host paths, 1 advisory, 2 bus-level only) + audit log.
  *
  * Zero runtime dependencies; host-agnostic (no OpenCode host import) so the
  * mock-host suites can drive it without a live TUI. Fail-open everywhere:
@@ -34,7 +34,7 @@
 // Event registry + tier table.
 // ---------------------------------------------------------------------------
 
-/** The six blockable bus events (H1+H5). All six deny-block per tier table. */
+/** The six bus events (H1+H5): 3 enforced on host paths, 1 advisory, 2 bus-level only. All six deny-block per tier table at bus.emit. */
 export const HOOK_EVENTS = Object.freeze([
   'pre-tool-use',
   'post-tool-use',
@@ -74,6 +74,14 @@ function timeoutForTier(tier, overrides = {}) {
 }
 
 /**
+ * Keys a handler may return alongside (or instead of) `verdict` without
+ * expressing allow/deny intent. A reason-only object whose keys are all in
+ * this set is a recognised allow; any other key (e.g. `allowed`, `deny`,
+ * `block`) is unrecognised and tagged — never silently dropped.
+ */
+const DESCRIPTIVE_KEYS = new Set(['reason', 'message', 'note', 'annotations']);
+
+/**
  * Normalise a handler's return into `allow` | `deny` | `advisory`.
  * `undefined`/`null`/`true` mean allow (non-blocking default); `false` and
  * `'deny'` mean deny; `'advisory'` (or `{verdict:'advisory'}`) annotates
@@ -103,17 +111,25 @@ export function normalizeVerdictEx(value) {
     // reason — it is NOT a reason-only object. Treat it as unrecognized so
     // the caller tags fallback:true + note, consistent with 42/{verdict:BOGUS}/
     // "gibberish"/0/[].
-    if (Object.keys(value).length === 0) {
+    const keys = Object.keys(value);
+    if (keys.length === 0) {
       return { verdict: 'allow', recognized: false };
     }
     const raw = value.verdict;
-    if (raw === undefined || raw === null || String(raw).trim() === '') {
-      return { verdict: 'allow', recognized: true }; // reason-only object
+    if (raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '')) {
+      // Reason-only object: recognised ONLY when every key is descriptive.
+      // `{allowed:false}` / `{deny:true}` / `{block:true}` express intent this
+      // bus does not honour; treating them as a plain allow would be a silent
+      // fail-open, so they are unrecognised (the caller tags fallback:true).
+      return keys.every((k) => DESCRIPTIVE_KEYS.has(k))
+        ? { verdict: 'allow', recognized: true }
+        : { verdict: 'allow', recognized: false };
     }
-    const v = String(raw).trim().toLowerCase();
-    if (v === 'deny') return { verdict: 'deny', recognized: true };
-    if (v === 'advisory') return { verdict: 'advisory', recognized: true };
-    if (v === 'allow') return { verdict: 'allow', recognized: true };
+    // `verdict` present: reuse the scalar path so the object and string
+    // spellings (`'block'`, `'warn'`, `false`, …) can never diverge.
+    if (typeof raw === 'string' || typeof raw === 'boolean') {
+      return normalizeVerdictEx(raw);
+    }
     return { verdict: 'allow', recognized: false };
   }
   return { verdict: 'allow', recognized: false };
@@ -131,6 +147,22 @@ function reasonOf(value) {
     return value.trim();
   }
   return null;
+}
+
+/**
+ * ` (keys: a,b)` for an unrecognised object verdict, else ''. Bounded (8 keys,
+ * 24 chars each) and stripped to printable characters so a hostile handler
+ * cannot inject control sequences into the audit note. Never throws.
+ */
+function unrecognizedKeysNote(value) {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+    const keys = Object.keys(value).slice(0, 8)
+      .map((k) => String(k).replace(/[^\x20-\x7e]/g, '?').slice(0, 24));
+    return keys.length > 0 ? ` (keys: ${keys.join(',')})` : '';
+  } catch {
+    return '';
+  }
 }
 
 /** Run one handler with a timeout bound. Never rejects: resolves a record.
@@ -176,7 +208,7 @@ function runHandlerBounded(handler, payload, ms) {
           // allow).
           ...(norm.recognized ? {} : {
             fallback: true,
-            note: 'unrecognized verdict; degraded to fail-open allow',
+            note: `unrecognized verdict${unrecognizedKeysNote(value)}; degraded to fail-open allow`,
           }),
         });
       },
@@ -205,10 +237,20 @@ export function createHookBus(opts = {}) {
   // note carries the cleared count. Both are surfaced via `getAuditStats()`.
   let droppedAuditEntries = 0;
   const clock = typeof opts.clock === 'function' ? opts.clock : () => new Date().toISOString();
+  function safeClock() {
+    try {
+      const val = clock();
+      if (typeof val === 'string' && val.length > 0) return val;
+      return new Date().toISOString();
+    } catch {
+      return new Date().toISOString();
+    }
+  }
 
   function appendAudit(entry) {
     try {
-      audit.push({ seq: seq += 1, ts: clock(), ...entry });
+      seq += 1;
+      audit.push({ seq, ts: safeClock(), ...entry });
       while (audit.length > MAX_AUDIT_ENTRIES) {
         audit.shift();
         droppedAuditEntries += 1;
@@ -248,17 +290,35 @@ export function createHookBus(opts = {}) {
   }
 
   async function emit(event, payload = {}, emitOpts = {}) {
+    const safeGet = (fn) => { try { return fn(); } catch { return null; } };
+    const payloadTool = safeGet(() => payload?.tool ?? null);
+    const payloadEventId = safeGet(() => payload?.eventId ?? null);
+
     try {
       if (!handlers.has(event)) {
         appendAudit({
           event: String(event), tier: 'n/a', handler: 'n/a',
           verdict: 'allow', outcome: 'fallback', latencyMs: 0,
           fallback: true, note: 'emit(): unknown event; fail-open allow',
-          tool: null, eventId: null, // FAIL 3b: keys always present (null when absent)
+          tool: payloadTool, eventId: payloadEventId, // FAIL 3b: keys always present (null when absent)
         });
         return { allowed: true, verdicts: [], annotations: [{ event, outcome: 'fallback', note: 'unknown event' }] };
       }
       const list = [...(handlers.get(event) || [])];
+      if (list.length === 0 && emitOpts?.auditEmpty) {
+        appendAudit({
+          event: String(event),
+          tier: 'n/a',
+          handler: 'n/a',
+          verdict: 'allow',
+          outcome: 'fallback',
+          latencyMs: 0,
+          fallback: true,
+          note: `no handlers registered for ${String(event)} in this process`,
+          tool: payloadTool,
+          eventId: payloadEventId,
+        });
+      }
       const fastBudget = timeoutForTier('fast', emitOpts);
       const slowBudget = timeoutForTier('slow', emitOpts);
 
@@ -277,8 +337,8 @@ export function createHookBus(opts = {}) {
             latencyMs: rec.latencyMs,
             // FAIL 3b: `tool` / `eventId` keys are ALWAYS present (null when
             // the payload carries none) so audit consumers can rely on shape.
-            tool: payload?.tool ?? null,
-            eventId: payload?.eventId ?? null,
+            tool: payloadTool,
+            eventId: payloadEventId,
             ...(rec.fallback ? { fallback: true } : {}),
             ...(rec.note ? { note: rec.note } : {}),
             ...(rec.error ? { error: rec.error } : {}),
@@ -309,7 +369,7 @@ export function createHookBus(opts = {}) {
           event: String(event), tier: 'n/a', handler: 'n/a',
           verdict: 'allow', outcome: 'fallback', latencyMs: 0,
           fallback: true, error: String(err?.message ?? err),
-          tool: payload?.tool ?? null, eventId: payload?.eventId ?? null,
+          tool: payloadTool, eventId: payloadEventId,
         });
       } catch {
         /* last-resort: never throw */
@@ -332,9 +392,10 @@ export function createHookBus(opts = {}) {
     try {
       const cleared = audit.length;
       audit.length = 0;
+      seq += 1;
       audit.push({
-        seq: seq += 1,
-        ts: clock(),
+        seq,
+        ts: safeClock(),
         event: 'audit-clear',
         tier: 'n/a',
         handler: 'n/a',
@@ -384,7 +445,8 @@ export function createHookBus(opts = {}) {
 export async function gatePreCommit(bus, payload = {}, emitOpts = {}) {
   try {
     if (!bus || typeof bus.emit !== 'function') return { allowed: true };
-    const res = await bus.emit('pre-commit', payload, emitOpts);
+    const opts = { auditEmpty: true, ...emitOpts };
+    const res = await bus.emit('pre-commit', payload, opts);
     return res && res.allowed === false ? { allowed: false, result: res } : { allowed: true, result: res };
   } catch {
     return { allowed: true };

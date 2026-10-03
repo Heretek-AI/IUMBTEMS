@@ -449,22 +449,48 @@ class TestHookBusRegistrarAdopt(unittest.TestCase):
 
 class TestParityDocPointers(unittest.TestCase):
     def test_every_pointer_resolves(self):
-        # Every parity-table / wire-in row resolves to a real file/line; the
-        # gap list names tool.execute.before explicitly.
+        # Every parity-table / wire-in row resolves to a real file/line;
+        # when a symbol name is specified in parentheses, verify it exists
+        # within ±3 lines of the cited line.
         doc = (PROJECT_ROOT / "docs" / "HOOK_BUS_PARITY.md").read_text(encoding="utf-8")
         self.assertIn("tool.execute.before", doc)
         refs = re.findall(
-            r"(plugins/[A-Za-z0-9_./-]+|runner/[A-Za-z0-9_./-]+):(\d+)", doc
+            r"((?:plugins|runner)/[A-Za-z0-9_./-]+):(\d+)(?:\s*\(([^)]+)\))?", doc
         )
         self.assertGreater(len(refs), 0, "parity doc must carry file:line pointers")
-        for path, line in sorted(set(refs)):
+        for path, line_str, symbol in refs:
             target = PROJECT_ROOT / path
             self.assertTrue(target.is_file(), f"parity pointer missing file: {path}")
-            total = sum(1 for _ in target.open(encoding="utf-8"))
+            lines = target.read_text(encoding="utf-8").splitlines()
+            line_no = int(line_str)
             self.assertTrue(
-                1 <= int(line) <= total,
-                f"parity pointer out of range: {path}:{line} (file has {total} lines)",
+                1 <= line_no <= len(lines),
+                f"parity pointer out of range: {path}:{line_no} (file has {len(lines)} lines)",
             )
+            if symbol and symbol.strip():
+                sym = symbol.strip()
+                start = max(0, line_no - 4)
+                end = min(len(lines), line_no + 3)
+                window = "\n".join(lines[start:end])
+                self.assertIn(
+                    sym,
+                    window,
+                    f"symbol '{sym}' not found within ±3 lines of {path}:{line_no}",
+                )
+
+    def test_tool_execute_before_gap_stated_once_outside_appendix(self):
+        doc = (PROJECT_ROOT / "docs" / "HOOK_BUS_PARITY.md").read_text(encoding="utf-8")
+        body_before_appendix = doc.split("## Appendix:")[0]
+        self.assertIn("## Gap list", body_before_appendix)
+        gap_section = body_before_appendix.split("## Gap list")[1]
+        gap_headers = re.findall(r"^\d+\.\s+\*\*.*?\*\*", gap_section, re.MULTILINE)
+        tool_gaps = [g for g in gap_headers if "tool.execute.before" in g]
+        self.assertEqual(
+            len(tool_gaps),
+            1,
+            f"expected exactly one enumerated tool.execute.before gap, got {tool_gaps}",
+        )
+        self.assertIn("1.", tool_gaps[0], "gap 1 must be the tool.execute.before gap")
 
 
 class TestHookBusFixRound(unittest.TestCase):
@@ -503,6 +529,111 @@ class TestHookBusFixRound(unittest.TestCase):
             self.assertEqual(entry["verdict"], "allow")
         by_name = {a["handler"]: a for a in data["audit"]}
         self.assertEqual(by_name["reason"].get("reason"), "needs review")
+
+    def test_deny_shaped_objects_are_tagged_not_silent(self):
+        res = run_node(
+            BUS_IMPORT
+            + """
+            const bus = createHookBus();
+            bus.on("pre-tool-use", () => ({allowed: false}), {tier: "fast", name: "h_allowed"});
+            bus.on("pre-tool-use", () => ({deny: true}), {tier: "fast", name: "h_deny"});
+            bus.on("pre-tool-use", () => ({block: true}), {tier: "fast", name: "h_block"});
+            const r = await bus.emit("pre-tool-use", {tool: "webfetch", eventId: "e2"});
+            console.log(JSON.stringify({allowed: r.allowed, audit: bus.getAuditLog()}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"deny-shaped object test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertTrue(data["allowed"], "unrecognized deny-shaped objects must fail open")
+        self.assertEqual(len(data["audit"]), 3)
+        for entry in data["audit"]:
+            self.assertTrue(entry.get("fallback"), f"entry not marked fallback: {entry}")
+            self.assertIn("unrecognized verdict", entry.get("note", ""))
+        by_name = {a["handler"]: a for a in data["audit"]}
+        self.assertIn("allowed", by_name["h_allowed"].get("note", ""))
+        self.assertIn("deny", by_name["h_deny"].get("note", ""))
+        self.assertIn("block", by_name["h_block"].get("note", ""))
+
+    def test_object_verdict_spellings_match_scalar(self):
+        res = run_node(
+            BUS_IMPORT
+            + """
+            const bus = createHookBus();
+            bus.on("pre-tool-use", () => ({verdict: "block"}), {tier: "fast", name: "h_block"});
+            bus.on("pre-tool-use", () => ({verdict: false}), {tier: "fast", name: "h_false"});
+            bus.on("pre-tool-use", () => ({verdict: "warn"}), {tier: "fast", name: "h_warn"});
+            bus.on("pre-tool-use", () => ({reason: "just a reason", annotations: []}), {tier: "fast", name: "h_reason"});
+            const r = await bus.emit("pre-tool-use", {tool: "webfetch"});
+            console.log(JSON.stringify({allowed: r.allowed, audit: bus.getAuditLog()}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"object verdict test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertFalse(data["allowed"], "verdict block/false must deny")
+        by_name = {a["handler"]: a for a in data["audit"]}
+        self.assertEqual(by_name["h_block"]["verdict"], "deny")
+        self.assertFalse(by_name["h_block"].get("fallback", False))
+        self.assertEqual(by_name["h_false"]["verdict"], "deny")
+        self.assertFalse(by_name["h_false"].get("fallback", False))
+        self.assertEqual(by_name["h_warn"]["verdict"], "advisory")
+        self.assertFalse(by_name["h_warn"].get("fallback", False))
+        self.assertEqual(by_name["h_reason"]["verdict"], "allow")
+        self.assertFalse(by_name["h_reason"].get("fallback", False))
+
+    def test_throwing_clock_still_audits(self):
+        res = run_node(
+            BUS_IMPORT
+            + """
+            const bus = createHookBus({
+              clock: () => { throw new Error("bad clock"); }
+            });
+            bus.on("pre-tool-use", () => "deny", {tier: "fast", name: "d"});
+            const r = await bus.emit("pre-tool-use", {tool: "test"});
+            console.log(JSON.stringify({allowed: r.allowed, entries: bus.getAuditLog().length}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"throwing clock test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertFalse(data["allowed"], "deny must be enforced despite clock failure")
+        self.assertGreaterEqual(data["entries"], 1, "audit log must record entry even with throwing clock")
+
+    def test_throwing_payload_getter_keeps_deny(self):
+        res = run_node(
+            BUS_IMPORT
+            + """
+            const bus = createHookBus();
+            bus.on("pre-tool-use", () => "deny", {tier: "fast", name: "d"});
+            const hostile = {
+              get tool() { throw new Error("hostile getter"); },
+              get eventId() { throw new Error("hostile getter"); }
+            };
+            const r = await bus.emit("pre-tool-use", hostile);
+            console.log(JSON.stringify({allowed: r.allowed, audit: bus.getAuditLog()}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"throwing getter test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertFalse(data["allowed"], "deny must be enforced despite hostile payload getter")
+        self.assertGreaterEqual(len(data["audit"]), 1)
+        self.assertEqual(data["audit"][0]["verdict"], "deny")
+
+    def test_gate_pre_commit_empty_bus_audits_vacuity(self):
+        res = run_node(
+            BUS_IMPORT
+            + """
+            import { gatePreCommit } from "./plugins/opencode/hook-bus.js";
+            const bus = createHookBus();
+            const r = await gatePreCommit(bus, {updates: {mode: "audit"}});
+            const audit = bus.getAuditLog();
+            console.log(JSON.stringify({allowed: r.allowed, audit}));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"empty bus gatePreCommit test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertTrue(data["allowed"])
+        self.assertEqual(len(data["audit"]), 1)
+        self.assertTrue(data["audit"][0].get("fallback"))
+        self.assertIn("no handlers registered for pre-commit in this process", data["audit"][0].get("note", ""))
 
     def test_audit_always_carries_tool_and_eventId(self):
         res = run_node(
@@ -619,6 +750,29 @@ class TestHookBusFixRound(unittest.TestCase):
         self.assertTrue(
             data["audited"], "denied fallback write must leave an audit entry"
         )
+
+    def test_direct_fs_gate_with_empty_bus_records_vacuity(self):
+        res = run_node(
+            """
+            import { gateDirectFsPreCommit } from "./plugins/opencode/tui.js";
+            import { createHookBus } from "./plugins/opencode/hook-bus.js";
+            const bus = createHookBus();
+            const r = await gateDirectFsPreCommit(bus, {
+              draft: {mode: "audit"}, baseDir: "/tmp/oc-fs-gate-empty"
+            });
+            const audit = bus.getAuditLog();
+            console.log(JSON.stringify({
+              allowed: r.allowed,
+              audit,
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"empty bus direct-fs test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertTrue(data["allowed"], "empty bus must allow write")
+        self.assertEqual(len(data["audit"]), 1)
+        self.assertTrue(data["audit"][0].get("fallback"))
+        self.assertIn("no handlers registered for pre-commit in this process", data["audit"][0].get("note", ""))
 
     def test_direct_fs_stale_guard_preserved(self):
         # FAIL 1: the gate does NOT replace the stale-write guard — a stale

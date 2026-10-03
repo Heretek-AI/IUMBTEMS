@@ -480,5 +480,116 @@ class TestSetupAdoptsDepHealth(unittest.TestCase):
         )
 
 
+class TestOsvFaultInjection(unittest.TestCase):
+    def test_offline_feed_throw_records_unavailable_and_allows(self):
+        res = run_node(
+            DEP_IMPORT
+            + """
+            const queryOsv = async () => { throw new Error("OSV network failure (DNS unreachable)"); };
+            let direct = null;
+            let threw = false;
+            try {
+              direct = await checkDeps({
+                manifests: { pipTexts: ["requests==2.28.1"] },
+                queryOsv,
+                osvTimeoutMs: 100,
+              });
+            } catch { threw = true; }
+            console.log(JSON.stringify({
+              threw,
+              allowed: direct && direct.allowed,
+              pipStatus: direct && direct.ecosystems.pip.status,
+              findingCount: direct && direct.ecosystems.pip.findings.length,
+              source: direct && direct.ecosystems.pip.findings[0] && direct.ecosystems.pip.findings[0].source,
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"offline throw test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertFalse(data["threw"], "offline feed throw must never throw")
+        self.assertTrue(data["allowed"], "offline feed throw must fail open")
+        self.assertEqual(data["pipStatus"], "unavailable")
+        self.assertGreaterEqual(data["findingCount"], 1)
+        self.assertEqual(data["source"], "unavailable")
+
+    def test_100k_vulns_bomb_capped_and_fast(self):
+        res = run_node(
+            DEP_IMPORT
+            + """
+            const vulns = Array.from({ length: 100000 }, (_, i) => ({
+              id: "GHSA-bomb-" + i,
+              summary: "critical bomb " + i,
+              severity: [{ score: "9.8" }],
+            }));
+            const queryOsv = async () => ({ status: "ok", vulns });
+            const runOutdated = async () => ({ status: "ok", json: {} });
+            const runAudit = async () => ({ status: "ok", json: {} });
+            const bus = createHookBus();
+            const notices = [];
+            const notify = (s) => { notices.push(s); };
+            const reg = await registerDepHealth(null, {
+              bus, runOutdated, runAudit, queryOsv, notify, osvTimeoutMs: 500,
+            });
+            const t0 = Date.now();
+            const direct = await checkDeps({
+              manifests: { pipTexts: ["requests==2.28.1"] },
+              queryOsv,
+              osvTimeoutMs: 500,
+            });
+            const emitRes = await bus.emit("pre-tool-use", { tool: "edit", eventId: "e-bomb" });
+            const elapsed = Date.now() - t0;
+            const findingCount = direct.ecosystems.pip.findings.length;
+            const noticeMsg = notices[0] ? notices[0].message : "";
+            console.log(JSON.stringify({
+              allowed: direct.allowed,
+              emitAllowed: emitRes.allowed,
+              findingCount,
+              elapsed,
+              notices: notices.length,
+              noticeMsg,
+              hasBombIdInToast: noticeMsg.includes("GHSA-bomb"),
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"100k bomb test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertTrue(data["allowed"])
+        self.assertTrue(data["emitAllowed"])
+        self.assertEqual(data["findingCount"], 50, "findings must be capped at MAX_DEP_FINDINGS (50)")
+        self.assertLess(data["elapsed"], 2000, "100k bomb must complete in milliseconds")
+        self.assertEqual(data["notices"], 1, "exactly one summary toast")
+        self.assertFalse(data["hasBombIdInToast"], "toast must be counts-only; no vuln IDs")
+
+    def test_never_resolving_query_times_out_and_allows(self):
+        res = run_node(
+            DEP_IMPORT
+            + """
+            const queryOsv = () => new Promise(() => {});
+            const t0 = Date.now();
+            const direct = await checkDeps({
+              manifests: { pipTexts: ["flask==2.0.1"] },
+              queryOsv,
+              osvTimeoutMs: 80,
+            });
+            const elapsed = Date.now() - t0;
+            console.log(JSON.stringify({
+              allowed: direct.allowed,
+              elapsed,
+              pipStatus: direct.ecosystems.pip.status,
+              findingCount: direct.ecosystems.pip.findings.length,
+              source: direct.ecosystems.pip.findings[0] && direct.ecosystems.pip.findings[0].source,
+            }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"hung query test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        self.assertTrue(data["allowed"])
+        self.assertLess(data["elapsed"], 2000, "hung query must settle near budget")
+        self.assertEqual(data["pipStatus"], "unavailable")
+        self.assertGreaterEqual(data["findingCount"], 1)
+        self.assertEqual(data["source"], "unavailable")
+
+
 if __name__ == "__main__":
     unittest.main()
+

@@ -31,8 +31,8 @@
  * - Plugin host surface (the measured bundle entry)
  *   [VERIFIED: sha256:f42787d2ce436bbd6d55e90a15d45b656290a1a44451fff3318b094a4582ce01
  *   `file:///home/john/Projects/IUMBTEMS/plugins/opencode/index.js`]
- * - Bus contract (six blockable events, tiered enforcement, fail-open,
- *   tool/eventId audit guarantees) — the annotation transport
+ * - Bus contract (six events, 3 host-enforced / 1 advisory / 2 bus-level,
+ *   tiered enforcement, fail-open, tool/eventId audit guarantees) — transport
  *   [VERIFIED: sha256:f2c0843b598ba6f19cc0e208f8d02e0250c70615e3c484474d50635d0b5cdef8
  *   `file:///home/john/Projects/IUMBTEMS/plugins/opencode/hook-bus.js`]
  * - Never-deny advisory bridge precedent ({allowed:true} on every path,

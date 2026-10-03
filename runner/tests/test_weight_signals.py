@@ -357,5 +357,45 @@ class TestSetupAdoptsWeightSignals(unittest.TestCase):
         )
 
 
+class TestTamperedBaseline(unittest.TestCase):
+    def test_corrupted_baseline_variants_fail_open_without_crash(self):
+        res = run_node(
+            WEIGHT_IMPORT
+            + META_BUILDER
+            + """
+            const variants = [
+              "{not valid json",
+              "[]",
+              JSON.stringify({ bytes: "not-a-number", measuredAt: "invalid-date" }),
+              JSON.stringify({ bytes: null }),
+              JSON.stringify({}),
+            ];
+            const results = [];
+            for (const text of variants) {
+              let threw = false;
+              let direct = null;
+              try {
+                direct = await measureBundle({ metafile: meta(1000), baselineText: text });
+              } catch { threw = true; }
+              results.push({
+                threw,
+                allowed: direct && direct.allowed,
+                status: direct && direct.annotations[0] && direct.annotations[0].status,
+                delta: direct && direct.annotations[0] && direct.annotations[0].deltaVsBaseline,
+              });
+            }
+            console.log(JSON.stringify({ results }));
+            """
+        )
+        self.assertEqual(res.returncode, 0, f"tampered baseline test failed: {res.stderr}")
+        data = last_json_object(res.stdout)
+        for r in data["results"]:
+            self.assertFalse(r["threw"], "tampered baseline must never throw")
+            self.assertTrue(r["allowed"], "tampered baseline must fail open")
+            self.assertEqual(r["status"], "scanned")
+            self.assertIsNone(r["delta"], "corrupted baseline yields null delta")
+
+
 if __name__ == "__main__":
     unittest.main()
+
