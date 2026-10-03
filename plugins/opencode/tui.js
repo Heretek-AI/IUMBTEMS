@@ -26,7 +26,8 @@ import {
   saveConfig,
   validateConfig,
 } from './config-io.js';
-import { OPENCODE_COMMANDS, SettingsRpc } from './index.js';
+import { gatePreCommit } from './hook-bus.js';
+import { OPENCODE_COMMANDS, SettingsRpc, hookBus as sharedHookBus } from './index.js';
 
 const PLUGIN_ID = 'heretek.iumbtems.epistemic-swarm.tui';
 const REFRESH_MS = 5000;
@@ -96,6 +97,70 @@ export function subscribeSettingsChanged(api, onChanged) {
     });
     return typeof unsub === 'function' ? unsub : () => {};
   } catch {
+    return null;
+  }
+}
+
+/**
+ * Phase 01-hook-bus-spec fix round (QA-B FAIL 1): `pre-commit` gate for the
+ * TUI direct-fs fallback leg (`saveConfig(draft, baseDir, guard)` in
+ * `openSettingsWizard`). The RPC leg already gates in
+ * `createSettingsHandlers().set`; without this the fallback wrote with zero
+ * `pre-commit` emit and zero audit entry.
+ *
+ * Emits `pre-commit` through the bus and maps the verdict per the tier table
+ * (deny blocks, bus faults fail open). The stale-write guard is NOT replaced
+ * — the caller still passes `guard` to `saveConfig`, which enforces
+ * `CONFIG_STALE` downstream. On RPC-null hosts the bus remains the
+ * enforcement point: pass `opts.hookBus` (or a host carrying the adopted
+ * `host.iumbtemsHookBus`); a null bus fails open with `{ allowed: true }`.
+ * The emit itself audit-logs the decision, so a denied fallback write always
+ * leaves an audit entry. Never throws.
+ *
+ * Narrow fix round (qa-b bypass): the shipped TUI path previously called
+ * `openSettingsWizard(api, root)` with no opts on an api that carried no
+ * `iumbtemsHookBus`, so the fallback gate resolved null and failed open past
+ * a denying pre-commit handler. `resolveHookBus` closes that wiring gap: the
+ * shared bus (`hookBus` from `index.js`, same instance the settings-RPC leg
+ * gates on [VERIFIED: sha256:52ac5b4d26062cfc6093440faa415ab152f8acd0d18c4496eb0087ed18a27d76])
+ * is the final fallback, so the shipped configuration never resolves a null
+ * bus. Fail-open remains only for genuine bus faults (null/non-emit bus
+ * passed EXPLICITLY to `gateDirectFsPreCommit`), not for missing wiring.
+ */
+export async function gateDirectFsPreCommit(bus, { draft, baseDir, guard } = {}) {
+  try {
+    if (!bus || typeof bus.emit !== 'function') return { allowed: true };
+    const expected = guard?.expected_hash ?? guard?.expectedHash ?? null;
+    return await gatePreCommit(bus, {
+      updates: draft ?? {},
+      root: baseDir ?? null,
+      ...(expected !== null && expected !== undefined ? { expected_hash: expected } : {}),
+    });
+  } catch {
+    return { allowed: true };
+  }
+}
+
+/**
+ * Resolve the pre-commit bus for the wizard fallback leg. Precedence:
+ * explicit `opts.hookBus` > adopted `host.iumbtemsHookBus` > shared bus.
+ * The shared-bus fallback is what keeps the shipped TUI path (slash command
+ * + palette, both RPC-null) from resolving a null bus. Never throws.
+ */
+export function resolveHookBus(host, opts) {
+  try {
+    const explicit = opts && opts.hookBus;
+    if (explicit && typeof explicit.emit === 'function') return explicit;
+    const adopted = host && host.iumbtemsHookBus;
+    if (adopted && typeof adopted.emit === 'function') return adopted;
+    if (sharedHookBus && typeof sharedHookBus.emit === 'function') return sharedHookBus;
+    return null;
+  } catch {
+    try {
+      if (sharedHookBus && typeof sharedHookBus.emit === 'function') return sharedHookBus;
+    } catch {
+      /* fall through */
+    }
     return null;
   }
 }
@@ -426,7 +491,7 @@ function SwarmKeymapLayer(api) {
         'Edit IUMBTEMS settings in a dialog wizard (validates input, writes atomically)',
       group: 'IUMBTEMS',
       palette: true,
-      run: () => openSettingsWizard(api, resolveRoot(api)),
+      run: () => openSettingsWizard(api, resolveRoot(api), { hookBus: resolveHookBus(api, null) }),
     },
     {
       id: SETTINGS_PANEL_COMMAND_ID,
@@ -1268,6 +1333,32 @@ export async function openSettingsWizard(host, root, opts = {}) {
           opts && (opts.expected_hash !== undefined || opts.expectedHash !== undefined)
             ? { expected_hash: opts.expected_hash, expectedHash: opts.expectedHash }
             : { expectedHash: startHash };
+        // Phase 01-hook-bus-spec fix round (QA-B FAIL 1): the direct-fs
+        // fallback is gated by `pre-commit` too — a tier-table deny blocks
+        // the write (toast + `{ ok: false, reason: 'pre-commit-denied' }`,
+        // nothing written, decision audit-logged on the bus). Bus faults
+        // fail open; the stale-write guard below (`saveConfig` raising
+        // `CONFIG_STALE`) is preserved unchanged.
+        try {
+          // Narrow fix round (qa-b bypass): resolve via the shared-bus
+          // fallback so the shipped RPC-null path never gates on null.
+          const fsBus = resolveHookBus(host, opts);
+          const fsGate = await gateDirectFsPreCommit(fsBus, {
+            draft,
+            baseDir,
+            guard,
+          });
+          if (fsGate && fsGate.allowed === false) {
+            wizardToast(
+              host,
+              'IUMBTEMS settings',
+              'Save denied by pre-commit hook — nothing was written.'
+            );
+            return { ok: false, reason: 'pre-commit-denied', written: false };
+          }
+        } catch {
+          /* gate faults fail open; the write below still runs */
+        }
         try {
           const res = saveConfig(draft, baseDir, guard);
           wizardToast(
@@ -1352,7 +1443,7 @@ export async function openSettingsPanel(host, root, opts = {}) {
  * without `command.transform` there is nothing to register (the palette
  * entries from the keymap layer still work). Never throws.
  */
-export async function registerWizardSlashCommand(api) {
+export async function registerWizardSlashCommand(api, opts = {}) {
   try {
     if (typeof api?.command?.transform !== 'function') return null;
     let existing = new Set();
@@ -1374,7 +1465,13 @@ export async function registerWizardSlashCommand(api) {
             'Inspect or update Epistemic Swarm parameters in a dialog wizard (validates + writes atomically)',
           execute: async () => {
             try {
-              await openSettingsWizard(api, resolveRoot(api));
+              // Narrow fix round (qa-b bypass): thread the bus on the shipped
+              // path — explicit opt > adopted host bus > shared bus — so the
+              // fallback gate never resolves null here.
+              await openSettingsWizard(api, resolveRoot(api), {
+                ...(opts || {}),
+                hookBus: resolveHookBus(api, opts),
+              });
             } catch {
               /* the wizard never throws into the host */
             }
@@ -1396,8 +1493,20 @@ export async function registerWizardSlashCommand(api) {
 }
 
 /** TUI setup: sidebar slot + palette command. Never throws. */
-export function setupTui(api) {
+export function setupTui(api, opts = {}) {
   try {
+    // Narrow fix round (qa-b bypass): adopt the shared bus onto the TUI api
+    // so `opts.hookBus || host.iumbtemsHookBus` never resolves null on the
+    // shipped path. Best-effort; never throws. The shared instance is the
+    // same one the settings-RPC leg gates on.
+    try {
+      if (api && typeof api === 'object' && !(api.iumbtemsHookBus && typeof api.iumbtemsHookBus.emit === 'function')) {
+        const bus = (opts && opts.hookBus) || sharedHookBus || null;
+        if (bus && typeof bus.emit === 'function') api.iumbtemsHookBus = bus;
+      }
+    } catch {
+      /* host attach is best-effort */
+    }
     const root = resolveRoot(api);
     const offSidebar = registerSlot(api, 'sidebar.content', () =>
       SwarmSidebar(api, root)
@@ -1408,7 +1517,7 @@ export function setupTui(api) {
     // setup stays synchronous; the handle lands when the host resolves it.
     let slashRegistration = null;
     try {
-      Promise.resolve(registerWizardSlashCommand(api))
+      Promise.resolve(registerWizardSlashCommand(api, opts))
         .then((reg) => {
           slashRegistration = reg;
         })

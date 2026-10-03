@@ -1,0 +1,16 @@
+{
+  "$comment": "Phase 04-coverage-treeshake-signals bundle baseline: measured once at build (esbuild metafile:true, write:false — measure, never emit) over the plugin host surface. Deltas compute against `bytes`. Refresh is an explicit user-confirmed step — NEVER automatic (a stale baseline annotates `stale-baseline` and still allows).",
+  "entry": "plugins/opencode/index.js",
+  "bytes": 182262,
+  "files": 6,
+  "topHeaviest": [
+    { "file": "plugins/opencode/index.js", "bytes": 119966 },
+    { "file": "plugins/opencode/config-io.js", "bytes": 60042 },
+    { "file": "plugins/opencode/dep-health.js", "bytes": 40199 },
+    { "file": "plugins/opencode/weight-signals.js", "bytes": 29350 },
+    { "file": "plugins/opencode/analysis-bridge.js", "bytes": 20953 }
+  ],
+  "measuredAt": "2026-10-03T00:00:00.000Z",
+  "measuredBy": "esbuild 0.28.2 (pinned devDep; bundle:true, metafile:true, write:false, platform:node, format:esm, external:[esbuild])",
+  "phase": "04-coverage-treeshake-signals"
+}

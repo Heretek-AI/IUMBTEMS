@@ -1,6 +1,6 @@
 {
   "name": "@heretek-ai/epistemic-swarm",
-  "version": "0.7.22",
+  "version": "0.7.23",
   "description": "IUMBTEMS (Epistemic Swarm) \u2014 High-Integrity Dialectic Research Agent Harness for Claude Code, OpenCode V2, Pi (pi.dev), OMP (oh-my-pi), Gemini CLI, Codex CLI, and AntiGravity",
   "main": "bin/cli.js",
   "bin": {
@@ -146,5 +146,9 @@
     "validate:claude": "claude plugin validate --strict .claude-plugin/marketplace.json && claude plugin validate --strict .",
     "prepack": "python3 scripts/build_adapters.py && python3 -m unittest discover -s runner/tests",
     "install-local": "bash install.sh"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "esbuild": "0.28.2"
   }
 }

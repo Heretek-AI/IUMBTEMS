@@ -34,6 +34,52 @@ import {
   resolveExpectedHash,
   validateConfig,
 } from './config-io.js';
+import {
+  createHookBus,
+  gatePreCommit,
+  registerHookBus,
+} from './hook-bus.js';
+import {
+  registerAnalysisBridge,
+} from './analysis-bridge.js';
+import {
+  registerDepHealth,
+} from './dep-health.js';
+import {
+  registerWeightSignals,
+} from './weight-signals.js';
+
+/**
+ * Shared hook bus (Phase 01-hook-bus-spec). Six blockable events with tiered
+ * fast-short/slow-long enforcement + audit log; fail-open, never throws.
+ *
+ * Phase evidence: transform-shaped registrations + the `tool.execute.before`
+ * gap [VERIFIED: sha256:52ac5b4d26062cfc6093440faa415ab152f8acd0d18c4496eb0087ed18a27d76
+ * `file:///home/john/Projects/IUMBTEMS/plugins/opencode/index.js`:1038-1126];
+ * setup adopt pattern [VERIFIED: same hash, `:2714-2750`].
+ *
+ * Per-event enforcement points (fix-round docs; see docs/HOOK_BUS_PARITY.md):
+ * - `pre-tool-use` / `post-tool-use`: ENFORCED in `registerHostTools`
+ *   `execute` for this plugin's OWN tools — a fast/slow tier-table deny
+ *   blocks execution (pre) or suppresses delivery (post). Host-NATIVE tools
+ *   (webfetch/websearch) have no `tool.execute.before` point, so they are
+ *   NOT gated — same gap class as the upstream ask, documented not implied.
+ * - `pre-commit`: ENFORCED on both write legs — the settings-RPC `set`
+ *   (`createSettingsHandlers().set`) and the TUI direct-fs fallback
+ *   (`gateDirectFsPreCommit` in `tui.js`). Stale-write guards stay downstream.
+ * - `session-start`: ADVISORY BY DESIGN — emitted in the compaction hook, a
+ *   deny is audit-logged but never drops the state push. Never counted as a
+ *   deny-blocks host path.
+ * - `stop` / `notification`: BUS-LEVEL ONLY — no host interception point
+ *   exists yet, so deny-blocks holds at `bus.emit` (direct subscribers) and
+ *   no host action is gated. No claim here implies host blocking.
+ *
+ * Caller-latency contract (GOAL §5/§6): `emit` runs tiers concurrently with
+ * each handler bounded by its tier budget, so a call resolves within
+ * max(fastBudget, slowBudget) + epsilon — a hung slow handler costs the
+ * caller at most the slow budget (default 5000 ms), never indefinitely.
+ */
+export const hookBus = createHookBus();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1138,11 +1184,55 @@ async function registerHostTools(host) {
         input: spec.input,
         options: { codemode: false },
         execute: async (args = {}, toolContext = undefined) => {
+          const normArgs = normalizeArgs(name, args);
+          const cwd = toolContext?.cwd || hostRoot;
+          // Phase 01-hook-bus-spec (fix round): `pre-tool-use` gates this
+          // plugin's OWN tool executions. A tier-table deny BLOCKS the
+          // `callMcp` dispatch (structured `{content}` denial, same shape as
+          // a result, so the host contract is unchanged); bus faults fail
+          // open. Host-NATIVE tools are NOT gated here — there is no
+          // `tool.execute.before` point (see the accepted-asymmetry note
+          // above); that gap is documented in docs/HOOK_BUS_PARITY.md, never
+          // implied away.
+          let pre = { allowed: true };
+          try {
+            const gated = await hookBus.emit('pre-tool-use', {
+              tool: name,
+              args: normArgs,
+              sessionID: toolContext?.sessionID ?? null,
+              eventId: toolContext?.eventId ?? null,
+            });
+            if (gated && gated.allowed === false) pre = { allowed: false };
+          } catch {
+            pre = { allowed: true };
+          }
+          if (pre.allowed === false) {
+            return { content: `Tool execution denied by pre-tool-use hook (tool: ${name}).` };
+          }
           const r = await callMcp(
             name,
-            normalizeArgs(name, args),
-            toolContext?.cwd || hostRoot
+            normArgs,
+            cwd
           );
+          // `post-tool-use`: the call already ran, so a tier-table deny
+          // blocks DELIVERY — the real result is suppressed and a structured
+          // `{content}` notice is returned instead (audit-logged either way).
+          let post = { allowed: true };
+          try {
+            const gated = await hookBus.emit('post-tool-use', {
+              tool: name,
+              args: normArgs,
+              result: (r && r.content) ?? null,
+              sessionID: toolContext?.sessionID ?? null,
+              eventId: toolContext?.eventId ?? null,
+            });
+            if (gated && gated.allowed === false) post = { allowed: false };
+          } catch {
+            post = { allowed: true };
+          }
+          if (post.allowed === false) {
+            return { content: `Tool result suppressed by post-tool-use hook (tool: ${name}).` };
+          }
           return { content: r.content };
         },
       });
@@ -1756,6 +1846,16 @@ async function registerCompactionHook(host, context) {
         const root =
           event?.directory || host.location?.directory || context.location?.directory || event?.cwd;
         if (!root) return;
+        // Phase 01-hook-bus-spec: `session-start(compaction)` restores
+        // `.research` state path. The bus verdict is advisory here — a deny
+        // must not drop the compaction context push (fail-open); the emit is
+        // still audit-logged on the shared bus.
+        // [VERIFIED: sha256:52ac5b4d26062cfc6093440faa415ab152f8acd0d18c4496eb0087ed18a27d76 `:1750-1775`]
+        try {
+          await hookBus.emit('session-start', { root, eventId: 'compaction' });
+        } catch {
+          /* bus faults fail open; the state push below still runs */
+        }
         const text = buildCompactionContext(root);
         if (!text) return;
         const system = Array.isArray(event?.system) ? event.system : null;
@@ -2330,6 +2430,11 @@ export function createSettingsHandlers(opts = {}) {
   const storage = opts.storage || null;
   const emitChanged = opts.emitChanged || null;
   const reloadMcp = opts.reloadMcp || null;
+  // Phase 01-hook-bus-spec: `pre-commit` gates config writes via this
+  // settings-RPC path. Defaults to the shared bus; stale-write guards below
+  // are preserved (a bus allow still runs the expected-hash MCP write, which
+  // enforces staleness).
+  const settingsBus = opts.hookBus || hookBus;
 
   return {
     get: async () => {
@@ -2418,6 +2523,29 @@ export function createSettingsHandlers(opts = {}) {
       }
       const args = { ...sanitized, base_dir: researchDir };
       if (expected !== null) args.expected_hash = expected;
+      // Phase 01-hook-bus-spec `pre-commit` gate: a tier-table deny blocks the
+      // write (structured `invalid`, nothing written); bus faults fail open.
+      // The expected-hash stale guard below still runs on every allow, so
+      // stale-write preservation is unchanged. NOTE: the deny-block `rpcFail`
+      // stays OUTSIDE the fail-open try — `rpcFail` throws when the host
+      // supplies no `context.error`, and catching our own block would
+      // silently fail open past a deny.
+      let gate = null;
+      try {
+        gate = await gatePreCommit(settingsBus, {
+          updates: sanitized,
+          root,
+          ...(expected !== null ? { expected_hash: expected } : {}),
+        });
+      } catch {
+        gate = { allowed: true };
+      }
+      if (gate && gate.allowed === false) {
+        return rpcFail(context, 'invalid', 'Config write denied by pre-commit hook.', {
+          written: false,
+          errors: ['pre-commit hook denied the write'],
+        });
+      }
       const res = await callMcpImpl('iumbtems_config', args, root);
       const payload = parseMcpContent(res);
       if (payload && payload.status === 'stale') {
@@ -2502,6 +2630,7 @@ export async function registerSettingsRpc(host, opts = {}) {
       storage,
       emitChanged,
       reloadMcp,
+      hookBus: opts.hookBus || hookBus,
     });
     registration = await register.call(host.rpc, SettingsRpc, handlers);
     if (!registration) return null;
@@ -2757,6 +2886,52 @@ export function createOpenCodePlugin(context = {}) {
       } catch (err) {
         log(host, 'error', 'registering temperature hook failed', errDetail(err));
       }
+      // Phase 01-hook-bus-spec: adopt the six-event hook bus alongside the
+      // existing registrations (same adopt/best-effort pattern). The bus
+      // registrar returns a single registration (or null), so wrap it for
+      // `adopt`, which takes a list. Never throws.
+      try {
+        adopt([await registerHookBus(host, { bus: hookBus })]);
+      } catch (err) {
+        log(host, 'error', 'registering hook bus failed', errDetail(err));
+      }
+      // Phase 02-lsp-bridge: adopt the first bus consumer (CLI-based JS/TS
+      // analysis, all-advisory) alongside the existing registrations (same
+      // adopt/best-effort pattern). Analyzer-missing degrades to a silent
+      // skip inside the bridge; this adoption never throws.
+      try {
+        adopt([await registerAnalysisBridge(host, { bus: hookBus })]);
+      } catch (err) {
+        log(host, 'error', 'registering analysis bridge failed', errDetail(err));
+      }
+      // Phase 03-dep-health-gate: adopt the second bus consumer
+      // (outdated/vulnerable-dependency warnings, all-advisory + mechanical
+      // QA coverage gate) alongside the existing registrations (same
+      // adopt/best-effort pattern). Feed outages degrade to recorded
+      // `unavailable` entries inside the module; this adoption never throws.
+      try {
+        adopt([await registerDepHealth(host, {
+          bus: hookBus,
+          // Host-reported project directory; the module falls back to the
+          // process cwd when the host reports none (see checkDeps).
+          root: host.location?.directory || undefined,
+        })]);
+      } catch (err) {
+        log(host, 'error', 'registering dep-health failed', errDetail(err));
+      }
+      // Phase 04-coverage-treeshake-signals: adopt the third bus consumer
+      // (coverage deltas + esbuild-measured bundle weight, all-advisory,
+      // never-blocking) alongside the existing registrations (same
+      // adopt/best-effort pattern). esbuild missing/failing degrades to a
+      // recorded `unavailable` entry inside the module; this adoption never
+      // throws.
+      try {
+        adopt([await registerWeightSignals(host, {
+          bus: hookBus,
+        })]);
+      } catch (err) {
+        log(host, 'error', 'registering weight-signals failed', errDetail(err));
+      }
       // Slow work AFTER registration.
       try {
         await applyConfigOptions(host, opts, context);
@@ -2774,14 +2949,31 @@ export function createOpenCodePlugin(context = {}) {
       // `TypeError: de is not a function`, dropping every registration.
       return async () => {
         let disposed = 0;
+        const pending = [];
         for (const registration of registrations) {
           try {
-            await registration.dispose();
-            disposed += 1;
+            const done = registration.dispose();
+            if (done && typeof done.then === 'function') {
+              // Async teardown settles alongside the rest; a rejection logs
+              // exactly like a synchronous throw below.
+              pending.push(
+                done.then(
+                  () => { disposed += 1; },
+                  (err) => log(host, 'warn', 'registration.dispose() failed', errDetail(err)),
+                ),
+              );
+            } else {
+              disposed += 1;
+            }
           } catch (err) {
             log(host, 'warn', 'registration.dispose() failed', errDetail(err));
           }
         }
+        // Await only when at least one disposal is asynchronous: awaiting an
+        // already-settled promise still yields, which would defer the
+        // synchronous nudge-stop loop below past a non-awaited cleanup() call
+        // (pinned by test_setup_cleanup_aborts_nudge_streams).
+        if (pending.length > 0) await Promise.all(pending);
         registrations.length = 0;
         let stopped = 0;
         for (const stop of setupCleanups) {
