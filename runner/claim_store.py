@@ -40,6 +40,28 @@ SCHEMA_VERSION = 1
 DOSIER_NAMES = ("alpha_dossier.json", "beta_dossier.json")
 
 
+def _coerce_text(value: Any) -> Optional[str]:
+    """Crash-safe TEXT coercion for sqlite (R9 tiebreak-2 F2).
+
+    Non-string sides (int/dict/list/bytes) coerce via str()/json, never
+    `sqlite3.ProgrammingError: type 'dict' is not supported`. None stays
+    None (NULL); str passes through.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            pass
+    try:
+        return str(value)
+    except Exception:
+        return ""
+
+
 def _has_fts5(conn: sqlite3.Connection) -> bool:
     try:
         conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS _fts5_probe USING fts5(x)")
@@ -159,6 +181,28 @@ class ClaimStore:
     def _upsert_claim(
         self, cur: sqlite3.Cursor, scope_id: str, dossier: str, c: ClaimWitness
     ) -> None:
+        # R9 (tiebreak-2 F2): ClaimWitness fields are untrusted-adjacent
+        # (hand-built witnesses may carry int/dict hash/statement/quote) —
+        # coerce-or-drop to str/None before binding, never sqlite
+        # ProgrammingError on dict/list. parent_claims json must not raise;
+        # confidence must be float/None; claim_sources only for non-empty
+        # str hashes.
+        try:
+            parent_json = json.dumps(c.parent_claims)
+        except (TypeError, ValueError):
+            parent_json = "[]"
+        _conf = getattr(c, "confidence", None)
+        if _conf is None:
+            conf_val = None
+        else:
+            try:
+                conf_val = float(_conf)
+            except (TypeError, ValueError):
+                conf_val = None
+        claim_id_s = _coerce_text(getattr(c, "claim_id", None)) or "UNKNOWN"
+        scope_s = _coerce_text(scope_id) or ""
+        dossier_s = _coerce_text(dossier) or ""
+        hash_s = _coerce_text(getattr(c, "source_hash", None))
         cur.execute(
             """
             INSERT OR REPLACE INTO claims (
@@ -169,33 +213,33 @@ class ClaimStore:
             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
-                c.claim_id,
-                scope_id,
-                dossier,
-                c.kind,
-                c.tag,
-                c.statement,
-                c.source_hash,
-                c.source_url,
-                c.verbatim_quote,
-                json.dumps(c.parent_claims),
-                c.deductive_logic,
-                c.falsification,
-                c.query,
-                c.finding,
-                c.severity,
-                c.tier,
-                c.confidence,
-                c.status,
+                claim_id_s,
+                scope_s,
+                dossier_s,
+                _coerce_text(getattr(c, "kind", None)),
+                _coerce_text(getattr(c, "tag", None)),
+                _coerce_text(getattr(c, "statement", None)),
+                hash_s,
+                _coerce_text(getattr(c, "source_url", None)),
+                _coerce_text(getattr(c, "verbatim_quote", None)),
+                parent_json,
+                _coerce_text(getattr(c, "deductive_logic", None)),
+                _coerce_text(getattr(c, "falsification", None)),
+                _coerce_text(getattr(c, "query", None)),
+                _coerce_text(getattr(c, "finding", None)),
+                _coerce_text(getattr(c, "severity", None)),
+                _coerce_text(getattr(c, "tier", None)),
+                conf_val,
+                _coerce_text(getattr(c, "status", None)),
             ),
         )
-        if c.source_hash:
+        if isinstance(hash_s, str) and hash_s:
             cur.execute(
                 """
                 INSERT OR IGNORE INTO claim_sources (scope_id, dossier, claim_id, source_hash)
                 VALUES (?,?,?,?)
                 """,
-                (scope_id, dossier, c.claim_id, c.source_hash),
+                (scope_s, dossier_s, claim_id_s, hash_s),
             )
 
     def _sync_fts(self) -> None:

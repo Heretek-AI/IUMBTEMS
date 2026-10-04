@@ -25,6 +25,7 @@ from runner.darkharvest_claims import (
     normalize_license_whitelist,
     sanitize_self_reported,
 )
+from runner.claim_witness import normalize_negative_knowledge_rows
 
 
 def _repo_validation_enabled() -> bool:
@@ -36,19 +37,59 @@ def _repo_validation_enabled() -> bool:
     )
 
 
+def _safe_list_len(value: Any) -> int:
+    """Crash-safe len() for untrusted dossier list fields (R1).
+
+    `inferred_implications: None`, `affirmative_claims: "x"`, or any
+    non-list shape degrades to 0 instead of `TypeError: len(None)`.
+    """
+    return len(value) if isinstance(value, list) else 0
+
+
+def _safe_str(value: Any) -> str:
+    """Crash-safe render coercion (R1): None → "", int → str, str → as-is."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return str(value)
+    except Exception:
+        return ""
+
+
 def _mark_rejected_claims(score_claims: list, *result_lists: list) -> None:
-    """Mirror the auditor's UNVERIFIED_REJECTED verdict onto ClaimWitness records."""
+    """Mirror the auditor's UNVERIFIED_REJECTED verdict onto ClaimWitness records.
+
+    R1: audit rows are untrusted-adjacent (built by `_verify_claims` from
+    untrusted dossiers, plus any injected test rows) — non-dict rows and
+    missing/non-string claim ids degrade to skip, never KeyError/TypeError
+    via strict subscript indexing.
+    """
     from runner.claim_witness import STATUS_REJECTED
 
     results_by_id: Dict[str, Any] = {}
     for results in result_lists:
+        if not isinstance(results, (list, tuple)):
+            continue
         for r in results:
-            results_by_id[r["claim_id"]] = r
-    for c in score_claims:
-        r = results_by_id.get(c.claim_id)
+            if not isinstance(r, dict):
+                continue
+            cid = r.get("claim_id")
+            if not isinstance(cid, str) or not cid:
+                continue
+            results_by_id[cid] = r
+    for c in score_claims or []:
+        cid = getattr(c, "claim_id", None)
+        if not isinstance(cid, str):
+            continue
+        r = results_by_id.get(cid)
         if r is not None and r.get("audited_tag") == "UNVERIFIED_REJECTED":
-            c.tag = "UNVERIFIED_REJECTED"
-            c.status = STATUS_REJECTED
+            try:
+                c.tag = "UNVERIFIED_REJECTED"
+                c.status = STATUS_REJECTED
+            except Exception:
+                continue
 
 
 def _compute_scope_epistemic_score(
@@ -184,6 +225,13 @@ class EpistemicAuditorEngine:
         with open(beta_file, "r", encoding="utf-8") as f:
             beta_dossier = json.load(f)
 
+        # R1: dossiers are untrusted LLM JSON — a top-level list/string/None
+        # must degrade to an empty dossier, never `AttributeError` on `.get`.
+        if not isinstance(alpha_dossier, dict):
+            alpha_dossier = {}
+        if not isinstance(beta_dossier, dict):
+            beta_dossier = {}
+
         # Darkharvest dossiers emit `candidate_repositories[]`, not the standard
         # claim keys, and may self-report audit-shaped fields (#5 layers 1 & 3).
         for label, dossier in (("alpha", alpha_dossier), ("beta", beta_dossier)):
@@ -206,13 +254,26 @@ class EpistemicAuditorEngine:
             normalize_dossier_claims(beta_dossier, "beta"), constitution=constitution
         )
 
+        # 01-nk-hardening (A2): NK ingest normalization. Untrusted dossiers
+        # reach the renderer warn-only (research_swarm.py _warn_schema_violations
+        # never aborts), so malformed rows (missing/None/non-string
+        # query/finding) must be filtered here: scoring and rendering agree on
+        # valid `{query, finding}` rows only, and the dropped count is reported.
+        alpha_nk_valid, alpha_nk_dropped = normalize_negative_knowledge_rows(
+            alpha_dossier.get("negative_knowledge", [])
+        )
+        beta_nk_valid, beta_nk_dropped = normalize_negative_knowledge_rows(
+            beta_dossier.get("negative_knowledge", [])
+        )
+        dropped_malformed_nk = alpha_nk_dropped + beta_nk_dropped
+
         counts = {
             "verified": alpha_verified + beta_verified,
             "rejected": alpha_rejected + beta_rejected,
-            "inferred": len(alpha_dossier.get("inferred_implications", [])),
-            "hypotheses": len(beta_dossier.get("hypotheses", [])),
-            "neg_knowledge": len(alpha_dossier.get("negative_knowledge", []))
-            + len(beta_dossier.get("negative_knowledge", [])),
+            # R1: None/non-list shapes degrade to 0, never len(None) TypeError.
+            "inferred": _safe_list_len(alpha_dossier.get("inferred_implications")),
+            "hypotheses": _safe_list_len(beta_dossier.get("hypotheses")),
+            "neg_knowledge": len(alpha_nk_valid) + len(beta_nk_valid),
         }
 
         # 3. Calculate Epistemic Score via the pure refinement function.
@@ -276,6 +337,7 @@ class EpistemicAuditorEngine:
                 "verified_passed": counts["verified"],
                 "unverified_rejected": counts["rejected"],
                 "negative_knowledge_count": counts["neg_knowledge"],
+                "dropped_malformed_nk": dropped_malformed_nk,
                 "epistemic_score": epistemic_score,
                 "divergence_score": divergence_score,
                 "mode": mode,
@@ -293,7 +355,10 @@ class EpistemicAuditorEngine:
         with open(scope_dir / "audit_report.json", "w", encoding="utf-8") as f:
             json.dump(audit_report, f, indent=2)
 
-        # 6. Generate Synthesis Markdown
+        # 6. Generate Synthesis Markdown. The NK renderer re-applies the
+        # same ingest normalization, so the rendered catalog (including the
+        # dropped_malformed_nk note) structurally agrees with the scored
+        # count above.
         synthesis_md = self._generate_synthesis_markdown(
             scope_id, alpha_dossier, beta_dossier, audit_report
         )
@@ -338,13 +403,35 @@ class EpistemicAuditorEngine:
                 retracted_hashes=retracted_hashes,
             )
 
-        for claim in claims:
-            cid = claim.get("claim_id", "UNKNOWN")
+        for claim in claims or []:
+            # R1: claims derive from untrusted dossiers — non-dict entries and
+            # non-string sides (source_hash int, statement None) degrade to a
+            # rejection/empty string, never AttributeError/TypeError.
+            if not isinstance(claim, dict):
+                audited_claims.append(
+                    {
+                        "claim_id": "UNKNOWN",
+                        "statement": "",
+                        "original_tag": "VERIFIED",
+                        "audited_tag": "UNVERIFIED_REJECTED",
+                        "reason": "Malformed claim entry (non-dict)",
+                        "confidence": 0.0,
+                    }
+                )
+                rejected_count += 1
+                continue
+            _cid = claim.get("claim_id", "UNKNOWN")
+            cid = _cid if isinstance(_cid, str) else _safe_str(_cid) or "UNKNOWN"
             shash = claim.get("source_hash", "")
             quote = claim.get("verbatim_quote", "")
-            statement = claim.get("statement", "")
+            statement = _safe_str(claim.get("statement", ""))
 
-            if not shash or not quote:
+            if (
+                not isinstance(shash, str)
+                or not isinstance(quote, str)
+                or not shash
+                or not quote
+            ):
                 audited_claims.append(
                     {
                         "claim_id": cid,
@@ -413,21 +500,38 @@ class EpistemicAuditorEngine:
     def _compute_divergence(
         self, alpha_dossier: Dict[str, Any], beta_dossier: Dict[str, Any]
     ) -> Tuple[float, List[Dict[str, Any]]]:
-        alpha_claims = alpha_dossier.get("affirmative_claims", [])
-        beta_claims = beta_dossier.get("falsification_claims", [])
-        critiques = beta_dossier.get("methodological_critiques", [])
+        # R1: every field here is untrusted LLM output. None/non-list claim
+        # sections degrade to []; non-dict/None critiques are skipped (not
+        # counted); non-string critique sides coerce to "" — never
+        # `crit.get` AttributeError or `len(None)` TypeError.
+        _alpha = alpha_dossier if isinstance(alpha_dossier, dict) else {}
+        _beta = beta_dossier if isinstance(beta_dossier, dict) else {}
+        alpha_claims = _alpha.get("affirmative_claims", [])
+        beta_claims = _beta.get("falsification_claims", [])
+        critiques = _beta.get("methodological_critiques", [])
+        if not isinstance(alpha_claims, list):
+            alpha_claims = []
+        if not isinstance(beta_claims, list):
+            beta_claims = []
+        if not isinstance(critiques, list):
+            critiques = []
 
         matrix = []
         contradictions = 0
 
         for crit in critiques:
-            target = crit.get("target_assertion", "")
+            if not isinstance(crit, dict):
+                continue
+            target = _safe_str(crit.get("target_assertion", ""))
             matrix.append(
                 {
                     "tension_type": "METHODOLOGICAL_CHALLENGE",
                     "proponent_claim": target,
-                    "adversary_critique": crit.get("critique", ""),
-                    "counter_evidence_hash": crit.get("evidence_hash", "NONE"),
+                    "adversary_critique": _safe_str(crit.get("critique", "")),
+                    "counter_evidence_hash": _safe_str(
+                        crit.get("evidence_hash", "NONE")
+                    )
+                    or "NONE",
                 }
             )
             contradictions += 1
@@ -439,28 +543,41 @@ class EpistemicAuditorEngine:
 
     @staticmethod
     def _render_verified_section(alpha_audit: list, beta_audit: list) -> List[str]:
+        # A5 sibling sweep + R1: auditor-owned audit rows are still read
+        # defensively (.get + isinstance) so a malformed row degrades to a
+        # skip instead of a KeyError. R1: `source_hash` int coerces via str
+        # (int has no [:8] slice) and `statement` None renders as "" (never
+        # the literal "None"). Valid rows render byte-identically.
         lines = ["## 1. Verified Empirical Grounding"]
-        for claim in alpha_audit:
-            if claim["audited_tag"] == "VERIFIED":
+        for claim in alpha_audit or []:
+            if not isinstance(claim, dict):
+                continue
+            if claim.get("audited_tag") == "VERIFIED":
                 lines.append(
-                    f"- `[VERIFIED: {claim['source_hash'][:8]}]` {claim['statement']}"
+                    f"- `[VERIFIED: {_safe_str(claim.get('source_hash'))[:8]}]` {_safe_str(claim.get('statement', ''))}"
                 )
-        for claim in beta_audit:
-            if claim["audited_tag"] == "VERIFIED":
+        for claim in beta_audit or []:
+            if not isinstance(claim, dict):
+                continue
+            if claim.get("audited_tag") == "VERIFIED":
                 lines.append(
-                    f"- `[VERIFIED: {claim['source_hash'][:8]}]` (Counter-Evidence) {claim['statement']}"
+                    f"- `[VERIFIED: {_safe_str(claim.get('source_hash'))[:8]}]` (Counter-Evidence) {_safe_str(claim.get('statement', ''))}"
                 )
         return lines
 
     @staticmethod
     def _render_tensions_section(matrix: list) -> List[str]:
         lines = ["\n## 2. Dialectic Tensions & Falsification Audit"]
-        if matrix:
+        if isinstance(matrix, list) and matrix:
             for item in matrix:
-                lines.append(f"### Tension: {item['tension_type']}")
-                lines.append(f"- **Thesis Assertion**: {item['proponent_claim']}")
+                if not isinstance(item, dict):
+                    continue
+                lines.append(f"### Tension: {_safe_str(item.get('tension_type', ''))}")
                 lines.append(
-                    f"- **Adversarial Critique**: {item['adversary_critique']}"
+                    f"- **Thesis Assertion**: {_safe_str(item.get('proponent_claim', ''))}"
+                )
+                lines.append(
+                    f"- **Adversarial Critique**: {_safe_str(item.get('adversary_critique', ''))}"
                 )
         else:
             lines.append(
@@ -473,19 +590,28 @@ class EpistemicAuditorEngine:
         claims: list, summary: Optional[Dict[str, Any]] = None
     ) -> List[str]:
         lines = ["\n## 3. Rejected & Unverified Assertions"]
-        rejected = [c for c in claims if c["audited_tag"] == "UNVERIFIED_REJECTED"]
+        rejected = [
+            c
+            for c in (claims or [])
+            if isinstance(c, dict) and c.get("audited_tag") == "UNVERIFIED_REJECTED"
+        ]
         if rejected:
             for r in rejected:
                 lines.append(
-                    f'- ⚠️ **PURGED**: "{r["statement"]}" — *Reason: {r["reason"]}*'
+                    f'- ⚠️ **PURGED**: "{_safe_str(r.get("statement", ""))}" — *Reason: {_safe_str(r.get("reason", ""))}*'
                 )
             return lines
 
         # No rejected claims is only "all verified" when the audit actually
         # verified something. Otherwise this is static text contradicting the
         # verdict (observed in darkharvest: 0 verified + "100% verified", #5).
-        summary = summary or {}
+        # R1: summary is auditor-owned but the parameter is untrusted-adjacent
+        # (tests/hand-built callers may pass a string/None) — non-dict
+        # degrades to {}, never AttributeError on `.get`.
+        summary = summary if isinstance(summary, dict) else {}
         verified = summary.get("verified_passed", 0)
+        if not isinstance(verified, int):
+            verified = 0
         if summary.get("verdict") == "WARNING_LICENSE_CONFLICT":
             lines.append(
                 f"No claims rejected, but {summary.get('blocking_findings', 0)} "
@@ -506,15 +632,36 @@ class EpistemicAuditorEngine:
     def _render_negative_knowledge_section(
         alpha: Dict[str, Any], beta: Dict[str, Any]
     ) -> List[str]:
+        # A1 defensive rendering (01-nk-hardening): untrusted NK rows are
+        # normalized (.get + validity filter) instead of strictly indexed —
+        # a row missing `query`/`finding` (absent, None, or non-string) is
+        # dropped and counted, never a KeyError. R3: each side normalizes
+        # separately so a single-dict field coerces (never vanishes with
+        # dropped=0). R6: the normalizer truncates to NK_MAX_FIELD_LEN, so
+        # synthesis is bounded. Valid rows render exactly as before.
         lines = ["\n## 4. Negative Knowledge Catalog"]
-        all_neg = alpha.get("negative_knowledge", []) + beta.get(
-            "negative_knowledge", []
+        alpha_raw = (
+            alpha.get("negative_knowledge", []) if isinstance(alpha, dict) else []
         )
-        if all_neg:
-            for n in all_neg:
-                lines.append(f"- `[NEGATIVE_KNOWLEDGE: {n['query']}]` {n['finding']}")
+        beta_raw = beta.get("negative_knowledge", []) if isinstance(beta, dict) else []
+        alpha_valid, alpha_dropped = normalize_negative_knowledge_rows(alpha_raw)
+        beta_valid, beta_dropped = normalize_negative_knowledge_rows(beta_raw)
+        valid = alpha_valid + beta_valid
+        dropped = alpha_dropped + beta_dropped
+        if valid:
+            for n in valid:
+                if not isinstance(n, dict):
+                    continue
+                lines.append(
+                    f"- `[NEGATIVE_KNOWLEDGE: {_safe_str(n.get('query'))}]` {_safe_str(n.get('finding'))}"
+                )
         else:
             lines.append("No negative knowledge declarations logged.")
+        if dropped:
+            lines.append(
+                f"- {dropped} malformed negative-knowledge row(s) dropped "
+                f"(dropped_malformed_nk={dropped})."
+            )
         return lines
 
     def _generate_synthesis_markdown(
@@ -547,15 +694,18 @@ class EpistemicAuditorEngine:
 
     @staticmethod
     def _render_harvest_findings(findings: list) -> List[str]:
-        if not findings:
+        if not isinstance(findings, list) or not findings:
             return []
         lines = ["\n## 5. Harvest Safety Findings"]
         for f in findings:
+            if not isinstance(f, dict):
+                continue
             icon = "⛔" if f.get("severity") == "BLOCKING" else "⚠️"
-            detail = f.get("detail") or f.get("kind", "")
+            detail = _safe_str(f.get("detail") or f.get("kind", ""))
             resolution = f.get("resolution")
-            suffix = f" → **{resolution}**" if resolution else ""
+            resolution_s = _safe_str(resolution) if resolution else ""
+            suffix = f" → **{resolution_s}**" if resolution_s else ""
             lines.append(
-                f"- {icon} `{f.get('repo', '?')}` — {f.get('kind', '')}: {detail}{suffix}"
+                f"- {icon} `{_safe_str(f.get('repo', '?')) or '?'}` — {_safe_str(f.get('kind', ''))}: {detail}{suffix}"
             )
         return lines

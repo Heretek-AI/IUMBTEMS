@@ -96,6 +96,36 @@ white-space gaps + harvest backlog ranked Impact×Effort×Differentiation (top 5
 + risks + epistemic audit totals. Reruns diff changed cells + new/removed
 candidates.
 
+### Negative-knowledge contract (`negative_knowledge[]`)
+
+Both dossiers may carry `negative_knowledge[]` (e.g. closed targets with no
+citable source). Every row MUST be exactly
+`{"query": "<string>", "finding": "<string>"}` — both keys present, both
+non-empty strings (invisible-only ZWSP/BOM strings count as empty). Rows
+missing a key (or with a `null`/non-string side) are **dropped and counted**
+as `dropped_malformed_nk`, so emit only complete rows. Fields are capped at
+2000 chars (overlong text is truncated). Do NOT add a `tag` field — ingest
+kind wins, a spoofed `tag: VERIFIED` never creates verified credit. Dropped
+rows carry no penalty, but valid-row spam still earns the NK bonus, so do NOT
+pad with low-value or duplicate rows to inflate the score — duplicates are
+deduped and reviewers treat NK-heavy CERTIFYs with suspicion. Good:
+
+```json
+{"query": "Self-hosted Paseo-class session handoff", "finding": "No permissive-licensed implementation found; candidates are AGPL or closed."}
+```
+
+Bad (dropped — never emit):
+
+```json
+{"query": "Self-hosted Paseo-class session handoff"}
+{"finding": "Nothing harvestable."}
+{"statement": "No harvestable repo.", "source_hash": "abc123"}
+{"query": 123, "finding": "Numeric query side."}
+{"query": "", "finding": "Empty query side."}
+{"query": "   ", "finding": "Whitespace-only query side."}
+"just a string, not a dict"
+```
+
 ## 5. HARD BANS
 
 1. No writes outside `.research/`. No dependency installs.

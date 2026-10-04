@@ -37,6 +37,9 @@
         "negative_knowledge_count": {
           "type": "integer"
         },
+        "dropped_malformed_nk": {
+          "type": "integer"
+        },
         "epistemic_score": {
           "type": "number"
         },

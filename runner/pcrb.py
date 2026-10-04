@@ -103,23 +103,46 @@ def _resolve_synthesis(base_dir: Path) -> str:
 
 
 def _witness_for(c, hasher: Any, needed_hashes: set) -> Dict[str, Any]:
-    """Build one claim's witness record and track hashes worth bundling."""
+    """Build one claim's witness record and track hashes worth bundling.
+
+    R8 (01-nk-hardening tiebreak-2 F1): source_hash/verbatim_quote are
+    untrusted-adjacent (hand-built witnesses may carry int/dict/list) —
+    isinstance-guard both before hasher/set. Non-string sides degrade to
+    reject (confidence None, no bundling), never TypeError via
+    `re.match` (hasher) or `set.add` (unhashable dict).
+    """
+    _sh = getattr(c, "source_hash", None)
+    _q = getattr(c, "verbatim_quote", None)
     witness: Dict[str, Any] = {
-        "quote": c.verbatim_quote,
-        "source_hash": c.source_hash,
+        "quote": _q,
+        "source_hash": _sh,
         "confidence": None,
         "verified_at": None,
     }
-    if not c.source_hash:
+    if not isinstance(_sh, str) or not _sh:
         return witness
-    if c.verbatim_quote:
-        passed, conf, _msg = hasher.verify_quote(c.source_hash, c.verbatim_quote)
+    if not isinstance(_q, str) or not _q:
+        try:
+            needed_hashes.add(_sh)
+        except TypeError:
+            pass
+        return witness
+    try:
+        passed, conf, _msg = hasher.verify_quote(_sh, _q)
+    except (TypeError, AttributeError):
+        return witness
+    try:
         witness["confidence"] = float(conf)
-        witness["verified_at"] = datetime.now(timezone.utc).isoformat()
-        if passed:
-            needed_hashes.add(c.source_hash)
-    else:
-        needed_hashes.add(c.source_hash)
+    except (TypeError, ValueError):
+        witness["confidence"] = None
+    witness["verified_at"] = datetime.now(timezone.utc).isoformat()
+    if passed:
+        try:
+            needed_hashes.add(_sh)
+        except TypeError:
+            pass
+    # Legacy: a present-but-unverified quote bundles nothing (verifier
+    # re-checks independently); a missing quote bundles the hash for audit.
     return witness
 
 

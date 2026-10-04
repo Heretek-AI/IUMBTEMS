@@ -178,6 +178,8 @@ AUDIT_REPORT: Dict[str, Any] = {
                 "verified_passed": {"type": "integer"},
                 "unverified_rejected": {"type": "integer"},
                 "negative_knowledge_count": {"type": "integer"},
+                # 01-nk-hardening: malformed NK rows dropped at ingest.
+                "dropped_malformed_nk": {"type": "integer"},
                 "epistemic_score": {"type": "number"},
                 "divergence_score": {"type": "number"},
                 "mode": {"type": ["string", "null"]},

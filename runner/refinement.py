@@ -33,6 +33,8 @@ from runner.claim_witness import (
     TAG_NEGATIVE_KNOWLEDGE,
     TAG_VERIFIED,
     ClaimWitness,
+    _is_nonempty_str,
+    normalized_nk_key,
     witness_check,
 )
 
@@ -138,40 +140,56 @@ def claim_verdict(
     violations = check_invariants([claim], hasher=hasher, constitution=constitution)
 
     reasons = [f"{v.rule}: {v.message}" for v in violations]
+    # R1: claim is witness-adjacent (hand-built callers may pass None/string
+    # or a witness with int/dict source_hash) — getattr degrades to skip,
+    # and unhashable hashes degrade to skip, never AttributeError/TypeError.
+    _sh = getattr(claim, "source_hash", None)
+    _sh_hashable = isinstance(_sh, str) and bool(_sh)
     if (
         constitution.retraction_policy == "zero_tolerance"
-        and claim.source_hash
+        and _sh_hashable
         and retracted_hashes
-        and claim.source_hash in retracted_hashes
+        and _sh in retracted_hashes
     ):
-        reasons.append(
-            f"ZERO_TOLERANCE_RETRACTION: source {claim.source_hash} was retracted"
-        )
+        reasons.append(f"ZERO_TOLERANCE_RETRACTION: source {_sh} was retracted")
+    _status = getattr(claim, "status", None)
     if (
-        claim.status in (STATUS_STALE, STATUS_SUSPECT)
+        _status in (STATUS_STALE, STATUS_SUSPECT)
         and constitution.retraction_policy == "zero_tolerance"
         and not any(r.startswith("ZERO_TOLERANCE_RETRACTION") for r in reasons)
     ):
-        reasons.append(f"ZERO_TOLERANCE_RETRACTION: claim status {claim.status}")
+        reasons.append(f"ZERO_TOLERANCE_RETRACTION: claim status {_status}")
 
     return {
-        "claim_id": claim.claim_id,
+        "claim_id": getattr(claim, "claim_id", "UNKNOWN"),
         "verdict": "REJECTED" if reasons else "ACCEPTED",
         "reasons": reasons,
     }
 
 
 def _check_verified_claim(c: ClaimWitness, hasher: Any, out: List[Violation]) -> None:
-    """Verified/claim-kind gates: hash, quote, then live witness check."""
-    if not c.source_hash:
+    """Verified/claim-kind gates: hash, quote, then live witness check.
+
+    R10 (tiebreak-2 F3): truthiness → isinstance+nonempty so the validator
+    agrees with the scorer. `source_hash: 123` / `{"h": 1}` / `["h"]` and
+    `verbatim_quote: 42` are missing (VERIFIED_REQUIRES_*), never a
+    truthy-int bypass; the hasher guard requires both sides be non-empty
+    str, so a dict hash is rejected without a hasher call (no TypeError
+    inside `re.match`).
+    """
+    _sh = getattr(c, "source_hash", None)
+    _q = getattr(c, "verbatim_quote", None)
+    if not isinstance(_sh, str) or not _sh.strip():
         out.append(
             Violation(c.claim_id, "VERIFIED_REQUIRES_HASH", "source_hash missing")
         )
-    if not c.verbatim_quote:
+    if not isinstance(_q, str) or not _q.strip():
         out.append(
             Violation(c.claim_id, "VERIFIED_REQUIRES_QUOTE", "verbatim_quote missing")
         )
-    if hasher is None or not (c.source_hash and c.verbatim_quote):
+    if hasher is None or not (
+        isinstance(_sh, str) and _sh.strip() and isinstance(_q, str) and _q.strip()
+    ):
         return
     passed, _conf, msg = witness_check(c, hasher)
     if not passed:
@@ -187,13 +205,19 @@ def _check_verified_and_inferred(
         _check_verified_claim(c, hasher, out)
 
     if c.tag == TAG_INFERRED or c.kind == KIND_INFERENCE:
-        if not c.parent_claims:
+        # R10: parent_claims int/string/None must not pass via truthiness —
+        # only a non-empty list/tuple satisfies (agrees with the brainstorm
+        # scorer's well_formed gate); deductive_logic int/None/blank is
+        # missing (isinstance+nonempty, not `not`).
+        _parents = getattr(c, "parent_claims", [])
+        if not isinstance(_parents, (list, tuple)) or len(_parents) == 0:
             out.append(
                 Violation(
                     c.claim_id, "INFERRED_REQUIRES_PARENTS", "parent_claims empty"
                 )
             )
-        if not c.deductive_logic:
+        _logic = getattr(c, "deductive_logic", None)
+        if not isinstance(_logic, str) or not _logic.strip():
             out.append(
                 Violation(
                     c.claim_id, "INFERRED_REQUIRES_LOGIC", "deductive_logic missing"
@@ -202,7 +226,15 @@ def _check_verified_and_inferred(
 
 
 def _check_hypotheses_and_neg_knowledge(c: ClaimWitness, out: List[Violation]) -> None:
-    if (c.tag == TAG_HYPOTHESIS or c.kind == KIND_HYPOTHESIS) and not c.falsification:
+    # R10: falsification int/None/blank is missing (isinstance+nonempty,
+    # agreeing with the brainstorm scorer's well_formed gate which requires
+    # `isinstance(str) and strip()`); NK query/finding int/None/blank (and
+    # invisible-only via _is_nonempty_str) are missing, agreeing with the
+    # claims-path scorer's normalized_nk_key (int query/finding rejected).
+    _fals = getattr(c, "falsification", None)
+    if (c.tag == TAG_HYPOTHESIS or c.kind == KIND_HYPOTHESIS) and (
+        not isinstance(_fals, str) or not _fals.strip()
+    ):
         out.append(
             Violation(
                 c.claim_id, "HYPOTHESIS_REQUIRES_FALSIFICATION", "falsification missing"
@@ -210,11 +242,11 @@ def _check_hypotheses_and_neg_knowledge(c: ClaimWitness, out: List[Violation]) -
         )
 
     if c.tag == TAG_NEGATIVE_KNOWLEDGE or c.kind == KIND_NEGATIVE_KNOWLEDGE:
-        if not c.query:
+        if not _is_nonempty_str(getattr(c, "query", None)):
             out.append(
                 Violation(c.claim_id, "NEG_KNOWLEDGE_REQUIRES_QUERY", "query missing")
             )
-        if not c.finding:
+        if not _is_nonempty_str(getattr(c, "finding", None)):
             out.append(
                 Violation(
                     c.claim_id, "NEG_KNOWLEDGE_REQUIRES_FINDING", "finding missing"
@@ -228,21 +260,39 @@ def _check_constitution_and_parents(
     constitution: Constitution,
     out: List[Violation],
 ) -> None:
-    for parent in c.parent_claims:
-        if parent not in known_ids:
-            out.append(
-                Violation(
-                    c.claim_id,
-                    "PARENT_UNRESOLVED",
-                    f"parent_claims '{parent}' not in dossier set",
+    # R1: parent_claims is untrusted-adjacent (hand-built witnesses may carry
+    # None/int/string) — only list/tuple iterates; unhashable parents (dict)
+    # degrade to a violation, never TypeError. source_url int degrades to
+    # skip via isinstance, never AttributeError on `.lower()`.
+    parents = getattr(c, "parent_claims", [])
+    if isinstance(parents, (list, tuple)):
+        for parent in parents:
+            try:
+                unresolved = parent not in known_ids
+            except TypeError:
+                out.append(
+                    Violation(
+                        getattr(c, "claim_id", "UNKNOWN"),
+                        "PARENT_UNRESOLVED",
+                        f"parent_claims '{parent}' not in dossier set",
+                    )
                 )
-            )
+                continue
+            if unresolved:
+                out.append(
+                    Violation(
+                        c.claim_id,
+                        "PARENT_UNRESOLVED",
+                        f"parent_claims '{parent}' not in dossier set",
+                    )
+                )
 
     if constitution.mandatory_tags and not c.tag:
         out.append(Violation(c.claim_id, "MISSING_TAG", "tag required by constitution"))
 
-    if constitution.banned_domains and c.source_url:
-        src_lower = c.source_url.lower()
+    _src = getattr(c, "source_url", None)
+    if constitution.banned_domains and isinstance(_src, str) and _src:
+        src_lower = _src.lower()
         for dom in constitution.banned_domains:
             if dom.lower() in src_lower:
                 out.append(
@@ -266,6 +316,10 @@ def check_invariants(
     """
     constitution = constitution or LEGACY_CONSTITUTION
     claim_list = list(claims)
+    # R1: callers pass normalized witnesses, but an adversarial list may carry
+    # non-witness entries (None/string) — those degrade to skip, never
+    # AttributeError on `.claim_id`.
+    claim_list = [c for c in claim_list if isinstance(c, ClaimWitness)]
     known_ids = {c.claim_id for c in claim_list}
     out: List[Violation] = []
 
@@ -351,12 +405,31 @@ def compute_epistemic_score_from_claims(
         "neg_knowledge": 0,
     }
     weight_sum = 0.0
+    _seen_nk = set()
     tier_weighted = any(
         not math.isclose(w, 1.0, rel_tol=1e-7)
         for w in constitution.tier_weights.values()
     )
 
     for c in claims:
+        # R1: scorers consume witnesses derived from untrusted dossiers plus
+        # hand-built test witnesses — non-witness entries degrade to skip,
+        # never AttributeError on `.status`/`.tag`.
+        if not isinstance(c, ClaimWitness):
+            continue
+        # R2 (tag-spoof, kind wins): an NK-kind witness never counts as
+        # verified even when its row tag says VERIFIED (normalize_claim also
+        # forces the tag, this is defense-in-depth for hand-built witnesses).
+        # NK validity + exact-duplicate dedupe mirror the ingest normalizer so
+        # scoring and rendering agree; duplicates contribute nothing. R11: the
+        # dedupe key is the full cleaned pre-truncate pair
+        # (normalized_nk_key), so distinct past-2k rows stay valid=2.
+        if getattr(c, "kind", None) == KIND_NEGATIVE_KNOWLEDGE:
+            _nk_key = normalized_nk_key(c)
+            if _nk_key is not None and _nk_key not in _seen_nk:
+                _seen_nk.add(_nk_key)
+                counts["neg_knowledge"] += 1
+            continue
         if c.status == STATUS_REJECTED or c.tag == "UNVERIFIED_REJECTED":
             counts["rejected"] += 1
         elif c.tag == TAG_VERIFIED:
@@ -367,7 +440,13 @@ def compute_epistemic_score_from_claims(
         elif c.tag == TAG_HYPOTHESIS:
             counts["hypotheses"] += 1
         elif c.tag == TAG_NEGATIVE_KNOWLEDGE:
-            counts["neg_knowledge"] += 1
+            # 01-nk-hardening (A2): only valid {query, finding} rows count,
+            # agreeing with the defensive renderer. Malformed rows are
+            # dropped (no bonus), never scored. R11: full pre-truncate key.
+            _nk_key = normalized_nk_key(c)
+            if _nk_key is not None and _nk_key not in _seen_nk:
+                _seen_nk.add(_nk_key)
+                counts["neg_knowledge"] += 1
 
     total_assertions = max(
         1,
@@ -424,21 +503,51 @@ def compute_brainstorm_score_from_claims(
         "neg_knowledge": 0,
     }
     well_formed = 0
+    _seen_nk = set()
     for c in claims:
+        # R1: scorers consume witnesses derived from untrusted dossiers plus
+        # hand-built test witnesses — non-witness entries degrade to skip,
+        # never AttributeError on `.status`/`.tag`.
+        if not isinstance(c, ClaimWitness):
+            continue
+        # R2 (tag-spoof, kind wins): NK-kind witnesses never count as verified.
+        # R11: the dedupe key is the full cleaned pre-truncate pair
+        # (normalized_nk_key), mirroring the ingest normalizer — distinct
+        # past-2k rows stay valid=2 in both scoring and rendering.
+        if getattr(c, "kind", None) == KIND_NEGATIVE_KNOWLEDGE:
+            _nk_key = normalized_nk_key(c)
+            if _nk_key is not None and _nk_key not in _seen_nk:
+                _seen_nk.add(_nk_key)
+                counts["neg_knowledge"] += 1
+            continue
         if c.status == STATUS_REJECTED or c.tag == "UNVERIFIED_REJECTED":
             counts["rejected"] += 1
         elif c.tag == TAG_VERIFIED:
             counts["verified"] += 1
         elif c.tag == TAG_INFERRED:
             counts["inferred"] += 1
-            if c.parent_claims:
+            # R1: parent_claims is untrusted-adjacent (None/int/string) — only
+            # a non-empty list/tuple earns well-formed credit, never a crash
+            # or a truthy-int false positive.
+            _parents = getattr(c, "parent_claims", [])
+            if isinstance(_parents, (list, tuple)) and len(_parents) > 0:
                 well_formed += 1
         elif c.tag == TAG_HYPOTHESIS:
             counts["hypotheses"] += 1
-            if (c.falsification or "").strip():
+            # R1: falsification may be int/None on hand-built witnesses —
+            # only a non-blank string earns well-formed credit (`.strip()`
+            # requires a string).
+            _fals = getattr(c, "falsification", "")
+            if isinstance(_fals, str) and _fals.strip():
                 well_formed += 1
         elif c.tag == TAG_NEGATIVE_KNOWLEDGE:
-            counts["neg_knowledge"] += 1
+            # 01-nk-hardening (A2): only valid {query, finding} rows count,
+            # agreeing with the defensive renderer. Malformed rows are
+            # dropped (no bonus), never scored. R11: full pre-truncate key.
+            _nk_key = normalized_nk_key(c)
+            if _nk_key is not None and _nk_key not in _seen_nk:
+                _seen_nk.add(_nk_key)
+                counts["neg_knowledge"] += 1
 
     total_assertions = max(
         1,
