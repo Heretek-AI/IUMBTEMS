@@ -1,10 +1,9 @@
 ---
-description: Inspect or tune Epistemic Swarm parameters (engine, depth, mode)
+description: Inspect or update Epistemic Swarm parameters (engine, depth, mode)
 ---
 
-Inspect or tune IUMBTEMS swarm parameters: `$1`.
+Inspect or update the Epistemic Swarm configuration.
 
-`python3 skills/swarm_config/configure.py $1`
+Arguments: $ARGUMENTS (may be empty to inspect current settings)
 
-Engines: `duckduckgo` (zero-key default), `brave`, `firecrawl`, `searxng`.
-Modes: `research`, `audit`, `scout`, `hybrid`, `brainstorm`. Depth: 1-4.
+Call `iumbtems_config`; map `--engine`/`--depth`/`--mode`/`--show` style flags to search_engine/max_iterations/mode, or pass through no arguments to inspect (or run `python3 skills/swarm_config/configure.py $ARGUMENTS`).

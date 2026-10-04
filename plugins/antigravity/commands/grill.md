@@ -1,9 +1,10 @@
 ---
-description: Socratic grilling and decision frontier exploration
+description: Launch Socratic grilling and decision tree frontier exploration
 ---
 
-Launch IUMBTEMS Socratic grilling for `$1`.
+Launch Socratic grilling on the decision frontier.
 
-Follow `skills/grilling/SKILL.md` (rounds, frontier, assumption inversion,
-factual vs decisional separation). Persist with
-`python3 skills/grilling/socratic_tree.py --export`.
+Objective: $ARGUMENTS (may be empty to inspect the current frontier)
+
+Call `iumbtems_socratic_frontier` with `{"objective": "<objective>", "file": ".research/frontier.json"}` (or `python3 skills/grilling/socratic_tree.py --export`); omit "objective" to inspect.
+Challenge premises, invert assumptions, and report open frontier nodes.

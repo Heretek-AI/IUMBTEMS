@@ -1,10 +1,11 @@
 ---
-description: Scout open-source libraries and build clean-room blueprints
+description: Scout open-source libraries, audit copyleft licenses, generate clean-room blueprints
 ---
 
-Scout open-source solutions for `$1`:
+Scout open-source solutions for the requested capability.
 
-`python3 runner/research_swarm.py --mode scout --objective "$1"`
+Feature: $ARGUMENTS
+If $ARGUMENTS is empty, ask the user for the feature or algorithm first; never call with placeholder arguments.
 
-Flag GPL/AGPL contamination, solo-maintainer risk, dependency weight, CVEs.
-Report: `.research/oss_scout_report.md` plus a clean-room re-implementation blueprint.
+1. Execute `iumbtems_oss_scout` with `{"feature": "<feature>"}` (or `python3 runner/research_swarm.py --mode scout --objective "$ARGUMENTS"`).
+2. Report mature candidates, GPL/AGPL copyleft risks, and the clean-room blueprint in `.research/oss_scout_report.md`.

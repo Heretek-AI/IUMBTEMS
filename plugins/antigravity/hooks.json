@@ -2,7 +2,7 @@
   "epistemic-query-interceptor": {
     "PreToolUse": [
       {
-        "matcher": "search_web|read_url_content",
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",

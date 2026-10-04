@@ -297,3 +297,18 @@ Body:
 > Repro/pointer: the accepted-asymmetry comment in the plugin
 > (see plugins/opencode/index.js:1163 (tool.execute.before)) and the parity gap list in
 > docs/HOOK_BUS_PARITY.md.
+
+## Appendix: AntiGravity lifecycle hooks parity
+
+AntiGravity (`agy`) provides first-class host lifecycle hooks (`plugins/antigravity/hooks.json` -> `plugins/antigravity/antigravity_hooks.py`) wired directly to the 6-event Hook Bus via `plugins/antigravity/hook_bus_bridge.js`:
+
+| AntiGravity Hook | Bus Event | Blocking Semantics | Enforcement Point |
+| :--- | :--- | :--- | :--- |
+| `PreToolUse` (`*`) | `pre-tool-use`, `pre-commit` | Deny blocks execution | Enforced natively by Antigravity host before ANY tool step executes. Denies ungrounded searches (`search_web`/`read_url_content`) and enforces pre-commit validation on `.research/config.json` |
+| `PostToolUse` (`*`) | `post-tool-use` | Advisory / result capture | Enforced natively after tool step completes. Dispatches to Analysis Bridge (Biome), Dep Health (OSV.dev), and Weight Signals (esbuild) |
+| `PreInvocation` | `session-start`, `notification` | Advisory context injection | Injects Epistemic Integrity directive, compaction state (`buildCompactionContext`), and pending quality gate annotations into `injectSteps` |
+| `Stop` | `stop` | `continue` blocks termination | Enforced natively: blocks premature stop when degraded living dossier claims (`STALE`/`SUSPECT`) exist in `.research/ledger/claim_status.json` or bus subscribers deny stop |
+
+Pointers:
+- AntiGravity hook runner: plugins/antigravity/antigravity_hooks.py:99 (handle_pre_tool)
+- AntiGravity hook bus bridge: plugins/antigravity/hook_bus_bridge.js:103 (handlePreTool)

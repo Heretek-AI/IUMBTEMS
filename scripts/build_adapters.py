@@ -275,6 +275,7 @@ def _check_package_json() -> List[str]:
 
 ANTIGRAVITY_COMMANDS = [
     "audit",
+    "brainstorm",
     "brainstorming",
     "darkharvest",
     "domainexpansion",

@@ -10,6 +10,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -21,6 +22,7 @@ PLUGIN_ROOT = PROJECT_ROOT / "plugins" / "antigravity"
 
 EXPECTED_COMMANDS = [
     "audit",
+    "brainstorm",
     "brainstorming",
     "darkharvest",
     "domainexpansion",
@@ -78,7 +80,7 @@ class TestAntigravityPluginManifest(unittest.TestCase):
 
 
 class TestAntigravityCommands(unittest.TestCase):
-    def test_all_nine_commands_exist_with_frontmatter(self):
+    def test_all_ten_commands_exist_with_frontmatter(self):
         commands_dir = PLUGIN_ROOT / "commands"
         self.assertTrue(commands_dir.is_dir())
         for cmd in EXPECTED_COMMANDS:
@@ -138,13 +140,14 @@ class TestAntigravityHooks(unittest.TestCase):
 
         interceptor = hooks_cfg["epistemic-query-interceptor"]
         self.assertIn("PreToolUse", interceptor)
+        self.assertEqual(interceptor["PreToolUse"][0]["matcher"], "*")
         self.assertIn("PreInvocation", interceptor)
 
         auditor = hooks_cfg["epistemic-claim-auditor"]
         self.assertIn("PostToolUse", auditor)
         self.assertIn("Stop", auditor)
 
-    def test_hooks_runner_execution(self):
+    def test_hooks_runner_search_denial(self):
         bridge_script = PROJECT_ROOT / "runner" / "antigravity_hooks.py"
         self.assertTrue(bridge_script.exists())
 
@@ -159,26 +162,178 @@ class TestAntigravityHooks(unittest.TestCase):
         res = json.loads(proc.stdout)
         self.assertEqual(res.get("decision"), "deny")
 
-        # PreInvocation injection test
+        # PreTool read_url_content denial test
         proc = subprocess.run(
-            [sys.executable, str(bridge_script), "pre_invocation"],
-            input=json.dumps({"conversationId": "test-turn"}),
+            [sys.executable, str(bridge_script), "pre_tool"],
+            input=json.dumps({"toolCall": {"name": "read_url_content", "args": {"Url": "https://example.com"}}}),
             capture_output=True,
             text=True,
         )
         self.assertEqual(proc.returncode, 0)
         res = json.loads(proc.stdout)
-        self.assertIn("injectSteps", res)
+        self.assertEqual(res.get("decision"), "deny")
 
-        # Stop allow test
+    def test_pre_tool_allow_read_tools(self):
+        bridge_script = PROJECT_ROOT / "runner" / "antigravity_hooks.py"
         proc = subprocess.run(
-            [sys.executable, str(bridge_script), "stop"],
-            input=json.dumps({"terminationReason": "model_stop"}),
+            [sys.executable, str(bridge_script), "pre_tool"],
+            input=json.dumps({"toolCall": {"name": "view_file", "args": {"AbsolutePath": "/dummy/file"}}}),
             capture_output=True,
             text=True,
         )
         self.assertEqual(proc.returncode, 0)
         res = json.loads(proc.stdout)
+        self.assertEqual(res.get("decision"), "allow")
+
+    def test_pre_tool_pre_commit_config_validation(self):
+        bridge_script = PROJECT_ROOT / "runner" / "antigravity_hooks.py"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            research_dir = tmppath / ".research"
+            research_dir.mkdir(parents=True, exist_ok=True)
+            cfg_file = research_dir / "config.json"
+
+            # 1. Invalid config payload (illegal mode)
+            proc = subprocess.run(
+                [sys.executable, str(bridge_script), "pre_tool"],
+                input=json.dumps({
+                    "workspacePaths": [str(tmppath)],
+                    "toolCall": {
+                        "name": "write_to_file",
+                        "args": {
+                            "TargetFile": str(cfg_file),
+                            "CodeContent": json.dumps({"mode": "totally_invalid_mode"}),
+                        },
+                    },
+                }),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0)
+            res = json.loads(proc.stdout)
+            self.assertEqual(res.get("decision"), "deny")
+            self.assertIn("Pre-commit validation rejected", res.get("reason", ""))
+
+    def test_pre_invocation_injects_epistemic_and_compaction_context(self):
+        bridge_script = PROJECT_ROOT / "runner" / "antigravity_hooks.py"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            research_dir = tmppath / ".research"
+            research_dir.mkdir(parents=True, exist_ok=True)
+            (research_dir / "config.json").write_text(
+                json.dumps({"mode": "research", "search_engine": "duckduckgo", "max_iterations": 3}),
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [sys.executable, str(bridge_script), "pre_invocation"],
+                input=json.dumps({"workspacePaths": [str(tmppath)], "conversationId": "test-compaction"}),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0)
+            res = json.loads(proc.stdout)
+            self.assertIn("injectSteps", res)
+            steps = res["injectSteps"]
+            self.assertGreaterEqual(len(steps), 2)
+            texts = [s.get("ephemeralMessage", "") for s in steps]
+            # Must contain epistemic integrity prompt
+            self.assertTrue(any("EPISTEMIC INTEGRITY" in t for t in texts))
+            # Must contain compaction context with active configuration
+            self.assertTrue(any("mode=research" in t and "engine=duckduckgo" in t for t in texts))
+
+    def test_stop_allows_clean_workspace(self):
+        bridge_script = PROJECT_ROOT / "runner" / "antigravity_hooks.py"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            proc = subprocess.run(
+                [sys.executable, str(bridge_script), "stop"],
+                input=json.dumps({"workspacePaths": [tmpdir], "terminationReason": "model_stop"}),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0)
+            res = json.loads(proc.stdout)
+            self.assertEqual(res.get("decision"), "allow")
+
+    def test_stop_gates_when_degraded_claims_present(self):
+        bridge_script = PROJECT_ROOT / "runner" / "antigravity_hooks.py"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            ledger_dir = tmppath / ".research" / "ledger"
+            ledger_dir.mkdir(parents=True, exist_ok=True)
+            ledger_file = ledger_dir / "claim_status.json"
+            # Write a ledger with a degraded STALE claim
+            ledger_file.write_text(
+                json.dumps([{"claim_id": "c1", "to_status": "STALE", "at": "2026-10-03T00:00:00Z"}]),
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [sys.executable, str(bridge_script), "stop"],
+                input=json.dumps({"workspacePaths": [str(tmppath)], "terminationReason": "model_stop"}),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0)
+            res = json.loads(proc.stdout)
+            self.assertEqual(res.get("decision"), "continue")
+            self.assertIn("Epistemic audit warning", res.get("reason", ""))
+
+            # Now create .factory/STOP and verify immediate allow override
+            factory_dir = tmppath / ".factory"
+            factory_dir.mkdir(parents=True, exist_ok=True)
+            (factory_dir / "STOP").write_text("STOP", encoding="utf-8")
+
+            proc = subprocess.run(
+                [sys.executable, str(bridge_script), "stop"],
+                input=json.dumps({"workspacePaths": [str(tmppath)], "terminationReason": "model_stop"}),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0)
+            res = json.loads(proc.stdout)
+            self.assertEqual(res.get("decision"), "allow")
+
+
+class TestAntigravityHookBusBridgeDirect(unittest.TestCase):
+    def test_bridge_direct_execution(self):
+        bridge_js = PLUGIN_ROOT / "hook_bus_bridge.js"
+        self.assertTrue(bridge_js.exists())
+
+        # Test pre_tool allow
+        proc = subprocess.run(
+            ["node", str(bridge_js), "pre_tool", json.dumps({"toolCall": {"name": "view_file"}})],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT),
+        )
+        self.assertEqual(proc.returncode, 0)
+        lines = [l.strip() for l in proc.stdout.strip().splitlines() if l.strip().startswith("{")]
+        res = json.loads(lines[-1])
+        self.assertEqual(res.get("decision"), "allow")
+
+        # Test pre_invocation compaction context
+        proc = subprocess.run(
+            ["node", str(bridge_js), "pre_invocation", "{}"],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT),
+        )
+        self.assertEqual(proc.returncode, 0)
+        lines = [l.strip() for l in proc.stdout.strip().splitlines() if l.strip().startswith("{")]
+        res = json.loads(lines[-1])
+        self.assertIn("compactionContext", res)
+
+        # Test stop
+        proc = subprocess.run(
+            ["node", str(bridge_js), "stop", "{}"],
+            capture_output=True,
+            text=True,
+            cwd=str(PROJECT_ROOT),
+        )
+        self.assertEqual(proc.returncode, 0)
+        lines = [l.strip() for l in proc.stdout.strip().splitlines() if l.strip().startswith("{")]
+        res = json.loads(lines[-1])
         self.assertEqual(res.get("decision"), "allow")
 
 
