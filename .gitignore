@@ -1,16 +1,19 @@
 node_modules/
-.research/
-!.research/.gitkeep
-.factory/
-.roadmap/
-!.roadmap/.gitkeep
-evals/results/
-plugins/*/evals/results/
-__pycache__/
-*.py[cod]
-*$py.class
-*.log
-searxng-data/
 dist/
 *.tgz
+*.log
+*.tsbuildinfo
+
+# Local research cache (content-addressed sources)
+.research/
+
+# Factory: specs, roadmap, frontier, gates, waivers and approvals are tracked;
+# runtime state, run logs and the kill-file are not.
+.factory/runtime/
+.factory/runs/
+.factory/worktrees/
+.factory/STOP
+
+# Local-only checkouts and legacy runtime state
 review/
+.legacy-state/

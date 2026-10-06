@@ -1,154 +1,21 @@
 {
-  "name": "@heretek-ai/epistemic-swarm",
-  "version": "0.7.25",
-  "description": "IUMBTEMS (Epistemic Swarm) \u2014 High-Integrity Dialectic Research Agent Harness for Claude Code, OpenCode V2, Pi (pi.dev), OMP (oh-my-pi), Gemini CLI, Codex CLI, and AntiGravity",
-  "main": "bin/cli.js",
-  "bin": {
-    "iumbtems": "bin/cli.js",
-    "epistemic-swarm": "bin/cli.js"
-  },
-  "exports": {
-    ".": "./bin/cli.js",
-    "./opencode": "./plugins/opencode/index.js",
-    "./server": "./plugins/opencode/index.js",
-    "./tui": "./plugins/opencode/tui.js",
-    "./pi": "./extensions/pi/index.js",
-    "./omp": "./extensions/pi/index.js"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
-  "dependencies": {
-    "solid-js": "1.9.12",
-    "@opentui/solid": ">=0.4.0 <0.6.0"
-  },
-  "overrides": {
-    "@babel/core": "^7.29.6"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Heretek-AI/IUMBTEMS.git"
-  },
-  "bugs": {
-    "url": "https://github.com/Heretek-AI/IUMBTEMS/issues"
-  },
-  "homepage": "https://github.com/Heretek-AI/IUMBTEMS#readme",
-  "keywords": [
-    "iumbtems",
-    "epistemic-swarm",
-    "i-use-my-brain-to-express-my-self",
-    "pi-package",
-    "omp-package",
-    "opencode",
-    "opencode-plugin",
-    "claude-code",
-    "gemini-cli",
-    "codex-cli",
-    "antigravity",
-    "oh-my-pi",
-    "omp",
-    "ai-agents",
-    "autonomous-agents",
-    "multi-agent-systems",
-    "dialectic-swarm",
-    "dialectic",
-    "epistemic-integrity",
-    "research-harness",
-    "research-agent",
-    "mcp",
-    "model-context-protocol",
-    "mcp-servers",
-    "deep-research",
-    "socratic-grilling",
-    "socratic-questioning",
-    "brainstorming",
-    "lateral-thinking",
-    "fact-checking",
-    "red-teaming",
-    "citation-validation",
-    "hallucination-prevention",
-    "swarm-intelligence",
-    "code-audit",
-    "oss-scout",
-    "clean-room-engineering",
-    "proof-carrying-briefs",
-    "living-dossiers"
-  ],
-  "pi": {
-    "extensions": [
-      "./extensions/pi/index.js"
-    ],
-    "skills": [
-      "./skills/grilling",
-      "./skills/research_cache",
-      "./skills/epistemic_search",
-      "./skills/swarm_config",
-      "./skills/code_audit",
-      "./skills/oss_scout",
-      "./skills/brainstorming",
-      "./skills/darkharvest",
-      "./skills/factory"
-    ],
-    "prompts": [
-      "./prompts/*.md"
-    ]
-  },
-  "omp": {
-    "extensions": [
-      "./extensions/pi/index.js"
-    ],
-    "skills": [
-      "./skills/grilling",
-      "./skills/research_cache",
-      "./skills/epistemic_search",
-      "./skills/swarm_config",
-      "./skills/code_audit",
-      "./skills/oss_scout",
-      "./skills/brainstorming",
-      "./skills/darkharvest",
-      "./skills/factory"
-    ],
-    "prompts": [
-      "./prompts/*.md"
-    ],
-    "commands": [
-      "./.omp/commands/*.md"
-    ]
-  },
-  "author": "Heretek AI",
+  "name": "epistemic-swarm-monorepo",
+  "private": true,
+  "type": "module",
   "license": "Apache-2.0",
-  "files": [
-    "bin",
-    "prompts",
-    "skills",
-    "schemas",
-    "hooks",
-    "config",
-    "runner",
-    "extensions",
-    "plugins",
-    "scripts",
-    ".agents",
-    ".omp",
-    ".claude-plugin",
-    "install.sh",
-    "README.md",
-    "MARKETPLACE.md",
-    "LICENSE"
-  ],
-  "engines": {
-    "node": ">=18.0.0"
-  },
+  "workspaces": ["packages/*"],
   "scripts": {
-    "test": "python3 -m unittest discover -s runner/tests",
-    "build:adapters": "python3 scripts/build_adapters.py",
-    "check:adapters": "python3 scripts/build_adapters.py --check",
-    "validate:claude": "claude plugin validate --strict .claude-plugin/marketplace.json && claude plugin validate --strict .",
-    "prepack": "python3 scripts/build_adapters.py && python3 -m unittest discover -s runner/tests",
-    "install-local": "bash install.sh"
+    "test": "bun test ./packages",
+    "typecheck": "tsc -b packages/core packages/testkit packages/opencode packages/cli",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "check": "bun run lint && bun run typecheck && bun run test"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
-    "esbuild": "0.28.2"
-  }
+    "@types/bun": "1.4.2",
+    "@types/node": "26.6.4",
+    "typescript": "7.0.2"
+  },
+  "engines": { "node": ">=22", "bun": ">=1.4" }
 }

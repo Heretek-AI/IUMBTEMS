@@ -1,6 +1,0 @@
-description = "Run dialectic codebase architecture and security audit"
-prompt = """Run the IUMBTEMS dialectic codebase audit on: {{args}}.
-
-Execute: python3 runner/research_swarm.py --mode audit --objective "{{args}}"
-Report: .research/code_audit_report.md with file:///path#Lstart-Lend pointers.
-"""

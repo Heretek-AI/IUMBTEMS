@@ -1,1 +1,0 @@
-# AgentSkills compatibility marker

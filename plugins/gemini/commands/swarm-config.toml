@@ -1,7 +1,0 @@
-description = "Inspect or tune Epistemic Swarm parameters (engine, depth, mode)"
-prompt = """Inspect or tune IUMBTEMS swarm parameters for: {{args}}.
-
-Execute: python3 skills/swarm_config/configure.py {{args}}
-Engines: duckduckgo (zero-key default), brave, firecrawl, searxng.
-Modes: research, audit, scout, hybrid, brainstorm. Depth: 1-4.
-"""
