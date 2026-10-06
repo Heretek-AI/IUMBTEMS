@@ -3,10 +3,12 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "test": "bun test ./packages",
-    "typecheck": "tsc -b packages/core packages/testkit packages/opencode packages/cli",
+    "typecheck": "for p in core testkit opencode cli; do tsc -p packages/$p/tsconfig.json --noEmit --composite false || exit 1; done",
     "lint": "biome check .",
     "format": "biome format --write .",
     "check": "bun run lint && bun run typecheck && bun run test"
@@ -17,5 +19,8 @@
     "@types/node": "26.6.4",
     "typescript": "7.0.2"
   },
-  "engines": { "node": ">=22", "bun": ">=1.4" }
+  "engines": {
+    "node": ">=22",
+    "bun": ">=1.4"
+  }
 }

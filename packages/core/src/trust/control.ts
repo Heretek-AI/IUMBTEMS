@@ -21,6 +21,7 @@ export const FACTORY_CONTROL = [
   ".factory/approvals/**",
   ".factory/runtime/**",
   ".factory/STOP",
+  ".factory/git-hooks/**",
   ".git/config",
   ".git/hooks/**",
 ] as const
