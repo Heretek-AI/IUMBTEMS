@@ -28,6 +28,7 @@ EXPECTED_COMMANDS = [
     "darkharvest",
     "factory",
     "domainexpansion",
+    "queereye",
 ]
 
 EXPECTED_AGENTS = [
@@ -42,6 +43,7 @@ EXPECTED_AGENTS = [
     "programmer",
     "qa-a",
     "qa-b",
+    "queereye",
 ]
 
 

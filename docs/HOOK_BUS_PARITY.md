@@ -42,7 +42,7 @@ blocking without an emit site.
 | PreCommit (settings write) | pre-commit | `{ updates, root, expected_hash? }` | deny blocks the write (structured invalid / not-written, nothing written) | ENFORCED on BOTH legs: settings-RPC `set` AND the TUI direct-fs fallback (`gateDirectFsPreCommit`). Stale-write guard still enforced downstream in both | fast 500 ms / slow 5000 ms | fail-open allow; stale-write guard still enforced by the MCP write / `saveConfig` | plugins/opencode/hook-bus.js:445 (gatePreCommit) |
 | Stop | stop | `{ sessionID, reason? }` | deny blocks at `bus.emit` (direct subscribers) | BUS-LEVEL ONLY: no host interception point exists yet, so no host action is gated. Deny-blocks holds for bus participants, exactly like the six bus unit tests pin | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/hook-bus.js:38 (HOOK_EVENTS) |
 | Notification | notification | `{ message, level?, sessionID? }` | deny blocks at `bus.emit` (direct subscribers) | BUS-LEVEL ONLY: same scope as `stop` — no host toast/log interception point, no host action gated | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/hook-bus.js:38 (HOOK_EVENTS) |
-| SessionStart (compaction restore) | session-start | `{ root, eventId }` | advisory BY DESIGN: a deny is audit-logged but never drops the compaction state push | ADVISORY emit inside the compaction hook. Explicitly NOT counted as a deny-blocks host path — the bus unit test pins `bus.emit` returning `allowed: false` while the host push still proceeds | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/index.js:1849 (session-start) |
+| SessionStart (compaction restore) | session-start | `{ root, eventId }` | advisory BY DESIGN: a deny is audit-logged but never drops the compaction state push | ADVISORY emit inside the compaction hook. Explicitly NOT counted as a deny-blocks host path — the bus unit test pins `bus.emit` returning `allowed: false` while the host push still proceeds | fast 500 ms / slow 5000 ms | fail-open allow + audit | plugins/opencode/index.js:1865 (session-start) |
 
 ## Caller-latency contract (GOAL §5/§6)
 
@@ -75,22 +75,22 @@ runner/tests/test_hook_bus.py (a never-settling slow handler with a small
 - Bus registry `on(event, handler, { tier })` and `emit(event, payload)` with
   per-tier timeouts: plugins/opencode/hook-bus.js:231 (createHookBus)
 - `pre-tool-use` deny-blocks-execution emit in plugin-tool `execute`:
-  plugins/opencode/index.js:1193 (pre-tool-use)
+  plugins/opencode/index.js:1209 (pre-tool-use)
 - `post-tool-use` deny-suppresses-delivery emit in plugin-tool `execute`:
-  plugins/opencode/index.js:1216 (post-tool-use)
+  plugins/opencode/index.js:1232 (post-tool-use)
 - `pre-commit` gate helper (stale-write guards preserved downstream):
   plugins/opencode/hook-bus.js:445 (gatePreCommit)
 - Direct-fs `pre-commit` gate helper (fallback leg):
   plugins/opencode/tui.js:130 (gateDirectFsPreCommit)
 - Bus adoption alongside existing registrations (same adopt/best-effort
-  pattern): plugins/opencode/index.js:2888 (registerHookBus)
+  pattern): plugins/opencode/index.js:2904 (registerHookBus)
 - Shared bus instance: plugins/opencode/index.js:82 (hookBus)
 - `pre-commit` gate inside the settings-RPC `set` leg:
-  plugins/opencode/index.js:2529 (gatePreCommit)
+  plugins/opencode/index.js:2545 (gatePreCommit)
 - Direct-fs `pre-commit` gate inside the wizard fallback leg:
   plugins/opencode/tui.js:1346 (gateDirectFsPreCommit)
 - `session-start` (advisory) emit inside the compaction hook:
-  plugins/opencode/index.js:1849 (session-start)
+  plugins/opencode/index.js:1865 (session-start)
 - Audit ledger (ring-cap counter + clear tombstone):
   plugins/opencode/hook-bus.js:389 (clearAuditLog)
 - Mock-host bus tests (order, timeouts, fail-open, audit completeness, per-event
@@ -105,7 +105,7 @@ runner/tests/test_hook_bus.py (a never-settling slow handler with a small
    cannot be intercepted the way Claude Code hooks do
    [VERIFIED: sha256:52ac5b4d26062cfc6093440faa415ab152f8acd0d18c4496eb0087ed18a27d76].
    Consequence: `pre-tool-use` / `post-tool-use` enforce on THIS plugin's own
-   tool executions (see plugins/opencode/index.js:1193 (pre-tool-use)); they cannot yet veto
+   tool executions (see plugins/opencode/index.js:1209 (pre-tool-use)); they cannot yet veto
    arbitrary host tool executions. The bus degrades gracefully (advisory
    annotations + audit) until the upstream guard API exists.
 2. `session-start` verdicts are advisory-only BY DESIGN (a deny never drops
@@ -295,7 +295,7 @@ Body:
 > notification are bus-level only.
 >
 > Repro/pointer: the accepted-asymmetry comment in the plugin
-> (see plugins/opencode/index.js:1163 (tool.execute.before)) and the parity gap list in
+> (see plugins/opencode/index.js:1179 (tool.execute.before)) and the parity gap list in
 > docs/HOOK_BUS_PARITY.md.
 
 ## Appendix: AntiGravity lifecycle hooks parity

@@ -822,6 +822,22 @@ export const OPENCODE_COMMANDS = [
       '3. All expansion proposals carry the strict VERIFIED evidence bar; log every loop to .factory/state.json.',
     ].join('\n'),
   },
+  {
+    name: 'queereye',
+    description: 'Queereye style-guide interview: 7-axis rounds emitting DTCG tokens in .queereye/',
+    usage: '/queereye [<brand-hint>]',
+    agent: 'queereye',
+    subagent: false,
+    subtask: false,
+    template: [
+      'Run the Queereye style-guide interview as the queereye agent in the current session.',
+      'Hint: $ARGUMENTS (may be empty to start from brand).',
+      'If $ARGUMENTS is empty, start at the brand axis; never proceed on placeholder input.',
+      '1. Run the schema-typed turn loop over 7 axes in order (brand, color, type, layout, effects, dark/light, a11y): show recommendations before each ask; validate every answer inline (vague answers are parse errors with a counter-question; pasted hex/font literals are smuggling attempts yielding zero one-off tokens; contradictions trigger repair, never agreement).',
+      '2. Write .queereye/tokens.json incrementally per settled axis (resume via .queereye/interview.json); refuse writes outside .queereye/ (hard error). Tokens are DTCG $value/$type/$description with alias chains (primitive -> semantic -> component), snapshot 2025.10.',
+      '3. Contrast-gate every text pair (>=4.5:1 body, >=3:1 large; AAA 7:1 noted) and compile via the Style-Dictionary-compat path to CSS vars; render .queereye/STYLE_GUIDE.md purely from tokens plus probe output (byte-match; verify with the queereye check --strict drift gate). Implementation: runner/queereye/slots.py (SlotLoop), tokens.py, contrast.py, fs.py, render.py, cli.py.',
+    ].join('\n'),
+  },
 ];
 
 /**
