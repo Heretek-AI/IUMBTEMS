@@ -1,0 +1,1 @@
+{"sha256":"13167e22ef2e32753ea90a0cd01295f4ebf0aa34ca79001b0e7012af82fac26a","title":"Antigravity Lifecycle Hooks (hooks.json) contract","origin":"strings extracted from ~/.local/bin/agy (agy 1.3.0, binary mtime 2026-10-06)","retrieved":"2026-10-06","method":"strings -n 2 agy | section between '# Lifecycle Hooks' and '## Current Limitations'+2"}

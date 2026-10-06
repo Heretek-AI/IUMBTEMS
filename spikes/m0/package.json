@@ -1,0 +1,17 @@
+{
+  "name": "@heretek-ai/spike-m0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test --timeout 60000"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.0.24",
+    "@opencode/sdk": "2.0.24",
+    "@opentui/core": "0.5.14",
+    "@opentui/solid": "0.5.14",
+    "@types/bun": "^1.4.2",
+    "solid-js": "1.9.15",
+    "typescript": "5.8.2"
+  }
+}

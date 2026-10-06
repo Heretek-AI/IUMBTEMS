@@ -13,3 +13,4 @@ __pycache__/
 searxng-data/
 dist/
 *.tgz
+review/
