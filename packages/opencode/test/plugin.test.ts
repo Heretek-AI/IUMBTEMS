@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { researchSourcesDir, SourceCache } from "@heretek-ai/es-core"
 import { boot, directiveScript, type Harness, lastAgentRequest, systemText } from "@heretek-ai/es-testkit"
 import { EsRpc } from "../src/rpc-def.ts"
 
@@ -146,8 +147,18 @@ describe("a factory run end to end on the real host", () => {
     ).toContain("Approved frontier")
     expect((await rpc.status({}, where(h))).stage).toBe("RESEARCH")
 
+    const cache = new SourceCache(researchSourcesDir(h.directory))
+    const source = await cache.put({
+      url: "https://example.test/greet",
+      text: "A greeting module exports greet(name) and returns a string.",
+      provider: "fetch",
+    })
     await mkdir(path.join(h.directory, ".factory/research"), { recursive: true })
-    await writeFile(path.join(h.directory, ".factory/research/REPORT.md"), `# Research\n${"Evidence. ".repeat(40)}\n`)
+    await writeFile(
+      path.join(h.directory, ".factory/research/REPORT.md"),
+      `# Research\n\n- greet returns a string [VERIFIED: sha256:${source.meta.sha256} "exports greet(name) and returns a string"]\n`,
+    )
+
     const research = await h.run(call("es_research_complete"), { agent: "factory" })
     expect(research.tools[0]?.status).toBe("completed")
 

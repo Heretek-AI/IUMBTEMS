@@ -100,6 +100,25 @@ describe("grill → research → spec", () => {
     expect(state.spendCeilingUSD).toBe(25)
   })
 
+  test("research completes only when the report passes the epistemic audit", async () => {
+    await factory.begin("human:tester")
+    await factory.writeFrontier("grill", frontier())
+    await approve("frontier")
+    await factory.beginResearch("human:tester")
+    await mkdir(path.join(fx.root, ".factory/research"), { recursive: true })
+    await writeFile(
+      path.join(fx.root, ".factory/research/REPORT.md"),
+      "# Research\n\n- Everyone uses greet() [VERIFIED: sha256:" +
+        "a".repeat(64) +
+        ' "everyone uses greet"]\n- untagged opinion\n',
+    )
+    await expect(factory.completeResearch("factory")).rejects.toThrow("does not pass the epistemic audit")
+    const coverage = JSON.parse(await readFile(path.join(fx.root, ".factory/research/coverage.json"), "utf8"))
+    expect(coverage).toMatchObject({ claims: 2, ungrounded: 1, untagged: 1, passed: false })
+    await writeReport(fx.root)
+    expect((await factory.completeResearch("factory")).stage).toBe("SPEC")
+  })
+
   test("a spec edited after approval blocks the build", async () => {
     await factory.begin("human:tester")
     await factory.writeFrontier("grill", frontier())

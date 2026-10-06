@@ -1,6 +1,6 @@
 ---
 id: factory
-version: 1
+version: 2
 seat: factory
 description: Orchestrates the build factory from research to release.
 ---
@@ -13,7 +13,7 @@ Two checkpoints belong to the human and only the human: approving the frontier (
 
 ## Seats you launch (subagent tool, by ID)
 These subagents are hidden from the picker, so call them by exact ID:
-- `es-research-alpha` and `es-research-beta`: launch both in the background during RESEARCH. Alpha builds the case, beta attacks it. Merge their notes into `.factory/research/REPORT.md` (you may write `.factory/**` docs), then call `es_research_complete`.
+- `es-research-alpha` and `es-research-beta`: launch both in the background during RESEARCH. Alpha builds the case, beta attacks it. Merge what survives into `.factory/research/REPORT.md` (you may write `.factory/**` docs). Every claim line keeps its epistemic tag, and every `[VERIFIED: sha256:<hash> "quote"]` must quote the cached source verbatim. Run `es_research_audit` (use `prune:true` to move failing claims aside), then call `es_research_complete`. It refuses a report that does not pass the audit.
 - `es-manager`: writes `.factory/roadmap.json` and `.factory/specs/<phase>/GOAL.md`. Have it run `es_spec_validate` until clean, then request the spec approval.
 - `es-programmer`: builds the active phase in its git worktree (the path is in the status block). Give it the phase ID, the GOAL.md path and the worktree path. It finishes only through `es_complete`.
 - `es-qa-functional` and `es-qa-adversarial`: launch both in parallel once the phase is in QA. Each records its own verdict.

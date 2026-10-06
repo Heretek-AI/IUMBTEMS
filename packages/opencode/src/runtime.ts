@@ -15,6 +15,8 @@ export interface PluginOptions {
   readonly pr?: "gh" | "off"
   /** Append language-server diagnostics to edit results (default on). */
   readonly lspAfterEdit?: boolean
+  /** Search provider id (brave, firecrawl, searxng); default: the first with credentials. */
+  readonly searchProvider?: string
 }
 
 export interface Runtime {
@@ -60,5 +62,6 @@ export function parseOptions(raw: Record<string, unknown> | undefined): PluginOp
       : {}),
     pr: options.pr === "off" ? "off" : "gh",
     lspAfterEdit: options.lspAfterEdit !== false,
+    ...(typeof options.searchProvider === "string" ? { searchProvider: options.searchProvider } : {}),
   }
 }

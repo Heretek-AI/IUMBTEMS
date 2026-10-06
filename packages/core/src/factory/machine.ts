@@ -18,6 +18,8 @@ import { seatOf } from "../agents/registry.ts"
 import { readApproval, verifyApproval } from "../approval/record.ts"
 import { appendAuditEntry } from "../audit/chain.ts"
 import { factoryLayout } from "../layout.ts"
+import { auditMarkdown, formatCoverage } from "../research/auditor.ts"
+import { researchCache } from "../research/ops.ts"
 import { type Frontier, FrontierSchema } from "../schema/frontier.ts"
 import { type AcceptanceCriterion, parseGoalMarkdown } from "../schema/goal.ts"
 import { RoadmapSchema } from "../schema/roadmap.ts"
@@ -274,13 +276,28 @@ export class Factory {
     this.requireSeat(agentId, "factory")
     return this.mutate(`agent:${agentId}`, async (state) => {
       this.requireStage(state, "RESEARCH")
-      const report = await readFile(this.layout.researchReport, "utf8").catch(() => "")
-      if (report.trim().length < 200)
+      const report = await readFile(this.layout.researchReport, "utf8").catch(() => undefined)
+      if (report === undefined)
+        throw new FactoryError("Research is not done: .factory/research/REPORT.md does not exist.")
+      const cache = researchCache(this.root)
+      const audit = await auditMarkdown(report, cache)
+      await writeJson(path.join(this.layout.research, "coverage.json"), {
+        ...audit.coverage,
+        passed: audit.passed,
+        at: this.now().toISOString(),
+      })
+      if (!audit.passed)
         throw new FactoryError(
-          "Research is not done: .factory/research/REPORT.md is missing or too thin (need ≥200 chars).",
+          `The research report does not pass the epistemic audit.\n${formatCoverage(audit)}\nFix or prune the claims (es_research_audit with prune:true), then try again.`,
         )
+      // Keep only the evidence the report cites, so the tracked cache stays small.
+      const removed = await cache.prune(new Set(audit.cited))
       state.stage = "SPEC"
-      await this.audit(`agent:${agentId}`, "stage.spec", { reportHash: sha256(report) })
+      await this.audit(`agent:${agentId}`, "stage.spec", {
+        reportHash: sha256(report),
+        coverage: audit.coverage,
+        prunedSources: removed.length,
+      })
       return state
     })
   }

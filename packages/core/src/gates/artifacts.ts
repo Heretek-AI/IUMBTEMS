@@ -3,6 +3,8 @@
 import { readdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import { factoryLayout } from "../layout.ts"
+import { auditMarkdown } from "../research/auditor.ts"
+import { researchCache } from "../research/ops.ts"
 import { FrontierSchema } from "../schema/frontier.ts"
 import { type GateFinding, GatesConfigSchema } from "../schema/gates.ts"
 import { parseGoalMarkdown } from "../schema/goal.ts"
@@ -44,6 +46,20 @@ export async function validateArtifacts(root: string): Promise<GateFinding[]> {
     specs = await readdir(layout.specs)
   } catch {
     // no specs yet
+  }
+  const report = await readFile(layout.researchReport, "utf8").catch(() => undefined)
+  if (report !== undefined) {
+    const audit = await auditMarkdown(report, researchCache(root))
+    for (const claim of audit.claims.filter((item) => item.status !== "grounded"))
+      findings.push({
+        file: ".factory/research/REPORT.md",
+        line: claim.line,
+        rule: `research/${claim.status}`,
+        severity: "error",
+        message: claim.reason ?? claim.status,
+        fixHint: "Tag the claim and quote the cached source verbatim, or prune it (es_research_audit prune:true).",
+        check: "artifacts",
+      })
   }
   for (const id of specs)
     await check(layout.spec(id), "schema/goal", (text) => {

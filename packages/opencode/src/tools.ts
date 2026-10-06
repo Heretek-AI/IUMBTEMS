@@ -1,13 +1,18 @@
 // Epistemic Swarm tools for OpenCode v2: the harness-neutral core operations,
 // registered as direct (codemode:false) tools, each under its own permission
 // action so per-agent rules can hide it. Refusals become model-facing tool errors.
-import { esTools, lspTools, pendingApprovals } from "@heretek-ai/es-core"
+import { esTools, lspTools, pendingApprovals, researchTools } from "@heretek-ai/es-core"
 import { Error as ToolError } from "@opencode/plugin/promise/tool"
 import type { Runtime } from "./runtime.ts"
 
 export function registerTools(editor: { add(tool: any): void }, runtime: Runtime) {
   const lsp = lspTools({ root: runtime.root, manager: runtime.lsp, policy: () => runtime.policy() })
-  for (const def of [...esTools({ ...runtime, lsp: runtime.lsp }), ...lsp])
+  const research = researchTools({
+    root: runtime.root,
+    policy: () => runtime.policy(),
+    ...(runtime.options.searchProvider ? { provider: runtime.options.searchProvider } : {}),
+  })
+  for (const def of [...esTools({ ...runtime, lsp: runtime.lsp }), ...lsp, ...research])
     editor.add({
       name: def.name,
       description: def.description,

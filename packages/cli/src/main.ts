@@ -16,6 +16,7 @@ import {
   LspManager,
   loadHooks,
   recordConsent,
+  researchTools,
   verifyAuditChain,
 } from "@heretek-ai/es-core"
 import { type Args, flag, parseArgs } from "./args.ts"
@@ -52,6 +53,9 @@ Gates
 
 Other
   hooks                         Hook bridge status, trust and per-harness capability loss
+  research search <query>       Search with the configured provider
+  research fetch <url>          Fetch and cache a source (prints its sha256)
+  research audit [file] [--prune]  Epistemic audit of a research report
   lsp [status]                  Language servers and how each resolves
   lsp diagnostics <file>        Diagnostics for one file
   lsp install <server>          Pinned, checksummed install   [human, TTY]
@@ -119,6 +123,31 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         return await trust(context, subArgs(1))
       case "waive":
         return await waive(context, subArgs(1))
+      case "research": {
+        const tools = researchTools({
+          root,
+          policy: async () => ({ root, ...(io.stateDir ? { stateDir: io.stateDir } : {}) }),
+        })
+        const tool = (name: string) => tools.find((item) => item.name === name)!
+        if (sub === "search" && rest.length) {
+          io.print(await tool("es_research_search").execute({ query: rest.join(" ") }, { agent: "human" }))
+          return 0
+        }
+        if (sub === "fetch" && rest[0]) {
+          io.print((await tool("es_research_fetch").execute({ url: rest[0] }, { agent: "human" })).split("\n---\n")[0]!)
+          return 0
+        }
+        if (sub === "audit") {
+          const text = await tool("es_research_audit").execute(
+            { ...(rest[0] ? { path: rest[0] } : {}), prune: args.flags.prune === true },
+            { agent: "human" },
+          )
+          io.print(text)
+          return /Audit passed/.test(text) || /Pruned/.test(text) ? 0 : 1
+        }
+        io.print("Usage: es research search <query> | fetch <url> | audit [file] [--prune]")
+        return 2
+      }
       case "lsp": {
         const manager = new LspManager({ root, ...(io.stateDir ? { stateDir: io.stateDir } : {}) })
         try {

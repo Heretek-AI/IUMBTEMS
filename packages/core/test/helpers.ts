@@ -68,10 +68,18 @@ export async function writeGoal(root: string, id: string, extra = "") {
   )
 }
 
+/** A research report whose single claim cites a cached source verbatim. */
 export async function writeReport(root: string) {
+  const { SourceCache, researchSourcesDir } = await import("../src/research/index.ts")
+  const cache = new SourceCache(researchSourcesDir(root))
+  const source = await cache.put({
+    url: "https://example.test/greeting",
+    text: "Greeting libraries usually expose a single greet function.",
+    provider: "fetch",
+  })
   await mkdir(path.join(root, ".factory/research"), { recursive: true })
   await writeFile(
     path.join(root, ".factory/research/REPORT.md"),
-    `# Research\n\n${"Evidence and findings. ".repeat(20)}\n`,
+    `# Research\n\n- A greet function is the conventional API [VERIFIED: sha256:${source.meta.sha256} "expose a single greet function"]\n`,
   )
 }
