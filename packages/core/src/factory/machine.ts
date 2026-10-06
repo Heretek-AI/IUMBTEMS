@@ -12,7 +12,7 @@
 //   the spend ceiling and the runtime cap, halting on any breach.
 // - Side effects (worktrees, commits, branch moves, PRs) are journaled.
 import { randomBytes } from "node:crypto"
-import { readFile } from "node:fs/promises"
+import { readFile, symlink } from "node:fs/promises"
 import path from "node:path"
 import { seatOf } from "../agents/registry.ts"
 import { readApproval, verifyApproval } from "../approval/record.ts"
@@ -340,6 +340,10 @@ export class Factory {
       await Git.addWorktree(this.root, dir, phase.branch!, from)
       return { base: from }
     })
+    // Share installed dependencies so gate tools resolve inside the worktree.
+    for (const name of ["node_modules", ".venv", "venv"])
+      if ((await exists(path.join(this.root, name))) && !(await exists(path.join(dir, name))))
+        await symlink(path.join(this.root, name), path.join(dir, name), "dir").catch(() => undefined)
     phase.baseCommit = result.base
     phase.status = "building"
     phase.qa = {}
