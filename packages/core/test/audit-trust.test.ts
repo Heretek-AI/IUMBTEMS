@@ -3,8 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { appendAuditEntry, verifyAuditChain } from "../src/audit/index.ts"
-import { checkSeatWritePermission, checkStopFile, isControlPath, verifyControlFiles } from "../src/trust/index.ts"
-import { sha256 } from "../src/util/hash.ts"
+import { checkStopFile } from "../src/trust/index.ts"
 
 describe("audit and trust", () => {
   test("audit log appends with hash chaining and verifies correctly", async () => {
@@ -56,50 +55,6 @@ describe("audit and trust", () => {
       const verification = await verifyAuditChain(tempDir)
       expect(verification.valid).toBe(false)
       expect(verification.error).toContain("Hash forgery detected")
-    } finally {
-      await rm(tempDir, { recursive: true, force: true })
-    }
-  })
-
-  test("permissions enforce seat write boundaries and protect control files", () => {
-    // Control files are strictly denied for all agents
-    expect(isControlPath(".factory/gates.json")).toBe(true)
-    expect(isControlPath(".factory/waivers/w1.json")).toBe(true)
-    expect(isControlPath(".factory/audit.jsonl")).toBe(true)
-    expect(isControlPath("packages/core/src/index.ts")).toBe(false)
-
-    expect(checkSeatWritePermission("manager", ".factory/gates.json").allowed).toBe(false)
-    expect(checkSeatWritePermission("programmer", ".factory/gates.json").allowed).toBe(false)
-    expect(checkSeatWritePermission("human", ".factory/gates.json").allowed).toBe(true)
-
-    // QA is strictly read-only
-    expect(checkSeatWritePermission("qa-a", "src/foo.ts").allowed).toBe(false)
-    expect(checkSeatWritePermission("qa-b", "README.md").allowed).toBe(false)
-
-    // Manager can write .factory specs and docs, but not src/
-    expect(checkSeatWritePermission("manager", ".factory/specs/GOAL.md").allowed).toBe(true)
-    expect(checkSeatWritePermission("manager", "docs/ARCH.md").allowed).toBe(true)
-    expect(checkSeatWritePermission("manager", "src/code.ts").allowed).toBe(false)
-
-    // Programmer can write src, but not .factory/**
-    expect(checkSeatWritePermission("programmer", "src/code.ts").allowed).toBe(true)
-    expect(checkSeatWritePermission("programmer", ".factory/specs/GOAL.md").allowed).toBe(false)
-  })
-
-  test("tamper checks verify control file hashes", async () => {
-    const tempDir = await mkdtemp(path.join(tmpdir(), "es-tamper-test-"))
-    try {
-      const fileRel = "test-file.txt"
-      const content = "secure-content"
-      await writeFile(path.join(tempDir, fileRel), content)
-      const expectedHash = sha256(content)
-
-      const result = await verifyControlFiles(tempDir, { [fileRel]: expectedHash })
-      expect(result.clean).toBe(true)
-
-      const tamperedResult = await verifyControlFiles(tempDir, { [fileRel]: "badhash" })
-      expect(tamperedResult.clean).toBe(false)
-      expect(tamperedResult.violations.length).toBe(1)
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }

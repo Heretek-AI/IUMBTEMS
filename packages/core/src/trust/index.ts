@@ -1,3 +1,4 @@
-export * from "./permissions.ts"
+export * from "./control.ts"
+export * from "./paths.ts"
+export * from "./policy.ts"
 export * from "./stop.ts"
-export * from "./tamper.ts"

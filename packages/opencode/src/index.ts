@@ -1,10 +1,4 @@
-import {
-  checkSeatWritePermission,
-  checkStopFile,
-  FactoryStateMachine,
-  recordApproval,
-  runGates,
-} from "@heretek-ai/es-core"
+import { checkStopFile, evaluateWrite, FactoryStateMachine, recordApproval, runGates } from "@heretek-ai/es-core"
 import { Plugin } from "@opencode/plugin"
 import { Error as ToolError } from "@opencode/plugin/promise/tool"
 
@@ -179,11 +173,9 @@ export default Plugin.define({
       if (toolName === "write" || toolName === "edit" || toolName === "patch") {
         const filePath = (event.input as any)?.path ?? (event.input as any)?.filePath
         if (typeof filePath === "string") {
-          // Infer seat from event or default to programmer
-          const seat = (event as any).agent?.role ?? "programmer"
-          const check = checkSeatWritePermission(seat, filePath)
-          if (!check.allowed) {
-            throw new ToolError({ message: `Access Denied: ${check.reason}` })
+          const decision = evaluateWrite({ root: ctx.location.directory }, event.agent, filePath)
+          if (decision.effect === "deny") {
+            throw new ToolError({ message: `Access Denied: ${decision.reason}` })
           }
         }
       }
