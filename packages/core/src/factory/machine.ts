@@ -58,6 +58,8 @@ export interface GateRunLike {
   readonly summary: string
   /** Test files that failed in this run (for red-first evidence). */
   readonly failedTests?: readonly string[]
+  /** A test command failed (red), even if no file was attributed. */
+  readonly testsFailed?: boolean
 }
 
 export interface GateRequest {
@@ -378,9 +380,10 @@ export class Factory {
       if (state.stage !== "BUILD") return
       const phase = this.active(state)
       const failed = result.failedTests ?? []
+      const red = failed.length > 0 || result.testsFailed === true
       phase.history.push({
         at: this.now().toISOString(),
-        event: failed.length ? "tests-red" : result.passed ? "gates-green" : "gates-red",
+        event: red ? "tests-red" : result.passed ? "gates-green" : "gates-red",
         notes: failed.join(", "),
       })
     })

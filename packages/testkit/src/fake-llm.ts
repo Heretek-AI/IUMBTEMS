@@ -3,7 +3,12 @@
 // script decides the reply (text and/or tool calls) from the request body.
 
 export type ToolCall = { readonly name: string; readonly args: Record<string, unknown> }
-export type Turn = { readonly text?: string; readonly toolCalls?: readonly ToolCall[] }
+export type Turn = {
+  readonly text?: string
+  readonly toolCalls?: readonly ToolCall[]
+  /** Token usage reported for this turn (defaults to 10 in / 5 out). */
+  readonly usage?: { readonly input: number; readonly output: number }
+}
 export type ChatRequest = {
   readonly model: string
   readonly messages: ReadonlyArray<{ role: string; content?: unknown; tool_call_id?: string; tool_calls?: unknown }>
@@ -23,15 +28,11 @@ export interface FakeLLM {
 
 let callCounter = 0
 
-function chunk(id: string, delta: Record<string, unknown>, finish: string | null = null) {
-  return `data: ${JSON.stringify({
-    id,
-    object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
-    model: "fake",
-    choices: [{ index: 0, delta, finish_reason: finish }],
-  })}\n\n`
-}
+const frame = (id: string, choices: unknown[], extra: Record<string, unknown> = {}) =>
+  `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: "fake", choices, ...extra })}\n\n`
+
+const chunk = (id: string, delta: Record<string, unknown>, finish: string | null = null) =>
+  frame(id, [{ index: 0, delta, finish_reason: finish }])
 
 export function startFakeLLM(initial: Script = () => ({ text: "ok" })): FakeLLM {
   let script = initial
@@ -45,7 +46,12 @@ export function startFakeLLM(initial: Script = () => ({ text: "ok" })): FakeLLM 
       const body = (await req.json()) as ChatRequest
       const index = requests.length
       requests.push(body)
-      const turn = script(body, index)
+      let turn: Turn
+      try {
+        turn = script(body, index)
+      } catch (error) {
+        turn = { text: `script error: ${error instanceof Error ? error.message : String(error)}` }
+      }
       const id = `chatcmpl-${index}`
       let out = chunk(id, { role: "assistant", content: "" })
       if (turn.text) out += chunk(id, { content: turn.text })
@@ -61,25 +67,33 @@ export function startFakeLLM(initial: Script = () => ({ text: "ok" })): FakeLLM 
           ],
         })
       })
-      out += chunk(id, {}, turn.toolCalls && turn.toolCalls.length > 0 ? "tool_calls" : "stop")
-      out += "data: [DONE]\n\n"
-      return new Response(out, {
-        headers: {
-          "content-type": "text/event-stream",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
+      out += chunk(id, {}, turn.toolCalls?.length ? "tool_calls" : "stop")
+      const usage = turn.usage ?? { input: 10, output: 5 }
+      out += frame(id, [], {
+        usage: {
+          prompt_tokens: usage.input,
+          completion_tokens: usage.output,
+          total_tokens: usage.input + usage.output,
         },
       })
+      out += "data: [DONE]\n\n"
+      return new Response(out, { headers: { "content-type": "text/event-stream" } })
     },
   })
   return {
     url: `http://127.0.0.1:${server.port}/v1`,
     requests,
-    setScript(next) {
+    setScript: (next) => {
       script = next
     },
-    stop() {
-      server.stop(true)
-    },
+    stop: () => server.stop(true),
   }
 }
+
+/** Tool names advertised to the model in a recorded request. */
+export const advertised = (request: ChatRequest | undefined) =>
+  (request?.tools ?? []).map((tool) => tool.function.name).sort()
+
+/** Messages with role "tool" (tool results fed back to the model). */
+export const toolResults = (request: ChatRequest | undefined) =>
+  (request?.messages ?? []).filter((message) => message.role === "tool")

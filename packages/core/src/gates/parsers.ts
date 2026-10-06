@@ -225,7 +225,25 @@ const bunTest: Parser = (output, dir, check) => {
   const failed = new Set<string>()
   let current: string | undefined
   let location: { file: string; line: number } | undefined
+  let unhandled = false
   for (const line of output.split("\n")) {
+    if (/^# Unhandled error/.test(line.trim())) {
+      unhandled = true
+      continue
+    }
+    if (unhandled && /^error: /.test(line.trim())) {
+      unhandled = false
+      const file = current ?? "."
+      failed.add(file)
+      findings.push({
+        file,
+        rule: "test/failed",
+        severity: "error",
+        message: `Test file errored: ${line.trim().slice(7, 300)}`,
+        check,
+      })
+      continue
+    }
     const header = /^(\S+\.(?:test|spec|_test_|_spec_)\.[cm]?[jt]sx?|\S*(?:test|spec)\S*\.[cm]?[jt]sx?):$/.exec(
       line.trim(),
     )

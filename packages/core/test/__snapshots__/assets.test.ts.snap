@@ -1,0 +1,14 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`agent assets prompt snapshot: a changed prompt must bump its version 1`] = `
+{
+  "factory": "v1:354e3375935d7323",
+  "grill": "v1:9d41e78836cdb19c",
+  "manager": "v1:760534a1504318a5",
+  "programmer": "v1:2c7323535a91ecbb",
+  "qa-adversarial": "v1:b27954add6f55068",
+  "qa-functional": "v1:b3b652e6326a13a7",
+  "research-alpha": "v1:1bf926946e6508eb",
+  "research-beta": "v1:fcb675407a817966",
+}
+`;

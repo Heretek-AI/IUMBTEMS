@@ -104,5 +104,7 @@ export interface GateReport {
   readonly checks: readonly CheckReport[]
   readonly summary: string
   readonly failedTests: readonly string[]
+  /** A test command failed (even when no test file could be attributed). */
+  readonly testsFailed: boolean
   readonly logDir: string
 }

@@ -1,86 +1,240 @@
-import { describe, expect, test } from "bun:test"
+// Real-host tests: the plugin is loaded by an in-process OpenCode v2 host
+// (published @opencode/sdk) from disk, driven by a scripted fake model.
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import path from "node:path"
-import { boot } from "@heretek-ai/es-testkit"
+import { boot, directiveScript, type Harness, systemText } from "@heretek-ai/es-testkit"
+import { EsRpc } from "../src/rpc-def.ts"
 
-const pluginDir = path.resolve(__dirname, "..")
+const pluginDir = path.resolve(import.meta.dir, "..")
+const call = (name: string, args: Record<string, unknown> = {}) => `@@CALL ${name} ${JSON.stringify(args)}@@`
 
-describe("opencode plugin integration", () => {
-  test("loads plugin, registers tools and responds via real host", async () => {
-    const harness = await boot({
-      plugins: [pluginDir],
-      script: (request) => {
-        // Find if model should call a tool
-        const lastMsg = request.messages[request.messages.length - 1]
-        const text = String(lastMsg?.content ?? "")
+let state: string
+beforeAll(async () => {
+  state = await mkdtemp(path.join(tmpdir(), "es-plugin-state-"))
+})
+afterAll(() => rm(state, { recursive: true, force: true }))
 
-        if (text.includes("init factory")) {
-          return {
-            toolCalls: [
-              {
-                name: "es_factory_init",
-                args: { spendCeilingUSD: 50.0, directory: harness.directory },
-              },
-            ],
-          }
-        }
+async function host(files: Record<string, string> = {}): Promise<Harness> {
+  return boot({
+    git: true,
+    script: directiveScript,
+    plugins: [{ path: pluginDir, options: { stateDir: state, pr: "off" } }],
+    files: { "README.md": "# demo\n", ".gitignore": "node_modules/\n", ...files },
+  })
+}
 
-        if (text.includes("check status")) {
-          return {
-            toolCalls: [
-              {
-                name: "es_factory_status",
-                args: { directory: harness.directory },
-              },
-            ],
-          }
-        }
+const rpcFor = (h: Harness) => (h.opencode as any).rpc(EsRpc)
+const where = (h: Harness) => ({ location: h.location })
+const exists = (file: string) => Bun.file(file).exists()
 
-        return { text: "Plugin operational" }
-      },
+describe("integrity on the real host", () => {
+  let h: Harness
+  beforeAll(async () => {
+    h = await host()
+  }, 60_000)
+  afterAll(() => h?.close())
+
+  test("no agent tool can grant an approval", async () => {
+    const { tools } = await h.run(`go ${call("es_approve", { stage: "spec", approvedBy: "me" })}`)
+    expect(tools[0]?.status).toBe("error")
+    const advertised = h.llm.requests.flatMap((request) => (request.tools ?? []).map((tool) => tool.function.name))
+    expect(advertised).not.toContain("es_approve")
+  })
+
+  test("control files are denied for write (relative and absolute), patch and shell", async () => {
+    const target = path.join(h.directory, ".factory/approvals/spec.json")
+    const attempts = [
+      call("write", { path: ".factory/approvals/spec.json", content: "{}" }),
+      call("write", { path: target, content: "{}" }),
+      call("write", { path: "docs/../.factory/gates.json", content: "{}" }),
+      call("patch", { patchText: "*** Begin Patch\n*** Add File: .factory/waivers/w.json\n+{}\n*** End Patch" }),
+      call("shell", { command: "echo {} > .factory/approvals/spec.json" }),
+      call("shell", { command: "es approve spec" }),
+    ]
+    const { tools } = await h.run(`attack ${attempts.join(" ")}`)
+    expect(tools).toHaveLength(attempts.length)
+    for (const outcome of tools) expect(`${outcome.name}:${outcome.status}`).toBe(`${outcome.name}:error`)
+    expect(await exists(target)).toBe(false)
+    expect(await exists(path.join(h.directory, ".factory/waivers/w.json"))).toBe(false)
+  })
+
+  test("the user's build agent sees only the read-only es tools; factory agents get the state block", async () => {
+    await h.run("hello")
+    const build = h.llm.requests.at(-1)
+    const names = (build?.tools ?? []).map((tool) => tool.function.name).filter((name) => name.startsWith("es_"))
+    expect(names.sort()).toEqual(["es_gates_run", "es_status"])
+    expect(systemText(build)).not.toContain("<factory-state>")
+    await h.run("hello", { agent: "factory" })
+    const factory = h.llm.requests.at(-1)
+    expect(systemText(factory)).toContain("<factory-state>")
+    expect((factory?.tools ?? []).map((tool) => tool.function.name)).toContain("es_build_start")
+    expect((factory?.tools ?? []).map((tool) => tool.function.name)).not.toContain("es_complete")
+  })
+
+  test("a QA seat cannot write, and its shell writes vanish in the sandbox", async () => {
+    const { tools } = await h.run(
+      `qa ${call("write", { path: "src/x.ts", content: "x" })} ${call("shell", { command: "touch QA_TOUCHED && echo touched" })}`,
+      { agent: "es-qa-functional" },
+    )
+    expect(tools[0]?.status).toBe("error")
+    expect(tools[1]?.text).toContain("touched")
+    expect(await exists(path.join(h.directory, "QA_TOUCHED"))).toBe(false)
+  })
+
+  test("the STOP file stops factory seats and es tools, not the user's own agent", async () => {
+    await mkdir(path.join(h.directory, ".factory"), { recursive: true })
+    await writeFile(path.join(h.directory, ".factory/STOP"), "pause")
+    const seat = await h.run(`go ${call("es_status")}`, { agent: "factory" })
+    expect(seat.tools[0]?.status).toBe("error")
+    expect(seat.tools[0]?.text).toContain("stopped")
+    const user = await h.run(`go ${call("read", { path: "README.md" })}`)
+    expect(user.tools[0]?.status).toBe("completed")
+    await rm(path.join(h.directory, ".factory/STOP"))
+  })
+})
+
+describe("a factory run end to end on the real host", () => {
+  let h: Harness
+  const phase = "greet"
+  beforeAll(async () => {
+    h = await host({ "package.json": JSON.stringify({ name: "demo", devDependencies: { "@types/bun": "*" } }) })
+  }, 60_000)
+  afterAll(() => h?.close())
+
+  const frontier = {
+    version: "1.0",
+    idea: "A greeting module",
+    spendCeiling: { currency: "USD", maxAmount: 5 },
+    settled: true,
+    nodes: [{ id: "api", question: "API shape?", answer: "greet(name): string", status: "settled" }],
+  }
+  const goal = [
+    "---",
+    `phase: ${phase}`,
+    "title: Greeting function",
+    "acceptance:",
+    "  - kind: test",
+    "    id: unit",
+    "    description: greet is unit tested",
+    "    path: test/greet.test.ts",
+    "  - kind: file",
+    "    id: impl",
+    "    description: implementation exists",
+    "    path: src/greet.ts",
+    "---",
+    "Implement greet(name) returning `Hello, <name>!`, test first.",
+    "",
+  ].join("\n")
+
+  test("grill → human approves frontier → research → spec → human approves spec → build", async () => {
+    const grill = await h.run(
+      `${call("es_frontier_write", { frontier })} ${call("es_request_approval", { stage: "frontier" })}`,
+      { agent: "grill" },
+    )
+    expect(grill.tools.map((tool) => tool.status)).toEqual(["completed", "completed"])
+    expect(grill.tools[1]?.text).toContain("/es-approve")
+
+    const rpc = rpcFor(h)
+    const preview = await rpc.previewApproval({ stage: "frontier" }, where(h))
+    expect(preview.ok).toBe(true)
+    expect(preview.lines.join("\n")).toContain("$5 USD")
+    await expect(rpc.approve({ stage: "frontier", user: "tester", token: "bogus" }, where(h))).rejects.toBeDefined()
+    expect(
+      (await rpc.approve({ stage: "frontier", user: "tester", token: preview.token }, where(h))).message,
+    ).toContain("Approved frontier")
+    expect((await rpc.status({}, where(h))).stage).toBe("RESEARCH")
+
+    await mkdir(path.join(h.directory, ".factory/research"), { recursive: true })
+    await writeFile(path.join(h.directory, ".factory/research/REPORT.md"), `# Research\n${"Evidence. ".repeat(40)}\n`)
+    const research = await h.run(call("es_research_complete"), { agent: "factory" })
+    expect(research.tools[0]?.status).toBe("completed")
+
+    const manager = await h.run(
+      [
+        call("write", {
+          path: ".factory/roadmap.json",
+          content: JSON.stringify({
+            version: 1,
+            title: "Greeting",
+            phases: [{ id: phase, title: "Greeting function" }],
+          }),
+        }),
+        call("write", { path: `.factory/specs/${phase}/GOAL.md`, content: goal }),
+        call("write", { path: "src/sneaky.ts", content: "x" }),
+        call("es_spec_validate"),
+      ].join(" "),
+      { agent: "es-manager" },
+    )
+    expect(manager.tools.map((tool) => tool.status)).toEqual(["completed", "completed", "error", "completed"])
+    expect(manager.tools[3]?.text).toContain("Spec is valid")
+
+    const early = await h.run(call("es_build_start"), { agent: "factory" })
+    expect(early.tools[0]?.text).toContain("no spec approval")
+    const spec = await rpc.previewApproval({ stage: "spec" }, where(h))
+    await rpc.approve({ stage: "spec", user: "tester", token: spec.token }, where(h))
+    const build = await h.run(call("es_build_start"), { agent: "factory" })
+    expect(build.tools[0]?.status).toBe("completed")
+    expect(build.tools[0]?.text).toContain(`worktree:.factory/worktrees/${phase}`)
+  }, 120_000)
+
+  test("gate commands only run after a human trusts them", async () => {
+    const before = await h.run(call("es_gates_run", { scope: "full" }), { agent: "factory" })
+    expect(before.tools[0]?.text).toContain("trust/untrusted")
+    const rpc = rpcFor(h)
+    const preview = await rpc.previewTrust({}, where(h))
+    expect(preview.lines.join("\n")).toContain("bun test")
+    expect((await rpc.trust({ user: "tester", token: preview.token }, where(h))).message).toContain("Trusted")
+  }, 60_000)
+
+  test("programmer: red test first, implement in the worktree, gated complete", async () => {
+    const worktree = path.join(h.directory, ".factory/worktrees", phase)
+    const testFile = path.join(worktree, "test/greet.test.ts")
+    const impl = path.join(worktree, "src/greet.ts")
+    // The implementation's source text contains a template literal on purpose.
+    const implBody = ["export function greet(name: string): string {", "  return `Hello, $" + "{name}!`", "}", ""].join(
+      "\n",
+    )
+    const testBody =
+      'import { expect, test } from "bun:test"\nimport { greet } from "../src/greet.ts"\ntest("greets", () => expect(greet("Ada")).toBe("Hello, Ada!"))\n'
+
+    const outside = await h.run(call("write", { path: "src/greet.ts", content: "x" }), { agent: "es-programmer" })
+    expect(outside.tools[0]?.status).toBe("error")
+    expect(outside.tools[0]?.text).toContain("worktree")
+
+    const red = await h.run(
+      `${call("write", { path: testFile, content: testBody })} ${call("es_gates_run", { files: [testFile] })}`,
+      { agent: "es-programmer" },
+    )
+    expect(red.tools[1]?.text).toContain("test/failed")
+
+    const early = await h.run(call("es_qa_verdict", { verdict: "pass", notes: "self-approval" }), {
+      agent: "es-programmer",
     })
+    expect(early.tools[0]?.status).toBe("error")
 
-    try {
-      const res = await harness.run("init factory")
-      expect(res.context.length).toBeGreaterThan(0)
-
-      // Verify status tool
-      const statusRes = await harness.run("check status")
-      expect(statusRes.context.length).toBeGreaterThan(0)
-    } finally {
-      await harness.close()
-    }
-  }, 45000)
-
-  test("execute.before hook prevents unauthorized writes to control paths", async () => {
-    const harness = await boot({
-      plugins: [pluginDir],
-      script: (request) => {
-        const lastMsg = request.messages[request.messages.length - 1]
-        const text = String(lastMsg?.content ?? "")
-        if (text.includes("tamper file")) {
-          return {
-            toolCalls: [
-              {
-                name: "write",
-                args: {
-                  path: ".factory/gates.json",
-                  content: "tampered",
-                },
-              },
-            ],
-          }
-        }
-        return { text: "ready" }
-      },
+    const green = await h.run(`${call("write", { path: impl, content: implBody })} ${call("es_complete")}`, {
+      agent: "es-programmer",
     })
+    expect(green.tools[1]?.text).toContain("is complete and in QA")
+    expect(await readFile(impl, "utf8")).toContain("Hello")
+    expect(await exists(path.join(h.directory, "src/greet.ts"))).toBe(false)
+  }, 120_000)
 
-    try {
-      const res = await harness.run("tamper file")
-      const allMessages = JSON.stringify(res.context)
-      // The hook blocks and reports Access Denied or refusal
-      expect(allMessages).toContain("Access Denied")
-    } finally {
-      await harness.close()
+  test("both QA seats pass → release refuses without a PR opener and waits for a human", async () => {
+    for (const seat of ["es-qa-functional", "es-qa-adversarial"]) {
+      const verdict = await h.run(call("es_qa_verdict", { verdict: "pass", notes: "criteria met" }), { agent: seat })
+      expect(verdict.tools[0]?.status).toBe("completed")
     }
-  }, 45000)
+    expect((await rpcFor(h).status({}, where(h))).stage).toBe("RELEASE")
+    const release = await h.run(call("es_release"), { agent: "factory" })
+    expect(release.tools[0]?.text).toContain("no PR opener")
+  }, 120_000)
+
+  test("spend from factory sessions is tracked (estimated when the host reports no cost)", async () => {
+    const status = JSON.parse(await readFile(path.join(h.directory, ".factory/runtime/state.json"), "utf8"))
+    expect(status.spend.usd).toBeGreaterThan(0)
+    expect(status.spend.estimated).toBe(true)
+  })
 })

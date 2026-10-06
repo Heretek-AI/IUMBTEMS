@@ -230,7 +230,7 @@ async function runCommandCheck(
     const tail = output.trim().split("\n").slice(-8).join("\n")
     findings.push({
       file: ".",
-      rule: result.timedOut ? `${check.id}/timeout` : `${check.id}/failed`,
+      rule: result.timedOut ? `${check.id}/timeout` : `${check.id}/command-failed`,
       severity: "error",
       message: `${check.command} ${result.timedOut ? "timed out" : `exited ${result.code}`}${context.scope === "touched" && (check.kind === "typecheck" || check.kind === "lint") ? " (no findings in touched files; see log)" : ""}`,
       fixHint: `${tail.slice(0, 600)}\nFull log: ${log}`,
@@ -403,6 +403,11 @@ export async function runGates(options: RunGatesOptions): Promise<GateReport> {
     checks,
     summary,
     failedTests: [...new Set(failedTests)],
+    testsFailed: checks.some(
+      (check) =>
+        config.commands.some((item) => item.id === check.id && item.kind === "test") &&
+        (check.status === "fail" || check.status === "error"),
+    ),
     logDir,
   }
   await writeFile(path.join(logDir, "summary.json"), JSON.stringify({ ...report, findings: active }, null, 2))

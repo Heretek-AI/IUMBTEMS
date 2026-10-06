@@ -29,9 +29,14 @@ export function directiveScript(request: ChatRequest): Turn {
   const after = messages.slice(lastUser + 1)
   const userText = lastUser >= 0 ? text(messages[lastUser]!.content) : ""
   const results = after.filter((message) => message.role === "tool").map((message) => text(message.content))
-  if (results.length > 0) return { text: `done: ${results.join(" | ")}` }
   const calls = directives(userText)
-  if (calls.length > 0) return { toolCalls: calls }
+  // Default: one call per model turn, in order (like a careful agent). "@@PARALLEL@@"
+  // emits every call in a single turn, as models do for independent calls.
+  if (/@@PARALLEL@@/.test(userText)) {
+    if (results.length > 0) return { text: `done: ${results.join(" | ")}` }
+    if (calls.length > 0) return { toolCalls: calls }
+  } else if (results.length < calls.length) return { toolCalls: [calls[results.length]!] }
+  if (results.length > 0) return { text: `done: ${results.join(" | ")}` }
   return { text: `plain reply to: ${userText.slice(0, 80)}` }
 }
 
