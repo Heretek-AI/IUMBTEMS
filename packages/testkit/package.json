@@ -1,0 +1,33 @@
+{
+  "name": "@heretek-ai/es-testkit",
+  "version": "1.0.0",
+  "description": "Test harness for OpenCode v2 in-process host with scripted fake models",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./src/*.ts",
+      "bun": "./src/*.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@opencode/sdk": "2.0.24"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

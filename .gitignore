@@ -17,3 +17,7 @@ dist/
 # Local-only checkouts and legacy runtime state
 review/
 .legacy-state/
+evals/
+audit.md
+*.pyc
+__pycache__/

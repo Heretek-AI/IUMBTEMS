@@ -90,7 +90,13 @@ describe("proc", () => {
     expect(env).toEqual({ PATH: "/bin", HOME: "/h" })
   })
   test("splitCommand honours quotes", () => {
-    expect(splitCommand(`npx tsc --noEmit -p "a b/tsconfig.json"`)).toEqual(["npx", "tsc", "--noEmit", "-p", "a b/tsconfig.json"])
+    expect(splitCommand(`npx tsc --noEmit -p "a b/tsconfig.json"`)).toEqual([
+      "npx",
+      "tsc",
+      "--noEmit",
+      "-p",
+      "a b/tsconfig.json",
+    ])
   })
   test("times out and caps output", async () => {
     const slow = await run(["sh", "-c", "sleep 5"], { cwd: tmpdir(), timeoutMs: 200 })

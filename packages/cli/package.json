@@ -1,0 +1,32 @@
+{
+  "name": "@heretek-ai/es-cli",
+  "version": "1.0.0",
+  "description": "Epistemic Swarm CLI and coarse MCP server",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "es-factory": "./dist/bin.js",
+    "iumbtems": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@heretek-ai/es-core": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

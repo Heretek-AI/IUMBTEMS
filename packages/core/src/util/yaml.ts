@@ -5,7 +5,10 @@
 // Anything else is a parse error, never a silent guess.
 
 export class YamlError extends Error {
-  constructor(message: string, readonly line: number) {
+  constructor(
+    message: string,
+    readonly line: number,
+  ) {
     super(`YAML line ${line}: ${message}`)
   }
 }
@@ -98,7 +101,13 @@ function parseMap(lines: Line[], state: { i: number }, indent: number): Record<s
   }
 }
 
-function parseScalarOrBlock(rest: string, lines: Line[], state: { i: number }, indent: number, number: number): unknown {
+function parseScalarOrBlock(
+  rest: string,
+  lines: Line[],
+  state: { i: number },
+  indent: number,
+  number: number,
+): unknown {
   if (rest === "|" || rest === ">" || rest === "|-" || rest === ">-") {
     const collected: string[] = []
     let blockIndent = -1
@@ -190,7 +199,12 @@ function emitScalar(value: unknown): string {
   if (value === null || value === undefined) return "null"
   if (typeof value === "boolean" || typeof value === "number") return String(value)
   const text = String(value)
-  if (plainSafe.test(text) && !["true", "false", "null", "~"].includes(text) && !/:\s|\s#/.test(text) && text.trim() === text)
+  if (
+    plainSafe.test(text) &&
+    !["true", "false", "null", "~"].includes(text) &&
+    !/:\s|\s#/.test(text) &&
+    text.trim() === text
+  )
     return text
   return JSON.stringify(text)
 }
@@ -215,9 +229,12 @@ export function stringifyYaml(value: unknown, indent = 0): string {
       .filter(([, item]) => item !== undefined)
       .map(([key, item]) => {
         const name = /^[\w.-]+$/.test(key) ? key : JSON.stringify(key)
-        if (Array.isArray(item)) return item.length === 0 ? `${pad}${name}: []\n` : `${pad}${name}:\n${stringifyYaml(item, indent + 2)}`
+        if (Array.isArray(item))
+          return item.length === 0 ? `${pad}${name}: []\n` : `${pad}${name}:\n${stringifyYaml(item, indent + 2)}`
         if (item && typeof item === "object")
-          return Object.keys(item).length === 0 ? `${pad}${name}: {}\n` : `${pad}${name}:\n${stringifyYaml(item, indent + 2)}`
+          return Object.keys(item).length === 0
+            ? `${pad}${name}: {}\n`
+            : `${pad}${name}:\n${stringifyYaml(item, indent + 2)}`
         if (typeof item === "string" && item.includes("\n")) {
           const body = item.replace(/\n$/, "")
           return `${pad}${name}: |${item.endsWith("\n") ? "" : "-"}\n${body

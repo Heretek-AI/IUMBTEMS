@@ -107,7 +107,11 @@ export async function withLock<T>(target: string, fn: () => Promise<T>, options:
 
 async function isStale(lock: string, staleMs: number): Promise<boolean> {
   try {
-    const owner = JSON.parse(await readFile(path.join(lock, "owner"), "utf8")) as { pid: number; host: string; at: number }
+    const owner = JSON.parse(await readFile(path.join(lock, "owner"), "utf8")) as {
+      pid: number
+      host: string
+      at: number
+    }
     if (owner.host === hostname() && !processAlive(owner.pid)) return true
     return Date.now() - owner.at > staleMs
   } catch {
@@ -140,6 +144,7 @@ export function insideRoot(root: string, child: string): string {
 /** POSIX-style path relative to root, or undefined when outside it. */
 export function relativeInside(root: string, file: string): string | undefined {
   const relative = path.relative(root, path.resolve(root, file))
-  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return relative === "" ? "." : undefined
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative))
+    return relative === "" ? "." : undefined
   return relative.split(path.sep).join("/")
 }

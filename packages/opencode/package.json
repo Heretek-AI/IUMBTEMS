@@ -1,0 +1,38 @@
+{
+  "name": "@heretek-ai/epistemic-swarm",
+  "version": "1.0.0",
+  "description": "Epistemic Swarm: AI build factory plugin for OpenCode v2",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@heretek-ai/es-core": "workspace:*",
+    "@opencode/plugin": "2.0.24"
+  },
+  "devDependencies": {
+    "@heretek-ai/es-testkit": "workspace:*",
+    "@opencode/sdk": "2.0.24"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

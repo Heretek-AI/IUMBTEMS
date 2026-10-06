@@ -225,3 +225,8 @@ export function splitCommand(command: string): string[] {
   if (started) out.push(current)
   return out
 }
+
+/** Convenient helper to run a string command directly. */
+export function runCommand(command: string, options: RunOptions): Promise<RunResult> {
+  return run(splitCommand(command), options)
+}
