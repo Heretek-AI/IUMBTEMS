@@ -4,11 +4,14 @@
 import path from "node:path"
 import {
   atomicWrite,
+  capabilityLoss,
   Factory,
   factoryLayout,
   factorySummary,
   gateRunner,
   git,
+  HookEngine,
+  loadHooks,
   verifyAuditChain,
 } from "@heretek-ai/es-core"
 import { type Args, flag, parseArgs } from "./args.ts"
@@ -44,6 +47,7 @@ Gates
   gates install-git [--uninstall]   Opt-in pre-commit/pre-push gates   [human, TTY]
 
 Other
+  hooks                         Hook bridge status, trust and per-harness capability loss
   audit verify                  Verify the hash-chained audit log
   mcp                           Serve the factory tools over MCP (stdio)
   version
@@ -108,6 +112,28 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         return await trust(context, subArgs(1))
       case "waive":
         return await waive(context, subArgs(1))
+      case "hooks": {
+        const engine = await HookEngine.create({
+          root,
+          ...(io.stateDir ? { stateDir: io.stateDir } : {}),
+          audit: false,
+        })
+        const status = engine.status()
+        const loaded = await loadHooks(root)
+        const trust =
+          status.projectHandlers === 0 ? "nothing to trust" : status.trusted ? "trusted" : "NOT trusted (es trust)"
+        const lines = [
+          `${status.handlers} hook handler(s); ${status.projectHandlers} from the project (${trust}).`,
+          ...status.projectLines,
+          ...status.diagnostics.map((item) => `! ${item}`),
+        ]
+        for (const harness of ["claude", "opencode", "pi", "antigravity"] as const) {
+          const loss = capabilityLoss(loaded.handlers, harness)
+          lines.push(`${harness}: ${loss.length ? loss.map((item) => item.reason).join("; ") : "all enforced"}`)
+        }
+        io.print(lines.join("\n"))
+        return 0
+      }
       case "audit": {
         if (sub !== "verify") break
         const result = await verifyAuditChain(root)

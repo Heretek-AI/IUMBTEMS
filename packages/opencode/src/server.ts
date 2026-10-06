@@ -4,6 +4,8 @@
 import { factorySummary, formatReport, git, loadSkills, runGates } from "@heretek-ai/es-core"
 import { Plugin } from "@opencode/plugin"
 import { compileAgents } from "./agents.ts"
+import { createFactoryContinuation } from "./continue.ts"
+import { createHookBridge } from "./hooks.ts"
 import { createPolicyHooks } from "./policy.ts"
 import { createRpcHandlers } from "./rpc.ts"
 import { EsRpc } from "./rpc-def.ts"
@@ -52,15 +54,34 @@ export default Plugin.define({
 
     await ctx.tool.transform((editor) => registerTools(editor, runtime))
 
+    // Our policy runs first, so its denials win over any user hook.
     const policy = createPolicyHooks(runtime)
+    const bridge = await createHookBridge(ctx as any, runtime, () => servers)
+    const sessionAgents = new Map<string, string | undefined>()
+    const agentOf = async (sessionID: string) => {
+      if (!sessionAgents.has(sessionID))
+        sessionAgents.set(
+          sessionID,
+          ((await ctx.session.get({ sessionID } as any).catch(() => undefined)) as any)?.agent,
+        )
+      return sessionAgents.get(sessionID)
+    }
     await ctx.tool.hook("execute.before", policy.before as any)
+    await ctx.tool.hook("execute.before", bridge.before as any)
     await ctx.tool.hook("execute.after", policy.after as any)
+    await ctx.tool.hook("execute.after", bridge.after as any)
     await ctx.permission.hook("evaluate", policy.evaluate as any)
+    await ctx.permission.hook("evaluate", bridge.evaluate as any)
     await ctx.shell.hook("create.before", policy.shellEnv)
+    await ctx.shell.hook("create.before", bridge.shell as any)
+    await ctx.session.hook("prompt", (async (event: any) =>
+      bridge.prompt(event, await agentOf(event.sessionID))) as any)
 
     const session = createSessionHooks(runtime)
     await ctx.session.hook("context", session.context as any)
+    await ctx.session.hook("context", bridge.context as any)
     await ctx.session.hook("compaction", session.compaction as any)
+    const continuation = createFactoryContinuation(ctx as any, runtime)
 
     // Human-only channel for the TUI (approvals, trust, resume).
     let registration: { events: { emit: (...args: any[]) => Promise<void> } } | undefined
@@ -70,7 +91,7 @@ export default Plugin.define({
         .emit("changed", { stage: state?.stage ?? "NONE", summary: factorySummary(state) })
         .catch(() => undefined)
     }
-    registration = await ctx.rpc.register(EsRpc, createRpcHandlers(runtime, notify) as any)
+    registration = await ctx.rpc.register(EsRpc, createRpcHandlers(runtime, notify, bridge.engine) as any)
 
     await ctx.command.transform((editor) => {
       editor.add({
@@ -118,6 +139,28 @@ export default Plugin.define({
         },
       })
       editor.add({
+        name: "hooks",
+        description: "Show the hook bridge: sources, handlers, trust and diagnostics (Epistemic Swarm)",
+        execute: async ({ sessionID }) => {
+          await bridge.engine.refresh()
+          const status = bridge.engine.status()
+          const trust =
+            status.projectHandlers === 0
+              ? "nothing to trust"
+              : status.trusted
+                ? "trusted"
+                : "NOT trusted: run /es-trust or `es trust`"
+          const lines = [
+            `Hook bridge: ${status.handlers} handler(s), ${status.projectHandlers} from the project (${trust}).`,
+            ...status.projectLines,
+            ...status.diagnostics.map((item) => `! ${item}`),
+            ...bridge.engine.recent.slice(-10).map((item) => `recent error: ${item}`),
+            "Stop hooks are emulated after the turn ends (advisory for plain chat).",
+          ]
+          await ctx.session.synthetic({ sessionID, text: lines.join("\n") } as any)
+        },
+      })
+      editor.add({
         name: "status",
         description: "Show the factory state (Epistemic Swarm)",
         execute: async ({ sessionID }) => {
@@ -127,15 +170,15 @@ export default Plugin.define({
     })
 
     // Spend: per-step host cost for factory-agent sessions (estimated from tokens when cost is 0).
-    const track = createSpendTracker(
-      runtime,
-      async (sessionID) => ((await ctx.session.get({ sessionID } as any)) as any)?.agent,
-    )
+    const track = createSpendTracker(runtime, agentOf)
     const abort = new AbortController()
     void (async () => {
       try {
-        for await (const event of ctx.event.subscribe({ signal: abort.signal }) as AsyncIterable<any>)
+        for await (const event of ctx.event.subscribe({ signal: abort.signal }) as AsyncIterable<any>) {
           await track(event).catch(() => undefined)
+          await bridge.onEvent(event, agentOf).catch(() => undefined)
+          await continuation(event, agentOf).catch(() => undefined)
+        }
       } catch {
         // stream closed on unload
       }

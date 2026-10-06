@@ -24,7 +24,11 @@ export function directiveScript(request: ChatRequest): Turn {
   const messages = request.messages
   // Host notices (e.g. "Code Mode tool catalog has changed") arrive as user-role
   // messages mid-turn; anchor on the last user message that carries real input.
-  const isNotice = (content: unknown) => /catalog has changed|<system-reminder>/.test(text(content))
+  const isNotice = (content: unknown) => {
+    const body = text(content).trim()
+    return !body.includes("@@CALL") && (/catalog has changed/.test(body) || body.startsWith("<system-reminder>"))
+  }
+  if (isTitleRequest(request)) return { text: "Test session" }
   const lastUser = messages.findLastIndex((message) => message.role === "user" && !isNotice(message.content))
   const after = messages.slice(lastUser + 1)
   const userText = lastUser >= 0 ? text(messages[lastUser]!.content) : ""
@@ -39,6 +43,16 @@ export function directiveScript(request: ChatRequest): Turn {
   if (results.length > 0) return { text: `done: ${results.join(" | ")}` }
   return { text: `plain reply to: ${userText.slice(0, 80)}` }
 }
+
+/** The host's background title-generation request (not part of the agent loop). */
+export const isTitleRequest = (request: ChatRequest | undefined) =>
+  (request?.messages ?? []).some(
+    (message) => message.role === "system" && /title generator/i.test(text(message.content)),
+  )
+
+/** The most recent agent-loop request (skips title generation). */
+export const lastAgentRequest = (requests: readonly ChatRequest[]) =>
+  [...requests].reverse().find((request) => !isTitleRequest(request))
 
 export const systemText = (request: ChatRequest | undefined) =>
   (request?.messages ?? [])

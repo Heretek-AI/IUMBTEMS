@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { boot, directiveScript, type Harness, systemText } from "@heretek-ai/es-testkit"
+import { boot, directiveScript, type Harness, lastAgentRequest, systemText } from "@heretek-ai/es-testkit"
 import { EsRpc } from "../src/rpc-def.ts"
 
 const pluginDir = path.resolve(import.meta.dir, "..")
@@ -62,12 +62,12 @@ describe("integrity on the real host", () => {
 
   test("the user's build agent sees only the read-only es tools; factory agents get the state block", async () => {
     await h.run("hello")
-    const build = h.llm.requests.at(-1)
+    const build = lastAgentRequest(h.llm.requests)
     const names = (build?.tools ?? []).map((tool) => tool.function.name).filter((name) => name.startsWith("es_"))
     expect(names.sort()).toEqual(["es_gates_run", "es_status"])
     expect(systemText(build)).not.toContain("<factory-state>")
     await h.run("hello", { agent: "factory" })
-    const factory = h.llm.requests.at(-1)
+    const factory = lastAgentRequest(h.llm.requests)
     expect(systemText(factory)).toContain("<factory-state>")
     expect((factory?.tools ?? []).map((tool) => tool.function.name)).toContain("es_build_start")
     expect((factory?.tools ?? []).map((tool) => tool.function.name)).not.toContain("es_complete")

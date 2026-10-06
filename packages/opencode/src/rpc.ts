@@ -9,6 +9,7 @@ import {
   commandSetHash,
   factoryLayout,
   factorySummary,
+  type HookEngine,
   hashJson,
   isTrusted,
   loadGatesConfig,
@@ -28,7 +29,7 @@ interface Ticket {
 
 const TTL_MS = 120_000
 
-export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>) {
+export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>, hooks?: HookEngine) {
   const tickets = new Map<string, Ticket>()
   const issue = (kind: string, subject: unknown) => {
     const token = randomBytes(12).toString("hex")
@@ -48,9 +49,19 @@ export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>)
       reason: error instanceof Error ? error.message : String(error),
     })
 
+  /** Everything a trust approval covers: gate commands and project hooks. */
   const trustSubject = async () => {
     const { config } = await loadGatesConfig(runtime.root)
-    return { config, ...(await commandSetHash(runtime.root, config.commands)) }
+    const gates = await commandSetHash(runtime.root, config.commands)
+    await hooks?.reload()
+    const hookStatus = hooks?.status()
+    const hookHash = hookStatus?.projectHash ?? ""
+    return {
+      gates,
+      hooks: { hash: hookHash, lines: hookStatus?.projectLines ?? [] },
+      lines: [...gates.lines, ...(hookStatus?.projectLines ?? [])],
+      key: { gates: gates.hash, hooks: hookHash },
+    }
   }
 
   return {
@@ -112,23 +123,35 @@ export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>)
       }
     },
     previewTrust: async () => {
-      const { hash, lines } = await trustSubject()
-      const trusted = await isTrusted(runtime.root, hash, runtime.stateDir)
+      const subject = await trustSubject()
+      const trusted =
+        (await isTrusted(runtime.root, subject.gates.hash, runtime.stateDir)) &&
+        (!subject.hooks.hash || (await isTrusted(runtime.root, subject.hooks.hash, runtime.stateDir, "hooks")))
       return {
-        ok: lines.length > 0,
-        title: trusted ? "Gate commands (already trusted)" : "Trust these gate commands?",
-        lines: lines.length ? lines : ["No gate commands detected for this project."],
+        ok: subject.lines.length > 0,
+        title: trusted ? "Gate commands and hooks (already trusted)" : "Trust these gate commands and project hooks?",
+        lines: subject.lines.length ? subject.lines : ["No gate commands or project hooks detected."],
         problems: [],
-        token: issue("trust", hash),
+        token: issue("trust", subject.key),
       }
     },
     trust: async (input: unknown, context: any) => {
       const { user, token } = input as { user: string; token: string }
       try {
-        const { hash, lines } = await trustSubject()
-        redeem(token, "trust", hash)
-        await trustProject(runtime.root, hash, lines, { approvedBy: user, stateDir: runtime.stateDir })
-        return { message: `Trusted ${lines.length} gate command line(s).` }
+        const subject = await trustSubject()
+        redeem(token, "trust", subject.key)
+        await trustProject(runtime.root, subject.gates.hash, subject.gates.lines, {
+          approvedBy: user,
+          stateDir: runtime.stateDir,
+        })
+        if (subject.hooks.hash)
+          await trustProject(runtime.root, subject.hooks.hash, subject.hooks.lines, {
+            approvedBy: user,
+            stateDir: runtime.stateDir,
+            kind: "hooks",
+          })
+        await hooks?.refresh()
+        return { message: `Trusted ${subject.lines.length} command/hook line(s).` }
       } catch (error) {
         return refused(context, error)
       }

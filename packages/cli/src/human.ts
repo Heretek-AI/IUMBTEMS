@@ -8,6 +8,7 @@ import {
   Factory,
   factoryLayout,
   gateRunner,
+  HookEngine,
   isTrusted,
   loadGatesConfig,
   readJson,
@@ -68,24 +69,41 @@ export async function approve(context: HumanContext, args: Args): Promise<number
 
 export async function trust(context: HumanContext, args: Args): Promise<number> {
   const { config } = await loadGatesConfig(context.root)
-  const { hash, lines } = await commandSetHash(context.root, config.commands)
-  const trusted = await isTrusted(context.root, hash, context.stateDir)
+  const gates = await commandSetHash(context.root, config.commands)
+  const hooks = (
+    await HookEngine.create({
+      root: context.root,
+      ...(context.stateDir ? { stateDir: context.stateDir } : {}),
+      audit: false,
+    })
+  ).status()
+  const lines = [...gates.lines, ...hooks.projectLines]
+  const trusted =
+    (await isTrusted(context.root, gates.hash, context.stateDir)) &&
+    (!hooks.projectHash || (await isTrusted(context.root, hooks.projectHash, context.stateDir, "hooks")))
   if (args.flags.show || lines.length === 0) {
     context.print(
-      lines.length ? `${trusted ? "Trusted" : "NOT trusted"}:\n${lines.join("\n")}` : "No gate commands detected.",
+      lines.length
+        ? `${trusted ? "Trusted" : "NOT trusted"}:\n${lines.join("\n")}`
+        : "No gate commands or project hooks detected.",
     )
     return 0
   }
   if (trusted) {
-    context.print("These gate commands are already trusted.")
+    context.print("These gate commands and hooks are already trusted.")
     return 0
   }
-  if (!(await confirmWithCode(context.io, "Trust these gate commands (they run project code)", lines))) {
+  if (
+    !(await confirmWithCode(context.io, "Trust these gate commands and project hooks (they run project code)", lines))
+  ) {
     context.print("Cancelled.")
     return 1
   }
-  await trustProject(context.root, hash, lines, context.stateDir ? { stateDir: context.stateDir } : {})
-  context.print(`Trusted ${lines.length} command line(s) for ${context.root}.`)
+  const options = context.stateDir ? { stateDir: context.stateDir } : {}
+  await trustProject(context.root, gates.hash, gates.lines, options)
+  if (hooks.projectHash)
+    await trustProject(context.root, hooks.projectHash, hooks.projectLines, { ...options, kind: "hooks" })
+  context.print(`Trusted ${lines.length} line(s) for ${context.root}.`)
   return 0
 }
 

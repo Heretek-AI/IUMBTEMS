@@ -13,6 +13,8 @@ export interface RunOptions {
   readonly env?: Readonly<Record<string, string | undefined>>
   /** Process variables to pass through beyond the default allowlist. */
   readonly passEnv?: readonly string[]
+  /** Inherit the full parent environment (trusted hooks, like Claude Code). Overrides scrubbing. */
+  readonly inheritEnv?: boolean
   readonly input?: string
   /** "readonly": bwrap ro root + tmp-overlay on cwd. Throws if bwrap is unavailable. */
   readonly sandbox?: "none" | "readonly"
@@ -134,7 +136,11 @@ export function run(command: readonly string[], options: RunOptions): Promise<Ru
   return new Promise((resolve, reject) => {
     const child = spawn(argv[0]!, argv.slice(1), {
       cwd: options.cwd,
-      env: scrubbedEnv(options.env, options.passEnv),
+      env: options.inheritEnv
+        ? (Object.fromEntries(
+            Object.entries({ ...process.env, ...options.env }).filter(([, value]) => value !== undefined),
+          ) as Record<string, string>)
+        : scrubbedEnv(options.env, options.passEnv),
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     })
@@ -188,6 +194,8 @@ export function run(command: readonly string[], options: RunOptions): Promise<Ru
         sandboxed,
       })
     })
+    // A child that exits without reading stdin must not crash us with EPIPE.
+    child.stdin!.on("error", () => {})
     if (options.input !== undefined) child.stdin!.end(options.input)
     else child.stdin!.end()
   })
