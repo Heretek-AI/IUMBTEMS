@@ -1,10 +1,67 @@
-import { mkdir } from "node:fs/promises"
-import path from "node:path"
-import { runCommand } from "../util/proc.ts"
+// Git operations the factory needs, argv-only (no shell), with errors that
+// carry git's own message. Phase work happens in worktrees under
+// .factory/worktrees/<phase>; the user's checkout is never switched.
+import { run } from "../util/proc.ts"
 
-export interface PhaseWorktree {
-  readonly worktreePath: string
-  readonly branch: string
+export class GitError extends Error {}
+
+export async function git(cwd: string, args: readonly string[], options: { allowFail?: boolean } = {}) {
+  const result = await run(["git", ...args], {
+    cwd,
+    timeoutMs: 60_000,
+    passEnv: ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"],
+  })
+  if (result.code !== 0 && !options.allowFail)
+    throw new GitError(`git ${args.join(" ")} failed: ${(result.stderr || result.stdout).trim()}`)
+  return result
+}
+
+const out = async (cwd: string, args: readonly string[]) => (await git(cwd, args)).stdout.trim()
+
+export const isRepo = async (dir: string) =>
+  (await git(dir, ["rev-parse", "--git-dir"], { allowFail: true })).code === 0
+export const headCommit = (dir: string) => out(dir, ["rev-parse", "HEAD"])
+export const revParse = (dir: string, ref: string) => out(dir, ["rev-parse", "--verify", `${ref}^{commit}`])
+
+export async function currentBranch(dir: string): Promise<string | undefined> {
+  const result = await git(dir, ["symbolic-ref", "--short", "-q", "HEAD"], { allowFail: true })
+  return result.code === 0 ? result.stdout.trim() : undefined
+}
+
+export async function branchExists(dir: string, branch: string): Promise<boolean> {
+  return (await git(dir, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], { allowFail: true })).code === 0
+}
+
+/** Create or reset `branch` to `from` without touching any checkout. */
+export const setBranch = (root: string, branch: string, from: string) => git(root, ["branch", "-f", branch, from])
+
+export async function addWorktree(root: string, dir: string, branch: string, from: string): Promise<void> {
+  await git(root, ["worktree", "prune"], { allowFail: true })
+  await git(root, ["worktree", "add", "-B", branch, dir, from])
+}
+
+export async function removeWorktree(root: string, dir: string): Promise<void> {
+  const result = await git(root, ["worktree", "remove", dir], { allowFail: true })
+  if (result.code !== 0 && !/is not a working tree|No such file/.test(result.stderr))
+    throw new GitError(`git worktree remove failed: ${result.stderr.trim()}`)
+}
+
+/** Stage everything and commit; returns the new commit, or undefined when there was nothing to commit. */
+export async function commitAll(
+  dir: string,
+  message: string,
+  author = "Epistemic Swarm <factory@epistemic-swarm.local>",
+) {
+  await git(dir, ["add", "-A"])
+  const staged = await git(dir, ["diff", "--cached", "--quiet"], { allowFail: true })
+  if (staged.code === 0) return undefined
+  const [name, email] = /^(.*) <(.*)>$/.exec(author)?.slice(1) ?? ["Epistemic Swarm", "factory@epistemic-swarm.local"]
+  await git(dir, ["-c", `user.name=${name}`, "-c", `user.email=${email}`, "commit", "--no-verify", "-m", message])
+  return headCommit(dir)
+}
+
+export async function isAncestor(dir: string, ancestor: string, descendant: string): Promise<boolean> {
+  return (await git(dir, ["merge-base", "--is-ancestor", ancestor, descendant], { allowFail: true })).code === 0
 }
 
 export interface DiffStats {
@@ -13,88 +70,41 @@ export interface DiffStats {
   readonly files: readonly string[]
 }
 
-export async function createPhaseWorktree(
-  rootDir: string,
-  phaseId: string,
-  options: { baseRef?: string } = {},
-): Promise<PhaseWorktree> {
-  const worktreesBase = path.join(rootDir, ".factory", "worktrees")
-  await mkdir(worktreesBase, { recursive: true })
-
-  const branch = `factory/phase-${phaseId}`
-  const worktreePath = path.join(worktreesBase, `phase-${phaseId}`)
-  const baseRef = options.baseRef ?? "HEAD"
-
-  // git worktree add -B <branch> <path> <baseRef>
-  const res = await runCommand(`git worktree add -B ${branch} ${worktreePath} ${baseRef}`, {
-    cwd: rootDir,
-    timeoutMs: 30000,
-  })
-
-  if (res.code !== 0) {
-    throw new Error(`Failed to create worktree for phase ${phaseId}: ${res.stderr || res.stdout}`)
-  }
-
-  return {
-    worktreePath,
-    branch,
-  }
-}
-
-export async function removePhaseWorktree(
-  rootDir: string,
-  phaseId: string,
-  options: { deleteBranch?: boolean } = {},
-): Promise<void> {
-  const worktreePath = path.join(rootDir, ".factory", "worktrees", `phase-${phaseId}`)
-  const branch = `factory/phase-${phaseId}`
-
-  // git worktree remove --force <path>
-  const res = await runCommand(`git worktree remove --force ${worktreePath}`, {
-    cwd: rootDir,
-    timeoutMs: 30000,
-  })
-
-  // If worktree directory is already gone, that is ok
-  if (res.code !== 0 && !res.stderr.includes("is not a working tree")) {
-    throw new Error(`Failed to remove worktree for phase ${phaseId}: ${res.stderr || res.stdout}`)
-  }
-
-  if (options.deleteBranch) {
-    await runCommand(`git branch -D ${branch}`, {
-      cwd: rootDir,
-      timeoutMs: 10000,
-    })
-  }
-}
-
-export async function getWorktreeDiffStats(worktreePath: string): Promise<DiffStats> {
-  // Use git diff --numstat HEAD against the base of branch or previous commit
-  const res = await runCommand("git diff --numstat HEAD", {
-    cwd: worktreePath,
-    timeoutMs: 15000,
-  })
-
-  if (res.code !== 0) {
-    return { added: 0, removed: 0, files: [] }
-  }
-
+/** Diff of the worktree (committed and uncommitted, plus untracked files) against `base`. */
+export async function diffStats(dir: string, base: string): Promise<DiffStats> {
+  await git(dir, ["add", "-A", "--intent-to-add"], { allowFail: true })
+  const numstat = await out(dir, ["diff", "--numstat", base])
   let added = 0
   let removed = 0
   const files: string[] = []
-
-  const lines = res.stdout.trim().split("\n").filter(Boolean)
-  for (const line of lines) {
-    const parts = line.split(/\s+/)
-    if (parts.length >= 3) {
-      const a = parseInt(parts[0] || "0", 10)
-      const r = parseInt(parts[1] || "0", 10)
-      const file = parts.slice(2).join(" ")
-      if (!Number.isNaN(a)) added += a
-      if (!Number.isNaN(r)) removed += r
-      files.push(file)
-    }
+  for (const line of numstat.split("\n").filter(Boolean)) {
+    const [a, r, ...name] = line.split("\t")
+    if (a !== "-") added += Number(a)
+    if (r !== "-") removed += Number(r)
+    files.push(name.join("\t"))
   }
-
   return { added, removed, files }
+}
+
+export async function changedFiles(dir: string, base: string): Promise<string[]> {
+  return (await diffStats(dir, base)).files.slice()
+}
+
+/** Files touched by each commit between base and HEAD, oldest first. */
+export async function commitFiles(dir: string, base: string): Promise<Array<{ commit: string; files: string[] }>> {
+  const log = await out(dir, ["log", "--reverse", "--format=%H", "--name-only", `${base}..HEAD`])
+  const commits: Array<{ commit: string; files: string[] }> = []
+  for (const line of log.split("\n")) {
+    if (/^[0-9a-f]{40}$/.test(line)) commits.push({ commit: line, files: [] })
+    else if (line.trim() && commits.length) commits.at(-1)!.files.push(line.trim())
+  }
+  return commits
+}
+
+/** Fingerprint of a checkout's uncommitted state (for post-run diff checks). */
+export async function treeFingerprint(dir: string): Promise<string> {
+  const status = await git(dir, ["status", "--porcelain=v1", "-uall"], { allowFail: true })
+  const diff = await git(dir, ["diff", "HEAD"], { allowFail: true })
+  const { sha256 } = await import("../util/hash.ts")
+  return sha256(status.stdout + "\0" + diff.stdout)
 }

@@ -46,7 +46,7 @@ describe("audit and trust", () => {
       })
 
       // Corrupt the file
-      const logFile = path.join(tempDir, ".factory", "audit.jsonl")
+      const logFile = path.join(tempDir, ".factory", "runtime", "audit.jsonl")
       const content = await Bun.file(logFile).text()
       const lines = content.trim().split("\n")
       const tamperedFirstLine = lines[0]?.replace("system", "hacker")
@@ -54,7 +54,7 @@ describe("audit and trust", () => {
 
       const verification = await verifyAuditChain(tempDir)
       expect(verification.valid).toBe(false)
-      expect(verification.error).toContain("Hash forgery detected")
+      expect(verification.error).toContain("entry 0 was modified")
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }

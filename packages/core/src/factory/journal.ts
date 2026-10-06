@@ -1,52 +1,36 @@
-import { mkdir, readFile } from "node:fs/promises"
-import path from "node:path"
-import { z } from "zod"
-import { PhaseSchema } from "../schema/phase.ts"
-import { atomicWrite } from "../util/fs.ts"
+// Append-only journal of side-effecting steps (worktree creation, commits,
+// branch moves, PR creation). Each step has a stable id; `once` skips a step
+// already journaled and returns its recorded result, so `/factory resume`
+// after a crash replays safely.
+import { readFile } from "node:fs/promises"
+import { factoryLayout } from "../layout.ts"
+import { appendLine, withLock } from "../util/fs.ts"
 
-export const FactoryStageSchema = z.enum([
-  "IDLE",
-  "GRILL",
-  "RESEARCH",
-  "SPEC",
-  "BUILD",
-  "QA",
-  "RELEASE",
-  "DONE",
-  "HALTED",
-])
-
-export type FactoryStage = z.infer<typeof FactoryStageSchema>
-
-export const FactoryStateSchema = z.object({
-  stage: FactoryStageSchema,
-  activePhaseId: z.string().optional(),
-  phases: z.array(PhaseSchema).default([]),
-  spendCeilingUSD: z.number().positive(),
-  totalSpendUSD: z.number().nonnegative().default(0),
-  totalRetries: z.number().int().nonnegative().default(0),
-  startedAt: z.string(),
-  updatedAt: z.string(),
-  haltReason: z.string().optional(),
-})
-
-export type FactoryState = z.infer<typeof FactoryStateSchema>
-
-export async function saveState(rootDir: string, state: FactoryState): Promise<void> {
-  const factoryDir = path.join(rootDir, ".factory")
-  await mkdir(factoryDir, { recursive: true })
-  const statePath = path.join(factoryDir, "state.json")
-  state.updatedAt = new Date().toISOString()
-  await atomicWrite(statePath, JSON.stringify(state, null, 2))
+export interface JournalEntry {
+  readonly step: string
+  readonly at: string
+  readonly result: unknown
 }
 
-export async function loadState(rootDir: string): Promise<FactoryState | null> {
-  const statePath = path.join(rootDir, ".factory", "state.json")
+export async function readJournal(root: string): Promise<JournalEntry[]> {
   try {
-    const raw = await readFile(statePath, "utf8")
-    return FactoryStateSchema.parse(JSON.parse(raw))
-  } catch (err: any) {
-    if (err.code === "ENOENT") return null
-    throw err
+    return (await readFile(factoryLayout(root).journal, "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as JournalEntry)
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return []
+    throw error
   }
+}
+
+export async function once<T>(root: string, step: string, fn: () => Promise<T>): Promise<T> {
+  const file = factoryLayout(root).journal
+  const done = (await readJournal(root)).find((entry) => entry.step === step)
+  if (done) return done.result as T
+  const result = await fn()
+  await withLock(file, () =>
+    appendLine(file, JSON.stringify({ step, at: new Date().toISOString(), result: result ?? null })),
+  )
+  return result
 }

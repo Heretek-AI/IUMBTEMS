@@ -1,126 +1,77 @@
 import { describe, expect, test } from "bun:test"
 import {
-  ApprovalSchema,
   AuditEntrySchema,
   FrontierSchema,
   GatesConfigSchema,
-  isWaiverActive,
-  PhaseSchema,
   parseGoalMarkdown,
-  WaiverSchema,
+  RoadmapSchema,
 } from "../src/schema/index.ts"
+import { stringifyFrontmatter } from "../src/util/yaml.ts"
 
 describe("schemas", () => {
-  test("frontier schema validates spend ceiling and nodes", () => {
-    const valid = FrontierSchema.parse({
-      spendCeiling: { currency: "USD", maxAmount: 50.0 },
-      nodes: [{ id: "q1", question: "Monorepo or multi-repo?", answer: "Monorepo", status: "settled" }],
-      settled: true,
-    })
-    expect(valid.spendCeiling.maxAmount).toBe(50.0)
-    expect(valid.nodes.length).toBe(1)
+  test("frontier: positive ceiling, known parents, settled needs answers and no open nodes", () => {
+    const base = { idea: "x", spendCeiling: { currency: "USD", maxAmount: 50 } }
+    expect(FrontierSchema.parse({ ...base, nodes: [{ id: "a", question: "q?" }] }).settled).toBe(false)
+    expect(() => FrontierSchema.parse({ ...base, spendCeiling: { currency: "USD", maxAmount: -1 } })).toThrow()
+    expect(() => FrontierSchema.parse({ ...base, nodes: [{ id: "a", question: "q?", parent: "zz" }] })).toThrow(
+      "unknown parent",
+    )
+    expect(() => FrontierSchema.parse({ ...base, settled: true, nodes: [{ id: "a", question: "q?" }] })).toThrow(
+      "still open",
+    )
+    expect(() => FrontierSchema.parse({ ...base, nodes: [{ id: "a", question: "q?", status: "settled" }] })).toThrow(
+      "needs an answer",
+    )
+  })
 
-    // Negative ceiling throws
+  test("roadmap: kebab ids, ≤20 phases, dependencies point backwards", () => {
+    const phase = (id: string, dependsOn: string[] = []) => ({ id, title: id, dependsOn })
+    expect(
+      RoadmapSchema.parse({ version: 1, title: "t", phases: [phase("a"), phase("b", ["a"])] }).phases,
+    ).toHaveLength(2)
+    expect(() => RoadmapSchema.parse({ version: 1, title: "t", phases: [phase("a", ["b"]), phase("b")] })).toThrow(
+      "earlier phase",
+    )
+    expect(() => RoadmapSchema.parse({ version: 1, title: "t", phases: [phase("Bad Id")] })).toThrow()
     expect(() =>
-      FrontierSchema.parse({
-        spendCeiling: { currency: "USD", maxAmount: -10 },
-      }),
-    ).toThrow()
+      RoadmapSchema.parse({ version: 1, title: "t", phases: Array.from({ length: 21 }, (_, i) => phase(`p${i}`)) }),
+    ).toThrow("20")
   })
 
-  test("goal markdown parser parses frontmatter and acceptance criteria", () => {
-    const content = `---
-phase: 01-scaffold
-title: Monorepo Scaffold
-verticalSlice: true
-acceptanceCriteria:
-  - id: ac1
-    description: bun test passes
-    testCommand: bun test
-dependencies:
-  - dep1
-spendBudget: 15.0
----
-# Scaffold Goal
-Here is the detailed body text.
-`
-    const { frontmatter, body } = parseGoalMarkdown(content)
-    expect(frontmatter.phase).toBe("01-scaffold")
-    expect(frontmatter.acceptanceCriteria.length).toBe(1)
-    expect(frontmatter.acceptanceCriteria[0]?.testCommand).toBe("bun test")
-    expect(body.trim()).toBe("# Scaffold Goal\nHere is the detailed body text.")
+  test("GOAL.md: typed acceptance criteria, unique ids, a body", () => {
+    const goal = (acceptance: unknown[], body = "Slice body.\n") =>
+      stringifyFrontmatter({ phase: "p1", title: "Phase 1", acceptance }, body)
+    const parsed = parseGoalMarkdown(
+      goal([
+        { kind: "command", id: "c", description: "builds", command: "bun run build" },
+        { kind: "test", id: "t", description: "unit", path: "test/a.test.ts" },
+        { kind: "file", id: "f", description: "doc", path: "docs/a.md", contains: "Usage" },
+      ]),
+    )
+    expect(parsed.frontmatter.acceptance.map((item) => item.kind)).toEqual(["command", "test", "file"])
+    expect(() => parseGoalMarkdown(goal([]))).toThrow("at least one")
+    expect(() => parseGoalMarkdown(goal([{ kind: "vibes", id: "v", description: "x" }]))).toThrow()
+    const dup = { kind: "file", id: "x", description: "d", path: "a" }
+    expect(() => parseGoalMarkdown(goal([dup, dup]))).toThrow("duplicate")
+    expect(() => parseGoalMarkdown(goal([dup], "\n"))).toThrow("body")
   })
 
-  test("phase schema defaults and seat assignments", () => {
-    const phase = PhaseSchema.parse({
-      id: "p1",
-      name: "Phase 1",
-    })
-    expect(phase.state).toBe("PENDING")
-    expect(phase.assignedSeats.programmer).toBe("programmer")
-    expect(phase.assignedSeats.qa_a).toBe("qa-a")
-    expect(phase.assignedSeats.qa_b).toBe("qa-b")
-    expect(phase.assignedSeats.manager).toBe("manager")
-  })
-
-  test("gates config schema validates default rules and budgets", () => {
-    const config = GatesConfigSchema.parse({
-      commands: {
-        lint: { command: "biome check .", extensions: [".ts", ".js"] },
-      },
-      budgets: {
-        maxDiffLines: 600,
-        maxFileLines: 900,
-        requireDepJustification: true,
-      },
-    })
-    expect(config.budgets.maxDiffLines).toBe(600)
+  test("gates config defaults", () => {
+    const config = GatesConfigSchema.parse({})
     expect(config.security.secrets).toBe(true)
   })
 
-  test("waiver active check honours expiration timestamp", () => {
-    const now = new Date("2026-10-06T12:00:00Z")
-    const futureWaiver = WaiverSchema.parse({
-      id: "w1",
-      rule: "lint/no-explicit-any",
-      filePattern: "test/**",
-      reason: "Mocking complex host types",
-      signedBy: "john",
-      signedAt: "2026-10-06T10:00:00Z",
-      expiresAt: "2026-10-07T10:00:00Z",
-      artifactHash: "a".repeat(64),
-    })
-    expect(isWaiverActive(futureWaiver, now)).toBe(true)
-
-    const expiredWaiver = WaiverSchema.parse({
-      ...futureWaiver,
-      expiresAt: "2026-10-05T10:00:00Z",
-    })
-    expect(isWaiverActive(expiredWaiver, now)).toBe(false)
-  })
-
-  test("approval schema checks required hashes and actor", () => {
-    const approval = ApprovalSchema.parse({
-      stage: "spec",
-      phaseId: "01-scaffold",
-      artifactPath: ".factory/specs/01-scaffold/GOAL.md",
-      artifactHash: "b".repeat(64),
-      approvedBy: "john",
-      approvedAt: "2026-10-06T15:00:00Z",
-    })
-    expect(approval.artifactHash).toBe("b".repeat(64))
-  })
-
-  test("audit entry schema validates hash lengths and sequence", () => {
-    const entry = AuditEntrySchema.parse({
-      seq: 0,
-      timestamp: "2026-10-06T15:00:00Z",
-      prevHash: "0".repeat(64),
-      actor: "manager",
-      action: "phase_start",
-      payload: { phase: "01-scaffold" },
-      hash: "c".repeat(64),
-    })
-    expect(entry.seq).toBe(0)
+  test("audit entry hashes are 64 hex chars", () => {
+    expect(() =>
+      AuditEntrySchema.parse({
+        seq: 0,
+        timestamp: "t",
+        prevHash: "0",
+        actor: "a",
+        action: "b",
+        payload: {},
+        hash: "c",
+      }),
+    ).toThrow()
   })
 })
