@@ -100,7 +100,7 @@ export type ShellDecision =
   | { readonly effect: "deny"; readonly reason: string }
 
 const HUMAN_ONLY_CLI =
-  /(^|[\s;&|(`'"/])(es|epistemic-swarm)\s+(approve|trust|waive|resume|rebaseline|factory\s+(resume|pr)|gates\s+install-git)\b/
+  /(^|[\s;&|(`'"/])(es|epistemic-swarm)\s+(approve|trust|waive|resume|rebaseline|factory\s+(resume|pr)|gates\s+install-git|lsp\s+install)\b/
 const CONTROL_MENTION =
   /\.factory\/(gates\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/
 const MUTATING =

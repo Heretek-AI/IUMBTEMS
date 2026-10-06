@@ -9,6 +9,7 @@ import {
   evaluateRead,
   evaluateShell,
   evaluateWrite,
+  formatDiagnostics,
   formatReport,
   loadGatesConfig,
   readonlyWrap,
@@ -111,7 +112,7 @@ export function createPolicyHooks(runtime: Runtime) {
           }
       }
     }
-    if (seat !== "programmer" || runtime.options.afterEdit === "off" || event.status !== "completed") return
+    if (event.status !== "completed") return
     const input = (event.input ?? {}) as Record<string, any>
     const files =
       WRITE_TOOLS.has(event.tool) && typeof input.path === "string"
@@ -120,6 +121,20 @@ export function createPolicyHooks(runtime: Runtime) {
           ? patchTargets(input.patchText)
           : []
     if (!files.length) return
+    if (runtime.options.lspAfterEdit !== false) {
+      const lines: string[] = []
+      for (const file of files) {
+        const absolute = path.resolve(runtime.root, file)
+        const result = await runtime.lsp.diagnostics(absolute, { maxWaitMs: 4_000 }).catch(() => undefined)
+        if (Array.isArray(result)) lines.push(...formatDiagnostics(runtime.root, absolute, result, 1))
+      }
+      if (lines.length)
+        event.result = {
+          ...event.result,
+          content: appendContent(event.result?.content, `<diagnostics>\n${lines.join("\n")}\n</diagnostics>`),
+        }
+    }
+    if (seat !== "programmer" || runtime.options.afterEdit === "off") return
     const worktree = (await runtime.policy()).worktree
     if (!worktree) return
     const { config } = await loadGatesConfig(runtime.root, worktree)

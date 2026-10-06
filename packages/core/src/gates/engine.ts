@@ -49,6 +49,8 @@ export interface RunGatesOptions {
   readonly stateDir?: string
   readonly signal?: AbortSignal
   readonly fetch?: typeof fetch
+  /** Language-server diagnostics for touched files (the "lsp" gate). */
+  readonly lsp?: { diagnostics(file: string, options?: { maxWaitMs?: number }): Promise<unknown> }
 }
 
 const TOOL_CONFIG = [
@@ -347,6 +349,33 @@ export async function runGates(options: RunGatesOptions): Promise<GateReport> {
       }),
     )
 
+  if (options.lsp && options.scope === "touched" && present.length)
+    await timed("lsp", async () => {
+      const out: GateFinding[] = []
+      for (const file of present) {
+        const result = await options.lsp!.diagnostics(path.join(dir, file), { maxWaitMs: 8_000 }).catch(() => undefined)
+        if (!Array.isArray(result)) continue
+        for (const item of result as Array<{
+          severity?: number
+          message: string
+          code?: string | number
+          source?: string
+          range: { start: { line: number; character: number } }
+        }>)
+          if ((item.severity ?? 1) === 1)
+            out.push({
+              file,
+              line: item.range.start.line + 1,
+              column: item.range.start.character + 1,
+              rule: `lsp/${item.source ?? "diagnostic"}${item.code !== undefined ? `-${item.code}` : ""}`,
+              severity: "error",
+              message: item.message,
+              check: "lsp",
+            })
+      }
+      return out
+    })
+
   if (config.commands.length) {
     const { hash, lines } = await commandSetHash(dir, config.commands)
     if (!(await isTrusted(root, hash, options.stateDir))) {
@@ -429,7 +458,7 @@ export function formatReport(report: GateReport): string {
 }
 
 /** Adapter for the factory: the engine as a GateRunner bound to a state dir. */
-export function gateRunner(options: { stateDir?: string; fetch?: typeof fetch } = {}) {
+export function gateRunner(options: { stateDir?: string; fetch?: typeof fetch; lsp?: RunGatesOptions["lsp"] } = {}) {
   return (request: {
     root: string
     dir: string
@@ -443,5 +472,6 @@ export function gateRunner(options: { stateDir?: string; fetch?: typeof fetch } 
       ...request,
       ...(options.stateDir ? { stateDir: options.stateDir } : {}),
       ...(options.fetch ? { fetch: options.fetch } : {}),
+      ...(options.lsp ? { lsp: options.lsp } : {}),
     })
 }

@@ -8,10 +8,14 @@ import {
   Factory,
   factoryLayout,
   factorySummary,
+  formatDiagnostics,
   gateRunner,
   git,
   HookEngine,
+  installServer,
+  LspManager,
   loadHooks,
+  recordConsent,
   verifyAuditChain,
 } from "@heretek-ai/es-core"
 import { type Args, flag, parseArgs } from "./args.ts"
@@ -19,7 +23,7 @@ import { gatesRun, installGitHooks } from "./gates.ts"
 import { DRIVERS, runHeadless } from "./headless.ts"
 import { approve, type HumanContext, recordPr, resume, trust, waive } from "./human.ts"
 import { serveStdio } from "./mcp.ts"
-import { type ConfirmIO, NotInteractive, terminalIO } from "./tty.ts"
+import { type ConfirmIO, confirmWithCode, NotInteractive, terminalIO } from "./tty.ts"
 
 export const VERSION = "1.0.0"
 
@@ -48,6 +52,9 @@ Gates
 
 Other
   hooks                         Hook bridge status, trust and per-harness capability loss
+  lsp [status]                  Language servers and how each resolves
+  lsp diagnostics <file>        Diagnostics for one file
+  lsp install <server>          Pinned, checksummed install   [human, TTY]
   audit verify                  Verify the hash-chained audit log
   mcp                           Serve the factory tools over MCP (stdio)
   version
@@ -112,6 +119,45 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         return await trust(context, subArgs(1))
       case "waive":
         return await waive(context, subArgs(1))
+      case "lsp": {
+        const manager = new LspManager({ root, ...(io.stateDir ? { stateDir: io.stateDir } : {}) })
+        try {
+          if (sub === "install") {
+            const id = rest[0]
+            const server = (await manager.settings()).servers.find((item) => item.id === id)
+            if (!server?.install) {
+              io.print(id ? `${id} has no pinned install.` : "Usage: es lsp install <server>")
+              return 2
+            }
+            const lines = [
+              ...server.install.packages.map((pkg) => `${pkg.name}@${pkg.version}  ${pkg.integrity}`),
+              "Verified against the pinned sha512; installed with scripts disabled.",
+            ]
+            if (!(await confirmWithCode(io.confirm, `Install the ${id} language server`, lines))) return 1
+            await recordConsent(id!, true, io.stateDir)
+            io.print(`Installed ${await installServer(server, io.stateDir ? { stateDir: io.stateDir } : {})}`)
+            return 0
+          }
+          if (sub === "diagnostics" && rest[0]) {
+            const result = await manager.diagnostics(rest[0], { maxWaitMs: 15_000 })
+            if (!Array.isArray(result)) {
+              io.print(result.unavailable)
+              return 1
+            }
+            const lines = formatDiagnostics(root, path.resolve(root, rest[0]), result)
+            io.print(lines.length ? lines.join("\n") : "No errors or warnings.")
+            return lines.some((line) => / error/.test(line)) ? 1 : 0
+          }
+          const settings = await manager.settings()
+          for (const server of settings.servers) {
+            const command = await manager.command(server, root)
+            io.print(`${server.id}: ${Array.isArray(command) ? command.join(" ") : command.unavailable}`)
+          }
+          return 0
+        } finally {
+          await manager.stopAll()
+        }
+      }
       case "hooks": {
         const engine = await HookEngine.create({
           root,

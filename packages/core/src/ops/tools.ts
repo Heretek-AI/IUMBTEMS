@@ -31,6 +31,8 @@ export interface OpsContext {
   readonly root: string
   readonly factory: Factory
   readonly stateDir: string
+  /** Language-server diagnostics for the touched-scope "lsp" gate. */
+  readonly lsp?: { diagnostics(file: string, options?: { maxWaitMs?: number }): Promise<unknown> }
 }
 
 const object = (properties: Record<string, unknown> = {}, required: string[] = []) => ({
@@ -187,7 +189,8 @@ export function esTools(ops: OpsContext): EsToolDef[] {
           ...(worktree && phase?.baseCommit ? { base: phase.baseCommit, phaseId: phase.id } : {}),
           ...(state ? { runId: state.runId } : {}),
           stateDir: ops.stateDir,
-          signal: context.signal,
+          ...(ops.lsp ? { lsp: ops.lsp } : {}),
+          ...(context.signal ? { signal: context.signal } : {}),
         })
         if (seat === "programmer") await factory.recordGateRun(context.agent, report)
         return formatReport(report)

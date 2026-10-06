@@ -31,6 +31,8 @@ export function permissionRules(spec: AgentSpec, mcpServers: readonly string[]):
     rules.push({ action: "external_directory", resource: "/tmp/*", effect: "allow" })
   }
   if (spec.writes.length === 0) rules.push({ action: "edit", resource: "*", effect: "deny" })
+  if (spec.lsp === "none") rules.push({ action: "lsp", resource: "*", effect: "deny" })
+  if (spec.lsp !== "full") rules.push({ action: "lsp_rename", resource: "*", effect: "deny" })
   return rules
 }
 

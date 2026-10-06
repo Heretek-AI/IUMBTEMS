@@ -46,6 +46,12 @@ export const EsRpc = Rpc.define({
       errors: { refused: obj({ reason: str }, ["reason"]) },
     },
     previewResume: { input: obj({}), output: Preview },
+    previewLspInstall: { input: obj({ id: str }, ["id"]), output: Preview },
+    lspInstall: {
+      input: obj({ id: str, user: str, token: str }, ["id", "user", "token"]),
+      output: obj({ message: str }, ["message"]),
+      errors: { refused: obj({ reason: str }, ["reason"]) },
+    },
     resume: {
       input: obj(
         {

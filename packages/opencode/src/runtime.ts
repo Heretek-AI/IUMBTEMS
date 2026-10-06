@@ -1,5 +1,5 @@
 // Per-location runtime shared by the plugin's hooks, tools, commands and RPC.
-import { stateDir as defaultStateDir, Factory, gateRunner, type PolicyContext } from "@heretek-ai/es-core"
+import { stateDir as defaultStateDir, Factory, gateRunner, LspManager, type PolicyContext } from "@heretek-ai/es-core"
 import { ghPrOpener } from "./pr.ts"
 
 export interface PluginOptions {
@@ -13,6 +13,8 @@ export interface PluginOptions {
   readonly estimate?: { readonly inputPerM?: number; readonly outputPerM?: number }
   /** Disable the gh-based PR opener (tests). */
   readonly pr?: "gh" | "off"
+  /** Append language-server diagnostics to edit results (default on). */
+  readonly lspAfterEdit?: boolean
 }
 
 export interface Runtime {
@@ -20,11 +22,13 @@ export interface Runtime {
   readonly options: PluginOptions
   readonly stateDir: string
   readonly factory: Factory
+  readonly lsp: LspManager
   policy(): Promise<PolicyContext>
 }
 
 export function createRuntime(root: string, options: PluginOptions): Runtime {
   const stateDir = options.stateDir ?? defaultStateDir()
+  const lsp = new LspManager({ root, stateDir })
   const factory = new Factory(root, {
     gates: gateRunner({ stateDir }),
     ...(options.pr === "off" ? {} : { pr: ghPrOpener }),
@@ -35,6 +39,7 @@ export function createRuntime(root: string, options: PluginOptions): Runtime {
     options,
     stateDir,
     factory,
+    lsp,
     async policy() {
       const worktree = await factory.activeWorktree().catch(() => undefined)
       return { root, stateDir, ...(worktree ? { worktree } : {}) }
@@ -54,5 +59,6 @@ export function parseOptions(raw: Record<string, unknown> | undefined): PluginOp
       ? { estimate: options.estimate as PluginOptions["estimate"] }
       : {}),
     pr: options.pr === "off" ? "off" : "gh",
+    lspAfterEdit: options.lspAfterEdit !== false,
   }
 }

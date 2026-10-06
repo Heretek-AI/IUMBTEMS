@@ -11,9 +11,11 @@ import {
   factorySummary,
   type HookEngine,
   hashJson,
+  installServer,
   isTrusted,
   loadGatesConfig,
   recordApproval,
+  recordConsent,
   trustProject,
   verifyControl,
   writeJson,
@@ -152,6 +154,40 @@ export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>,
           })
         await hooks?.refresh()
         return { message: `Trusted ${subject.lines.length} command/hook line(s).` }
+      } catch (error) {
+        return refused(context, error)
+      }
+    },
+    previewLspInstall: async (input: unknown) => {
+      const { id } = input as { id: string }
+      const server = (await runtime.lsp.settings()).servers.find((item) => item.id === id)
+      if (!server?.install)
+        return {
+          ok: false,
+          title: `Cannot install ${id}`,
+          lines: [],
+          problems: [server ? `${id} has no pinned install` : `unknown server ${id}`],
+        }
+      return {
+        ok: true,
+        title: `Install ${id}?`,
+        lines: [
+          ...server.install.packages.map((pkg) => `${pkg.name}@${pkg.version}  ${pkg.integrity.slice(0, 32)}…`),
+          "Downloaded from npm, verified against the pinned sha512, installed with scripts disabled into your state dir.",
+        ],
+        problems: [],
+        token: issue(`lsp:${id}`, server.install),
+      }
+    },
+    lspInstall: async (input: unknown, context: any) => {
+      const { id, user, token } = input as { id: string; user: string; token: string }
+      try {
+        const server = (await runtime.lsp.settings()).servers.find((item) => item.id === id)
+        if (!server?.install) throw new Error(`${id} has no pinned install`)
+        redeem(token, `lsp:${id}`, server.install)
+        await recordConsent(id, true, runtime.stateDir)
+        const bin = await installServer(server, { stateDir: runtime.stateDir })
+        return { message: `Installed ${id} (${bin}) for ${user}.` }
       } catch (error) {
         return refused(context, error)
       }

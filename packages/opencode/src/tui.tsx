@@ -88,6 +88,19 @@ export default Plugin.define({
       toast(result.message, "success")
     })
 
+    const lspInstall = guarded(async (input) => {
+      const id =
+        input?.trim() ||
+        (await context.ui.dialog.prompt({
+          title: "Install which language server?",
+          placeholder: "typescript, pyright",
+        }))
+      if (!id) return
+      const token = await confirm(await call("previewLspInstall", { id }), "Install")
+      if (!token) return
+      toast((await call("lspInstall", { id, user, token })).message, "success")
+    })
+
     const status = guarded(async () => {
       const result = await call("status")
       await context.ui.dialog.alert({
@@ -130,6 +143,14 @@ export default Plugin.define({
           palette: true,
           slash: { name: "es-status" },
           run: status,
+        },
+        {
+          id: "es.lsp.install",
+          title: "Epistemic Swarm: install a language server",
+          group: "Epistemic Swarm",
+          palette: true,
+          slash: { name: "es-lsp-install", arguments: true },
+          run: lspInstall,
         },
       ],
     }))

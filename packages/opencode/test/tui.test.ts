@@ -66,6 +66,7 @@ test("slash commands register; approval goes preview → confirm → approve(tok
     "es-trust",
     "es-resume",
     "es-status",
+    "es-lsp-install",
   ])
   await commands[0].run()
   expect(confirmed.calls.map(([method]) => method)).toEqual(["status", "previewApproval", "approve"])

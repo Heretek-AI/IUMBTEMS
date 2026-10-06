@@ -36,6 +36,8 @@ export interface AgentSpec {
   readonly readonlyShell: boolean
   readonly skills: readonly string[]
   readonly mcp: readonly string[]
+  /** Language-server tools: "full" includes applying renames, "read" is navigation and diagnostics only. */
+  readonly lsp: "full" | "read" | "none"
 }
 
 const SEATS_SPAWNED_BY_FACTORY = [
@@ -70,6 +72,7 @@ export const AGENTS: readonly AgentSpec[] = [
     readonlyShell: true,
     skills: ["factory"],
     mcp: [],
+    lsp: "read",
   },
   {
     id: "grill",
@@ -85,6 +88,7 @@ export const AGENTS: readonly AgentSpec[] = [
     readonlyShell: true,
     skills: ["grill"],
     mcp: [],
+    lsp: "none",
   },
   {
     id: "es-manager",
@@ -100,6 +104,7 @@ export const AGENTS: readonly AgentSpec[] = [
     readonlyShell: true,
     skills: ["factory"],
     mcp: [],
+    lsp: "read",
   },
   {
     id: "es-programmer",
@@ -115,6 +120,7 @@ export const AGENTS: readonly AgentSpec[] = [
     readonlyShell: false,
     skills: [],
     mcp: [],
+    lsp: "full",
   },
   {
     id: "es-qa-functional",
@@ -130,6 +136,7 @@ export const AGENTS: readonly AgentSpec[] = [
     readonlyShell: true,
     skills: [],
     mcp: [],
+    lsp: "read",
   },
   {
     id: "es-qa-adversarial",
@@ -145,6 +152,7 @@ export const AGENTS: readonly AgentSpec[] = [
     readonlyShell: true,
     skills: [],
     mcp: [],
+    lsp: "read",
   },
   {
     id: "es-research-alpha",
@@ -160,6 +168,7 @@ export const AGENTS: readonly AgentSpec[] = [
     readonlyShell: true,
     skills: [],
     mcp: [],
+    lsp: "none",
   },
   {
     id: "es-research-beta",
@@ -175,6 +184,7 @@ export const AGENTS: readonly AgentSpec[] = [
     readonlyShell: true,
     skills: [],
     mcp: [],
+    lsp: "none",
   },
 ]
 

@@ -139,6 +139,24 @@ export default Plugin.define({
         },
       })
       editor.add({
+        name: "lsp",
+        description: "Language servers: configured, available and running (Epistemic Swarm)",
+        execute: async ({ sessionID }) => {
+          const status = await runtime.lsp.status()
+          const settings = await runtime.lsp.settings()
+          const lines = [status.enabled ? "LSP is on." : "LSP is disabled (lsp: false)."]
+          for (const server of settings.servers) {
+            const command = await runtime.lsp.command(server, runtime.root)
+            const running = status.running.filter((item) => item.id === server.id)
+            lines.push(
+              `${server.id} [${server.extensions.join(" ")}]: ${Array.isArray(command) ? `available (${command.join(" ")})` : command.unavailable}${running.length ? ` · running for ${running.length} root(s)` : ""}`,
+            )
+          }
+          lines.push(...status.diagnostics.map((item) => `! ${item}`))
+          await ctx.session.synthetic({ sessionID, text: lines.join("\n") } as any)
+        },
+      })
+      editor.add({
         name: "hooks",
         description: "Show the hook bridge: sources, handlers, trust and diagnostics (Epistemic Swarm)",
         execute: async ({ sessionID }) => {
@@ -183,6 +201,9 @@ export default Plugin.define({
         // stream closed on unload
       }
     })()
-    return () => abort.abort()
+    return async () => {
+      abort.abort()
+      await runtime.lsp.stopAll()
+    }
   },
 })
