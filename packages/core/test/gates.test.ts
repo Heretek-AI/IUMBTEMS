@@ -223,6 +223,51 @@ describe("command checks", () => {
     expect(report.findings[0]?.rule).toBe("gates/tool-missing")
   })
 
+  test("touched scope prefers the import graph for tests, and falls back to the runner heuristic", async () => {
+    await write("src/util.ts", "export const helper = () => 1\n")
+    await write("test/imports-util.test.ts", 'import { helper } from "../src/util"\n')
+    await write("src/lone.ts", "export const lone = 1\n")
+    await write("src/lone.test.ts", "// does not import lone\n")
+    await write("record.ts", 'await Bun.write("record.json", JSON.stringify(process.argv.slice(2)))\n')
+    const cfg = config(
+      [{ id: "test", kind: "test", command: "bun run record.ts", parser: "generic", related: "bun" }],
+      {
+        budgets: { requireTestWithBehavior: false },
+      },
+    )
+    await trust(cfg)
+
+    const graphRun = await gates({ touched: ["src/util.ts"], config: cfg, structure: { regexOnly: true } })
+    expect(graphRun.passed).toBe(true)
+    // The test that imports the change (the graph's answer), not the "util" stem.
+    expect(JSON.parse(await Bun.file(path.join(fx.root, "record.json")).text())).toEqual(["test/imports-util.test.ts"])
+
+    const fallback = await gates({ touched: ["src/lone.ts"], config: cfg, structure: { regexOnly: true } })
+    expect(fallback.passed).toBe(true)
+    // No test imports it, so the runner-native stem heuristic still applies.
+    expect(JSON.parse(await Bun.file(path.join(fx.root, "record.json")).text())).toEqual(["lone"])
+  })
+
+  test("polyglot repos: each runner only receives tests of its own language", async () => {
+    await write("src/util.ts", "export const helper = () => 1\n")
+    await write("test/imports-util.test.ts", 'import { helper } from "../src/util"\n')
+    await write("pkg/core.py", "def thing():\n    return 1\n")
+    await write("pkg/test_core.py", "from core import thing\n")
+    await write("record.ts", 'await Bun.write("record.json", JSON.stringify(process.argv.slice(2)))\n')
+    const cfg = config(
+      [{ id: "py-test", kind: "test", command: "bun run record.ts", parser: "generic", related: "pytest" }],
+      { budgets: { requireTestWithBehavior: false } },
+    )
+    await trust(cfg)
+    const report = await gates({
+      touched: ["src/util.ts", "pkg/core.py"],
+      config: cfg,
+      structure: { regexOnly: true },
+    })
+    expect(report.passed).toBe(true)
+    expect(JSON.parse(await Bun.file(path.join(fx.root, "record.json")).text())).toEqual(["pkg/test_core.py"])
+  })
+
   test("invalid gates.json fails closed and falls back to detection", async () => {
     await write(".factory/gates.json", '{"commands": "nope"}')
     const { problem } = await loadGatesConfig(fx.root)

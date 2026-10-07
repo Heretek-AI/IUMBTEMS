@@ -18,6 +18,7 @@ import {
   type GatesConfig,
   GatesConfigSchema,
 } from "../schema/gates.ts"
+import { type AffectedTests, affectedTests, type GraphOptions } from "../structure/index.ts"
 import { verifyControl } from "../trust/control.ts"
 import { relativeTo } from "../trust/paths.ts"
 import { commandSetHash, isTrusted } from "../trust/store.ts"
@@ -51,6 +52,8 @@ export interface RunGatesOptions {
   readonly fetch?: typeof fetch
   /** Language-server diagnostics for touched files (the "lsp" gate). */
   readonly lsp?: { diagnostics(file: string, options?: { maxWaitMs?: number }): Promise<unknown> }
+  /** Structural index options for touched-scope affected-test selection. */
+  readonly structure?: GraphOptions
 }
 
 const TOOL_CONFIG = [
@@ -111,8 +114,49 @@ function resolveBinary(argv0: string, dir: string, root: string): string {
   return argv0
 }
 
-function relatedTestArgs(check: CommandCheck, files: readonly string[], dir: string): string[] | undefined {
+function relatedTestArgs(
+  check: CommandCheck,
+  files: readonly string[],
+  dir: string,
+  affected?: AffectedTests,
+): string[] | undefined {
   const code = files.filter((file) => /\.[cm]?[jt]sx?$|\.py$|\.go$/.test(file))
+  // The import graph knows which tests (transitively) import the change set.
+  // When it has an answer for this runner's language, prefer it; otherwise
+  // fall back to runner-native selection (full suite still runs at phase end).
+  const tests = affected?.tests ?? []
+  const jsTests = tests.filter((file) => /\.[cm]?[jt]sx?$/.test(file))
+  const pyTests = tests.filter((file) => file.endsWith(".py"))
+  if (tests.length) {
+    switch (check.related) {
+      case "bun":
+        if (jsTests.length) return [...jsTests]
+        break
+      case "vitest":
+        if (jsTests.length) return ["run", ...jsTests]
+        break
+      case "jest":
+        if (jsTests.length) return ["--runTestsByPath", ...jsTests]
+        break
+      case "pytest":
+        if (pyTests.length) return [...pyTests]
+        break
+      case "go": {
+        // Go tests are package-scoped: run the packages of affected tests and
+        // of every touched file (so a changed package always compiles).
+        const dirs = new Set<string>()
+        const go = [...tests.filter((file) => file.endsWith(".go")), ...code.filter((file) => file.endsWith(".go"))]
+        for (const file of go) {
+          const parent = path.posix.dirname(file)
+          dirs.add(parent === "." ? "." : `./${parent}`)
+        }
+        if (dirs.size) return [...dirs]
+        break
+      }
+      default:
+        return undefined
+    }
+  }
   if (code.length === 0) return undefined
   const stem = (file: string) =>
     path.basename(file).replace(/\.(test|spec)?\.?[cm]?[jt]sx?$|\.py$|_test\.go$|\.go$/, "")
@@ -135,7 +179,7 @@ function relatedTestArgs(check: CommandCheck, files: readonly string[], dir: str
       return tests.length ? [...new Set(tests)] : undefined
     }
     case "go":
-      return [...new Set(code.filter((file) => file.endsWith(".go")).map((file) => `./${path.dirname(file)}`))]
+      return [...new Set(code.filter((file) => file.endsWith(".go")).map((file) => `./${path.posix.dirname(file)}`))]
     default:
       return undefined
   }
@@ -151,6 +195,7 @@ async function runCommandCheck(
     scope: "touched" | "full"
     files: readonly string[]
     logDir: string
+    affected?: AffectedTests
     signal?: AbortSignal
   },
 ): Promise<{ report: CheckReport; findings: GateFinding[]; failedTests: string[] }> {
@@ -163,7 +208,7 @@ async function runCommandCheck(
   })
   if (context.scope === "touched") {
     if (check.kind === "test") {
-      const extra = relatedTestArgs(check, context.files, context.dir)
+      const extra = relatedTestArgs(check, context.files, context.dir, context.affected)
       if (!extra) return skip("no related tests for the touched files (full suite runs at completion)")
       argv = check.related === "vitest" ? [argv[0]!, ...extra] : [...argv, ...extra]
     } else if (check.touchedArgs) {
@@ -389,6 +434,15 @@ export async function runGates(options: RunGatesOptions): Promise<GateReport> {
       })
       checks.push({ id: "trust", status: "fail", durationMs: 0, findings: 1, note: "command set not trusted" })
     } else {
+      // Touched scope: prefer the import graph for affected-test selection,
+      // with runner-native selection as fallback (full suite at completion).
+      let affected: AffectedTests | undefined
+      if (
+        options.scope === "touched" &&
+        present.length &&
+        config.commands.some((check) => check.kind === "test" && check.related !== "none")
+      )
+        affected = await affectedTests(dir, present, options.structure ?? {}).catch(() => undefined)
       for (const check of config.commands) {
         const outcome = await runCommandCheck(check, {
           dir,
@@ -396,6 +450,7 @@ export async function runGates(options: RunGatesOptions): Promise<GateReport> {
           scope: options.scope,
           files: present,
           logDir,
+          ...(affected ? { affected } : {}),
           ...(options.signal ? { signal: options.signal } : {}),
         })
         checks.push(outcome.report)
@@ -458,7 +513,14 @@ export function formatReport(report: GateReport): string {
 }
 
 /** Adapter for the factory: the engine as a GateRunner bound to a state dir. */
-export function gateRunner(options: { stateDir?: string; fetch?: typeof fetch; lsp?: RunGatesOptions["lsp"] } = {}) {
+export function gateRunner(
+  options: {
+    stateDir?: string
+    fetch?: typeof fetch
+    lsp?: RunGatesOptions["lsp"]
+    structure?: RunGatesOptions["structure"]
+  } = {},
+) {
   return (request: {
     root: string
     dir: string
@@ -473,5 +535,6 @@ export function gateRunner(options: { stateDir?: string; fetch?: typeof fetch; l
       ...(options.stateDir ? { stateDir: options.stateDir } : {}),
       ...(options.fetch ? { fetch: options.fetch } : {}),
       ...(options.lsp ? { lsp: options.lsp } : {}),
+      ...(options.structure ? { structure: options.structure } : {}),
     })
 }

@@ -1,7 +1,7 @@
 // Budget checks over the change set: diff size, file length, complexity,
 // dependency justification, and "behaviour change needs a test change".
 // Complexity is a decision-point count per function for brace languages and
-// Python (heuristic until the tree-sitter index lands in M5).
+// Python (text heuristic; the tree-sitter index powers affected-test selection).
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import type { GateBudgets, GateFinding } from "../schema/gates.ts"
