@@ -200,8 +200,8 @@ function braceComplexity(text: string): FunctionComplexity[] {
   let depth = 0
   const headers: readonly RegExp[] = [
     /\bfunction ?\*? ?([\w$]*) ?\(/,
-    /([\w$]+) ?[:=] ?(?:async )?(?:function\b|\([^)]*\) ?(?:: ?[^=]+)?=>|[\w$]+ ?=>)/,
-    /^ ?(?:(?:public|private|protected|static|async|override|readonly) )*([\w$]+) ?\([^)]*\) ?(?:: ?[^{]+)?\{/,
+    /([\w$]+) ?[:=] ?(?:async )?(?:function\b|\([\w$ ,:?=]*\) ?=>|[\w$]+ ?=>)/,
+    /^ ?(?:(?:public|private|protected|static|async|override|readonly) )*([\w$]+) ?\([\w$ ,:?=*[\]<>|&.]*\) ?(?:: ?[\w$ <>,.[\]|&]*)?\{/,
     /\bfn ([\w$]+)/,
     /\bfunc (?:\([^)]*\) )?([\w$]+)/,
   ]

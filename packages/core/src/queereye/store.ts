@@ -76,7 +76,7 @@ export async function writeIfChanged(
 export async function saveInterview(root: string, loop: SlotLoop): Promise<WriteOutcome[]> {
   const paths = designPaths(root)
   const state: DesignAnswers = {
-    values: Object.fromEntries(Object.entries(loop.values).map(([axis, values]) => [axis, { ...values }])),
+    values: Object.fromEntries(Object.entries(loop.values).map(([axis, values]) => [axis, Object.fromEntries(values)])),
     skipped: Object.fromEntries(
       Object.entries(loop.skipped).map(([axis, skipped]) => [
         axis,
@@ -115,7 +115,7 @@ export async function loadInterview(root: string, loop: SlotLoop): Promise<boole
       `corrupt interview.json at ${file}: ${result.error.message}; restore from backup or delete it to restart`,
     )
   for (const axis of Object.keys(loop.values) as Array<keyof typeof loop.values>) {
-    loop.values[axis] = { ...(result.data.values[axis] ?? {}) }
+    loop.values[axis] = new Map(Object.entries(result.data.values[axis] ?? {}))
     loop.skipped[axis] = new Set(result.data.skipped[axis] ?? [])
   }
   return true

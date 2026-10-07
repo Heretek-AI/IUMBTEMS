@@ -50,17 +50,27 @@ export interface AuditReport {
   readonly passed: boolean
 }
 
-const TAG = /\[(VERIFIED|INFERRED|HYPOTHESIS|NEGATIVE_KNOWLEDGE):([^\]]*)\]/g
+const TAG_KINDS = ["VERIFIED", "INFERRED", "HYPOTHESIS", "NEGATIVE_KNOWLEDGE"] as const
 
 export function parseTags(line: string): Tag[] {
   const tags: Tag[] = []
-  for (const match of line.matchAll(TAG)) {
-    const kind = match[1] as TagKind
-    const body = match[2]!.trim()
+  let i = 0
+  while (i < line.length) {
+    const open = line.indexOf("[", i)
+    if (open < 0) break
+    const kind = TAG_KINDS.find((name) => line.startsWith(`${name}:`, open + 1))
+    if (!kind) {
+      i = open + 1
+      continue
+    }
+    const close = line.indexOf("]", open + 1 + kind.length + 1)
+    if (close < 0) break
+    const body = line.slice(open + 1 + kind.length + 1, close).trim()
     if (kind === "VERIFIED") {
       const verified = /^(?:sha256:)?([0-9a-f]{64}|\S+)\s+["“](.+)["”]$/s.exec(body)
       tags.push({ kind, body, ...(verified ? { source: verified[1]!, quote: verified[2]! } : {}) })
     } else tags.push({ kind, body })
+    i = close + 1
   }
   return tags
 }

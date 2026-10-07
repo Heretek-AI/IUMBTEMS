@@ -345,8 +345,8 @@ export interface NextSlot {
 }
 
 export class SlotLoop {
-  readonly values: Record<Axis, Record<string, string>> = Object.fromEntries(
-    AXES.map((axis) => [axis, Object.create(null) as Record<string, string>]),
+  readonly values: Record<Axis, Map<string, string>> = Object.fromEntries(
+    AXES.map((axis) => [axis, new Map<string, string>()]),
   ) as never
   readonly skipped: Record<Axis, Set<string>> = Object.fromEntries(AXES.map((axis) => [axis, new Set()])) as never
 
@@ -357,7 +357,7 @@ export class SlotLoop {
   nextRequiredSlot(): NextSlot | undefined {
     for (const axis of AXES)
       for (const slot of this.requiredSlots(axis))
-        if (!(slot in this.values[axis]) && !this.skipped[axis].has(slot))
+        if (!this.values[axis].has(slot) && !this.skipped[axis].has(slot))
           return {
             axis,
             slot,
@@ -381,7 +381,7 @@ export class SlotLoop {
     )
       throw new Error(`unknown slot ${axis}.${slot}`)
     this.skipped[axis].add(slot)
-    delete this.values[axis][slot]
+    this.values[axis].delete(slot)
   }
 
   /** Validate and store one answer; throws on vague/smuggled/contradiction. */
@@ -417,34 +417,35 @@ export class SlotLoop {
       )
     if (axis === "color" && HEX_SMUGGLING_RE.test(text))
       throw new SmuggledValueError(axis, slot, "hex literals never become tokens; pick a family word.")
-    const problems = validateForm(axis, { ...this.values[axis], [slot]: text })
+    const problems = validateForm(axis, Object.fromEntries([...this.values[axis], [slot, text]]))
     if (problems.length) throw new ContradictionError(axis, slot, problems.join(" | "))
     const cross = this.crossAxisRepair(axis, slot, text)
     if (cross) throw new ContradictionError(axis, slot, cross)
     this.skipped[axis].delete(slot)
-    this.values[axis][slot] = text
+    this.values[axis].set(slot, text)
     return text
   }
 
   /** Settled value or the axis default (skipped slots stay defaulted). */
   effective(axis: Axis, slot: string): string {
-    return this.values[axis][slot] ?? FORMS[axis].defaults[slot]!
+    return this.values[axis].get(slot) ?? FORMS[axis].defaults[slot]!
   }
 
   private crossAxisRepair(axis: Axis, slot: string, text: string): string | undefined {
     const low = text.toLowerCase()
     if (axis === "brand" && slot === "values") {
-      const level = this.values.a11y.text_level ?? "AA"
+      const level = this.values.a11y.get("text_level") ?? "AA"
       if (LOW_CONTRAST_MARKERS.some((marker) => low.includes(marker)) && ["AA", "AAA"].includes(level.toUpperCase()))
         return `sycophancy refused: 'low contrast' taste contradicts the ${level.toUpperCase()} text gate; repair: keep the aesthetic in non-text decoration, text stays AA.`
     }
     if (axis === "a11y" && slot === "text_level") {
-      const brandValues = (this.values.brand.values ?? "").toLowerCase()
+      const brandValues = (this.values.brand.get("values") ?? "").toLowerCase()
       if (LOW_CONTRAST_MARKERS.some((marker) => brandValues.includes(marker)) && ["aa", "aaa"].includes(low))
         return "contradiction with settled brand values demanding low contrast; repair: text stays gated, low contrast is non-text decoration only."
     }
     if (axis === "effects" && slot === "motion") {
-      if ((this.values.a11y.reduced_motion ?? "yes").toLowerCase() === "yes" && low === "expressive") return undefined
+      if ((this.values.a11y.get("reduced_motion") ?? "yes").toLowerCase() === "yes" && low === "expressive")
+        return undefined
       if (low === "always animate everything, ignore prefers-reduced-motion")
         return "motion contradicts reduced-motion=yes; repair: expressive motion with a reduced-motion off-ramp."
     }

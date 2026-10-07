@@ -197,7 +197,7 @@ describe("the interview loop", () => {
     expect(() => b.submit("brand", "values", "low contrast, barely visible")).toThrow(/low contrast/)
     // The cross-axis guard also covers state that predates the repair hook.
     const c = new SlotLoop()
-    c.values.brand.values = "low contrast warmth"
+    c.values.brand.set("values", "low contrast warmth")
     expect(() => c.submit("a11y", "text_level", "AAA")).toThrow(/contradiction with settled brand values/)
   })
 
@@ -217,7 +217,7 @@ describe("the interview loop", () => {
     loop.submit("color", "accent", "none")
     for (const axis of AXES)
       for (const slot of FORMS[axis].requiredSlots)
-        if (!(slot in loop.values[axis]) && !loop.skipped[axis].has(slot)) loop.skip(axis, slot)
+        if (!loop.values[axis].has(slot) && !loop.skipped[axis].has(slot)) loop.skip(axis, slot)
     const probes = loop.probePairs()
     expect(probes.map((pair) => pair.name)).not.toContain("accent large on paper")
     const body = probes.find((pair) => pair.name === "body on paper")!
@@ -277,7 +277,7 @@ describe("the filesystem contract", () => {
     await saveInterview(root, first)
     const resumed = new SlotLoop()
     expect(await loadInterview(root, resumed)).toBe(true)
-    expect(resumed.values.brand).toMatchObject({ name: "Acme", voice: "minimal" })
+    expect(Object.fromEntries(resumed.values.brand)).toMatchObject({ name: "Acme", voice: "minimal" })
     expect(resumed.nextRequiredSlot()).toMatchObject({ axis: "brand", slot: "values" })
   })
 

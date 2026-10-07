@@ -340,7 +340,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           const loop = new SlotLoop()
           const resumed = await loadInterview(root, loop)
           const total =
-            Object.values(loop.values).reduce((sum, values) => sum + Object.keys(values).length, 0) +
+            Object.values(loop.values).reduce((sum, values) => sum + values.size, 0) +
             Object.values(loop.skipped).reduce((sum, skipped) => sum + skipped.size, 0)
           const next = loop.nextRequiredSlot()
           const lines = [

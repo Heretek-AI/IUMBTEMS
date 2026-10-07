@@ -34,7 +34,7 @@ const object = (properties: Record<string, unknown>, required: string[] = []) =>
 const progressText = (loop: SlotLoop): string => {
   const next = loop.nextRequiredSlot()
   const total = AXES.reduce((sum, axis) => sum + FORMS[axis].requiredSlots.length, 0)
-  const done = AXES.reduce((sum, axis) => sum + Object.keys(loop.values[axis]).length + loop.skipped[axis].size, 0)
+  const done = AXES.reduce((sum, axis) => sum + loop.values[axis].size + loop.skipped[axis].size, 0)
   return next
     ? `${done}/${total} slots settled. Next: ${next.axis}.${next.slot} — ${next.question}${next.recommendations.length ? ` (options: ${next.recommendations.join(", ")})` : ""}`
     : `${done}/${total} slots settled. The interview is complete; run es_design_complete.`
