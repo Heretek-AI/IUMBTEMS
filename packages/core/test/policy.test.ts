@@ -216,6 +216,10 @@ describe("shell policy", () => {
       "cd .factory && echo '{}' > gates.json",
       `cd .fac""tory && printf forged > research/sources/aa.md`,
       "echo x > .FACTORY/GATES.json",
+      // F3 (1.1.1 re-audit): separator without whitespace after the dir.
+      "cd .factory;echo '{}' > gates.json",
+      "cd .factory&&echo x>gates.json",
+      "cd .factory|tee gates.json",
     ])
       expect([command, shell("build", command, false).effect]).toEqual([command, "deny"])
     // Reads stay allowed; substitution and redirection do not.

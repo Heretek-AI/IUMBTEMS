@@ -157,7 +157,7 @@ export function esTools(ops: OpsContext): EsToolDef[] {
         "Validate .factory/roadmap.json and every phase GOAL.md against their schemas. Run until it reports no errors.",
       input: object(),
       execute: async () => {
-        const problems = await validateArtifacts(root)
+        const problems = await validateArtifacts(root, ops.stateDir)
         const subject = await approvalSubject(root, "spec").then(
           (result) => result,
           (error: Error) => error,

@@ -153,7 +153,7 @@ export function invokesHumanOnly(command: string): boolean {
 const CONTROL_MENTION =
   /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|audits\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design|scout)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/i
 /** Any mention of the factory dir (a `cd .factory` reaches control files without naming them). */
-const FACTORY_MENTION = /(^|[\s/=:])\.factory(\/|\s|$)/i
+const FACTORY_MENTION = /(^|[\s/=:])\.factory(\/|[\s;|&]|$)/i
 const MUTATING =
   /(>|\btee\b|\brm\b|\bmv\b|\bcp\b|\bln\b|\btruncate\b|\bchmod\b|\bchown\b|\btouch\b|\bsed\s+(-[a-zA-Z]*i|--in-place)|\bdd\b|\binstall\b|\bgit\s+(checkout|restore|rm|mv|reset|clean|apply|am|stash))/
 

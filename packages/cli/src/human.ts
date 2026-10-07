@@ -278,7 +278,7 @@ export async function retract(context: HumanContext, args: Args): Promise<number
 
 const show = (value: unknown) => (value === undefined ? "(unset)" : JSON.stringify(value))
 
-/** Set one config key in the project (default) or global layer: schema-validated, previewed, typed-code confirmed. */
+/** Set one config key in the project (default) or global layer: schema-validated, previewed, passphrase-confirmed. */
 export async function configSet(context: HumanContext, args: Args): Promise<number> {
   const [key, value] = args.positionals
   if (!key || value === undefined) {
