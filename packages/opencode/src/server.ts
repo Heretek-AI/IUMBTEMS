@@ -141,6 +141,21 @@ export default Plugin.define({
         },
       })
       editor.add({
+        name: "design",
+        description: "Interview me into a design system: tokens, contrast gates, style guide (Epistemic Swarm)",
+        execute: async ({ sessionID, prompt, delivery }) => {
+          await ctx.session.switchAgent({ sessionID, agent: "designer" } as any)
+          await ctx.session.prompt({
+            ...prompt,
+            sessionID,
+            text: prompt.text?.trim()
+              ? `Run the design interview. Product: ${prompt.text}`
+              : "Ask me for the product name and start the design interview, one question at a time.",
+            delivery,
+          } as any)
+        },
+      })
+      editor.add({
         name: "factory",
         description: "Drive the build factory from its current stage (Epistemic Swarm)",
         execute: async ({ sessionID, prompt, delivery }) => {

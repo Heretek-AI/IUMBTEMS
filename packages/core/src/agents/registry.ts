@@ -18,9 +18,10 @@ export type Seat =
   | "brainstorm-lens"
   | "brainstorm-critic"
   | "harvester"
+  | "designer"
 
 /** Where a seat may write with the host's edit tools. */
-export type WriteScope = "factory-docs" | "research" | "brainstorm" | "harvest" | "worktree"
+export type WriteScope = "factory-docs" | "research" | "brainstorm" | "harvest" | "design" | "worktree"
 
 export type ModelTier = "fast" | "balanced" | "deep"
 
@@ -156,6 +157,29 @@ export const AGENTS: readonly AgentSpec[] = [
     writes: ["harvest"],
     readonlyShell: true,
     skills: ["harvest"],
+    mcp: [],
+    lsp: "none",
+  },
+  {
+    id: "designer",
+    seat: "designer",
+    mode: "primary",
+    hidden: false,
+    tier: "deep",
+    description: "Interviews you into a design system: tokens, contrast gates and a generated style guide.",
+    prompt: "designer",
+    tools: [
+      "es_status",
+      "es_design_status",
+      "es_design_answer",
+      "es_design_skip",
+      "es_design_complete",
+      "es_design_check",
+    ],
+    spawns: [],
+    writes: ["design"],
+    readonlyShell: true,
+    skills: ["queereye"],
     mcp: [],
     lsp: "none",
   },

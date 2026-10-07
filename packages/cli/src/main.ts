@@ -4,14 +4,19 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import {
+  aliasReuseRatio,
   atomicWrite,
   brainstormPaths,
   buildPlan,
   candidateId,
   capabilityLoss,
+  checkDrift,
+  compileToCssVars,
+  designPaths,
   Factory,
   factoryLayout,
   factorySummary,
+  findOneOffs,
   formatDiagnostics,
   gateRunner,
   git,
@@ -21,6 +26,7 @@ import {
   LENSES,
   LspManager,
   loadHooks,
+  loadInterview,
   parseSource,
   readIdeas as readBrainstormIdeas,
   readPlan as readBrainstormPlan,
@@ -29,12 +35,18 @@ import {
   readHarvestPlan,
   readProfiles as readHarvestProfiles,
   readHarvestResult,
+  readProbes,
+  readTokens,
   recordConsent,
   renderBrainstorm,
+  renderGuide,
   researchTools,
+  SlotLoop,
   scanSource,
   startRun as startBrainstorm,
+  validateTokens,
   verifyAuditChain,
+  writeArtifacts,
   writeProfile,
 } from "@heretek-ai/es-core"
 import { type Args, flag, parseArgs } from "./args.ts"
@@ -80,6 +92,9 @@ Other
   brainstorm lenses             List the built-in divergent lenses
   harvest show [--json]         Show the teardown plan/progress or the report
   harvest scan <source>         Scan one source (local path, git URL, github:owner/repo, npm:name)
+  design [status]               Design interview progress (resumes from .factory/design)
+  design render                 Re-render tokens.css + STYLE_GUIDE.md from tokens.json
+  design check                  Fail on render drift, invalid tokens or one-off mints
   lsp [status]                  Language servers and how each resolves
   lsp diagnostics <file>        Diagnostics for one file
   lsp install <server>          Pinned, checksummed install   [human, TTY]
@@ -315,6 +330,71 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           return 1
         }
         io.print("Usage: es harvest show [--json] | scan <source>")
+        return 2
+      }
+      case "design": {
+        const paths = designPaths(root)
+        if (sub === "status" || sub === undefined) {
+          const loop = new SlotLoop()
+          const resumed = await loadInterview(root, loop)
+          const total =
+            Object.values(loop.values).reduce((sum, values) => sum + Object.keys(values).length, 0) +
+            Object.values(loop.skipped).reduce((sum, skipped) => sum + skipped.size, 0)
+          const next = loop.nextRequiredSlot()
+          const lines = [
+            resumed
+              ? `Resumed the design interview from ${paths.interview}.`
+              : `No interview yet in ${paths.dir}; start one with /design.`,
+            next
+              ? `${total} slot(s) settled. Next: ${next.axis}.${next.slot} — ${next.question}`
+              : `${total} slot(s) settled; the interview is complete (es_design_complete, or \`es design render\` after completion).`,
+          ]
+          const tokens = await readTokens(root).catch(() => undefined)
+          if (tokens) {
+            const reuse = aliasReuseRatio(tokens)
+            lines.push(
+              `Tokens: ${reuse.total} (reuse ${reuse.ratio.toFixed(2)}), one-off mints ${findOneOffs(tokens).length}, validation errors ${validateTokens(tokens).length}`,
+            )
+          }
+          io.print(lines.join("\n"))
+          return 0
+        }
+        if (sub === "render") {
+          const tokens = await readTokens(root).catch(() => undefined)
+          if (tokens === undefined) {
+            io.print(`No tokens.json in ${paths.dir} yet; finish the interview first.`)
+            return 1
+          }
+          const probes = (await readProbes(root)) ?? []
+          const outcomes = await writeArtifacts(root, {
+            tokens,
+            probes,
+            guide: renderGuide(tokens, probes),
+            css: compileToCssVars(tokens),
+          })
+          io.print(
+            `Rendered ${paths.css} and ${paths.guide} (${outcomes.filter((outcome) => outcome.wrote).length} file(s) changed).`,
+          )
+          return 0
+        }
+        if (sub === "check") {
+          const report = await checkDrift(root)
+          const tokens = await readTokens(root).catch(() => undefined)
+          const oneOffs = tokens ? findOneOffs(tokens) : []
+          const failed = report.drifted.length + report.missing.length + report.tokenErrors.length + oneOffs.length
+          io.print(
+            [
+              report.drifted.length || report.missing.length
+                ? `Drift: ${[...report.drifted, ...report.missing.map((file) => `${file} (missing)`)].join(", ")}`
+                : "STYLE_GUIDE.md and tokens.css byte-match the renderer output.",
+              `Token errors: ${report.tokenErrors.length} · one-off mints: ${oneOffs.length}`,
+              ...report.tokenErrors.slice(0, 5),
+              ...oneOffs.slice(0, 5).map((item) => `${item.path}: ${item.reason}`),
+            ].join("\n"),
+          )
+          return failed ? 1 : 0
+        }
+        io.print("Usage: es design [status] | render | check")
         return 2
       }
       case "lsp": {

@@ -20,6 +20,8 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | brainstorm-shortlist-entry | `schemas/brainstorm-shortlist-entry.schema.json` |
 | check-status | `schemas/check-status.schema.json` |
 | command-check | `schemas/command-check.schema.json` |
+| design-answers | `schemas/design-answers.schema.json` |
+| design-artifacts | `schemas/design-artifacts.schema.json` |
 | frontier-node | `schemas/frontier-node.schema.json` |
 | frontier | `schemas/frontier.schema.json` |
 | gate-budgets | `schemas/gate-budgets.schema.json` |
@@ -36,7 +38,9 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | harvest-verdict | `schemas/harvest-verdict.schema.json` |
 | license-finding | `schemas/license-finding.schema.json` |
 | parser-id | `schemas/parser-id.schema.json` |
+| probe-row | `schemas/probe-row.schema.json` |
 | provenance | `schemas/provenance.schema.json` |
+| queereye-tokens | `schemas/queereye-tokens.schema.json` |
 | related-tests | `schemas/related-tests.schema.json` |
 | roadmap-phase | `schemas/roadmap-phase.schema.json` |
 | roadmap | `schemas/roadmap.schema.json` |
