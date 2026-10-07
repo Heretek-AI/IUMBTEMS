@@ -1,0 +1,129 @@
+name: E2E feedback (opencode + plugin)
+
+# Repeatable end-to-end test: install opencode, install the plugin the way
+# users get it, exercise the seats against a real model, then leave a
+# deterministic debug report plus one best-effort agent feedback note.
+#
+# - `scripts/pack-smoke.sh` proves the packed tarballs install and load.
+# - `bun run evals` runs one real, step-capped turn per `evals/cases/*.json`
+#   in an isolated workspace loading this repo's plugin.
+# - `bun scripts/e2e-report.ts` renders the deterministic `feedback-report.md`.
+# - The `agent-feedback` step asks the model to diagnose that report (one
+#   `timeout`-bounded turn; best-effort, never masks the eval verdict).
+#
+# Secrets/vars (same triple as the nightly evals job):
+#   secrets.ES_EVAL_API_KEY  the provider key
+#   vars.ES_EVAL_MODEL       e.g. opencode/muse-spark-1.3-contributor-free
+#   vars.ES_EVAL_KEY_VAR     env-var name for the key (default ANTHROPIC_API_KEY;
+#                            use OPENCODE_API_KEY for Zen/Go keys)
+on:
+  push:
+    branches: [rewrite]
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Override vars.ES_EVAL_MODEL for this run (empty = use the variable)"
+        required: false
+        default: ""
+      max_steps:
+        description: "Per-case step cap (bounds spend: cost <= steps x context x price)"
+        required: false
+        default: "6"
+
+# Least privilege: the workflow only reads the checkout.
+permissions:
+  contents: read
+
+jobs:
+  e2e-feedback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ES_EVAL_MODEL: ${{ inputs.model || vars.ES_EVAL_MODEL }}
+      ES_EVAL_KEY_VAR: ${{ vars.ES_EVAL_KEY_VAR || 'ANTHROPIC_API_KEY' }}
+      ES_EVAL_MAX_STEPS: ${{ inputs.max_steps || '6' }}
+      ES_EVAL_TIMEOUT_MS: "300000"
+    steps:
+      # Third-party actions are pinned to commit SHAs (bump deliberately).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      # The packages as users install them (fails on workspace:* leaks or
+      # missing bundled assets).
+      - name: Install-as-user smoke test
+        run: scripts/pack-smoke.sh
+
+      - name: Install opencode CLI
+        run: |
+          # Pinned to the same CLI the repo tests against; bump deliberately
+          # together with @opencode/sdk and @opencode/plugin in package.json.
+          npm install --global --ignore-scripts @opencode/cli-linux-x64@2.0.24
+          export PATH="$(npm root --global)/@opencode/cli-linux-x64/bin:$PATH"
+          opencode --version
+
+      - name: Exercise seats against the real model
+        id: evals
+        env:
+          ES_EVAL_API_KEY: ${{ secrets.ES_EVAL_API_KEY }}
+        run: |
+          if [ -z "$ES_EVAL_API_KEY" ] || [ -z "$ES_EVAL_MODEL" ]; then
+            echo "e2e-feedback: secrets.ES_EVAL_API_KEY and vars.ES_EVAL_MODEL (or inputs.model) are not both set; skipping."
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+          export PATH="$(npm root --global)/@opencode/cli-linux-x64/bin:$PATH"
+          export "$ES_EVAL_KEY_VAR=$ES_EVAL_API_KEY"
+          opencode --version
+          bun run evals
+
+      # Deterministic report: offline, secret-free, runs even when evals fail.
+      - name: Render debug report
+        if: always() && steps.evals.outputs.skipped != 'true'
+        run: |
+          export PATH="$(npm root --global)/@opencode/cli-linux-x64/bin:$PATH"
+          newest="$(ls -t evals/results/*.json 2>/dev/null | head -1)"
+          [ -n "$newest" ] || { echo "debug report: no flat evals/results/*.json (evals never wrote one); skipping."; exit 0; }
+          bun scripts/e2e-report.ts "$newest" "$(opencode --version 2>/dev/null || echo unknown)" "${GITHUB_SHA:0:7}"
+          {
+            echo "## E2E feedback (${ES_EVAL_MODEL})"
+            echo
+            cat "${newest%.json}.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # One best-effort agent turn over the deterministic report. Bounded by
+      # `timeout` (no cost events exist in the CLI stream, so wall-clock plus
+      # the eval step caps bound the spend). Never fails the job: the eval
+      # verdict above is what gates.
+      - name: Agent feedback on the report
+        if: always() && steps.evals.outputs.skipped != 'true'
+        continue-on-error: true
+        env:
+          ES_EVAL_API_KEY: ${{ secrets.ES_EVAL_API_KEY }}
+        run: |
+          export PATH="$(npm root --global)/@opencode/cli-linux-x64/bin:$PATH"
+          export "$ES_EVAL_KEY_VAR=$ES_EVAL_API_KEY"
+          newest="$(ls -t evals/results/*.json 2>/dev/null | head -1)"
+          report="${newest%.json}.md"
+          [ -n "$newest" ] && [ -f "$report" ] || { echo "agent-feedback: no report found; skipping."; exit 0; }
+          work="$(mktemp -d)"
+          home="$work/home"
+          mkdir -p "$home"
+          cat > "$work/opencode.json" <<EOF
+          {
+            "model": "$ES_EVAL_MODEL",
+            "plugins": [{ "package": "$GITHUB_WORKSPACE/packages/opencode", "options": { "pr": "off" } }]
+          }
+          EOF
+          prompt="You are a debug analyst. Read the E2E feedback report below and reply with: (1) the most likely root cause per FAIL case, citing the failing check or tool line; (2) the smallest repo change that would fix or further isolate it; (3) anything in the report that looks like harness flakiness rather than a product bug. Keep it under 30 lines. Report: $(head -c 4000 "$report")"
+          HOME="$home" timeout 150 opencode run --standalone --agent build "$prompt" > "$work/feedback.txt" 2>"$work/feedback.err" \
+            || { echo "agent-feedback: model turn failed (rate limit or timeout); keeping the deterministic report only."; exit 0; }
+          cp "$work/feedback.txt" "${newest%.json}.agent-feedback.md"
+          { echo "## Agent feedback"; echo; cat "$work/feedback.txt"; } >> "$GITHUB_STEP_SUMMARY"
+          echo "agent-feedback: wrote $(basename "${newest%.json}.agent-feedback.md")"

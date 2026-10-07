@@ -68,9 +68,17 @@ for (const file of files) {
       : ran
     results.push({
       id: result.id,
+      agent: testCase.agent,
+      description: testCase.description,
       pass: result.pass,
+      exitCode: result.exitCode,
+      capped: result.capped,
+      timedOut: result.timedOut,
       steps: result.transcript.steps,
       tools: result.transcript.tools,
+      errors: result.transcript.errors,
+      // The full text can be large; the debug report carries an excerpt.
+      textExcerpt: result.transcript.text.slice(0, 2000),
       failures: result.failures,
     })
     console.log(
