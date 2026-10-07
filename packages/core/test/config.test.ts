@@ -95,6 +95,19 @@ describe("layered config", () => {
     })
   })
 
+  test("audit.phase defaults to optional, takes required in any layer, rejects anything else (#33)", async () => {
+    expect((await loadEsConfig(root, { env })).config.audit).toEqual({ phase: "optional" })
+    await writeProject({ audit: { phase: "required" } })
+    expect((await loadEsConfig(root, { env })).config.audit).toEqual({ phase: "required" })
+    await writeProject({ audit: { phase: "sometimes" } })
+    await expect(loadEsConfig(root, { env })).rejects.toThrow(/audit\.phase/)
+    await writeGlobal({ audit: { phase: "required" } })
+    await writeProject({ audit: { phase: "optional" } })
+    expect((await loadEsConfig(root, { env })).config.audit).toEqual({ phase: "optional" })
+    const overridden = await loadEsConfig(root, { env, overrides: { audit: { phase: "required" } } })
+    expect(overridden.config.audit).toEqual({ phase: "required" })
+  })
+
   test("mergeConfig is recursive and later layers win", () => {
     expect(mergeConfig({ a: { x: 1, y: 2 } }, { a: { y: 3 }, b: 4 })).toEqual({ a: { x: 1, y: 3 }, b: 4 })
     expect(mergeConfig({ a: 1 }, { a: undefined })).toEqual({ a: 1 })

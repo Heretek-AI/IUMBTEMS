@@ -1,0 +1,3 @@
+The bun test runner accepts a single file path argument. Run one focused
+test file without paying for the whole suite, and the report names only
+the file you passed.

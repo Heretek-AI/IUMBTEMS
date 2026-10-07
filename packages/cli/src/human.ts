@@ -9,6 +9,7 @@ import {
   ConfigError,
   type ConfigSetPlan,
   commandSetHash,
+  engineSignedFiles,
   Factory,
   factoryLayout,
   gateRunner,
@@ -23,8 +24,10 @@ import {
   recordWaiver,
   researchSourcesDir,
   SourceCache,
+  signEngineFile,
   trustProject,
   verifyControl,
+  verifyEngineFile,
   writeJson,
 } from "@heretek-ai/es-core"
 import { type Args, flag, parseExpiry } from "./args.ts"
@@ -144,6 +147,57 @@ export async function rebaselineControl(context: HumanContext): Promise<number> 
   }
   await rebaseline(context.root, `human:${user()} (es rebaseline)`)
   context.print(`Re-baselined ${check.violations.length} control-file change(s).`)
+  return 0
+}
+
+/**
+ * Human-only: verify the signed sidecars on engine-owned files, and with
+ * `--sign` re-sign reviewed files after the passphrase confirm (adopts legacy
+ * pre-sidecar files and recovers tampered ones the human has reviewed).
+ */
+export async function reseal(context: HumanContext, sign: boolean): Promise<number> {
+  const { exists } = await import("@heretek-ai/es-core")
+  const files = engineSignedFiles(context.root)
+  const present = async (file: string) => exists(file)
+  const targets = (await Promise.all(files.map(async (file) => ((await present(file)) ? file : undefined)))).filter(
+    (file): file is string => file !== undefined,
+  )
+  if (!targets.length) {
+    context.print("No engine-signed files yet (no factory run here).")
+    return 0
+  }
+  const problems = new Map<string, string>()
+  for (const file of targets) {
+    const problem = await verifyEngineFile(file, context.stateDir)
+    if (problem) problems.set(file, problem)
+  }
+  const rel = (file: string) => file.slice(context.root.length + 1)
+  if (!sign) {
+    for (const file of targets) context.print(`${rel(file)}: ${problems.get(file) ?? "ok"}`)
+    if (problems.size) {
+      context.print("Review the files above, then a human re-signs them with `es reseal --sign`.")
+      return 1
+    }
+    return 0
+  }
+  if (!problems.size) {
+    context.print("Every sidecar verifies; nothing to sign.")
+    return 0
+  }
+  const lines = [...problems].map(([file, problem]) => `${rel(file)}: ${problem}`)
+  if (
+    !(await confirmHuman(
+      context.io,
+      `Re-sign ${problems.size} engine file(s) as ${user()} (review them first: a mismatch can mean tampering)`,
+      lines,
+      context.stateDir,
+    ))
+  ) {
+    context.print("Cancelled; nothing was signed.")
+    return 1
+  }
+  for (const file of problems.keys()) await signEngineFile(file, context.stateDir)
+  context.print(`Re-signed ${problems.size} engine file(s).`)
   return 0
 }
 

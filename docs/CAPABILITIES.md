@@ -25,7 +25,7 @@ and Antigravity adapters ship in 1.1–1.3). Generated: do not edit by hand.
 | harvest | ENFORCED | `packages/opencode/test/harvest.test.ts` | Fail-closed SPDX detection, provenance profiles, policy-enforced matrix, clean-room specs. |
 | design | ENFORCED | `packages/opencode/test/design.test.ts` | Queereye interview, DTCG tokens, contrast gate, generated guide and drift check; phase-02 specs/webref/csf/tui renders and the phase-03 ledger bundle with its cite-gate receipt. |
 | claims | ENFORCED | `packages/core/test/research.test.ts` | Witnessed claims and dossiers: the evidence cache, dossiers and the claim ledger are tool-only; planted cache entries are refused (engine seal) and every VERIFIED quote and code span is re-checked against the bytes on disk. |
-| audit | ENFORCED | `packages/opencode/test/fires.test.ts` | Code-audit pair: only auditor seats record verdicts; every finding is witnessed on disk (a hallucinated line is refused); quote fragments carry >= 12 chars each and a thesis pass needs a witnessed invariant; verdicts block. |
+| audit | ENFORCED | `packages/opencode/test/fires.test.ts` | Code-audit pair: only auditor seats record verdicts; every finding is witnessed on disk (a hallucinated line is refused); quote fragments carry >= 12 chars each and a thesis pass needs a witnessed invariant; verdicts block (an opened phase audit holds the merge; audit.phase required also holds a missing one until it passes or a human dismisses it). |
 | scout | ENFORCED | `packages/opencode/test/fires.test.ts` | OSS scout: cached-only web under an offline (--unshare-net) sandbox, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited. |
 
 ## claude

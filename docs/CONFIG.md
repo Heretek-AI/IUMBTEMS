@@ -17,5 +17,6 @@ plugin option is ignored with a warning (TUI toast and `/config`). Generated: do
 | `research` | object | `{"depth":2}` | Research-stage tunables (ported from the 0.7 configure tool). |
 | `domainPack` | string | — | Active domain-pack constitution for RESEARCH (quant, biopharma or legal); unset keeps the legacy flat behaviour. |
 | `licenseWhitelist` | array | `["MIT","Apache-2.0","BSD-2-Clause","BSD-3-Clause","ISC","0BSD","Unlicense","CC0-1.0"]` | SPDX ids darkharvest may depend on or vendor (a harvest plan may only narrow it); everything else is clean-room only. |
+| `audit` | object | `{"phase":"optional"}` | Code-audit gating tunables (set with `es config set audit.phase required`). |
 
 `es config show` and `/config` print the effective config and which files contributed.

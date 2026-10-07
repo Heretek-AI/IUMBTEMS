@@ -34,6 +34,7 @@ import { type Frontier, FrontierSchema } from "../schema/frontier.ts"
 import { type AcceptanceCriterion, parseGoalMarkdown } from "../schema/goal.ts"
 import { RoadmapSchema } from "../schema/roadmap.ts"
 import { rebaseline, repinControl, verifyControl } from "../trust/control.ts"
+import { signEngineFile, verifyEngineFile } from "../trust/sidecar.ts"
 import { checkStopFile } from "../trust/stop.ts"
 import { appendLine, exists, readJson, relativeInside, withLock, writeJson } from "../util/fs.ts"
 import { sha256 } from "../util/hash.ts"
@@ -60,6 +61,9 @@ import { deferredFacts, diffFrontier, readFrontier, reopenedNodes, treeCounts } 
 export class FactoryError extends Error {}
 /** The factory is halted; only a human can resume it. */
 export class FactoryHalted extends FactoryError {}
+
+/** A phase audit that lets the phase merge: passed, or dismissed by a human. */
+const auditClear = (audit: Audit | undefined): boolean => audit?.status === "passed" || audit?.status === "dismissed"
 
 export interface GateFindingLike {
   readonly file: string
@@ -118,6 +122,13 @@ export interface FactoryDeps {
   readonly researchDepth?: number
   /** Config domainPack: the constitution RESEARCH must satisfy (unset keeps the legacy behaviour). */
   readonly domainPack?: string
+  /**
+   * Config audit.phase: "required" refuses passPhase until the phase has a
+   * passed or human-dismissed audit; unset (or "optional") keeps the legacy
+   * behaviour where only an opened audit blocks. Set with
+   * `es config set audit.phase required`.
+   */
+  readonly auditPhase?: "optional" | "required"
 }
 
 export interface CompleteResult {
@@ -152,12 +163,35 @@ export class Factory {
 
   // ------------------------------------------------------------ state io
 
+  /**
+   * Read the run state and verify its sidecar. Takes the state lock so a
+   * reader never observes a half-written (state, sidecar) pair: saves sign
+   * under the same lock, and background writers (async spend events) can
+   * land mid-read otherwise. Callers already holding the lock use
+   * readUnsafe.
+   */
   async read(): Promise<FactoryState | undefined> {
+    // No state file, no run: return before locking (the lock mkdirs).
+    if (!(await exists(this.layout.state))) return undefined
+    return withLock(this.layout.state, () => this.readUnsafe())
+  }
+
+  /** Read + verify without taking the state lock (the caller holds it). */
+  private async readUnsafe(): Promise<FactoryState | undefined> {
     const raw = await readJson<{ version?: unknown }>(this.layout.state)
     if (raw === undefined) return undefined
     if (raw.version !== FACTORY_STATE_VERSION)
       throw new FactoryError(
         `.factory/runtime/state.json is a version ${String(raw.version)} run; 1.1 needs a fresh run (state version ${FACTORY_STATE_VERSION}). A human removes .factory/runtime/state.json (and an old frontier) and starts again with /grill.`,
+      )
+    // The run state is engine-owned: a missing or forged sidecar means the
+    // file was pre-seeded or tampered with outside the engine. Only a human
+    // re-signs it (`es reseal --sign`) after reviewing what changed.
+    const problem = await verifyEngineFile(this.layout.state, this.deps.stateDir)
+    if (problem)
+      throw new FactoryError(
+        `.factory/runtime/state.json has a ${problem}: it was not written by this engine. ` +
+          `Review it (es_status will not run), then a human re-signs it with \`es reseal --sign\`.`,
       )
     return FactoryStateSchema.parse(raw)
   }
@@ -179,6 +213,7 @@ export class Factory {
   private async save(state: FactoryState) {
     state.updatedAt = this.now().toISOString()
     await writeJson(this.layout.state, FactoryStateSchema.parse(state))
+    await signEngineFile(this.layout.state, this.deps.stateDir)
   }
 
   private audit(actor: string, action: string, payload: Record<string, unknown> = {}) {
@@ -192,7 +227,7 @@ export class Factory {
     options: { guard?: boolean; create?: boolean } = {},
   ): Promise<T> {
     return withLock(this.layout.state, async () => {
-      const existing = await this.read()
+      const existing = await this.readUnsafe()
       if (!existing && !options.create)
         throw new FactoryError("No factory run here yet. Start one with /grill (or `es factory begin`).")
       const state = existing ?? this.fresh()
@@ -326,6 +361,7 @@ export class Factory {
       ...(frontier ? { frontier } : {}),
       ...(this.deps.researchDepth !== undefined ? { researchDepth: this.deps.researchDepth } : {}),
       ...(this.deps.domainPack !== undefined ? { domainPack: this.deps.domainPack } : {}),
+      ...(this.deps.auditPhase === "required" ? { auditPhase: "required" as const } : {}),
     })
   }
 
@@ -717,12 +753,14 @@ export class Factory {
     const outcome = this.qaOutcome(phase)
     if (!outcome || !functional || !adversarial) return
     if (outcome === "pass") {
-      // An opened phase audit must pass (or be dismissed by a human) before the phase merges.
-      if (phase.audit && phase.audit.status !== "passed" && phase.audit.status !== "dismissed") {
+      // An opened phase audit must pass (or be dismissed by a human) before
+      // the phase merges; with audit.phase required, a missing audit blocks
+      // the same way (passPhase refuses without a passed/dismissed audit).
+      if (!auditClear(phase.audit) && (phase.audit || this.deps.auditPhase === "required")) {
         phase.history.push({
           at: this.now().toISOString(),
           event: "qa-passed",
-          notes: `awaiting audit ${phase.audit.id}`,
+          notes: phase.audit ? `awaiting audit ${phase.audit.id}` : "awaiting a phase audit (audit.phase is required)",
         })
         return
       }
@@ -739,6 +777,12 @@ export class Factory {
   }
 
   private async passPhase(state: FactoryState, phase: PhaseRuntime) {
+    // Backstop for audit.phase required: settleQa waits instead of calling,
+    // but no path may merge a phase without a passed or human-dismissed audit.
+    if (this.deps.auditPhase === "required" && !auditClear(phase.audit))
+      throw new FactoryError(
+        `Phase ${phase.id} needs a passed or human-dismissed audit first (audit.phase is required: open one with es_audit_open, or a human runs \`es audit dismiss <id> --reason …\`).`,
+      )
     const runBranch = state.runBranch!
     await once(this.root, `${state.runId}:${phase.id}:merge`, async () => {
       const tip = await Git.revParse(this.root, runBranch)
@@ -1096,11 +1140,11 @@ export class Factory {
   // ------------------------------------------------------------ spend, halt, resume
 
   async recordSpend(usd: number, estimated: boolean): Promise<FactoryState | undefined> {
-    if (!(usd > 0)) return this.read()
+    if (!(usd > 0)) return this.readUnsafe()
     // No run, nothing to charge; taking the lock would create .factory/runtime/ in any project.
-    if (!(await this.read())) return undefined
+    if (!(await this.readUnsafe())) return undefined
     return withLock(this.layout.state, async () => {
-      const state = await this.read()
+      const state = await this.readUnsafe()
       if (!state || state.stage === "HALTED" || state.stage === "DONE") return state
       state.spend.usd += usd
       state.spend.estimated ||= estimated

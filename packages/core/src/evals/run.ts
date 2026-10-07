@@ -43,6 +43,8 @@ export interface EvalWorkspace {
   readonly dir: string
   /** HOME and XDG dirs for the run, so no global config or plugin leaks in. */
   readonly home: string
+  /** Isolated engine state dir the plugin uses (signing key, trust store). */
+  readonly stateDir: string
   cleanup(): Promise<void>
 }
 
@@ -57,6 +59,7 @@ export async function evalWorkspace(options: {
   const base = await mkdtemp(path.join(tmpdir(), "es-eval-"))
   const dir = path.join(base, "project")
   const home = path.join(base, "home")
+  const stateDir = path.join(base, "state")
   await mkdir(dir, { recursive: true })
   await mkdir(home, { recursive: true })
   await writeFile(
@@ -65,7 +68,7 @@ export async function evalWorkspace(options: {
       {
         model: options.model,
         ...(options.providers ? { providers: options.providers } : {}),
-        plugins: [{ package: options.pluginDir, options: { pr: "off", stateDir: path.join(base, "state") } }],
+        plugins: [{ package: options.pluginDir, options: { pr: "off", stateDir } }],
       },
       null,
       2,
@@ -84,7 +87,7 @@ export async function evalWorkspace(options: {
       child.on("close", () => resolve())
       child.on("error", () => resolve())
     })
-  return { dir, home, cleanup: () => rm(base, { recursive: true, force: true }) }
+  return { dir, home, stateDir, cleanup: () => rm(base, { recursive: true, force: true }) }
 }
 
 export interface EvalRunOptions {

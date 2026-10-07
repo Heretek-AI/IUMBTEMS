@@ -182,6 +182,8 @@ describe("shell policy", () => {
       "node ./node_modules/@heretek-ai/es-cli/bin/es.js trust",
       `bun -e "Bun.spawn(['es','approve','spec'])"`,
       "es key seal",
+      "es reseal",
+      "es reseal --sign",
     ])
       expect([command, shell("build", command).effect]).toEqual([command, "deny"])
   })

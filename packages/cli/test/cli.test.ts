@@ -250,6 +250,18 @@ describe("es config set", () => {
     expect((await run(["config", "show"])).out).toContain('"depth": 3')
   })
 
+  test("audit.phase takes required in the project layer and rejects anything else (#33)", async () => {
+    const { verifyControl, rebaseline } = await import("@heretek-ai/es-core")
+    await rebaseline(root, "test")
+    expect((await run(["config", "set", "audit.phase", "sometimes"], human())).code).toBe(1)
+    const io = human()
+    expect((await run(["config", "set", "audit.phase", "required"], io)).code).toBe(0)
+    expect(io.output.join("")).toContain('audit.phase: (unset) → "required"')
+    expect(await projectConfig()).toEqual({ audit: { phase: "required" } })
+    expect((await verifyControl(root)).clean).toBe(true)
+    expect((await run(["config", "show"])).out).toContain('"phase": "required"')
+  })
+
   test("rejects unknown keys, invalid values and project-forbidden keys (those go --global)", async () => {
     const typo = await run(["config", "set", "reserch.depth", "3"], human())
     expect([typo.code, typo.out]).toEqual([1, expect.stringContaining("Refused")])
@@ -283,6 +295,37 @@ describe("es config set", () => {
     expect(io.output.join("")).toContain("accepted along with it")
     expect(await projectConfig()).toEqual({ pr: "gh", research: { depth: 4 } })
     expect((await verifyControl(root)).clean).toBe(true)
+  })
+})
+
+describe("es reseal", () => {
+  const stateFile = () => path.join(root, ".factory/runtime/state.json")
+  const factory = () => new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+
+  test("verifies engine sidecars; --sign re-signs reviewed files at a TTY", async () => {
+    expect(await run(["reseal"])).toEqual({ code: 0, out: expect.stringContaining("No engine-signed files yet") })
+    await factory().begin("human:tester")
+    expect((await run(["reseal"])).out).toContain("state.json: ok")
+    // Tamper outside the engine: verify reports it and the run refuses.
+    await writeFile(stateFile(), `${await readFile(stateFile(), "utf8")} `)
+    const bad = await run(["reseal"])
+    expect(bad.code).toBe(1)
+    expect(bad.out).toContain("signature mismatch")
+    await expect(factory().read()).rejects.toThrow("signature mismatch")
+    // Re-signing needs the human passphrase; a pipe cannot give it, a human signs.
+    expect((await run(["reseal", "--sign"])).code).toBe(3)
+    expect((await run(["reseal", "--sign"], human())).code).toBe(0)
+    expect((await run(["reseal"])).out).toContain("state.json: ok")
+    expect((await factory().read())!.stage).toBe("GRILL")
+  })
+
+  test("adopts a legacy pre-sidecar run after review", async () => {
+    await factory().begin("human:tester")
+    await rm(`${stateFile()}.sig`)
+    await expect(factory().read()).rejects.toThrow("es reseal")
+    expect((await run(["reseal"])).out).toContain("missing sidecar")
+    expect((await run(["reseal", "--sign"], human())).code).toBe(0)
+    expect((await factory().read())!.stage).toBe("GRILL")
   })
 })
 

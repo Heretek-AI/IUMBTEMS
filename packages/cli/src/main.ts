@@ -63,6 +63,7 @@ import {
   type HumanContext,
   rebaselineControl,
   recordPr,
+  reseal,
   resume,
   retract,
   trust,
@@ -94,6 +95,7 @@ Checkpoints and exceptions                                      [human, TTY]
   approve <frontier|spec>       Approve a checkpoint (shows hashes; asks for the passphrase)
   trust [--show]                Approve this project's gate commands by hash
   rebaseline                    Accept hand edits to pinned control files (gates.json, config.json)
+  reseal [--sign]               Verify engine sidecars (re-sign reviewed files)   [human, TTY]
   waive <rule> --reason "…" [--files <glob>] [--expires 7d] [--id <name>]
   key seal                      Create the passphrase-sealed human key   [human, TTY]
   key status                    Show the human key fingerprint
@@ -162,6 +164,7 @@ const BOOLEAN_FLAGS = [
   "allow-unverifiable",
   "global",
   "open-only",
+  "sign",
 ]
 
 export async function main(argv: readonly string[], io: MainIO): Promise<number> {
@@ -181,7 +184,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
     ...(io.stateDir ? { stateDir: io.stateDir } : {}),
   }
   const subArgs = (from: number): Args => ({ positionals: args.positionals.slice(from), flags: args.flags })
-  const factory = (extra: { researchDepth?: number } = {}) =>
+  const factory = (extra: { researchDepth?: number; auditPhase?: "optional" | "required" } = {}) =>
     new Factory(root, {
       gates: gateRunner(io.stateDir ? { stateDir: io.stateDir } : {}),
       ...(io.stateDir ? { stateDir: io.stateDir } : {}),
@@ -198,11 +201,16 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         io.print(VERSION)
         return 0
       case "status": {
-        const depth = await loadEsConfig(root).then(
-          (loaded) => loaded.config.research.depth,
+        const loaded = await loadEsConfig(root).then(
+          (loaded) => ({ depth: loaded.config.research.depth, auditPhase: loaded.config.audit.phase }),
           () => undefined,
         )
-        io.print(await factory(depth === undefined ? {} : { researchDepth: depth }).summary())
+        io.print(
+          await factory({
+            ...(loaded?.depth === undefined ? {} : { researchDepth: loaded.depth }),
+            ...(loaded?.auditPhase === "required" ? { auditPhase: "required" as const } : {}),
+          }).summary(),
+        )
         return 0
       }
       case "approve":
@@ -211,6 +219,8 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         return await trust(context, subArgs(1))
       case "rebaseline":
         return await rebaselineControl(context)
+      case "reseal":
+        return await reseal(context, args.flags.sign === true)
       case "waive":
         return await waive(context, subArgs(1))
       case "key": {
