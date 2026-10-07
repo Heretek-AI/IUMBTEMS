@@ -10,7 +10,7 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { factoryLayout } from "../layout.ts"
-import { readJson, writeJson } from "../util/fs.ts"
+import { readJson, withLock, writeJson } from "../util/fs.ts"
 import { matchAny } from "../util/glob.ts"
 import { sha256 } from "../util/hash.ts"
 
@@ -132,6 +132,30 @@ export async function rebaseline(root: string, updatedBy: string): Promise<Contr
   }
   await writeJson(factoryLayout(root).control, baseline)
   return baseline
+}
+
+/**
+ * Re-pin one control file after an agent write (#32). Unlike `rebaseline`,
+ * only `rel` is updated, so a concurrent hand edit to another control file
+ * (gates.json, config.json) is not absorbed into the baseline: it still shows
+ * as drift and halts the run. Acts only when a baseline exists; compare-and-
+ * swaps on `expectedOld` (the pin before our write) so a concurrent change to
+ * the same file is not silently absorbed either.
+ */
+export async function repinControl(root: string, rel: string, expectedOld: string | null): Promise<void> {
+  const file = factoryLayout(root).control
+  await withLock(file, async () => {
+    const baseline = await readJson<ControlBaseline>(file)
+    if (!baseline) return
+    if ((baseline.files[rel] ?? null) !== expectedOld) return
+    const current = await hashOrNull(path.join(root, ...rel.split("/")))
+    baseline.files[rel] = current
+    await writeJson(file, {
+      ...baseline,
+      updatedAt: new Date().toISOString(),
+      updatedBy: `${baseline.updatedBy} + repin:${rel}`,
+    })
+  })
 }
 
 export interface ControlCheck {

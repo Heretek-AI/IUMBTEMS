@@ -33,7 +33,7 @@ import { researchCache } from "../research/ops.ts"
 import { type Frontier, FrontierSchema } from "../schema/frontier.ts"
 import { type AcceptanceCriterion, parseGoalMarkdown } from "../schema/goal.ts"
 import { RoadmapSchema } from "../schema/roadmap.ts"
-import { rebaseline, verifyControl } from "../trust/control.ts"
+import { rebaseline, repinControl, verifyControl } from "../trust/control.ts"
 import { checkStopFile } from "../trust/stop.ts"
 import { appendLine, exists, readJson, relativeInside, withLock, writeJson } from "../util/fs.ts"
 import { sha256 } from "../util/hash.ts"
@@ -290,8 +290,13 @@ export class Factory {
         })
         const problems = diffFrontier(previous, parsed.data)
         if (problems.length) throw new FactoryError(`The frontier write was refused:\n- ${problems.join("\n- ")}`)
+        const before = await readJson<{ files?: Record<string, string | null> }>(this.layout.control).catch(
+          () => undefined,
+        )
         await writeJson(this.layout.frontier, parsed.data)
-        await rebaseline(this.root, `agent:${agentId} via es_frontier_write`)
+        // Re-pin only the frontier file (#32): a concurrent hand edit to
+        // gates.json or config.json must still halt the run as drift.
+        await repinControl(this.root, ".factory/frontier.json", before?.files?.[".factory/frontier.json"] ?? null)
         const counts = treeCounts(parsed.data)
         await this.audit(`agent:${agentId}`, "frontier.write", {
           settled: parsed.data.settled,

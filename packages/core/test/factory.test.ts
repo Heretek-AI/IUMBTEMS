@@ -88,6 +88,30 @@ describe("grill → research → spec", () => {
     expect(JSON.parse(await readFile(factoryLayout(fx.root).frontier, "utf8")).idea).toBe("A greeting library")
   })
 
+  test("#32: a hand edit to gates.json around a frontier write still halts as drift", async () => {
+    const { repinControl, verifyControl } = await import("../src/trust/control.ts")
+    const { readJson } = await import("../src/util/fs.ts")
+    await factory.begin("human:tester")
+    await factory.writeFrontier("grill", frontier())
+    await approve("frontier") // human rebaseline: baseline pins frontier + approvals
+    expect((await verifyControl(fx.root)).clean).toBe(true)
+    const before = await readJson<{ files: Record<string, string | null> }>(factoryLayout(fx.root).control)
+    const frontierPin = before?.files[".factory/frontier.json"] ?? null
+    await writeFile(path.join(fx.root, ".factory/gates.json"), '{"commands":[]}\n')
+    // The agent rewrite re-pins only its own file: the hand edit is not absorbed...
+    await writeFile(
+      factoryLayout(fx.root).frontier,
+      JSON.stringify({ ...frontier(), idea: "A greeting library, revised" }),
+    )
+    await repinControl(fx.root, ".factory/frontier.json", frontierPin)
+    const check = await verifyControl(fx.root)
+    expect(check.clean).toBe(false)
+    expect(check.violations.join(";")).toContain(".factory/gates.json")
+    expect(check.violations.some((v) => v.includes(".factory/frontier.json"))).toBe(false)
+    // ...so the next guarded transition halts on the drift.
+    await expect(factory.writeFrontier("grill", frontier())).rejects.toThrow(FactoryHalted)
+  })
+
   test("a missing or unsettled frontier points at the grill recording step", async () => {
     await expect(approvalSubject(fx.root, "frontier")).rejects.toThrow("/grill")
     await factory.begin("human:tester")
