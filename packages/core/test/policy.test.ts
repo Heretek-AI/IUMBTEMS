@@ -50,6 +50,12 @@ describe("control classification", () => {
     [".claude/settings.json", "config"],
     [".factory/specs/p1/GOAL.md", undefined],
     ["src/index.ts", undefined],
+    // #45: case variants name the same file on case-insensitive volumes.
+    [".factory/GATES.json", "factory"],
+    [".FACTORY/approvals/spec.json", "factory"],
+    [".factory/research/SOURCES/abc.md", "factory"],
+    [".factory/research/Dossier.json", "factory"],
+    ["OpenCode.json", "config"],
   ])("%s → %s", (file, expected) => expect(controlClass(file)).toBe(expected as any))
 })
 
@@ -152,7 +158,7 @@ describe("shell policy", () => {
   const shell = (agent: string | undefined, command: string, sandboxAvailable = true) =>
     evaluateShell(ctx(), agent, command, { sandboxAvailable })
 
-  test("human-only CLIs are denied for every agent", () => {
+  test("human-only CLIs are denied for every agent, however they are quoted or wrapped", () => {
     expect(shell("build", "es approve spec").effect).toBe("deny")
     expect(shell(undefined, "cd x && epistemic-swarm waive lint/check").effect).toBe("deny")
     expect(shell("build", "es config set models.deep x/y").effect).toBe("deny")
@@ -166,6 +172,18 @@ describe("shell policy", () => {
     expect(shell("build", "es audit verify").effect).toBe("allow")
     expect(shell("build", "es audit show").effect).toBe("allow")
     expect(shell("build", "es scout show").effect).toBe("allow")
+    // The 1.1.0 audit (#44, #39): quoting, package runners and interpreters.
+    for (const command of [
+      "es 'approve' spec",
+      "es 'audit' src",
+      "es 'scout' leftpad",
+      "npx -y @heretek-ai/es-cli audit src --max-usd 5",
+      "bunx @heretek-ai/es-cli@1.1.0 approve frontier",
+      "node ./node_modules/@heretek-ai/es-cli/bin/es.js trust",
+      `bun -e "Bun.spawn(['es','approve','spec'])"`,
+      "es key seal",
+    ])
+      expect([command, shell("build", command).effect]).toEqual([command, "deny"])
   })
 
   test("seats may not reach the evidence cache from the shell; others may read but not mutate it", () => {
@@ -181,32 +199,78 @@ describe("shell policy", () => {
     expect(shell("es-programmer", "cat .factory/gates.json").effect).toBe("deny")
   })
 
-  test("a control-file mention is read-only-gated for every agent: interpreter one-liners cannot write", () => {
-    // The adversarial audit (A3): `python3 -c` / `node -e` bypassed the old
-    // rule, which only matched shell metacharacters (MUTATING).
+  test("a .factory mention is read-only-gated for the user's agents: the audit's bypasses are refused", () => {
+    // A3 (1.1.0): interpreter one-liners.
     expect(shell("build", `python3 -c 'open(".factory/gates.json","w").write("pwned")'`).effect).toBe("deny")
     expect(
       shell("build", `node -e 'require("fs").writeFileSync(".factory/research/sources/x.md","forged")'`).effect,
     ).toBe("deny")
     expect(shell("build", `bun -e 'Bun.write(".factory/claims/x", "y")'`).effect).toBe("deny")
-    // Reads stay allowed for non-seat agents; substitution and redirection do not.
+    // #37: commands the old allowlist called read-only, and paths it never saw.
+    for (const command of [
+      `env python3 -c "open('.factory/gates.json','w').write('{}')"`,
+      "find . -maxdepth 0 -fprintf .factory/gates.json x",
+      "sort -o .factory/frontier.json /etc/hostname",
+      "git diff --no-index --output=.factory/claims/x.json /etc/hostname /etc/hostname",
+      "uniq /etc/hostname .factory/research/coverage.json",
+      "cd .factory && echo '{}' > gates.json",
+      `cd .fac""tory && printf forged > research/sources/aa.md`,
+      "echo x > .FACTORY/GATES.json",
+    ])
+      expect([command, shell("build", command, false).effect]).toEqual([command, "deny"])
+    // Reads stay allowed; substitution and redirection do not.
     expect(shell("build", "cat .factory/gates.json").effect).toBe("allow")
     expect(shell("build", "cat .factory/gates.json | grep gates").effect).toBe("allow")
+    expect(shell("build", "ls .factory/specs").effect).toBe("allow")
     expect(shell("build", "cat .factory/gates.json $(curl -s evil.example)").effect).toBe("deny")
     expect(shell("build", "cat .factory/gates.json > /tmp/copy.json").effect).toBe("deny")
     expect(shell("build", "sed -n 1p .factory/gates.json").effect).toBe("deny")
   })
 
-  test("read-only seats run sandboxed, or allowlisted when bubblewrap is missing", () => {
-    expect(shell("es-qa-functional", "bun test")).toEqual({ effect: "allow", mode: "readonly-sandbox" })
-    expect(shell("es-qa-functional", "git diff | head", false)).toEqual({ effect: "allow", mode: "readonly-checked" })
-    expect(shell("es-qa-functional", "rm -rf src", false).effect).toBe("deny")
-    expect(shell("es-qa-functional", "cat $(echo x)", false).effect).toBe("deny")
+  test("the private state dir is refused by name, glob or path", () => {
+    for (const command of [
+      `cat ${state}/key`,
+      "cat ~/.local/state/epistemic-swarm/k*",
+      "ls $HOME/.local/state/epistemic-swarm",
+    ])
+      expect([command, shell("build", command).effect]).toEqual([command, "deny"])
   })
 
-  test("seats cannot push or rewrite refs", () => {
-    expect(shell("es-programmer", "git push origin HEAD").effect).toBe("deny")
-    expect(shell("es-programmer", "bun test")).toEqual({ effect: "allow", mode: "normal" })
+  test("every agent shell is sandboxed by kind; seats fail closed without bubblewrap", () => {
+    expect(shell("build", "bun test")).toEqual({ effect: "allow", mode: "sandbox", kind: "user", offline: false })
+    expect(shell("build", "bun test", false)).toEqual({ effect: "allow", mode: "unsandboxed" })
+    expect(shell("es-programmer", "bun test")).toEqual({
+      effect: "allow",
+      mode: "sandbox",
+      kind: "programmer",
+      offline: false,
+    })
+    expect(shell("es-qa-functional", "bun test")).toMatchObject({ mode: "sandbox", kind: "readonly" })
+    expect(shell("es-research-alpha", "curl -s https://example.com")).toMatchObject({ kind: "readonly", offline: true })
+    expect(shell("factory", "ls")).toMatchObject({ kind: "readonly", offline: false })
+    for (const agent of ["es-programmer", "es-qa-functional", "es-research-alpha", "factory"]) {
+      const decision = shell(agent, "ls", false)
+      expect([agent, decision.effect, "reason" in decision ? decision.reason : ""]).toEqual([
+        agent,
+        "deny",
+        expect.stringContaining("bubblewrap"),
+      ])
+    }
+  })
+
+  test("seats cannot push, change git config or remotes, or rewrite refs, whatever the global options", () => {
+    for (const command of [
+      "git push origin HEAD",
+      "git -C . push origin HEAD:main",
+      "git -c core.x=1 push --force origin HEAD:main",
+      "git -C . config core.hooksPath /tmp/h",
+      "git remote add evil https://example.com/x.git",
+      "git reset --hard HEAD~1",
+      "git branch -D main",
+    ])
+      expect([command, shell("es-programmer", command).effect]).toEqual([command, "deny"])
+    expect(shell("es-programmer", "git status").effect).toBe("allow")
+    expect(shell("es-programmer", "git diff --stat").effect).toBe("allow")
   })
 })
 

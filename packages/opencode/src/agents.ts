@@ -23,6 +23,9 @@ export function permissionRules(spec: AgentSpec, mcpServers: readonly string[]):
     ...spec.spawns.map((agent) => ({ action: "subagent", resource: agent, effect: "allow" as const })),
     { action: "skill", resource: "*", effect: "deny" },
     ...spec.skills.map((skill) => ({ action: "skill", resource: skill, effect: "allow" as const })),
+    // Code Mode (`execute`) reaches host tools no seat needs, including MCP
+    // resources outside the seat's MCP scope.
+    { action: "execute", resource: "*", effect: "deny" },
   ]
   for (const server of mcpServers)
     if (!spec.mcp.includes(server))

@@ -65,12 +65,17 @@ export type ControlClass = "factory" | "config"
  * inside a phase worktree (.factory/worktrees/<id>/...) are classified by their
  * path within that worktree, since they would ship on the phase branch.
  */
+// Matched case-insensitively: on a case-insensitive volume `.factory/GATES.json`
+// is the gates file, so a case variant must not slip past the policy (#45).
+const FACTORY_CONTROL_LOWER = FACTORY_CONTROL.map((glob) => glob.toLowerCase())
+const CONFIG_CONTROL_LOWER = CONFIG_CONTROL.map((glob) => glob.toLowerCase())
+
 export function controlClass(relative: string): ControlClass | undefined {
-  const normalized = relative.replace(/^\.\//, "")
+  const normalized = relative.replace(/^\.\//, "").toLowerCase()
   const inner = /^\.factory\/worktrees\/[^/]+\/(.+)$/.exec(normalized)?.[1]
   for (const candidate of inner ? [normalized, inner] : [normalized]) {
-    if (matchAny(candidate, FACTORY_CONTROL)) return "factory"
-    if (matchAny(candidate, CONFIG_CONTROL)) return "config"
+    if (matchAny(candidate, FACTORY_CONTROL_LOWER)) return "factory"
+    if (matchAny(candidate, CONFIG_CONTROL_LOWER)) return "config"
   }
   return undefined
 }

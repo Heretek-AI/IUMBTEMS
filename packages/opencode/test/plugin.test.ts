@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { researchSourcesDir, SourceCache } from "@heretek-ai/es-core"
+import { bwrapAvailable, researchSourcesDir, SourceCache } from "@heretek-ai/es-core"
 import { boot, directiveScript, type Harness, lastAgentRequest, systemText } from "@heretek-ai/es-testkit"
 import { EsRpc } from "../src/rpc-def.ts"
 
@@ -173,6 +173,16 @@ describe("integrity on the real host", () => {
     expect(systemText(programmer)).not.toContain("<id>grill</id>")
   })
 
+  test("seats are not offered Code Mode; the user's own agent still is (issue #50)", async () => {
+    const offered = async (agent: string) => {
+      await h.run("hello", { agent })
+      return (lastAgentRequest(h.llm.requests)?.tools ?? []).map((tool) => tool.function.name)
+    }
+    expect(await offered("build")).toContain("execute")
+    for (const agent of ["factory", "grill", "brainstormer", "harvester", "es-research-alpha", "es-programmer"])
+      expect([agent, (await offered(agent)).includes("execute")]).toEqual([agent, false])
+  })
+
   test("the factory invokes a hidden seat by id; compaction keeps the factory state", async () => {
     const { sessionID } = await h.run(
       `delegate ${call("subagent", { agent: "es-manager", description: "plan", prompt: "summarise the roadmap" })}`,
@@ -191,19 +201,53 @@ describe("integrity on the real host", () => {
     expect(systemText(compaction)).toContain("<factory-state>")
   })
 
-  test("a QA seat cannot write, and its shell writes never escape (sandbox or allowlist)", async () => {
+  test("a QA seat cannot write, and its shell writes never escape (sandboxed, or refused without bwrap)", async () => {
     const { tools } = await h.run(
-      `qa ${call("write", { path: "src/x.ts", content: "x" })} ${call("shell", { command: "touch QA_TOUCHED && echo touched" })}`,
+      `qa ${call("write", { path: "src/x.ts", content: "x" })} ${call("shell", { command: "touch QA_TOUCHED; echo tried" })}`,
       { agent: "es-qa-functional" },
     )
     expect(tools[0]?.status).toBe("error")
-    // With bwrap the command runs and the write vanishes; without it the
-    // allowlist refuses the command outright. Either way nothing escapes.
+    // With bwrap the command runs and the write fails or vanishes; without it
+    // factory seats get no shell at all (1.1.1). Either way nothing escapes.
     const shell = tools[1]
-    if (shell?.status === "completed") expect(shell.text).toContain("touched")
-    else expect(shell?.text).toMatch(/allowlist|read-only seat/i)
+    if (bwrapAvailable()) expect(shell?.text).toContain("tried")
+    else expect(shell?.text).toMatch(/bubblewrap/i)
     expect(await exists(path.join(h.directory, "QA_TOUCHED"))).toBe(false)
   })
+
+  test.skipIf(!bwrapAvailable())(
+    "the 1.1.0 audit's shell attacks fail in the sandbox even when they evade the text rules",
+    async () => {
+      await mkdir(path.join(h.directory, ".factory/research/sources"), { recursive: true })
+      await writeFile(path.join(state, "key"), "PLANTED-SIGNING-KEY\n")
+      const sh = async (agent: string, command: string) =>
+        (await h.run(`x ${call("shell", { command })}`, { agent })).tools[0]
+      // P1/P5: variable indirection hides the factory dir from any text rule.
+      for (const agent of ["build", "es-programmer"]) {
+        const forged = await sh(agent, 'F=.fac; cd "${F}tory" && echo forged > research/sources/forged.md; echo done')
+        expect([agent, forged?.status]).toEqual([agent, "completed"])
+        expect(await exists(path.join(h.directory, ".factory/research/sources/forged.md"))).toBe(false)
+      }
+      // P3: the programmer reads the signing key through a glob.
+      const leak = await sh(
+        "es-programmer",
+        `D=${path.dirname(state)}; cat "$D"/${path.basename(state)}/k* ; echo done`,
+      )
+      expect(leak?.text ?? "").not.toContain("PLANTED-SIGNING-KEY")
+      // P4: a cached-web research seat reaches a local server.
+      const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("NET-REACHED") })
+      try {
+        const net = await sh(
+          "es-research-alpha",
+          `python3 -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:${server.port}/').read())"; echo done`,
+        )
+        expect(net?.text ?? "").not.toContain("NET-REACHED")
+      } finally {
+        server.stop(true)
+      }
+    },
+    60_000,
+  )
 
   test("the STOP file stops factory seats and es tools, not the user's own agent", async () => {
     await mkdir(path.join(h.directory, ".factory"), { recursive: true })

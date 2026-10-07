@@ -12,7 +12,7 @@ import {
   runGates,
   trustProject,
 } from "../src/index.ts"
-import { run } from "../src/util/proc.ts"
+import { bwrapAvailable, resetBwrapProbe, run } from "../src/util/proc.ts"
 import { type Fixture, gitRepo } from "./helpers.ts"
 
 const BIOME = path.resolve(import.meta.dir, "../../../node_modules/.bin/biome")
@@ -63,6 +63,49 @@ describe("detection", () => {
     await write("go.mod", "module x\n")
     const ids = (await detectGates(fx.root)).commands.map((item) => item.id)
     expect(ids).toEqual(["test", "py-format", "py-lint", "py-test", "go-format", "go-lint", "go-test"])
+  })
+})
+
+describe("the gate sandbox (#51)", () => {
+  // Gate commands are trusted, but what they run (tests) is agent-written.
+  const probe = (key: string) =>
+    [
+      `cat ${key} > leak.txt 2>/dev/null`,
+      "mkdir -p .factory/research/sources && echo forged > .factory/research/sources/forged.md",
+      "git config core.hooksPath /tmp/evil-hooks",
+      "echo ran > ran.txt",
+      "true",
+    ].join("; ")
+
+  test.skipIf(!bwrapAvailable())(
+    "agent-written test code cannot read the key, forge evidence or retarget git",
+    async () => {
+      const key = path.join(fx.state, "key")
+      await writeFile(key, "SECRET-SIGNING-KEY\n")
+      await mkdir(path.join(fx.root, ".factory"), { recursive: true })
+      await write("probe.sh", `${probe(key)}\n`)
+      const cfg = config([{ id: "probe", kind: "test", command: "sh probe.sh" }])
+      await trust(cfg)
+      const report = await gates({ scope: "full", config: cfg, sandbox: "required" })
+      expect(report.checks.find((check) => check.id === "probe")?.status).toBe("pass")
+      expect(await Bun.file(path.join(fx.root, "ran.txt")).text()).toBe("ran\n")
+      expect(await Bun.file(path.join(fx.root, "leak.txt")).text()).not.toContain("SECRET-SIGNING-KEY")
+      expect(await Bun.file(path.join(fx.root, ".factory/research/sources/forged.md")).exists()).toBe(false)
+      expect(await Bun.file(path.join(fx.root, ".git/config")).text()).not.toContain("hooksPath")
+    },
+  )
+
+  test("a required sandbox refuses to run when bubblewrap is missing", async () => {
+    const cfg = config([{ id: "probe", kind: "test", command: "touch RAN" }])
+    await trust(cfg)
+    resetBwrapProbe(false)
+    try {
+      const report = await gates({ scope: "full", config: cfg, sandbox: "required" })
+      expect(report.findings.map((finding) => finding.rule)).toContain("gates/sandbox-missing")
+      expect(await Bun.file(path.join(fx.root, "RAN")).exists()).toBe(false)
+    } finally {
+      resetBwrapProbe()
+    }
   })
 })
 

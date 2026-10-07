@@ -8,6 +8,7 @@ import { stateDir } from "../layout.ts"
 import { matchAny } from "../util/glob.ts"
 import { controlClass } from "./control.ts"
 import { canonicalPath, isInside, relativeTo, resolveTarget } from "./paths.ts"
+import { SANDBOX_MISSING, type SandboxKind } from "./sandbox.ts"
 
 export type Decision = { readonly effect: "allow" } | { readonly effect: "deny" | "ask"; readonly reason: string }
 
@@ -99,34 +100,114 @@ export function evaluateRead(context: PolicyContext, _agentId: string | undefine
 }
 
 // ------------------------------------------------------------------ shell
+//
+// Enforcement is the OS sandbox (trust/sandbox.ts): every agent shell runs
+// under bubblewrap with control files read-only and secrets masked; factory
+// seats are refused outright without it. The text rules below are defence in
+// depth with clear refusal messages, and the only layer for the user's own
+// agents on hosts without bubblewrap, where they are best effort: arbitrary
+// shell can always outwit pattern matching, so that mode is documented as
+// weaker.
 
 export type ShellDecision =
-  | { readonly effect: "allow"; readonly mode: "normal" | "readonly-sandbox" | "readonly-checked" }
+  | { readonly effect: "allow"; readonly mode: "sandbox"; readonly kind: SandboxKind; readonly offline: boolean }
+  | { readonly effect: "allow"; readonly mode: "unsandboxed" }
   | { readonly effect: "deny"; readonly reason: string }
 
-const HUMAN_ONLY_CLI =
-  /(^|[\s;&|(`'"/])(es|epistemic-swarm)\s+(approve|trust|waive|resume|rebaseline|factory\s+(resume|pr)|gates\s+install-git|lsp\s+install|config\s+set|research\s+retract)\b/
-/** Human-launched jobs that drive a harness CLI: an agent must not start nested headless runs. */
-const HUMAN_ONLY_JOBS = /(^|[\s;&|(`'"/])(es|epistemic-swarm)\s+(audit\s+(?!(verify|show)\b)\S|scout\s+(?!show\b)\S)/
+/** The command with shell quoting and escapes removed, so `es 'approve'` and `.fac""tory` read plainly. */
+export const unquoteShell = (command: string) => command.replaceAll(/['"\\]/g, "")
+
+const words = (command: string) => command.split(/[^\w@./-]+/).filter(Boolean)
+
+const ES_BINARY = /^(es|epistemic-swarm|es\.js|es-cli|@heretek-ai\/es-cli(@[\w.-]+)?)$|\/(es|es\.js|epistemic-swarm)$/
+/** Human-only verbs: the next word(s) after the es binary. */
+const HUMAN_VERBS: ReadonlyArray<readonly [string, ((next: string | undefined) => boolean)?]> = [
+  ["approve"],
+  ["trust"],
+  ["waive"],
+  ["resume"],
+  ["rebaseline"],
+  ["key"],
+  ["reseal"],
+  ["factory", (next) => next === "resume" || next === "pr"],
+  ["gates", (next) => next === "install-git"],
+  ["lsp", (next) => next === "install"],
+  ["config", (next) => next === "set"],
+  ["research", (next) => next === "retract" || next === "export"],
+  // Audit and scout runs drive a harness CLI: an agent must not start nested headless runs.
+  ["audit", (next) => next !== undefined && next !== "verify" && next !== "show"],
+  ["scout", (next) => next !== undefined && next !== "show"],
+]
+
+/** Whether the command invokes a human-only es verb, however it is quoted or wrapped. */
+export function invokesHumanOnly(command: string): boolean {
+  const tokens = words(unquoteShell(command))
+  return tokens.some((token, index) => {
+    if (!ES_BINARY.test(token)) return false
+    const verb = tokens[index + 1]
+    const rule = HUMAN_VERBS.find(([name]) => name === verb)
+    return rule !== undefined && (rule[1] === undefined || rule[1](tokens[index + 2]))
+  })
+}
+
 const CONTROL_MENTION =
-  /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|audits\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design|scout)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/
+  /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|audits\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design|scout)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/i
+/** Any mention of the factory dir (a `cd .factory` reaches control files without naming them). */
+const FACTORY_MENTION = /(^|[\s/=:])\.factory(\/|\s|$)/i
 const MUTATING =
   /(>|\btee\b|\brm\b|\bmv\b|\bcp\b|\bln\b|\btruncate\b|\bchmod\b|\bchown\b|\btouch\b|\bsed\s+(-[a-zA-Z]*i|--in-place)|\bdd\b|\binstall\b|\bgit\s+(checkout|restore|rm|mv|reset|clean|apply|am|stash))/
-const SEAT_FORBIDDEN_GIT =
-  /\bgit\s+(push|reset\s+--hard|clean\b|branch\s+-D|worktree\b|filter-branch|update-ref|config\b)/
 
-/** Commands a read-only seat may run when bubblewrap is unavailable (each pipeline segment). */
+/** Global git options that take a value, skipped to find the subcommand (`git -C . push`). */
+const GIT_VALUE_OPTIONS = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--exec-path",
+  "--config-env",
+])
+const SEAT_FORBIDDEN_GIT = new Set(["push", "config", "worktree", "filter-branch", "update-ref", "clean", "remote"])
+
+/** git subcommands in a command, past global options. */
+function gitSubcommands(command: string): Array<{ sub: string; args: string[] }> {
+  const found: Array<{ sub: string; args: string[] }> = []
+  for (const segment of segments(unquoteShell(command))) {
+    const tokens = segment.split(/\s+/)
+    for (let i = 0; i < tokens.length; i++) {
+      if (!/(^|\/)git$/.test(tokens[i]!)) continue
+      let j = i + 1
+      while (j < tokens.length && tokens[j]!.startsWith("-")) j += GIT_VALUE_OPTIONS.has(tokens[j]!) ? 2 : 1
+      if (j < tokens.length) found.push({ sub: tokens[j]!, args: tokens.slice(j + 1) })
+    }
+  }
+  return found
+}
+
+const seatForbiddenGit = (command: string) =>
+  gitSubcommands(command).find(
+    ({ sub, args }) =>
+      SEAT_FORBIDDEN_GIT.has(sub) ||
+      (sub === "reset" && args.includes("--hard")) ||
+      (sub === "branch" && args.some((arg) => /^-[a-zA-Z]*D/.test(arg))),
+  )
+
+/**
+ * Commands that only read (each pipeline segment). No `env` (it runs any
+ * program), and no tool with an output-file option: `sort -o`, `uniq IN OUT`,
+ * `tree -o`, `git … --output`, `find -fprint*`/`-fls` all write.
+ */
 const READONLY_ALLOW = [
-  /^git\s+(status|log|diff|show|blame|grep|ls-files|rev-parse|branch(\s+--list)?|describe)\b/,
-  /^(ls|cat|head|tail|wc|grep|rg|stat|file|tree|pwd|echo|which|sort|uniq|cut|tr|diff|basename|dirname|realpath|env|date|true)\b/,
-  /^find\b(?!.*\s-(delete|exec|execdir|ok|fprint)\b)/,
+  /^git\s+(status|log|diff|show|blame|grep|ls-files|rev-parse|branch(\s+--list)?|describe)\b(?!.*\s--output\b)/,
+  /^(ls|cat|head|tail|wc|grep|rg|stat|file|pwd|echo|which|cut|tr|diff|basename|dirname|realpath|date|true)\b/,
+  /^find\b(?!.*\s-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)\b)/,
   /^(bun\s+test|npx\s+(vitest|jest)|vitest|jest|pytest|cargo\s+test|go\s+test|npm\s+test|bun\s+run\s+test|python3?\s+-m\s+pytest)\b/,
   /^(tsc|npx\s+tsc|bunx\s+tsc|biome\s+(check|lint|format)|npx\s+biome|bunx\s+biome|ruff\s+(check|format\s+--check)|mypy|eslint|npx\s+eslint)\b/,
 ]
 
 function segments(command: string): string[] {
   return command
-    .split(/\|\||&&|[;|\n]/)
+    .split(/\|\||&&|[;|\n&]/)
     .map((segment) => segment.trim())
     .filter(Boolean)
 }
@@ -134,8 +215,7 @@ function segments(command: string): string[] {
 /**
  * A command that cannot write: no redirection, here-doc or command
  * substitution, and every segment on the read-only allowlist. Interpreter
- * one-liners (`python3 -c`, `node -e`, `bun -e`, …) are not on it, so a
- * control-file mention inside one is refused for every agent.
+ * one-liners (`python3 -c`, `node -e`, `bun -e`, …) are not on it.
  */
 const isProvablyReadOnly = (command: string): boolean =>
   !/[<>`]|\$\(/.test(command) &&
@@ -148,39 +228,45 @@ export function evaluateShell(
   options: { readonly sandboxAvailable: boolean },
 ): ShellDecision {
   const spec = agentSpec(agentId)
-  if (HUMAN_ONLY_CLI.test(command) || HUMAN_ONLY_JOBS.test(command))
+  const plain = unquoteShell(command)
+  if (invokesHumanOnly(command))
     return {
       effect: "deny",
       reason:
-        "That command is human-only (approvals, trust, waivers, resume, rebaseline, config set, retractions, audit and scout runs); agents cannot run it.",
+        "That command is human-only (approvals, trust, waivers, resume, rebaseline, keys, config set, retractions, exports, audit and scout runs); agents cannot run it.",
     }
   const privateDir = canonicalPath(context.stateDir ?? stateDir())
-  if (command.includes(privateDir) || /epistemic-swarm\/(key|trust)/.test(command))
+  if (plain.includes(privateDir) || /epistemic-swarm\/(key|trust|engine)|state\/epistemic-swarm/i.test(plain))
     return { effect: "deny", reason: "Agents may not access Epistemic Swarm's private state dir." }
-  if (CONTROL_MENTION.test(command) && (spec || MUTATING.test(command) || !isProvablyReadOnly(command)))
+  if (spec) {
+    if (!options.sandboxAvailable) return { effect: "deny", reason: `Factory seat "${spec.id}": ${SANDBOX_MISSING}` }
+    if (CONTROL_MENTION.test(plain))
+      return {
+        effect: "deny",
+        reason: "Factory seats may not reference control files from the shell; use the read tool to inspect them.",
+      }
+    const git = seatForbiddenGit(command)
+    if (git)
+      return {
+        effect: "deny",
+        reason: `Factory seats may not push, change git config or remotes, rewrite refs or manage worktrees (git ${git.sub}).`,
+      }
+    const kind: SandboxKind = spec.seat === "programmer" ? "programmer" : spec.readonlyShell ? "readonly" : "seat"
+    return { effect: "allow", mode: "sandbox", kind, offline: spec.web === "cached" }
+  }
+  // The user's own agents: control files and the factory dir only in provably read-only commands.
+  if (
+    (CONTROL_MENTION.test(plain) || FACTORY_MENTION.test(plain)) &&
+    (MUTATING.test(plain) || !isProvablyReadOnly(plain))
+  )
     return {
       effect: "deny",
-      reason: spec
-        ? "Factory seats may not reference control files from the shell; use the read tool to inspect them."
-        : "A control file may only be mentioned in a provably read-only shell command (no interpreters, redirection or substitution); use the read tool otherwise.",
+      reason:
+        "Epistemic Swarm's .factory/ and control files may only be mentioned in a provably read-only shell command (no interpreters, redirection or substitution); use the read tool otherwise.",
     }
-  if (!spec) return { effect: "allow", mode: "normal" }
-  if (SEAT_FORBIDDEN_GIT.test(command))
-    return {
-      effect: "deny",
-      reason: "Factory seats may not push, rewrite refs, manage worktrees or change git config.",
-    }
-  if (!spec.readonlyShell) return { effect: "allow", mode: "normal" }
-  if (options.sandboxAvailable) return { effect: "allow", mode: "readonly-sandbox" }
-  if (/`|\$\(/.test(command))
-    return { effect: "deny", reason: "Command substitution is not allowed in a read-only seat without bubblewrap." }
-  const blocked = segments(command).find((segment) => !READONLY_ALLOW.some((pattern) => pattern.test(segment)))
-  if (blocked)
-    return {
-      effect: "deny",
-      reason: `Read-only seat "${spec.id}" may not run "${blocked}" (bubblewrap unavailable, allowlist enforced).`,
-    }
-  return { effect: "allow", mode: "readonly-checked" }
+  return options.sandboxAvailable
+    ? { effect: "allow", mode: "sandbox", kind: "user", offline: false }
+    : { effect: "allow", mode: "unsandboxed" }
 }
 
 /** Quote one argument for POSIX sh. */

@@ -84,6 +84,8 @@ export default Plugin.define({
     }
     await ctx.tool.hook("execute.before", policy.before as any)
     await ctx.tool.hook("execute.before", bridge.before as any)
+    // Last: the final (possibly hook-rewritten) shell command is re-checked and sandboxed.
+    await ctx.tool.hook("execute.before", policy.sandbox as any)
     await ctx.tool.hook("execute.after", policy.after as any)
     await ctx.tool.hook("execute.after", createWebCache(runtime, searches) as any)
     await ctx.tool.hook("execute.after", bridge.after as any)

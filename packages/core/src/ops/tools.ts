@@ -205,6 +205,8 @@ export function esTools(ops: OpsContext): EsToolDef[] {
           ...(worktree && phase?.baseCommit ? { base: phase.baseCommit, phaseId: phase.id } : {}),
           ...(state ? { runId: state.runId } : {}),
           stateDir: ops.stateDir,
+          // A seat's gate run executes agent-written code: sandbox or refuse.
+          sandbox: seat ? "required" : "preferred",
           ...(ops.lsp ? { lsp: ops.lsp } : {}),
           ...(context.signal ? { signal: context.signal } : {}),
         })
