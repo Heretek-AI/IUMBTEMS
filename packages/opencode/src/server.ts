@@ -312,6 +312,7 @@ export default Plugin.define({
             runtime.configSources.length
               ? `Layers: ${runtime.configSources.join(" → ")} → plugin options`
               : "Layers: defaults only (no config files)",
+            ...runtime.warnings.map((warning) => `Warning: ${warning}`),
             JSON.stringify(runtime.config, null, 2),
           ]
           await ctx.session.synthetic({ sessionID, text: lines.join("\n") } as any)

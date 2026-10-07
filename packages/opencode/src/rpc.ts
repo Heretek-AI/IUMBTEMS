@@ -84,6 +84,11 @@ export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>,
         pending: (await pendingApprovals(runtime.root)).map((item) => item.stage),
       }
     },
+    configState: async () => ({
+      config: JSON.stringify(runtime.config),
+      sources: [...runtime.configSources],
+      warnings: [...runtime.warnings],
+    }),
     factoryState: async () => {
       const state = await runtime.factory.read()
       const frontier = await readFrontier(runtime.root).catch(() => undefined)

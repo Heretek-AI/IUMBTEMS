@@ -26,6 +26,11 @@ export const EsRpc = Rpc.define({
       input: obj({}),
       output: obj({ summary: str, stage: str, pending: strArray }, ["summary", "stage", "pending"]),
     },
+    /** The effective config (JSON), the files it came from, and load warnings to show once. */
+    configState: {
+      input: obj({}),
+      output: obj({ config: str, sources: strArray, warnings: strArray }, ["config", "sources", "warnings"]),
+    },
     previewApproval: {
       input: obj({ stage: { type: "string", enum: ["frontier", "spec"] } }, ["stage"]),
       output: Preview,

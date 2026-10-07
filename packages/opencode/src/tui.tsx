@@ -19,6 +19,12 @@ export default Plugin.define({
     const user = userInfo().username
     const toast = (message: string, variant: "success" | "error" | "info" = "info") =>
       context.ui.toast.show({ title: "Epistemic Swarm", message, variant })
+    // Load warnings (e.g. ignored plugin options) are shown once per TUI start.
+    void call("configState")
+      .then((view: { warnings: string[] }) => {
+        for (const warning of view.warnings) toast(warning, "error")
+      })
+      .catch(() => undefined)
 
     const confirm = async (preview: Preview, label: string) => {
       if (!preview.ok || !preview.token) {
