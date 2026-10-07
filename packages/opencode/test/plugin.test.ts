@@ -279,6 +279,18 @@ describe("integrity on the real host", () => {
     expect(user.tools[0]?.status).toBe("completed")
     await rm(path.join(h.directory, ".factory/STOP"))
   })
+
+  test("issue #49: no approval RPC exists for a stolen service password to call", async () => {
+    // S3 masks service.json in every agent sandbox (sandbox.test.ts); S4
+    // removed the mutate methods, so even a caller with a valid preview token
+    // has no RPC to redeem it through. Previews still work for the TUI.
+    const rpc = rpcFor(h) as any
+    for (const method of ["approve", "trust", "resume"]) expect(typeof rpc[method]).not.toBe("function")
+    const approval = await rpc.previewApproval({ stage: "frontier" }, where(h))
+    expect(typeof approval.title).toBe("string")
+    expect(Array.isArray(approval.lines)).toBe(true)
+    expect(((await rpc.previewTrust({}, where(h))).lines ?? []).length).toBeGreaterThan(0)
+  })
 })
 
 describe("a factory run end to end on the real host", () => {
