@@ -130,7 +130,8 @@ function relatedTestArgs(
   if (tests.length) {
     switch (check.related) {
       case "bun":
-        if (jsTests.length) return [...jsTests]
+        // "./" makes bun treat each argument as a path, not a name filter.
+        if (jsTests.length) return jsTests.map((file) => `./${file}`)
         break
       case "vitest":
         if (jsTests.length) return ["run", ...jsTests]

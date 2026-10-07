@@ -5,7 +5,6 @@
 // (package directories). Unresolved specifiers are external.
 import { lstat, open, readdir, readFile } from "node:fs/promises"
 import path from "node:path"
-import { isTestFile } from "../gates/budgets.ts"
 import { git } from "../worktree/git.ts"
 import { extractStructure, type FileStructure } from "./extract.ts"
 import { type GrammarOptions, grammarFor } from "./grammars.ts"
@@ -385,6 +384,15 @@ export function dependentsOf(graph: ImportGraph, changed: readonly string[]): Se
   return seen
 }
 
+/**
+ * Files a test runner executes: `*.test.*` / `*.spec.*` / `*_test.*`,
+ * `__tests__/*`, `test_*.py`, `*_test.py`, `*_test.go`. Helpers that merely
+ * live under test/ are traversed by the graph but never selected.
+ */
+const RUNNABLE_TEST =
+  /(?:^|\/)__tests__\/[^/]+\.[cm]?[jt]sx?$|[._](?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)test_[^/]+\.py$|_test\.(?:py|go)$/
+export const isRunnableTest = (file: string) => RUNNABLE_TEST.test(file)
+
 export interface AffectedTests {
   readonly tests: readonly string[]
   /** Changed files the graph knows about. */
@@ -407,6 +415,6 @@ export async function affectedTests(
   if (!graph) return undefined
   const known = changed.filter((file) => graph.files.has(file))
   if (!known.length) return undefined
-  const tests = [...dependentsOf(graph, known)].filter(isTestFile).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  const tests = [...dependentsOf(graph, known)].filter(isRunnableTest).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
   return { tests, known, graph }
 }

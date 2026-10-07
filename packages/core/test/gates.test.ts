@@ -228,6 +228,9 @@ describe("command checks", () => {
     await write("test/imports-util.test.ts", 'import { helper } from "../src/util"\n')
     await write("src/lone.ts", "export const lone = 1\n")
     await write("src/lone.test.ts", "// does not import lone\n")
+    // A helper under test/ imports the change too; it is traversed, never run.
+    await write("test/helpers.ts", 'export { helper } from "../src/util"\n')
+    await write("test/uses-helper.test.ts", 'import { helper } from "./helpers"\n')
     await write("record.ts", 'await Bun.write("record.json", JSON.stringify(process.argv.slice(2)))\n')
     const cfg = config(
       [{ id: "test", kind: "test", command: "bun run record.ts", parser: "generic", related: "bun" }],
@@ -240,7 +243,10 @@ describe("command checks", () => {
     const graphRun = await gates({ touched: ["src/util.ts"], config: cfg, structure: { regexOnly: true } })
     expect(graphRun.passed).toBe(true)
     // The test that imports the change (the graph's answer), not the "util" stem.
-    expect(JSON.parse(await Bun.file(path.join(fx.root, "record.json")).text())).toEqual(["test/imports-util.test.ts"])
+    expect(JSON.parse(await Bun.file(path.join(fx.root, "record.json")).text())).toEqual([
+      "./test/imports-util.test.ts",
+      "./test/uses-helper.test.ts",
+    ])
 
     const fallback = await gates({ touched: ["src/lone.ts"], config: cfg, structure: { regexOnly: true } })
     expect(fallback.passed).toBe(true)
@@ -284,6 +290,17 @@ describe("parsers", () => {
       "typecheck",
     )
     expect(tsc.findings[0]).toMatchObject({ file: "src/a.ts", line: 3, column: 7, rule: "typecheck/TS2322" })
+    // Paths with parentheses (Next.js route groups) and the --pretty format.
+    const grouped = parseOutput(
+      "tsc",
+      "app/(auth)/page.tsx(12,5): error TS2304: Cannot find name 'x'.\napp/(shop)/[id]/page.tsx:4:1 - warning TS6133: 'y' is declared but never read.",
+      "/r",
+      "typecheck",
+    )
+    expect(grouped.findings).toMatchObject([
+      { file: "app/(auth)/page.tsx", line: 12, column: 5, rule: "typecheck/TS2304", message: "Cannot find name 'x'." },
+      { file: "app/(shop)/[id]/page.tsx", line: 4, column: 1, severity: "warning", rule: "typecheck/TS6133" },
+    ])
     const bun = parseOutput(
       "bun-test",
       "test/math.test.ts:\n2 | x\nerror: expect(received).toBe(expected)\n      at <anonymous> (/r/test/math.test.ts:2:34)\n(fail) adds [0.28ms]\n",
@@ -304,5 +321,33 @@ describe("parsers", () => {
     expect(scores.find((item) => item.name === "one")?.score).toBe(1)
     expect(scores.find((item) => item.name === "tiny")?.score).toBe(2)
     expect(scores.find((item) => item.name === "many")?.score).toBe(6)
+  })
+
+  test("complexity finds TS methods and arrows with return types and nested parens", () => {
+    const scores = complexity(
+      "a.ts",
+      [
+        "class A {",
+        "  method(x: number): string {",
+        "    if (x) { return 'a' }",
+        "    return 'b'",
+        "  }",
+        "  private async load(a = f(), b: Map<string, number>): Promise<void> {",
+        "    if (a && b) return",
+        "  }",
+        "}",
+        "const typed = (x: number): string => {",
+        "  return x ? 'y' : 'n'",
+        "}",
+        "export function plain(a: string): number {",
+        "  return a ? 1 : 0",
+        "}",
+        "expect(foo).toBe(1)",
+      ].join("\n"),
+    )
+    expect(scores.map((item) => item.name).sort()).toEqual(["load", "method", "plain", "typed"])
+    expect(scores.find((item) => item.name === "method")?.score).toBe(2)
+    expect(scores.find((item) => item.name === "load")?.score).toBe(3)
+    expect(scores.find((item) => item.name === "typed")?.score).toBe(2)
   })
 })

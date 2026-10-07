@@ -46,28 +46,28 @@ function jsonBlocks(output: string): unknown[] {
   return out
 }
 
+// tsc prints `file(line,col): error TSxxxx: msg` (or, with --pretty,
+// `file:line:col - error TSxxxx: msg`). The file part may itself contain
+// parentheses or colons (Next.js route groups like `app/(auth)/page.tsx`), so
+// each line is split at the diagnostic marker rather than by a path pattern.
+const TSC_PLAIN = /\((\d+),(\d+)\): (error|warning) (TS\d+): /
+const TSC_PRETTY = /:(\d+):(\d+) - (error|warning) (TS\d+): /
+
 const tsc: Parser = (output, dir, check) => {
   const findings: GateFinding[] = []
-  for (const match of output.matchAll(/^([^()\n]+)\((\d+),(\d+)\): (error|warning) (TS\d+): (.+)$/gm))
+  for (const line of output.split("\n")) {
+    const marker = TSC_PLAIN.exec(line) ?? TSC_PRETTY.exec(line)
+    if (!marker || marker.index === 0) continue
     findings.push({
-      file: relative(dir, match[1]!),
-      line: Number(match[2]),
-      column: Number(match[3]),
-      rule: `typecheck/${match[5]}`,
-      severity: match[4] === "warning" ? "warning" : "error",
-      message: match[6]!,
+      file: relative(dir, line.slice(0, marker.index)),
+      line: Number(marker[1]),
+      column: Number(marker[2]),
+      rule: `typecheck/${marker[4]}`,
+      severity: marker[3] === "warning" ? "warning" : "error",
+      message: line.slice(marker.index + marker[0].length),
       check,
     })
-  for (const match of output.matchAll(/^([^:\n]+):(\d+):(\d+) - (error|warning) (TS\d+): (.+)$/gm))
-    findings.push({
-      file: relative(dir, match[1]!),
-      line: Number(match[2]),
-      column: Number(match[3]),
-      rule: `typecheck/${match[5]}`,
-      severity: match[4] === "warning" ? "warning" : "error",
-      message: match[6]!,
-      check,
-    })
+  }
   return { findings, failedTests: [] }
 }
 

@@ -63,7 +63,15 @@ export function parseTags(line: string): Tag[] {
       i = open + 1
       continue
     }
-    const close = line.indexOf("]", open + 1 + kind.length + 1)
+    // The body may hold brackets of its own (a quote citing "[1]"): match depth.
+    let close = -1
+    for (let depth = 1, k = open + 1 + kind.length + 1; k < line.length; k++) {
+      if (line[k] === "[") depth++
+      else if (line[k] === "]" && --depth === 0) {
+        close = k
+        break
+      }
+    }
     if (close < 0) break
     const body = line.slice(open + 1 + kind.length + 1, close).trim()
     if (kind === "VERIFIED") {

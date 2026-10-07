@@ -224,6 +224,29 @@ function wordAt(text: string, word: string, from = 0): number {
   return -1
 }
 
+/** Index of the `)` matching the `(` at `open` (literals are already blanked), or -1. */
+function matchingParen(text: string, open: number): number {
+  let depth = 0
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === "(") depth++
+    else if (text[i] === ")" && --depth === 0) return i
+  }
+  return -1
+}
+
+/**
+ * After a parameter list closing at `close`: skip an optional `: ReturnType`
+ * and return where `terminator` ("{" or "=>") starts, or -1.
+ */
+function afterSignature(text: string, close: number, terminator: "{" | "=>"): number {
+  if (close < 0) return -1
+  const k = skipSpaces(text, close + 1)
+  if (text.startsWith(terminator, k)) return k
+  if (text[k] !== ":") return -1
+  const at = text.indexOf(terminator, k + 1)
+  return at < 0 || text.slice(k + 1, at).includes(";") ? -1 : at
+}
+
 /** The name a line declares a function/arrow/method under, without a regex. */
 function detectHeader(flat: string): string | undefined {
   const candidates: Array<{ name: string; index: number }> = []
@@ -245,7 +268,7 @@ function detectHeader(flat: string): string | undefined {
   if (go >= 0) {
     let i = skipSpaces(flat, go + "func".length)
     if (flat[i] === "(") {
-      const closing = flat.indexOf(")", i)
+      const closing = matchingParen(flat, i)
       i = closing < 0 ? i : skipSpaces(flat, closing + 1)
     }
     push(readIdent(flat, i), go)
@@ -262,9 +285,7 @@ function detectHeader(flat: string): string | undefined {
       continue
     }
     if (flat[j] === "(") {
-      const closing = flat.indexOf(")", j)
-      const k = closing < 0 ? -1 : skipSpaces(flat, closing + 1)
-      if (k >= 0 && flat.startsWith("=>", k)) push(name, i)
+      if (afterSignature(flat, matchingParen(flat, j), "=>") >= 0) push(name, i)
       continue
     }
     const target = readIdent(flat, j)
@@ -281,11 +302,7 @@ function detectHeader(flat: string): string | undefined {
     }
     const name = readIdent(flat, i)
     const j = skipSpaces(flat, i + name.length)
-    if (name && flat[j] === "(") {
-      const closing = flat.indexOf(")", j)
-      const k = closing < 0 ? -1 : skipSpaces(flat, closing + 1)
-      if (k >= 0 && flat[k] === "{") push(name, i)
-    }
+    if (name && flat[j] === "(" && afterSignature(flat, matchingParen(flat, j), "{") >= 0) push(name, i)
   }
   candidates.sort((a, b) => a.index - b.index)
   return candidates[0]?.name

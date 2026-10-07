@@ -76,6 +76,12 @@ describe("auditor", () => {
     )
     expect(tags.map((tag) => tag.kind)).toEqual(["VERIFIED", "INFERRED"])
     expect(tags[0]).toMatchObject({ source: "a".repeat(64), quote: "a test runner" })
+    // Brackets inside a tag body (a quote citing "[1]") stay in the body.
+    const nested = parseTags(
+      `x [VERIFIED: sha256:${"b".repeat(64)} "as shown in [1] and [2]"] [HYPOTHESIS: rerun [n=3]]`,
+    )
+    expect(nested[0]).toMatchObject({ kind: "VERIFIED", quote: "as shown in [1] and [2]" })
+    expect(nested[1]).toMatchObject({ kind: "HYPOTHESIS", body: "rerun [n=3]" })
   })
 
   test("grounded, ungrounded, untagged and malformed claims; headings, code and tables are not claims", async () => {
