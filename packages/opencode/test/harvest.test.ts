@@ -2,6 +2,7 @@
 // sources, fail-closed licences), reads within budget, builds the matrix and
 // completes; other seats see none of these tools.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -11,15 +12,11 @@ import { boot, directiveScript, type Harness, lastAgentRequest } from "@heretek-
 const pluginDir = path.resolve(import.meta.dir, "..")
 const call = (name: string, args: Record<string, unknown> = {}) => `@@CALL ${name} ${JSON.stringify(args)}@@`
 
-const MIT = `MIT License
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction. The software is provided "as is".`
-
-const GPL3 = `GNU GENERAL PUBLIC LICENSE
-Version 3, 29 June 2007
-Copyright (C) 2007 Free Software Foundation, Inc.`
+// Real SPDX texts: a permissive verdict needs a full template match.
+const fixture = (id: string) =>
+  readFileSync(path.resolve(import.meta.dir, "../../core/test/fixtures/licenses", `${id}.txt`), "utf8")
+const MIT = fixture("MIT")
+const GPL3 = fixture("GPL-3.0-only")
 
 const write = async (root: string, file: string, text: string) => {
   await mkdir(path.dirname(path.join(root, file)), { recursive: true })

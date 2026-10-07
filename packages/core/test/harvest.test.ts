@@ -3,6 +3,7 @@
 // policy and the tool loop that writes the report, vendor plan and clean-room
 // specs.
 import { afterEach, describe, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
 import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -15,7 +16,7 @@ import {
   githubApi,
   harvestPaths,
   harvestTools,
-  matchSignature,
+  identifyLicenseText,
   parseSource,
   readCandidate,
   readHarvestResult,
@@ -26,33 +27,11 @@ import {
 } from "../src/index.ts"
 import { gitRepo } from "./helpers.ts"
 
-const MIT = `MIT License
-
-Copyright (c) 2026 Example
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction. The software is provided "as is", without
-warranty of any kind.`
-
-const BSD3 = `Copyright (c) 2026, Example
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-1. Redistributions of source code must retain the above copyright notice.
-2. Redistributions in binary form must reproduce the above copyright notice.
-3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software.`
-
-const GPL3 = `GNU GENERAL PUBLIC LICENSE
-Version 3, 29 June 2007
-Copyright (C) 2007 Free Software Foundation, Inc.`
-
-const AGPL3 = `GNU AFFERO GENERAL PUBLIC LICENSE
-Version 3, 19 November 2007`
-
-const ISC = `ISC License
-Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.`
-
-const BSD0 = `BSD Zero Clause License
-Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted. The software is provided "as is".`
+// Real SPDX license-list texts (v3.29.0); see fixtures/licenses.
+const fixture = (id: string) => readFileSync(path.join(import.meta.dir, "fixtures/licenses", `${id}.txt`), "utf8")
+const MIT = fixture("MIT")
+const ISC = fixture("ISC")
+const GPL3 = fixture("GPL-3.0-only")
 
 const dirs: string[] = []
 const tmp = async (prefix: string) => {
@@ -84,18 +63,87 @@ const profileFor = (license: LicenseFinding, id = "p"): HarvestProfile => ({
 })
 
 describe("SPDX detection", () => {
-  test("signature matching separates the common licences", () => {
-    expect(matchSignature(MIT)?.spdx).toBe("MIT")
-    expect(matchSignature(BSD3)?.spdx).toBe("BSD-3-Clause")
-    expect(matchSignature(BSD3.replace(/3\. Neither the name[\s\S]*$/, ""))?.spdx).toBe("BSD-2-Clause")
-    expect(matchSignature(GPL3)?.spdx).toBe("GPL-3.0")
-    expect(matchSignature(AGPL3)?.spdx).toBe("AGPL-3.0")
-    expect(matchSignature(ISC)?.spdx).toBe("ISC")
-    expect(matchSignature(BSD0)?.spdx).toBe("0BSD")
-    expect(matchSignature("All rights reserved. Do what you like.")).toBeUndefined()
+  test.each([
+    ["MIT", "MIT", "permissive", true],
+    ["ISC", "ISC", "permissive", true],
+    ["BSD-2-Clause", "BSD-2-Clause", "permissive", true],
+    ["BSD-3-Clause", "BSD-3-Clause", "permissive", true],
+    ["Apache-2.0", "Apache-2.0", "permissive", true],
+    ["0BSD", "0BSD", "permissive", true],
+    ["Unlicense", "Unlicense", "public-domain", true],
+    ["CC0-1.0", "CC0-1.0", "public-domain", true],
+    ["GPL-2.0-only", "GPL-2.0", "copyleft", true],
+    ["GPL-3.0-only", "GPL-3.0", "copyleft", true],
+    ["LGPL-2.1-only", "LGPL-2.1", "weak-copyleft", true],
+    ["LGPL-3.0-only", "LGPL-3.0", "weak-copyleft", true],
+    ["AGPL-3.0-only", "AGPL-3.0", "copyleft", true],
+    ["MPL-2.0", "MPL-2.0", "weak-copyleft", true],
+    ["SSPL-1.0", "SSPL-1.0", "copyleft", true],
+    // Look-alikes and source-available licences never verify as permissive.
+    ["JSON", "unknown", "unknown", false],
+    ["MIT-0", "unknown", "unknown", false],
+    ["X11", "unknown", "unknown", false],
+    ["BSD-4-Clause", "BSD-4-Clause", "permissive", false],
+    ["BUSL-1.1", "BUSL-1.1", "unknown", false],
+    ["Elastic-2.0", "Elastic-2.0", "unknown", false],
+  ])("%s text → %s (%s, verified %p)", (file, spdx, family, verified) => {
+    expect(identifyLicenseText(fixture(file))).toMatchObject({ spdx, family, verified })
   })
 
-  test("a LICENSE file beats everything, then headers, then manifest claims", async () => {
+  test("riders, edits and real-world framing", () => {
+    const body = MIT.replace(/^MIT License\n\nCopyright[^\n]*\n/, "")
+    // Common framing still matches: a different title, several copyright lines, an HTML comment.
+    expect(
+      identifyLicenseText(
+        `<!-- generated -->\nThe MIT License (MIT)\n\nCopyright (c) 2026 A\nCopyright 2025 B. All rights reserved.\n${body}`,
+      )?.spdx,
+    ).toBe("MIT")
+    expect(identifyLicenseText(`(MIT)\n\nCopyright (c) 2013 J &lt;j@x&gt;\n${body}`)?.spdx).toBe("MIT")
+    // Riders, appended or prepended, and edited terms do not.
+    const commons = `"Commons Clause" License Condition v1.0\n\nThe Software is provided to you by the Licensor under the License, as defined below, subject to the following condition. Without limiting other conditions in the License, the grant of rights under the License will not include, and the License does not grant to you, the right to Sell the Software.\n`
+    expect(identifyLicenseText(`${MIT}\n${commons}`)).toMatchObject({
+      spdx: "LicenseRef-Commons-Clause",
+      verified: false,
+    })
+    expect(identifyLicenseText(`${commons}\n${MIT}`)).toMatchObject({
+      spdx: "LicenseRef-Commons-Clause",
+      verified: false,
+    })
+    expect(identifyLicenseText(`${MIT}\nThe Software shall be used for Good, not Evil.`)?.spdx).toBe("unknown")
+    expect(identifyLicenseText(MIT.replace("without restriction", "with restrictions"))?.spdx).toBe("unknown")
+    expect(identifyLicenseText("All rights reserved. Do what you like.")).toBeUndefined()
+  })
+
+  test("every licence file counts; the most restrictive wins; permissive ones combine", async () => {
+    const dual = await tmp("es-spdx-dual-")
+    await write(dual, "LICENSE-MIT", MIT)
+    await write(dual, "LICENSE-APACHE", fixture("Apache-2.0"))
+    expect(await detectLicense(dual)).toMatchObject({
+      spdx: "Apache-2.0 AND MIT",
+      family: "permissive",
+      verified: true,
+    })
+
+    const mixed = await tmp("es-spdx-mixed-")
+    await write(mixed, "LICENSE", MIT)
+    await write(mixed, "COPYING", GPL3)
+    expect(await detectLicense(mixed)).toMatchObject({ spdx: "GPL-3.0", family: "copyleft" })
+
+    const notices = await tmp("es-spdx-notices-")
+    await write(notices, "LICENSE", MIT)
+    await write(notices, "LICENSE-THIRD-PARTY.md", "Portions are licensed by their owners; see each file.")
+    expect(await detectLicense(notices)).toMatchObject({ spdx: "unknown", verified: false })
+
+    // A GPL header in one source file makes an MIT project copyleft.
+    const header = await tmp("es-spdx-header-")
+    await write(header, "LICENSE", MIT)
+    await write(header, "src/vendored.c", "/* SPDX-License-Identifier: GPL-2.0-only */\nint x;\n")
+    const withHeader = await detectLicense(header)
+    expect(withHeader).toMatchObject({ spdx: "GPL-2.0 AND MIT", family: "copyleft" })
+    expect(withHeader.note).toContain("GPL-2.0")
+  })
+
+  test("a LICENSE file beats everything; headers and manifests never verify", async () => {
     const root = await tmp("es-spdx-")
     await write(root, "LICENSE", MIT)
     await write(root, "package.json", JSON.stringify({ license: "GPL-3.0" }))
@@ -104,9 +152,9 @@ describe("SPDX detection", () => {
     expect(fromFile.sha256).toMatch(/^[0-9a-f]{64}$/)
 
     await rm(path.join(root, "LICENSE"))
-    await write(root, "src/a.ts", "// SPDX-License-Identifier: Apache-2.0\nexport const x = 1\n")
+    await write(root, "src/a.ts", "// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception\nexport const x = 1\n")
     const fromHeader = await detectLicense(root)
-    expect(fromHeader).toMatchObject({ spdx: "Apache-2.0", source: "spdx-header", verified: true })
+    expect(fromHeader).toMatchObject({ spdx: "Apache-2.0", source: "spdx-header", verified: false })
     expect(fromHeader.file).toBe("src/a.ts")
 
     await rm(path.join(root, "src/a.ts"))

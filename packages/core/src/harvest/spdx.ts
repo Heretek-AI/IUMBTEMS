@@ -1,106 +1,88 @@
-// Deterministic SPDX license detection. Detection is signature-based over
-// local bytes: each license has phrases that must all appear (and phrases that
-// must not). A LICENSE file match is the strongest evidence; explicit
-// `SPDX-License-Identifier` headers are next; manifest fields are self-reported
-// claims (verified: false) and alone can never authorize depend/vendor.
-// Unknown or non-whitelisted licenses fail closed to clean-room.
+// Deterministic SPDX license detection over local bytes, fail-closed.
+//
+// - A permissive or public-domain result needs an exact full-text match of a
+//   bundled SPDX template (templates.ts): extra or changed terms — a rider like
+//   the Commons Clause, the JSON licence's "Good, not Evil" — mean "unknown".
+// - Copyleft and source-available licences are recognised by their title and
+//   date lines (GPL-3.0 is not mistaken for AGPL because §13 mentions it).
+// - Every licence file in the root counts (LICENSE*, COPYING*, UNLICENSE…);
+//   the most restrictive wins, and several permissive ones combine with AND.
+// - `SPDX-License-Identifier` headers are declarations by single files: they
+//   add restrictions (a GPL header in an MIT repo makes it GPL) but never
+//   verify a licence on their own.
+// - Manifest fields are self-reported claims (verified: false).
+// Unknown or non-whitelisted licences end up clean-room in the policy.
 import { createHash } from "node:crypto"
 import { readdir } from "node:fs/promises"
 import path from "node:path"
 import type { LicenseFinding } from "../schema/harvest.ts"
 import { readRegularFile } from "../util/fs.ts"
+import { LICENSE_TEMPLATES, matchLicenseTemplate } from "./templates.ts"
 
-interface Signature {
-  readonly spdx: string
-  readonly family: LicenseFinding["family"]
-  /** Every phrase must appear in the normalised text. */
-  readonly all: readonly string[]
-  /** At least one of these must appear. */
-  readonly any?: readonly string[]
-  /** None of these may appear (used to split near-identical texts). */
-  readonly none?: readonly string[]
+type Family = LicenseFinding["family"]
+
+const FAMILIES: Readonly<Record<string, Family>> = {
+  MIT: "permissive",
+  "Apache-2.0": "permissive",
+  "BSD-2-Clause": "permissive",
+  "BSD-3-Clause": "permissive",
+  "BSD-4-Clause": "permissive",
+  ISC: "permissive",
+  "0BSD": "permissive",
+  Unlicense: "public-domain",
+  "CC0-1.0": "public-domain",
+  "MPL-1.1": "weak-copyleft",
+  "MPL-2.0": "weak-copyleft",
+  "LGPL-2.0": "weak-copyleft",
+  "LGPL-2.1": "weak-copyleft",
+  "LGPL-3.0": "weak-copyleft",
+  "EPL-1.0": "weak-copyleft",
+  "EPL-2.0": "weak-copyleft",
+  "CDDL-1.0": "weak-copyleft",
+  "GPL-1.0": "copyleft",
+  "GPL-2.0": "copyleft",
+  "GPL-3.0": "copyleft",
+  "AGPL-1.0": "copyleft",
+  "AGPL-3.0": "copyleft",
+  "EUPL-1.2": "copyleft",
+  "SSPL-1.0": "copyleft",
 }
-
-// Order matters only for ties; more specific signatures come first.
-const SIGNATURES: readonly Signature[] = [
-  { spdx: "AGPL-3.0", family: "copyleft", all: ["gnu affero general public license", "version 3"] },
-  { spdx: "LGPL-3.0", family: "weak-copyleft", all: ["gnu lesser general public license", "version 3"] },
-  { spdx: "GPL-3.0", family: "copyleft", all: ["gnu general public license", "version 3"] },
-  { spdx: "GPL-2.0", family: "copyleft", all: ["gnu general public license", "version 2"] },
-  { spdx: "MPL-2.0", family: "weak-copyleft", all: ["mozilla public license"], any: ["version 2.0", "v. 2.0"] },
-  { spdx: "Apache-2.0", family: "permissive", all: ["apache license", "version 2.0, january 2004"] },
-  {
-    spdx: "ISC",
-    family: "permissive",
-    all: [
-      "permission to use, copy, modify, and/or distribute this software for any purpose with or without fee",
-      "this permission notice appear in all copies",
-    ],
-  },
-  {
-    spdx: "0BSD",
-    family: "permissive",
-    all: ["permission to use, copy, modify, and/or distribute this software for any purpose with or without fee"],
-    none: ["in all copies"],
-  },
-  {
-    spdx: "MIT",
-    family: "permissive",
-    all: ["permission is hereby granted, free of charge"],
-    any: ['provided "as is"'],
-  },
-  {
-    spdx: "BSD-3-Clause",
-    family: "permissive",
-    all: ["redistribution and use in source and binary forms", "neither the name"],
-  },
-  {
-    spdx: "BSD-2-Clause",
-    family: "permissive",
-    all: ["redistribution and use in source and binary forms"],
-    none: ["neither the name"],
-  },
-  {
-    spdx: "Unlicense",
-    family: "public-domain",
-    all: ["this is free and unencumbered software released into the public domain"],
-  },
-  { spdx: "CC0-1.0", family: "public-domain", all: ["cc0 1.0 universal"] },
-]
 
 const CANONICAL: Readonly<Record<string, string>> = {
-  mit: "MIT",
-  "apache-2.0": "Apache-2.0",
-  "bsd-2-clause": "BSD-2-Clause",
-  "bsd-3-clause": "BSD-3-Clause",
-  isc: "ISC",
-  "0bsd": "0BSD",
-  unlicense: "Unlicense",
-  "cc0-1.0": "CC0-1.0",
-  "mpl-2.0": "MPL-2.0",
-  "gpl-2.0": "GPL-2.0",
+  ...Object.fromEntries(Object.keys(FAMILIES).map((id) => [id.toLowerCase(), id])),
   "gpl-2.0-only": "GPL-2.0",
   "gpl-2.0-or-later": "GPL-2.0",
-  "gpl-3.0": "GPL-3.0",
   "gpl-3.0-only": "GPL-3.0",
   "gpl-3.0-or-later": "GPL-3.0",
-  "agpl-3.0": "AGPL-3.0",
   "agpl-3.0-only": "AGPL-3.0",
   "agpl-3.0-or-later": "AGPL-3.0",
-  "lgpl-3.0": "LGPL-3.0",
-  "lgpl-2.1": "LGPL-2.1",
+  "lgpl-2.1-only": "LGPL-2.1",
+  "lgpl-2.1-or-later": "LGPL-2.1",
+  "lgpl-3.0-only": "LGPL-3.0",
+  "lgpl-3.0-or-later": "LGPL-3.0",
 }
 
-/** The license family for an arbitrary SPDX id (unknown ids stay unknown). */
-export function familyOf(spdx: string): LicenseFinding["family"] {
-  const known = SIGNATURES.find((signature) => signature.spdx === spdx)
-  if (known) return known.family
-  const id = spdx.toLowerCase()
-  if (id.startsWith("agpl") || id.startsWith("gpl")) return "copyleft"
-  if (id.startsWith("lgpl") || id.startsWith("mpl") || id.startsWith("epl") || id.startsWith("cddl"))
+/** Restrictiveness for aggregation: the most restrictive family wins. */
+const RANK: Readonly<Record<Family, number>> = {
+  "public-domain": 0,
+  permissive: 1,
+  unknown: 2,
+  "weak-copyleft": 3,
+  copyleft: 4,
+}
+
+/** The licence family for an SPDX id or an AND/OR expression of ids (unknown ids stay unknown). */
+export function familyOf(spdx: string): Family {
+  const ids = spdxIds(spdx)
+  if (ids.length > 1)
+    return ids.map(familyOf).reduce((worst, family) => (RANK[family] > RANK[worst] ? family : worst), "public-domain")
+  const id = normalizeLicenseId(spdx)
+  const known = FAMILIES[id]
+  if (known) return known
+  const lower = id.toLowerCase()
+  if (lower.startsWith("agpl") || lower.startsWith("gpl")) return "copyleft"
+  if (lower.startsWith("lgpl") || lower.startsWith("mpl") || lower.startsWith("epl") || lower.startsWith("cddl"))
     return "weak-copyleft"
-  if (id === "cc0-1.0" || id === "unlicense") return "public-domain"
-  if (/^(mit|apache-2\.0|bsd-|isc|0bsd)$/.test(id) || id.startsWith("bsd-")) return "permissive"
   return "unknown"
 }
 
@@ -110,42 +92,160 @@ export function normalizeLicenseId(id: string): string {
   return CANONICAL[trimmed.toLowerCase()] ?? trimmed
 }
 
+/**
+ * The ids in an SPDX expression. AND and OR are both kept (OR is treated
+ * conservatively, as if every id applied); `WITH <exception>` is dropped, since
+ * exceptions only add permissions.
+ */
+export function spdxIds(expression: string): string[] {
+  const tokens = expression.replace(/[()]/g, " ").split(/\s+/).filter(Boolean)
+  const ids: string[] = []
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!
+    if (/^(and|or)$/i.test(token)) continue
+    if (/^with$/i.test(token)) {
+      i++
+      continue
+    }
+    ids.push(normalizeLicenseId(token))
+  }
+  return [...new Set(ids)]
+}
+
 /** Lowercase, straighten typography and collapse whitespace. */
 export function normalizeText(text: string): string {
   return text
     .toLowerCase()
-    .replace(/[\u2018\u2019\u201a\u201b\u2032]/g, "'")
-    .replace(/[\u201c\u201d\u201e\u201f\u2033]/g, '"')
-    .replace(/[\u2010-\u2015\u2212]/g, "-")
-    .replace(/[\u00a0\u2000-\u200b\u202f\u205f\u3000]/g, " ")
+    .replace(/[‘’‚‛′]/g, "'")
+    .replace(/[“”„‟″]/g, '"')
+    .replace(/[‐-―−]/g, "-")
+    .replace(/[  -​  　]/g, " ")
+    .replace(/\blicenc(e|es|ed)\b/g, "licens$1")
     .replace(/\s+/g, " ")
     .trim()
 }
 
-/** The strongest signature match in a text, or undefined. */
-export function matchSignature(text: string): Signature | undefined {
-  const normalized = normalizeText(text)
-  let best: { signature: Signature; score: number } | undefined
-  for (const signature of SIGNATURES) {
-    if (!signature.all.every((phrase) => normalized.includes(phrase))) continue
-    if (signature.any?.length && !signature.any.some((phrase) => normalized.includes(phrase))) continue
-    if (signature.none?.some((phrase) => normalized.includes(phrase))) continue
-    const score = signature.all.length + (signature.any?.length ? 1 : 0) + (signature.none?.length ? 1 : 0)
-    if (!best || score > best.score) best = { signature, score }
+export interface IdentifiedLicense {
+  readonly spdx: string
+  readonly family: Family
+  /** True when the licence is established from its text (template match, or a copyleft title). */
+  readonly verified: boolean
+  readonly method: "template" | "title" | "resemblance"
+  readonly note?: string
+}
+
+interface Rule {
+  readonly test: (head: string, body: string) => string | undefined
+  readonly note?: string
+}
+
+// Titles are checked in the first lines only: the GPL-2.0 preamble mentions the
+// Lesser GPL and GPL-3.0 §13 the Affero GPL. Date lines catch texts that sit
+// under a project notice.
+const has = (text: string, ...phrases: string[]) => phrases.every((phrase) => text.includes(phrase))
+const title = (phrase: string, spdx: string | ((head: string) => string), note?: string): Rule => ({
+  test: (head) => (head.includes(phrase) ? (typeof spdx === "string" ? spdx : spdx(head)) : undefined),
+  ...(note ? { note } : {}),
+})
+const SOURCE_AVAILABLE = "source-available, not open source"
+const RESTRICTIVE: readonly Rule[] = [
+  {
+    test: (_, body) => (body.includes("commons clause") ? "LicenseRef-Commons-Clause" : undefined),
+    note: "a Commons Clause rider withholds the right to sell; not an open-source licence",
+  },
+  // 1. Titles (the first lines).
+  title("gnu affero general public license", "AGPL-3.0"),
+  title("gnu lesser general public license", (head) => (head.includes("version 2.1") ? "LGPL-2.1" : "LGPL-3.0")),
+  title("gnu library general public license", "LGPL-2.0"),
+  title("gnu general public license", (head) =>
+    head.includes("version 3") ? "GPL-3.0" : head.includes("version 1,") ? "GPL-1.0" : "GPL-2.0",
+  ),
+  title("mozilla public license", (head) => (/version 2\.0|v\. 2\.0/.test(head) ? "MPL-2.0" : "MPL-1.1")),
+  title("eclipse public license", (head) => (/v(ersion)? 2\.0/.test(head) ? "EPL-2.0" : "EPL-1.0")),
+  title("common development and distribution license", "CDDL-1.0"),
+  title("european union public license", "EUPL-1.2"),
+  title("server side public license", "SSPL-1.0"),
+  title("business source license", "BUSL-1.1", SOURCE_AVAILABLE),
+  title("elastic license", "Elastic-2.0", SOURCE_AVAILABLE),
+  // 2. Texts under a project notice: their distinctive date lines.
+  { test: (_, body) => (has(body, "gnu affero general public license", "19 november 2007") ? "AGPL-3.0" : undefined) },
+  { test: (_, body) => (has(body, "gnu lesser general public license", "february 1999") ? "LGPL-2.1" : undefined) },
+  { test: (_, body) => (has(body, "gnu lesser general public license", "29 june 2007") ? "LGPL-3.0" : undefined) },
+  { test: (_, body) => (has(body, "gnu general public license", "29 june 2007") ? "GPL-3.0" : undefined) },
+  { test: (_, body) => (has(body, "gnu general public license", "june 1991") ? "GPL-2.0" : undefined) },
+  { test: (_, body) => (has(body, "mozilla public license", "version 2.0") ? "MPL-2.0" : undefined) },
+  { test: (_, body) => (body.includes("server side public license") ? "SSPL-1.0" : undefined) },
+  {
+    test: (_, body) => (body.includes("business source license") ? "BUSL-1.1" : undefined),
+    note: SOURCE_AVAILABLE,
+  },
+  {
+    test: (_, body) =>
+      body.includes("all advertising materials mentioning features or use of this software must display")
+        ? "BSD-4-Clause"
+        : undefined,
+    note: "the advertising clause is an obligation the whitelist does not cover",
+  },
+]
+
+/** Permissive texts that are close to a template but did not match it exactly. */
+const LOOKALIKES: ReadonlyArray<readonly [string, string]> = [
+  ["MIT", "permission is hereby granted, free of charge"],
+  ["ISC/0BSD", "permission to use, copy, modify, and/or distribute this software for any purpose"],
+  ["ISC/0BSD", "permission to use, copy, modify, and distribute this software for any purpose"],
+  ["BSD", "redistribution and use in source and binary forms"],
+  ["Apache-2.0", "apache license"],
+  ["Unlicense", "free and unencumbered software released into the public domain"],
+  ["CC0-1.0", "cc0 1.0 universal"],
+]
+
+/** Identify one licence text. Undefined when nothing licence-like is recognised. */
+export function identifyLicenseText(text: string): IdentifiedLicense | undefined {
+  const exact = matchLicenseTemplate(text)
+  if (exact) return { spdx: exact, family: familyOf(exact), verified: true, method: "template" }
+  const body = normalizeText(text)
+  const head = body.slice(0, 160)
+  for (const rule of RESTRICTIVE) {
+    const spdx = rule.test(head, body)
+    if (!spdx) continue
+    const family = familyOf(spdx)
+    // Copyleft is established by its title (and fails closed anyway); a
+    // permissive or source-available match without a template is not.
+    const verified = family === "copyleft" || family === "weak-copyleft"
+    return { spdx, family, verified, method: "title", ...(rule.note ? { note: rule.note } : {}) }
   }
-  return best?.signature
+  const lookalike = LOOKALIKES.find(([, phrase]) => body.includes(phrase))
+  if (lookalike)
+    return {
+      spdx: "unknown",
+      family: "unknown",
+      verified: false,
+      method: "resemblance",
+      note: `resembles ${lookalike[0]} but does not match its SPDX template (changed or extra terms)`,
+    }
+  return undefined
 }
 
 const sha256 = (data: string | Uint8Array) => createHash("sha256").update(data).digest("hex")
 
+export interface LicenseScanEntry {
+  readonly name: string
+  readonly directory: boolean
+}
+
 export interface LicenseScanIO {
-  readonly readdir?: (dir: string) => Promise<string[]>
+  readonly readdir?: (dir: string) => Promise<LicenseScanEntry[]>
   readonly readFile?: (file: string) => Promise<string>
 }
 
-const LICENSE_FILE = /^(licen[cs]e|copying)(\.(md|txt|rst))?$/i
+const LICENSE_FILE = /^(licen[cs]e|copying|unlicense)([-._][\w.-]+)?$/i
 
-/** Detect the license of a project directory from its bytes, in priority order. */
+interface FileVerdict extends IdentifiedLicense {
+  readonly file: string
+  readonly sha256: string
+}
+
+/** Detect the license of a project directory from its bytes. */
 export async function detectLicense(
   dir: string,
   options: { maxHeaderFiles?: number; io?: LicenseScanIO } = {},
@@ -158,7 +258,7 @@ export async function detectLicense(
     (async (target: string) =>
       (await readdir(target, { withFileTypes: true }))
         .filter((entry) => entry.isFile() || entry.isDirectory())
-        .map((entry) => entry.name))
+        .map((entry) => ({ name: entry.name, directory: entry.isDirectory() })))
   const readFileImpl =
     options.io?.readFile ??
     (async (file: string) => {
@@ -167,45 +267,49 @@ export async function detectLicense(
       return text
     })
 
-  // 1. LICENSE / COPYING files (the strongest evidence).
-  const entries = await readdirImpl(dir).catch(() => [] as string[])
-  for (const name of entries.filter((entry) => LICENSE_FILE.test(entry)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
-    const file = path.join(dir, name)
-    const text = await readFileImpl(file).catch(() => undefined)
+  // 1. Every licence file in the root.
+  const entries = await readdirImpl(dir).catch(() => [] as LicenseScanEntry[])
+  const files: FileVerdict[] = []
+  for (const entry of entries
+    .filter((item) => !item.directory && LICENSE_FILE.test(item.name))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    const text = await readFileImpl(path.join(dir, entry.name)).catch(() => undefined)
     if (text === undefined) continue
-    const signature = matchSignature(text)
-    if (signature)
-      return {
-        spdx: signature.spdx,
-        family: signature.family,
-        source: "license-file",
-        file: name,
-        sha256: sha256(text),
-        confidence: "high",
-        verified: true,
-      }
+    const identified = identifyLicenseText(text) ?? {
+      spdx: "unknown",
+      family: "unknown" as const,
+      verified: false,
+      method: "resemblance" as const,
+      note: "no recognisable licence text",
+    }
+    files.push({ ...identified, file: entry.name, sha256: sha256(text) })
   }
 
-  // 2. SPDX headers in source files.
-  const header = await findSpdxHeader(dir, options.maxHeaderFiles ?? 200, { readdirImpl, readFileImpl })
-  if (header)
+  // 2. SPDX headers: declarations by single files.
+  const headers = await spdxHeaders(dir, options.maxHeaderFiles ?? 200, { readdirImpl, readFileImpl })
+
+  if (files.length) return combine(files, headers)
+  if (headers.length) {
+    const ids = [...new Set(headers.flatMap((header) => spdxIds(header.spdx)))].sort()
+    const spdx = ids.join(" AND ")
     return {
-      spdx: header.spdx,
-      family: familyOf(header.spdx),
+      spdx,
+      family: familyOf(spdx),
       source: "spdx-header",
-      file: header.file,
-      sha256: sha256(header.text),
+      file: headers[0]!.file,
+      sha256: sha256(headers[0]!.text),
       confidence: "medium",
-      verified: true,
-      note: "declared in a file header",
+      verified: false,
+      note: `declared only by SPDX headers (${headers.length} file(s)); no licence text found`,
     }
+  }
 
   // 3. Manifest fields: self-reported claims, never enough to depend on.
   const manifest = await manifestLicense(dir, readFileImpl)
   if (manifest)
     return {
       spdx: normalizeLicenseId(manifest.spdx),
-      family: familyOf(normalizeLicenseId(manifest.spdx)),
+      family: familyOf(manifest.spdx),
       source: "manifest",
       file: manifest.file,
       confidence: "medium",
@@ -223,38 +327,72 @@ export async function detectLicense(
   }
 }
 
-async function findSpdxHeader(
+/** Combine licence files (and headers) into one finding, most restrictive first. */
+function combine(files: readonly FileVerdict[], headers: readonly SpdxHeader[]): LicenseFinding {
+  const worst = files.reduce((a, b) => (RANK[b.family] > RANK[a.family] ? b : a))
+  const notes = files.filter((file) => file.note).map((file) => `${file.file}: ${file.note}`)
+  const fileIds = new Set(files.flatMap((file) => spdxIds(file.spdx)))
+  const extra = [...new Set(headers.flatMap((header) => spdxIds(header.spdx)))].filter((id) => !fileIds.has(id))
+  if (extra.length) notes.push(`source files also declare SPDX headers: ${extra.join(", ")}`)
+  const base = {
+    source: "license-file" as const,
+    file: files.length === 1 ? worst.file : files.map((file) => file.file).join(", "),
+    sha256: worst.sha256,
+    ...(notes.length ? { note: notes.join("; ") } : {}),
+  }
+  // One unrecognised licence file makes the whole project unknown.
+  if (worst.spdx === "unknown")
+    return { ...base, spdx: "unknown", family: "unknown", confidence: "low", verified: false }
+  const restrictive = RANK[worst.family] >= RANK.unknown
+  const spdx = [...new Set(restrictive ? [worst.spdx, ...extra] : [...fileIds, ...extra])].sort().join(" AND ")
+  const family = familyOf(spdx)
+  return {
+    ...base,
+    spdx,
+    family,
+    confidence: files.every((file) => file.verified) ? "high" : "medium",
+    // Verified only when every licence file was established from its text and
+    // no header added an unrecognised id.
+    verified: files.every((file) => file.verified) && extra.every((id) => id in FAMILIES),
+  }
+}
+
+interface SpdxHeader {
+  readonly spdx: string
+  readonly file: string
+  readonly text: string
+}
+
+const SOURCE_FILE = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|cs|c|cc|cpp|h|hpp|swift|kt)$/i
+const SKIP_DIRS = new Set([".git", "node_modules", "dist", "build", "vendor", "target"])
+
+async function spdxHeaders(
   dir: string,
   maxFiles: number,
   io: {
-    readdirImpl: (dir: string) => Promise<string[]>
+    readdirImpl: (dir: string) => Promise<LicenseScanEntry[]>
     readFileImpl: (file: string) => Promise<string>
   },
-): Promise<{ spdx: string; file: string; text: string } | undefined> {
-  const walk = async (
-    relative: string,
-    seen: { count: number },
-  ): Promise<{ spdx: string; file: string; text: string } | undefined> => {
-    if (seen.count >= maxFiles) return undefined
-    const entries = await io.readdirImpl(path.join(dir, relative)).catch(() => [] as string[])
+): Promise<SpdxHeader[]> {
+  const found: SpdxHeader[] = []
+  let count = 0
+  const walk = async (relative: string): Promise<void> => {
+    const entries = await io.readdirImpl(path.join(dir, relative)).catch(() => [] as LicenseScanEntry[])
     for (const entry of entries) {
-      if (seen.count >= maxFiles) return undefined
-      if (entry === ".git" || entry === "node_modules" || entry === "dist" || entry === "build") continue
-      const child = relative ? `${relative}/${entry}` : entry
-      if (/\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|cs|c|cc|cpp|h|hpp|swift|kt)$/i.test(entry)) {
-        seen.count += 1
+      if (count >= maxFiles) return
+      if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue
+      const child = relative ? `${relative}/${entry.name}` : entry.name
+      if (entry.directory) await walk(child)
+      else if (SOURCE_FILE.test(entry.name)) {
+        count += 1
         const text = await io.readFileImpl(path.join(dir, child)).catch(() => undefined)
-        if (text === undefined) continue
-        const match = /spdx-license-identifier:\s*([\w.+-]+)/i.exec(text)
-        if (match) return { spdx: normalizeLicenseId(match[1]!), file: child, text }
-      } else if (!entry.startsWith(".") && !/\./.test(entry)) {
-        const nested = await walk(child, seen)
-        if (nested) return nested
+        const match = text ? /spdx-license-identifier:[ \t]*([^\n*]+)/i.exec(text.slice(0, 4_000)) : undefined
+        if (text && match) found.push({ spdx: match[1]!.replace(/-->|\*\/|#/g, "").trim(), file: child, text })
       }
     }
-    return undefined
   }
-  return walk("", { count: 0 })
+  await walk("")
+  return found
 }
 
 type ReadImpl = (file: string) => Promise<string>
@@ -280,3 +418,6 @@ async function manifestLicense(dir: string, read: ReadImpl): Promise<{ spdx: str
   }
   return undefined
 }
+
+/** SPDX ids the bundled templates can verify (the default whitelist draws from these). */
+export const TEMPLATE_IDS: readonly string[] = Object.keys(LICENSE_TEMPLATES)

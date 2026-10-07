@@ -11,6 +11,7 @@ import type {
   LicenseFinding,
 } from "../schema/harvest.ts"
 import { HARVEST_VERSION } from "../schema/harvest.ts"
+import { spdxIds } from "./spdx.ts"
 
 export interface VerdictCheck {
   readonly verdict: HarvestVerdict
@@ -39,8 +40,10 @@ export function checkVerdict(
     return { verdict: "clean-room", downgraded: `license ${license.spdx} is ${license.family}; clean-room only` }
   if (license.family === "unknown")
     return { verdict: "clean-room", downgraded: `license ${license.spdx} is unknown; clean-room only` }
-  if (!whitelist.includes(license.spdx))
-    return { verdict: "clean-room", downgraded: `license ${license.spdx} is not on the license whitelist` }
+  // Every id of an AND/OR expression must be whitelisted (OR is treated as AND).
+  const missing = spdxIds(license.spdx).filter((id) => !whitelist.includes(id))
+  if (missing.length)
+    return { verdict: "clean-room", downgraded: `license ${missing.join(", ")} is not on the license whitelist` }
   return { verdict: proposed, attribution: attributionOf(license) }
 }
 
