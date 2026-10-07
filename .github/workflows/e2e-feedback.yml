@@ -123,7 +123,7 @@ jobs:
           EOF
           prompt="You are a debug analyst. Read the E2E feedback report below and reply with: (1) the most likely root cause per FAIL case, citing the failing check or tool line; (2) the smallest repo change that would fix or further isolate it; (3) anything in the report that looks like harness flakiness rather than a product bug. Keep it under 30 lines. Report: $(head -c 4000 "$report")"
           HOME="$home" timeout 150 opencode run --standalone --agent build "$prompt" > "$work/feedback.txt" 2>"$work/feedback.err" \
-            || { echo "agent-feedback: model turn failed (rate limit or timeout); keeping the deterministic report only."; exit 0; }
+            || { echo "agent-feedback: model turn failed; last of stderr:"; tail -c 800 "$work/feedback.err"; echo; echo "keeping the deterministic report only."; exit 0; }
           cp "$work/feedback.txt" "${newest%.json}.agent-feedback.md"
           { echo "## Agent feedback"; echo; cat "$work/feedback.txt"; } >> "$GITHUB_STEP_SUMMARY"
           echo "agent-feedback: wrote $(basename "${newest%.json}.agent-feedback.md")"
