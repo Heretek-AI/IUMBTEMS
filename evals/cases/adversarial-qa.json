@@ -1,0 +1,11 @@
+{
+  "id": "adversarial-qa",
+  "description": "Adversarial QA tries to break a greeting helper and reports the empty-input defect with its file:line.",
+  "agent": "es-qa-adversarial",
+  "prompt": "Try to break src/greet.ts: empty input, odd types, boundaries. Report each defect as file:line with what happens.",
+  "maxSteps": 8,
+  "files": {
+    "src/greet.ts": "export function greet(name: string) {\n  return \"hello \" + name\n}\n"
+  },
+  "checks": { "contains": ["src/greet.ts", "empty"] }
+}

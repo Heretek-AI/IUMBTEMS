@@ -1,0 +1,8 @@
+{
+  "id": "research",
+  "description": "Research fetches a served fixture page through the cached fetch tool and quotes its key sentence.",
+  "agent": "es-research-alpha",
+  "prompt": "Fetch {{SERVE_URL}}/handoff.txt with es_research_fetch and report the key sentence about the test runner, quoted verbatim.",
+  "maxSteps": 6,
+  "checks": { "toolsUsed": ["es_research_fetch"], "contains": ["single file path"] }
+}

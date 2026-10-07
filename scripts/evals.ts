@@ -15,6 +15,7 @@ import { cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { gradeFireCase } from "../packages/core/src/evals/fires.ts"
 import { caseStepCap, type EvalCase, evalWorkspace, runEvalCase } from "../packages/core/src/evals/run.ts"
+import { renderEvalPrompt, startServeFixtures } from "../packages/core/src/evals/serve.ts"
 
 const root = path.resolve(import.meta.dir, "..")
 const casesDir = path.join(root, "evals/cases")
@@ -62,10 +63,13 @@ if (!binary || !model) {
 
 const stamp = new Date().toISOString().replace(/[:.]/g, "-")
 const files = (await readdir(casesDir)).filter((file) => file.endsWith(".json")).sort()
+// Fixture pages for fetch cases ({{SERVE_URL}} in prompts); localhost only.
+const serve = await startServeFixtures(path.join(root, "evals/serve"))
 const results = []
 let spentUSD = 0
 for (const file of files) {
-  const testCase = JSON.parse(await readFile(path.join(casesDir, file), "utf8")) as EvalCase
+  const raw = JSON.parse(await readFile(path.join(casesDir, file), "utf8")) as EvalCase
+  const testCase = { ...raw, prompt: renderEvalPrompt(raw.prompt, serve.url) }
   const maxSteps = caseStepCap(testCase.maxSteps, stepCeiling)
   const remaining = budgetUSD === undefined ? undefined : budgetUSD - spentUSD
   if (remaining !== undefined && remaining <= 0) {
@@ -127,6 +131,7 @@ for (const file of files) {
 }
 
 await mkdir(resultsDir, { recursive: true })
+serve.stop()
 await writeFile(
   path.join(resultsDir, `${stamp}.json`),
   `${JSON.stringify({ at: stamp, model, stepCeiling, budgetUSD, spentUSD, results }, null, 2)}\n`,

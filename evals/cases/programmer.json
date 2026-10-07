@@ -1,0 +1,13 @@
+{
+  "id": "programmer",
+  "description": "The programmer implements a stub so the staged suite passes, then confirms green with the gate run.",
+  "agent": "es-programmer",
+  "prompt": "Implement src/sum.ts so the staged suite passes, then run es_gates_run to confirm green.",
+  "maxSteps": 10,
+  "files": {
+    "package.json": "{\n  \"name\": \"sum-fixture\",\n  \"version\": \"1.0.0\",\n  \"scripts\": { \"test\": \"bun test\" }\n}\n",
+    "src/sum.ts": "export function sum(a: number, b: number): number {\n  throw new Error(\"not implemented\")\n}\n",
+    "test/sum.test.ts": "import { expect, test } from \"bun:test\"\nimport { sum } from \"../src/sum.ts\"\ntest(\"adds\", () => expect(sum(2, 3)).toBe(5))\n"
+  },
+  "checks": { "toolsUsed": ["es_gates_run"], "contains": ["0 error(s)"] }
+}
