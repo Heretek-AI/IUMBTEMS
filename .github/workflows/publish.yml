@@ -29,8 +29,9 @@ jobs:
       - run: bun run check
       - run: bun run docs:check
       # Trusted publishing needs a recent npm CLI; it picks up the OIDC token
-      # from the environment automatically (no NODE_AUTH_TOKEN).
-      - run: npm install --global npm@latest
+      # from the environment automatically (no NODE_AUTH_TOKEN). Pinned, and no
+      # lifecycle scripts from the fetched tarball run.
+      - run: npm install --global --ignore-scripts npm@11.21.0
       - name: Publish packages
         env:
           DRY_RUN: ${{ inputs.dry_run }}
