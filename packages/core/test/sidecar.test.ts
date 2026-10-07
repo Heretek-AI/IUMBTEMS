@@ -59,4 +59,23 @@ describe("engine sidecars", () => {
     await signEngineFile(factoryLayout(fx.root).state, fx.state)
     expect((await factory.read())!.stage).toBe("GRILL")
   })
+
+  test("concurrent spend writes and reads never observe a half-signed pair", async () => {
+    const { Factory } = await import("../src/factory/index.ts")
+    const factory = new Factory(fx.root, {
+      gates: async () => ({ passed: true, findings: [], summary: "green" }),
+      stateDir: fx.state,
+    })
+    await factory.begin("human:tester")
+    // Background spend events (step_finish) save while seats read: every
+    // interleave must see a matching (state, sidecar) pair — a refusal
+    // rejects the Promise.all and fails the test. Reads may win the lock
+    // first and see the pre-charge snapshot; only forward progress matters.
+    for (let i = 0; i < 25; i++) {
+      const [charged, seen] = await Promise.all([factory.recordSpend(0.01, true), factory.read()])
+      expect(charged?.spend.events).toBeGreaterThan(0)
+      expect(seen?.stage).toBe("GRILL")
+    }
+    expect((await factory.read())!.spend.events).toBe(25)
+  })
 })

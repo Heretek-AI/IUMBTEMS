@@ -163,7 +163,21 @@ export class Factory {
 
   // ------------------------------------------------------------ state io
 
+  /**
+   * Read the run state and verify its sidecar. Takes the state lock so a
+   * reader never observes a half-written (state, sidecar) pair: saves sign
+   * under the same lock, and background writers (async spend events) can
+   * land mid-read otherwise. Callers already holding the lock use
+   * readUnsafe.
+   */
   async read(): Promise<FactoryState | undefined> {
+    // No state file, no run: return before locking (the lock mkdirs).
+    if (!(await exists(this.layout.state))) return undefined
+    return withLock(this.layout.state, () => this.readUnsafe())
+  }
+
+  /** Read + verify without taking the state lock (the caller holds it). */
+  private async readUnsafe(): Promise<FactoryState | undefined> {
     const raw = await readJson<{ version?: unknown }>(this.layout.state)
     if (raw === undefined) return undefined
     if (raw.version !== FACTORY_STATE_VERSION)
@@ -213,7 +227,7 @@ export class Factory {
     options: { guard?: boolean; create?: boolean } = {},
   ): Promise<T> {
     return withLock(this.layout.state, async () => {
-      const existing = await this.read()
+      const existing = await this.readUnsafe()
       if (!existing && !options.create)
         throw new FactoryError("No factory run here yet. Start one with /grill (or `es factory begin`).")
       const state = existing ?? this.fresh()
@@ -1126,11 +1140,11 @@ export class Factory {
   // ------------------------------------------------------------ spend, halt, resume
 
   async recordSpend(usd: number, estimated: boolean): Promise<FactoryState | undefined> {
-    if (!(usd > 0)) return this.read()
+    if (!(usd > 0)) return this.readUnsafe()
     // No run, nothing to charge; taking the lock would create .factory/runtime/ in any project.
-    if (!(await this.read())) return undefined
+    if (!(await this.readUnsafe())) return undefined
     return withLock(this.layout.state, async () => {
-      const state = await this.read()
+      const state = await this.readUnsafe()
       if (!state || state.stage === "HALTED" || state.stage === "DONE") return state
       state.spend.usd += usd
       state.spend.estimated ||= estimated
