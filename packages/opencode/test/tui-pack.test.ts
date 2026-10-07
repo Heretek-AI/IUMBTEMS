@@ -1,10 +1,13 @@
-// Regression test for the npm-installed TUI load failure ("Cannot find
-// package 'react'"). OpenCode installs npm plugins under a node_modules
-// directory, where the host's Solid transform does not apply — so the test
-// loads the PACKED artifact (dist/tui.js, pre-compiled at pack time) from a
-// fixture path containing node_modules, with only the host's runtime-module
-// rewriting registered. If raw JSX or an unresolvable import slips back in,
-// this import fails exactly like the production TUI.
+// Regression tests for loading the PACKED TUI artifact the way the release
+// host does. Two production realities are pinned here:
+//
+// 1. OpenCode installs npm plugins under a node_modules directory, where the
+//    host's Solid transform does not apply (raw .tsx fell back to react-jsx
+//    and failed on 'react'). The packed dist/tui.js must load from such a
+//    path with only the host's runtime-module rewriting registered.
+// 2. The slot claim entry point moved across host releases: opencode 2.0.x
+//    exposes context.ui.slot, later hosts bare context.slot. Setup must work
+//    with either and must not throw with neither (commands keep working).
 
 import { expect, test } from "bun:test"
 import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
@@ -17,7 +20,18 @@ import { buildTui } from "../script/build-tui.ts"
 
 ensureRuntimePluginSupport({ additional: { "@opencode/plugin/tui": { Plugin, PluginContextProvider, usePlugin } } })
 
-function stubContext() {
+async function loadPackedTui(): Promise<any> {
+  const built = await buildTui()
+  const fixture = mkdtempSync(path.join(tmpdir(), "es-tui-pack-"))
+  const pluginDir = path.join(fixture, "node_modules", "packed-plugin")
+  const destDir = path.join(pluginDir, "dist")
+  mkdirSync(destDir, { recursive: true })
+  copyFileSync(built, path.join(destDir, "tui.js"))
+  writeFileSync(path.join(pluginDir, "package.json"), '{"type":"module"}')
+  return (await import(pathToFileURL(path.join(destDir, "tui.js")).href)).default
+}
+
+function stubContext(shape: "release" | "later" | "none") {
   const slots: any[] = []
   const layers: any[] = []
   const rpc = new Proxy(
@@ -29,14 +43,14 @@ function stubContext() {
       },
     },
   )
+  const slotFn = (claim: any) => {
+    slots.push(claim)
+    return () => {}
+  }
   const context: any = {
     location: { directory: "/tmp/x" },
     data: { location: { default: () => ({ directory: "/tmp/x" }) } },
     client: { rpc: () => rpc },
-    slot: (claim: any) => {
-      slots.push(claim)
-      return () => {}
-    },
     ui: {
       toast: { show: () => {} },
       dialog: {
@@ -54,23 +68,31 @@ function stubContext() {
       },
     },
   }
+  if (shape === "later") context.slot = slotFn
+  if (shape === "release") context.ui.slot = slotFn
   return { context, slots, layers }
 }
 
-test("packed tui loads from a node_modules path and claims the panels", async () => {
-  const built = await buildTui()
-  const fixture = mkdtempSync(path.join(tmpdir(), "es-tui-pack-"))
-  const destDir = path.join(fixture, "node_modules", "packed-plugin", "dist")
-  mkdirSync(destDir, { recursive: true })
-  copyFileSync(built, path.join(destDir, "tui.js"))
-  writeFileSync(path.join(fixture, "node_modules", "packed-plugin", "package.json"), '{"type":"module"}')
+for (const shape of ["release", "later"] as const) {
+  test(`packed tui claims four session.panel slots via ${shape === "release" ? "ui.slot" : "bare slot"}`, async () => {
+    const plugin = await loadPackedTui()
+    expect(plugin.id).toBe("epistemic-swarm.tui")
+    const fx = stubContext(shape)
+    const cleanup = await plugin.setup(fx.context)
+    expect(typeof cleanup === "function" || cleanup === undefined).toBe(true)
+    expect(fx.slots).toHaveLength(4)
+    for (const claim of fx.slots) {
+      expect(claim.append).toBe("session.panel")
+      expect(claim.render({ name: "other" })).toBeNull()
+    }
+    expect(fx.layers[0].commands.map((command: any) => command.slash.name)).toContain("es-approve")
+  }, 60_000)
+}
 
-  const plugin = (await import(pathToFileURL(path.join(destDir, "tui.js")).href)).default as any
-  expect(plugin.id).toBe("epistemic-swarm.tui")
-
-  const fx = stubContext()
-  const cleanup = await plugin.setup(fx.context)
-  expect(typeof cleanup === "function" || cleanup === undefined).toBe(true)
-  expect(fx.slots).toHaveLength(4)
-  for (const claim of fx.slots) expect(claim.append).toBe("session.panel")
+test("packed tui setup survives a host with no slot entry (commands still register)", async () => {
+  const plugin = await loadPackedTui()
+  const fx = stubContext("none")
+  await plugin.setup(fx.context)
+  expect(fx.slots).toHaveLength(0)
+  expect(fx.layers[0].commands.map((command: any) => command.slash.name)).toContain("es-approve")
 }, 60_000)

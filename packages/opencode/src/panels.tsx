@@ -206,12 +206,18 @@ const PANELS = Object.entries(PANEL_COMPONENTS).map(([name, Panel]) => ({
 
 /** Claim the session.panel slot once per panel; each claim filters by name. */
 export function registerPanels(context: any, call: PanelCall, subscribe: PanelSubscribe): () => void {
-  const disposers = PANELS.map((panel) =>
-    context.slot({
-      append: "session.panel",
-      render: (input: { name: string }) => (input.name === panel.name ? panel.render({ call, subscribe }) : null),
-    }),
-  )
+  // Slot entry point moved across host releases: opencode 2.0.x exposes it
+  // as context.ui.slot (arity 1 object form or arity 2 name/render form),
+  // later hosts as bare context.slot. Without either, panels stay
+  // unregistered but setup must not throw (commands keep working).
+  const slotFn = typeof context.slot === "function" ? context.slot : context.ui?.slot
+  if (typeof slotFn !== "function") return () => {}
+  const disposers: Array<() => void> = []
+  for (const panel of PANELS) {
+    const render = (input: { name: string }) => (input.name === panel.name ? panel.render({ call, subscribe }) : null)
+    const dispose = slotFn.length <= 1 ? slotFn({ append: "session.panel", render }) : slotFn("session.panel", render)
+    if (typeof dispose === "function") disposers.push(dispose)
+  }
   return () => {
     for (const dispose of disposers) dispose()
   }
