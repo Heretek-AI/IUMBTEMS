@@ -255,7 +255,11 @@ describe("factory-gate", () => {
     // The human approves; the scripted factory seat can now build.
     await recordApproval(h.directory, { stage: "spec", channel: "cli", approvedBy: "tester", signer })
     const started = await h.run(call("es_build_start"), { agent: "factory" })
-    expect(started.tools[0]?.status).toBe("completed")
+    // [status, text]: the text names the refusal reason (CI-only failure, undiagnosed — see #35).
+    expect([started.tools[0]?.status, started.tools[0]?.text]).toEqual([
+      "completed",
+      expect.stringContaining("worktree:"),
+    ])
     expect(existsSync(path.join(h.directory, ".factory/worktrees/alpha"))).toBe(true)
 
     // Release is a RELEASE-stage action, not a build-stage one.
