@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 — unreleased
+## 1.1.0 — 2026-10-07
 
 "Dialectic Restoration" (#20) brings back the best of the 0.7 research
 harness, ported to TypeScript inside the 1.x trust model. Milestones: M1
