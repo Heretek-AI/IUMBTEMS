@@ -21,7 +21,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun build src/index.ts --target=node --outfile dist/es.js --external web-tree-sitter --external vscode-jsonrpc --external vscode-languageserver-protocol",
+    "build": "bun build src/index.ts --target=node --outfile dist/es.js --packages=external",
     "prepublishOnly": "bun run build",
     "test": "bun test"
   },
