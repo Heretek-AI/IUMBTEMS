@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.2 (unreleased)
+## 1.0.3 (unreleased)
 
 The 1.0 cutover replaces the Python research harness with the TypeScript
 **Epistemic Swarm** monorepo (`@heretek-ai/es-core`, `@heretek-ai/es-cli`,

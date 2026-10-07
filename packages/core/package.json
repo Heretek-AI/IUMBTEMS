@@ -1,6 +1,6 @@
 {
   "name": "@heretek-ai/es-core",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Epistemic Swarm core: factory state machine, mechanical gates, audit log, trust, research, brainstorm, harvest, LSP and hook/agent compilers.",
   "type": "module",
   "license": "Apache-2.0",

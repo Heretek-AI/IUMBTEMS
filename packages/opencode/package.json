@@ -1,6 +1,6 @@
 {
   "name": "@heretek-ai/epistemic-swarm",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Epistemic Swarm: an AI build factory for OpenCode v2 \u2014 grill, research, spec, build, QA and release, gated mechanically.",
   "type": "module",
   "license": "Apache-2.0",
@@ -20,7 +20,7 @@
     },
     "./tui": {
       "types": "./tui.tsx",
-      "default": "./tui.tsx"
+      "default": "./dist/tui.js"
     },
     "./rpc": {
       "types": "./rpc.ts",
@@ -32,10 +32,12 @@
     "server.ts",
     "tui.tsx",
     "rpc.ts",
-    "src"
+    "src",
+    "dist"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "bun script/build-tui.ts",
+    "prepublishOnly": "bun run build",
     "test": "bun test"
   },
   "dependencies": {
@@ -43,10 +45,13 @@
     "@opencode/plugin": "2.0.24"
   },
   "devDependencies": {
+    "@babel/core": "7.28.0",
+    "@babel/preset-typescript": "7.27.1",
     "@heretek-ai/es-testkit": "workspace:*",
     "@opencode/sdk": "2.0.24",
     "@opentui/core": "0.5.14",
     "@opentui/solid": "0.5.14",
+    "babel-preset-solid": "1.9.12",
     "solid-js": "1.9.15"
   },
   "engines": {
