@@ -17,3 +17,8 @@ The 1.0 cutover replaces the Python research harness with the TypeScript
   Antigravity (1.3) adapters follow, each publishing capability-matrix rows
   with smoke tests.
 - Platform: Linux, Node ≥ 22 or Bun. No Python.
+- Darkharvest licence verdicts are fail-closed: permissive only on a full-text
+  SPDX template match, every licence file and SPDX header counted, harvested
+  content never executed and confined to the project for agents.
+- Packages publish from `bun pm pack` tarballs (real versions, no `workspace:`)
+  that `scripts/pack-smoke.sh` installs and runs first.

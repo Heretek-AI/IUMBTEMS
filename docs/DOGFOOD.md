@@ -32,7 +32,11 @@ package with your provider/model ids per tier:
 ```
 
 Optionally commit a project config (`.factory/config.json`) with the same
-models — `es config show` and `/config` print the effective layers.
+models — `es config show` and `/config` print the effective layers. It is a
+pinned control file: commit it before `es approve frontier` (approvals record
+the baseline), or accept a later edit with `es rebaseline`. `embeddings` and
+`estimate` belong in the global config or plugin options; a project file may
+not set them.
 
 ## 2. Grill (you + `/grill`)
 

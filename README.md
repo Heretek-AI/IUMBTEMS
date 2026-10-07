@@ -54,7 +54,7 @@
 
 ## Known enforcement limits
 
-The integrity model is mechanical, but three limits are deliberate and visible
+The integrity model is mechanical, but these limits are deliberate and visible
 rather than silently assumed:
 
 - **Read-only seats.** QA and manager shells run under `bwrap` when it is
@@ -63,9 +63,19 @@ rather than silently assumed:
   it catches writes to files in the checkout, not reads or side effects outside
   it.
 - **Control-file baseline.** `verifyControl` hashes the files a human
-  authorises — `gates.json`, `frontier.json`, `approvals/**`, `waivers/**`.
-  Everything else in `.factory/**` and `.git/config` is deny-write for agents
-  but is not individually hashed on every run.
+  authorises — `gates.json`, `config.json`, `frontier.json`, `approvals/**`,
+  `waivers/**`; a hand edit is drift until a human accepts it (`es rebaseline`).
+  Everything else that is a control file (engine-owned brainstorm, harvest and
+  design state, `runtime/**`, `.git/config`) is deny-write for agents but is
+  not individually hashed on every run.
+- **Licence detection is strict.** A permissive verdict needs the whole licence
+  file to match an SPDX template; mixed, notice-only (e.g. an Apache header
+  without the licence text) or concatenated licence files are "unknown" and
+  therefore clean-room only. Agents harvest local code only inside the
+  project; a human can scan elsewhere with `es harvest scan`.
+- **Evals are opt-in and step-capped.** `bun run evals` needs the opencode CLI
+  and `ES_EVAL_MODEL`; each case is one real turn killed at a step cap, since
+  the CLI's event stream reports no cost.
 - **MCP caller identity.** Over the stdio MCP server the calling agent's
   identity is a model-supplied `agent` argument (or `ES_AGENT`), so it is
   ADVISORY: the harness adapter, not the protocol, establishes it. There is no
@@ -78,6 +88,7 @@ bun install
 bun run check        # biome + tsc + bun test (all packages)
 bun run docs:gen     # regenerate schemas/ + docs/ after schema changes
 bun run docs:check   # CI drift check
+scripts/pack-smoke.sh   # build, pack and install the packages; run them under Node and Bun
 scripts/v2-head.sh   # run the real-host suite against OpenCode v2 HEAD
 ```
 
