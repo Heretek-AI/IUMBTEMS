@@ -3,7 +3,6 @@
 // as counter-questions (never agreement), and completion refuses until the
 // token tree validates with zero one-off mints and every contrast pair passes.
 import { seatOf } from "../agents/registry.ts"
-import { factoryLayout } from "../layout.ts"
 import type { EsToolDef } from "../ops/tools.ts"
 import { ToolRefusal } from "../ops/tools.ts"
 import type { ProbeRow } from "../schema/queereye.ts"

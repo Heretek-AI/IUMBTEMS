@@ -10,7 +10,8 @@ import { run } from "../util/proc.ts"
 
 const which = new Map<string, boolean>()
 export function installed(binary: string): boolean {
-  if (!which.has(binary)) which.set(binary, spawnSync("sh", ["-c", `command -v ${binary}`]).status === 0)
+  // `binary` is an internal constant ("gitleaks", "osv-scanner"); PATH lookup is intended.
+  if (!which.has(binary)) which.set(binary, spawnSync("sh", ["-c", `command -v ${binary}`]).status === 0) // NOSONAR
   return which.get(binary)!
 }
 

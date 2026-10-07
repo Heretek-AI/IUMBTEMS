@@ -49,7 +49,7 @@ export function iterDeclarations(tree: unknown, prefix: readonly string[] = []):
   const walk = (node: unknown, path: readonly string[]) => {
     if (typeof node !== "object" || node === null || Array.isArray(node)) return
     const record = node as Record<string, unknown>
-    for (const key of Object.keys(record).sort()) {
+    for (const key of Object.keys(record).sort((a, b) => a.localeCompare(b))) {
       if (key.startsWith("$")) continue
       const child = record[key]
       const childPath = [...path, key]

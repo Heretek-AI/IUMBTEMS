@@ -22,7 +22,10 @@ else
   git clone --depth 1 --branch "$branch" "$repo" "$head_dir"
 fi
 echo "v2 HEAD: $(git -C "$head_dir" log -1 --format='%h %ci')"
-(cd "$head_dir" && bun install)
+# OpenCode's postinstall fixes its node-pty native binary, so scripts must run.
+# This is a shallow checkout of the canonical upstream repo inside a
+# secret-free CI sandbox; nothing here handles our secrets.
+(cd "$head_dir" && bun install) # NOSONAR -- node-pty postinstall is required
 
 for target in "$root"/packages/*/node_modules/@opencode/sdk "$root"/packages/*/node_modules/@opencode/plugin; do
   [ -e "$target" ] || [ -L "$target" ] || continue

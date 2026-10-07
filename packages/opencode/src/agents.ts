@@ -28,7 +28,9 @@ export function permissionRules(spec: AgentSpec, mcpServers: readonly string[]):
     // Autonomous seats never wait on a human: no questions, no paths outside the project except /tmp.
     rules.push({ action: "question", resource: "*", effect: "deny" })
     rules.push({ action: "external_directory", resource: "*", effect: "deny" })
-    rules.push({ action: "external_directory", resource: "/tmp/*", effect: "allow" })
+    // Sonar S5443 flags the /tmp literal; it governs creating temp files, while
+    // this only grants autonomous seats access to a scratch directory.
+    rules.push({ action: "external_directory", resource: "/tmp/*", effect: "allow" }) // NOSONAR
   }
   if (spec.writes.length === 0) rules.push({ action: "edit", resource: "*", effect: "deny" })
   if (spec.lsp === "none") rules.push({ action: "lsp", resource: "*", effect: "deny" })

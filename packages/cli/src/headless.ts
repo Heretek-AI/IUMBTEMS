@@ -34,7 +34,8 @@ export interface HarnessDriver {
 
 async function onPath(binary: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const child = spawn("sh", ["-c", `command -v ${binary}`], { stdio: "ignore" })
+    // `binary` is always an internal constant; PATH lookup is intended.
+    const child = spawn("sh", ["-c", `command -v ${binary}`], { stdio: "ignore" }) // NOSONAR
     child.on("close", (code) => resolve(code === 0))
     child.on("error", () => resolve(false))
   })
@@ -55,7 +56,9 @@ export const opencodeDriver: HarnessDriver = {
       ...(session ? ["--session", session] : []),
       prompt,
     ]
+    // `opencode` is resolved from PATH by design.
     const child = spawn("opencode", args, {
+      // NOSONAR
       cwd: root,
       stdio: ["ignore", "pipe", "pipe"],
       ...(signal ? { signal } : {}),

@@ -195,7 +195,8 @@ export function createPolicyHooks(runtime: Runtime) {
       return
     }
     if (seat && event.action === "external_directory") {
-      const tmp = event.resources.every((resource) => resource === "/tmp/*" || resource.startsWith("/tmp/"))
+      // Sonar S5443 flags the /tmp literal; this is an access check, not temp-file creation.
+      const tmp = event.resources.every((resource) => resource === "/tmp/*" || resource.startsWith("/tmp/")) // NOSONAR
       event.effect = tmp ? "allow" : "deny"
       if (!tmp) event.message = "Factory seats stay inside the project (and /tmp)."
       return

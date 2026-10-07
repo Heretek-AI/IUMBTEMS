@@ -86,7 +86,8 @@ let bwrapCache: boolean | undefined
 export function bwrapAvailable(): boolean {
   if (bwrapCache !== undefined) return bwrapCache
   try {
-    const probe = spawnSync("bwrap", ["--ro-bind", "/", "/", "--dev", "/dev", "--", "true"], { timeout: 5000 })
+    // bwrap is resolved from PATH by design (it may be absent).
+    const probe = spawnSync("bwrap", ["--ro-bind", "/", "/", "--dev", "/dev", "--", "true"], { timeout: 5000 }) // NOSONAR
     bwrapCache = probe.status === 0
   } catch {
     bwrapCache = false
