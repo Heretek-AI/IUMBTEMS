@@ -1,7 +1,7 @@
 // The capability matrix: what each harness actually enforces, declared once
 // and shared by the hook inspector, /status, the generated docs and (later)
 // the Claude/Pi/Antigravity adapters. ENFORCED rows must name the proof that
-// exercises them on a real harness (a test file or the M0 spike record);
+// exercises them on a real harness (a test file);
 // ADVISORY rows are best-effort and labelled as such; UNSUPPORTED rows are
 // declared gaps, not silently absent.
 import type { Harness, Support } from "./hooks/compile.ts"
@@ -32,36 +32,36 @@ export interface CapabilityRow {
   readonly capability: Capability
   readonly support: Support
   readonly detail: string
-  /** Repo-relative proof for ENFORCED rows (a test file or the M0 spike record). */
+  /** Repo-relative proof for ENFORCED rows (a real-host or real-render test file). */
   readonly test?: string
 }
 
 const opencode = (rows: Record<Capability, Omit<CapabilityRow, "capability">>): CapabilityRow[] =>
   CAPABILITIES.map((capability) => ({ capability, ...rows[capability] }))
 
-const M0 = "spikes/m0/RESULTS.md"
+const PLUGIN = "packages/opencode/test/plugin.test.ts"
 
 export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[]>> = {
   opencode: opencode({
     agents: {
       support: "enforced",
       detail: "Registered by agent.transform with wildcard-deny scoping; never touches built-ins or defaults.",
-      test: "packages/opencode/test/plugin.test.ts",
+      test: PLUGIN,
     },
     skills: {
       support: "enforced",
       detail: "One shared SKILL.md tree registered at runtime; per-agent visibility via skill deny rules.",
-      test: M0,
+      test: PLUGIN,
     },
     tools: {
       support: "enforced",
       detail: "es_* tools registered direct (codemode:false) with a permission action per tool; seat-scoped.",
-      test: "packages/opencode/test/plugin.test.ts",
+      test: PLUGIN,
     },
     permissions: {
       support: "enforced",
       detail: "permission.evaluate + tool.execute.before enforce the write/read/shell policy; control files denied.",
-      test: "packages/opencode/test/plugin.test.ts",
+      test: PLUGIN,
     },
     hooks: {
       support: "enforced",
@@ -70,18 +70,18 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     question: {
       support: "enforced",
-      detail: "Session forms; agents cannot answer them (only humans can).",
-      test: M0,
+      detail: "Session forms only humans can answer; primaries may ask, autonomous subagent seats may not.",
+      test: PLUGIN,
     },
     subagents: {
       support: "enforced",
-      detail: "Depth 1; hidden subagents are unlisted but invocable by ID; background fan-out supported.",
-      test: M0,
+      detail: "Depth 1; hidden seats are unlisted but invocable by ID, and only from the seats allowed to spawn them.",
+      test: PLUGIN,
     },
     compaction: {
       support: "enforced",
       detail: "Session compaction injects the compact factory-state block for factory seats.",
-      test: M0,
+      test: PLUGIN,
     },
     websearch: {
       support: "enforced",
@@ -95,8 +95,9 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     panels: {
       support: "enforced",
-      detail: "Four session.panel dashboards (factory, LSP, hooks, brainstorm) opened via ui.panel.open.",
-      test: "packages/opencode/test/tui.test.ts",
+      detail:
+        "Four session.panel dashboards (factory, LSP, hooks, brainstorm), rendered by OpenTUI and refreshed on server changes.",
+      test: "packages/opencode/test/panels.test.ts",
     },
     research: {
       support: "enforced",

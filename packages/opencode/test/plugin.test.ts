@@ -96,6 +96,41 @@ describe("integrity on the real host", () => {
     expect((factory?.tools ?? []).map((tool) => tool.function.name)).not.toContain("es_complete")
   })
 
+  test("skills are scoped per seat; autonomous seats cannot ask questions", async () => {
+    await h.run("hello", { agent: "factory" })
+    const factory = lastAgentRequest(h.llm.requests)
+    expect(systemText(factory)).toContain("<id>factory</id>")
+    expect(systemText(factory)).not.toContain("<id>grill</id>")
+    await h.run("hello", { agent: "grill" })
+    const grill = lastAgentRequest(h.llm.requests)
+    expect(systemText(grill)).toContain("<id>grill</id>")
+    expect(systemText(grill)).not.toContain("<id>factory</id>")
+    // Primaries talk to the human and keep the question tool; subagent seats are autonomous.
+    expect((grill?.tools ?? []).map((tool) => tool.function.name)).toContain("question")
+    await h.run("hello", { agent: "es-programmer" })
+    const programmer = lastAgentRequest(h.llm.requests)
+    expect((programmer?.tools ?? []).map((tool) => tool.function.name)).not.toContain("question")
+    expect(systemText(programmer)).not.toContain("<id>grill</id>")
+  })
+
+  test("the factory invokes a hidden seat by id; compaction keeps the factory state", async () => {
+    const { sessionID } = await h.run(
+      `delegate ${call("subagent", { agent: "es-manager", description: "plan", prompt: "summarise the roadmap" })}`,
+      { agent: "factory" },
+    )
+    const subagent = (lastAgentRequest(h.llm.requests)?.tools ?? []).find((tool) => tool.function.name === "subagent")
+    expect(subagent?.function.description ?? "").not.toContain("es-manager")
+    expect(JSON.stringify(h.llm.requests.at(-1))).toContain('state=\\"completed\\"')
+    const before = h.llm.requests.length
+    await h.opencode.sessions.compact({ sessionID } as any)
+    await h.opencode.sessions.wait({ sessionID } as any)
+    const compaction = h.llm.requests
+      .slice(before)
+      .find((request) => systemText(request).includes("Preserve this factory state"))
+    expect(compaction).toBeDefined()
+    expect(systemText(compaction)).toContain("<factory-state>")
+  })
+
   test("a QA seat cannot write, and its shell writes never escape (sandbox or allowlist)", async () => {
     const { tools } = await h.run(
       `qa ${call("write", { path: "src/x.ts", content: "x" })} ${call("shell", { command: "touch QA_TOUCHED && echo touched" })}`,

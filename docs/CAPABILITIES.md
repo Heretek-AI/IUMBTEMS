@@ -10,16 +10,16 @@ and Antigravity adapters ship in 1.1–1.3). Generated: do not edit by hand.
 | capability | support | proof | detail |
 | --- | --- | --- | --- |
 | agents | ENFORCED | `packages/opencode/test/plugin.test.ts` | Registered by agent.transform with wildcard-deny scoping; never touches built-ins or defaults. |
-| skills | ENFORCED | `spikes/m0/RESULTS.md` | One shared SKILL.md tree registered at runtime; per-agent visibility via skill deny rules. |
+| skills | ENFORCED | `packages/opencode/test/plugin.test.ts` | One shared SKILL.md tree registered at runtime; per-agent visibility via skill deny rules. |
 | tools | ENFORCED | `packages/opencode/test/plugin.test.ts` | es_* tools registered direct (codemode:false) with a permission action per tool; seat-scoped. |
 | permissions | ENFORCED | `packages/opencode/test/plugin.test.ts` | permission.evaluate + tool.execute.before enforce the write/read/shell policy; control files denied. |
 | hooks | ENFORCED | `packages/opencode/test/hooks.test.ts` | Claude hook schema bridged in-process; Stop is emulated after the turn (advisory for plain chat). |
-| question | ENFORCED | `spikes/m0/RESULTS.md` | Session forms; agents cannot answer them (only humans can). |
-| subagents | ENFORCED | `spikes/m0/RESULTS.md` | Depth 1; hidden subagents are unlisted but invocable by ID; background fan-out supported. |
-| compaction | ENFORCED | `spikes/m0/RESULTS.md` | Session compaction injects the compact factory-state block for factory seats. |
+| question | ENFORCED | `packages/opencode/test/plugin.test.ts` | Session forms only humans can answer; primaries may ask, autonomous subagent seats may not. |
+| subagents | ENFORCED | `packages/opencode/test/plugin.test.ts` | Depth 1; hidden seats are unlisted but invocable by ID, and only from the seats allowed to spawn them. |
+| compaction | ENFORCED | `packages/opencode/test/plugin.test.ts` | Session compaction injects the compact factory-state block for factory seats. |
 | websearch | ENFORCED | `packages/opencode/test/research.test.ts` | The configured provider registers as the host websearch; results are cached and citable. |
 | lsp | ENFORCED | `packages/opencode/test/lsp.test.ts` | The lsp config key is read and served by our own manager (v2 accepts but does not run it). |
-| panels | ENFORCED | `packages/opencode/test/tui.test.ts` | Four session.panel dashboards (factory, LSP, hooks, brainstorm) opened via ui.panel.open. |
+| panels | ENFORCED | `packages/opencode/test/panels.test.ts` | Four session.panel dashboards (factory, LSP, hooks, brainstorm), rendered by OpenTUI and refreshed on server changes. |
 | research | ENFORCED | `packages/opencode/test/research.test.ts` | Cache, quote verifier, auditor, providers and the websearch bridge. |
 | brainstorm | ENFORCED | `packages/opencode/test/brainstorm.test.ts` | Lens fan-out, record/score/complete tools, dedupe, rubric, shortlist with a forced outlier. |
 | harvest | ENFORCED | `packages/opencode/test/harvest.test.ts` | Fail-closed SPDX detection, provenance profiles, policy-enforced matrix, clean-room specs. |

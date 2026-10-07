@@ -15,7 +15,7 @@ export default Plugin.define({
     const rpc = context.client.rpc(EsRpc) as any
     const location = () => context.location ?? context.data.location.default()
     const call = (method: string, input: unknown = {}) => rpc[method](input, { location: location() })
-    const stopPanels = registerPanels(context, call)
+    const stopPanels = registerPanels(context, call, (listener) => rpc.events.on("changed", () => listener()))
     const user = userInfo().username
     const toast = (message: string, variant: "success" | "error" | "info" = "info") =>
       context.ui.toast.show({ title: "Epistemic Swarm", message, variant })

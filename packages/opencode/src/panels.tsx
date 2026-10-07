@@ -1,10 +1,42 @@
 // The four TUI panels: factory dashboard, LSP manager, hook inspector and
 // brainstorm board. Each is a session.panel slot contribution (the host
 // renders the one whose name is open) and reads structured state from the
-// server plugin over RPC — the same human-only channel the dialogs use.
-import { createResource, For, Show } from "solid-js"
+// server plugin over RPC — the same human-only channel the dialogs use. While
+// open, a panel refetches on every server `changed` event and every couple of
+// seconds, so it follows a running factory.
+import { createResource, createSignal, For, onCleanup, Show } from "solid-js"
 
 export type PanelCall = (method: string, input?: unknown) => Promise<any>
+/** Subscribe to server state changes; returns the unsubscribe function. */
+export type PanelSubscribe = (listener: () => void) => () => void
+
+export interface PanelProps {
+  readonly call: PanelCall
+  readonly subscribe: PanelSubscribe
+}
+
+export const PANEL_REFRESH_MS = 2_000
+
+/** Panel data, refetched on change events and on an interval while mounted. */
+function usePanelState(props: PanelProps, method: string): { data: () => any; error: () => string | undefined } {
+  const [version, setVersion] = createSignal(0)
+  const bump = () => setVersion((value) => value + 1)
+  const unsubscribe = props.subscribe(bump)
+  const timer = setInterval(bump, PANEL_REFRESH_MS)
+  onCleanup(() => {
+    unsubscribe()
+    clearInterval(timer)
+  })
+  const [state] = createResource(
+    version,
+    (): Promise<{ data?: any; error?: string }> =>
+      props.call(method).then(
+        (data) => ({ data }),
+        (error: any) => ({ error: String(error?.data?.reason ?? error?.message ?? error) }),
+      ),
+  )
+  return { data: () => state.latest?.data, error: () => state.latest?.error }
+}
 
 const Frame = (props: { title: string; children?: any }) => (
   <box flexDirection="column" padding={1} gap={1}>
@@ -13,11 +45,18 @@ const Frame = (props: { title: string; children?: any }) => (
   </box>
 )
 
-const FactoryPanel = (props: { call: PanelCall }) => {
-  const [state] = createResource(() => props.call("factoryState"))
+const Failed = (props: { error: () => string | undefined }) => (
+  <Show when={props.error()}>
+    <text>Could not load: {props.error()}</text>
+  </Show>
+)
+
+const FactoryPanel = (props: PanelProps) => {
+  const state = usePanelState(props, "factoryState")
   return (
     <Frame title="Factory dashboard">
-      <Show when={state()} fallback={<text>Loading factory state…</text>}>
+      <Failed error={state.error} />
+      <Show when={state.data()} fallback={<text>{state.error() ? "" : "Loading factory state…"}</text>}>
         {(data: () => any) => (
           <>
             <text>
@@ -54,11 +93,12 @@ const FactoryPanel = (props: { call: PanelCall }) => {
   )
 }
 
-const LspPanel = (props: { call: PanelCall }) => {
-  const [state] = createResource(() => props.call("lspState"))
+const LspPanel = (props: PanelProps) => {
+  const state = usePanelState(props, "lspState")
   return (
     <Frame title="Language servers">
-      <Show when={state()} fallback={<text>Loading language servers…</text>}>
+      <Failed error={state.error} />
+      <Show when={state.data()} fallback={<text>{state.error() ? "" : "Loading language servers…"}</text>}>
         {(data: () => any) => (
           <>
             <text>{data().enabled ? "LSP is on." : "LSP is disabled (lsp: false)."}</text>
@@ -79,11 +119,12 @@ const LspPanel = (props: { call: PanelCall }) => {
   )
 }
 
-const HooksPanel = (props: { call: PanelCall }) => {
-  const [state] = createResource(() => props.call("hooksState"))
+const HooksPanel = (props: PanelProps) => {
+  const state = usePanelState(props, "hooksState")
   return (
     <Frame title="Hook bridge">
-      <Show when={state()} fallback={<text>Loading hooks…</text>}>
+      <Failed error={state.error} />
+      <Show when={state.data()} fallback={<text>{state.error() ? "" : "Loading hooks…"}</text>}>
         {(data: () => any) => (
           <>
             <text>
@@ -110,11 +151,12 @@ const HooksPanel = (props: { call: PanelCall }) => {
   )
 }
 
-const BrainstormPanel = (props: { call: PanelCall }) => {
-  const [state] = createResource(() => props.call("brainstormState"))
+const BrainstormPanel = (props: PanelProps) => {
+  const state = usePanelState(props, "brainstormState")
   return (
     <Frame title="Brainstorm board">
-      <Show when={state()} fallback={<text>Loading brainstorm…</text>}>
+      <Failed error={state.error} />
+      <Show when={state.data()} fallback={<text>{state.error() ? "" : "Loading brainstorm…"}</text>}>
         {(data: () => any) => (
           <Show when={data().active} fallback={<text>No brainstorm in .factory/brainstorm yet. Run /brainstorm.</text>}>
             <text>Brief: {data().brief}</text>
@@ -149,19 +191,25 @@ const BrainstormPanel = (props: { call: PanelCall }) => {
   )
 }
 
-const PANELS: ReadonlyArray<{ name: string; render: (call: PanelCall) => any }> = [
-  { name: "factory", render: (call) => <FactoryPanel call={call} /> },
-  { name: "lsp", render: (call) => <LspPanel call={call} /> },
-  { name: "hooks", render: (call) => <HooksPanel call={call} /> },
-  { name: "brainstorm", render: (call) => <BrainstormPanel call={call} /> },
-]
+/** The panel components by panel name (rendered headlessly in tests). */
+export const PANEL_COMPONENTS: Readonly<Record<string, (props: PanelProps) => any>> = {
+  factory: FactoryPanel,
+  lsp: LspPanel,
+  hooks: HooksPanel,
+  brainstorm: BrainstormPanel,
+}
+
+const PANELS = Object.entries(PANEL_COMPONENTS).map(([name, Panel]) => ({
+  name,
+  render: (props: PanelProps) => <Panel call={props.call} subscribe={props.subscribe} />,
+}))
 
 /** Claim the session.panel slot once per panel; each claim filters by name. */
-export function registerPanels(context: any, call: PanelCall): () => void {
+export function registerPanels(context: any, call: PanelCall, subscribe: PanelSubscribe): () => void {
   const disposers = PANELS.map((panel) =>
     context.slot({
       append: "session.panel",
-      render: (input: { name: string }) => (input.name === panel.name ? panel.render(call) : null),
+      render: (input: { name: string }) => (input.name === panel.name ? panel.render({ call, subscribe }) : null),
     }),
   )
   return () => {
