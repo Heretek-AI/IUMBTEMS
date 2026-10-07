@@ -104,7 +104,8 @@ export function familyOf(spdx: string): LicenseFinding["family"] {
 }
 
 export function normalizeLicenseId(id: string): string {
-  const trimmed = id.trim().replace(/[`;]+$/, "")
+  let trimmed = id.trim()
+  while (trimmed.endsWith("`") || trimmed.endsWith(";")) trimmed = trimmed.slice(0, -1)
   return CANONICAL[trimmed.toLowerCase()] ?? trimmed
 }
 

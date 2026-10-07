@@ -3,7 +3,7 @@
 // (".js" → ".ts", index files), workspace packages (package.json exports),
 // Python relative and absolute modules, and Go module-path imports
 // (package directories). Unresolved specifiers are external.
-import { readdir, readFile, stat } from "node:fs/promises"
+import { open, readdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import { isTestFile } from "../gates/budgets.ts"
 import { git } from "../worktree/git.ts"
@@ -72,29 +72,36 @@ export async function listSourceFiles(dir: string, maxFiles = 20_000): Promise<s
 const fileCache = new Map<string, { mtimeMs: number; size: number; regexOnly: boolean; structure: FileStructure }>()
 
 async function structureOf(absolute: string, rel: string, options: GraphOptions) {
-  const info = await stat(absolute).catch(() => undefined)
-  if (!info?.isFile() || info.size > 2_000_000) return undefined
-  const cached = fileCache.get(absolute)
-  if (
-    cached &&
-    cached.mtimeMs === info.mtimeMs &&
-    cached.size === info.size &&
-    cached.regexOnly === Boolean(options.regexOnly)
-  )
-    return cached.structure
-  const text = await readFile(absolute, "utf8").catch(() => undefined)
-  if (text === undefined) return undefined
-  const structure = await extractStructure(rel, text, options)
-  if (structure) {
-    if (fileCache.size > 50_000) fileCache.clear()
-    fileCache.set(absolute, {
-      mtimeMs: info.mtimeMs,
-      size: info.size,
-      regexOnly: Boolean(options.regexOnly),
-      structure,
-    })
+  // Open once and stat the descriptor, so the size/mtime check and the read
+  // cannot race with a concurrent replacement of the path.
+  const handle = await open(absolute, "r").catch(() => undefined)
+  if (!handle) return undefined
+  try {
+    const info = await handle.stat()
+    if (!info.isFile() || info.size > 2_000_000) return undefined
+    const cached = fileCache.get(absolute)
+    if (
+      cached &&
+      cached.mtimeMs === info.mtimeMs &&
+      cached.size === info.size &&
+      cached.regexOnly === Boolean(options.regexOnly)
+    )
+      return cached.structure
+    const text = await handle.readFile("utf8")
+    const structure = await extractStructure(rel, text, options)
+    if (structure) {
+      if (fileCache.size > 50_000) fileCache.clear()
+      fileCache.set(absolute, {
+        mtimeMs: info.mtimeMs,
+        size: info.size,
+        regexOnly: Boolean(options.regexOnly),
+        structure,
+      })
+    }
+    return structure
+  } finally {
+    await handle.close()
   }
-  return structure
 }
 
 // ------------------------------------------------------------- resolution
@@ -140,7 +147,7 @@ function exportTarget(exports: unknown, subpath: string): string | undefined {
     const suffix = key.slice(star + 1)
     if (subpath.startsWith(prefix) && subpath.endsWith(suffix) && subpath.length >= prefix.length + suffix.length) {
       const target = pickCondition(value)
-      return target?.replace("*", subpath.slice(prefix.length, subpath.length - suffix.length))
+      return target?.replaceAll("*", subpath.slice(prefix.length, subpath.length - suffix.length))
     }
   }
   return undefined

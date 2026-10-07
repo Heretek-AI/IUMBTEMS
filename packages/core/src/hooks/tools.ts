@@ -26,8 +26,8 @@ const pick = <T extends Record<string, unknown>>(value: T) =>
   Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T
 
 export function patchFiles(patchText: string): string[] {
-  return [...patchText.matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+?)\s*$/gm)].map(
-    (match) => match[1]!,
+  return [...patchText.matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Move to):(.*)$/gm)].map((match) =>
+    match[1]!.trim(),
   )
 }
 

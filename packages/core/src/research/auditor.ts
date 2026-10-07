@@ -50,7 +50,7 @@ export interface AuditReport {
   readonly passed: boolean
 }
 
-const TAG = /\[(VERIFIED|INFERRED|HYPOTHESIS|NEGATIVE_KNOWLEDGE):\s*((?:[^\][]|\[[^\]]*\])*)\]/g
+const TAG = /\[(VERIFIED|INFERRED|HYPOTHESIS|NEGATIVE_KNOWLEDGE):[ \t]*(.*?)\]/g
 
 export function parseTags(line: string): Tag[] {
   const tags: Tag[] = []
@@ -163,7 +163,9 @@ export function pruneClaims(markdown: string, report: AuditReport): string {
     "",
     ...failed.map((claim) => `> ${claim.text}\n> — pruned: ${claim.reason ?? claim.status}`),
   ]
-  return `${kept.join("\n").replace(/\n+$/, "")}\n${section.join("\n")}\n`
+  let body = kept.join("\n")
+  while (body.endsWith("\n")) body = body.slice(0, -1)
+  return `${body}\n${section.join("\n")}\n`
 }
 
 export function formatCoverage(report: AuditReport): string {

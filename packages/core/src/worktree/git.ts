@@ -55,7 +55,10 @@ export async function commitAll(
   await git(dir, ["add", "-A"])
   const staged = await git(dir, ["diff", "--cached", "--quiet"], { allowFail: true })
   if (staged.code === 0) return undefined
-  const [name, email] = /^(.*) <(.*)>$/.exec(author)?.slice(1) ?? ["Epistemic Swarm", "factory@epistemic-swarm.local"]
+  const [name, email] = /^([^<]*) <([^>]*)>$/.exec(author)?.slice(1) ?? [
+    "Epistemic Swarm",
+    "factory@epistemic-swarm.local",
+  ]
   await git(dir, ["-c", `user.name=${name}`, "-c", `user.email=${email}`, "commit", "--no-verify", "-m", message])
   return headCommit(dir)
 }

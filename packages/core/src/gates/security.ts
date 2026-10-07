@@ -1,7 +1,7 @@
 // External security scanners: gitleaks (secrets) and OSV (known-vulnerable
 // dependencies). Used when installed; OSV falls back to its public API.
 // A dependency change that cannot be checked is UNVERIFIED and fails closed.
-import { spawnSync } from "node:child_process"
+import { accessSync, constants } from "node:fs"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import type { GateFinding } from "../schema/gates.ts"
@@ -9,10 +9,24 @@ import { parseJsonc } from "../util/jsonc.ts"
 import { run } from "../util/proc.ts"
 
 const which = new Map<string, boolean>()
+
+/** Is `binary` an executable on PATH? Pure lookup (no shell), so no injection. */
 export function installed(binary: string): boolean {
-  // `binary` is an internal constant ("gitleaks", "osv-scanner"); PATH lookup is intended.
-  if (!which.has(binary)) which.set(binary, spawnSync("sh", ["-c", `command -v ${binary}`]).status === 0) // NOSONAR
+  if (!which.has(binary)) which.set(binary, onPath(binary))
   return which.get(binary)!
+}
+
+function onPath(binary: string): boolean {
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!dir) continue
+    try {
+      accessSync(path.join(dir, binary), constants.X_OK)
+      return true
+    } catch {
+      // not executable here; keep looking
+    }
+  }
+  return false
 }
 
 export async function gitleaks(dir: string, files: readonly string[]): Promise<GateFinding[] | undefined> {

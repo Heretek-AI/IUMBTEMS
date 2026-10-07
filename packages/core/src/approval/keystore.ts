@@ -9,11 +9,8 @@ import { canonicalJson } from "../util/hash.ts"
 
 async function loadOrCreateKey(dir: string): Promise<Buffer> {
   const file = path.join(dir, "key")
-  try {
-    return Buffer.from((await readFile(file, "utf8")).trim(), "hex")
-  } catch (error: any) {
-    if (error?.code !== "ENOENT") throw error
-  }
+  const existing = await readKey(file)
+  if (existing) return existing
   await mkdir(dir, { recursive: true, mode: 0o700 })
   const key = randomBytes(32)
   try {
@@ -23,7 +20,19 @@ async function loadOrCreateKey(dir: string): Promise<Buffer> {
     return key
   } catch (error: any) {
     // Another process created it first: use theirs.
-    if (error?.code === "EEXIST") return Buffer.from((await readFile(file, "utf8")).trim(), "hex")
+    if (error?.code === "EEXIST") {
+      const raced = await readKey(file)
+      if (raced) return raced
+    }
+    throw error
+  }
+}
+
+async function readKey(file: string): Promise<Buffer | undefined> {
+  try {
+    return Buffer.from((await readFile(file, "utf8")).trim(), "hex")
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return undefined
     throw error
   }
 }

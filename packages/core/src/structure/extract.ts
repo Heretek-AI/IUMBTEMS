@@ -234,6 +234,21 @@ function go(root: Node): Pick<FileStructure, "imports" | "symbols" | "package"> 
   return { imports, symbols, ...(pkg ? { package: pkg } : {}) }
 }
 
+/** Blank out `/* … *\/` block comments, preserving newlines (linear, no backtracking). */
+function blankBlockComments(source: string): string {
+  let out = ""
+  let i = 0
+  for (;;) {
+    const start = source.indexOf("/*", i)
+    if (start < 0) return out + source.slice(i)
+    out += source.slice(i, start)
+    const end = source.indexOf("*/", start + 2)
+    const stop = end < 0 ? source.length : end + 2
+    out += source.slice(start, stop).replace(/[^\n]/g, " ")
+    i = stop
+  }
+}
+
 /** Regex fallback: imports only (symbols best effort), comments stripped first. */
 export function extractWithRegex(language: GrammarId, source: string): FileStructure {
   const imports: ImportRef[] = []
@@ -242,20 +257,20 @@ export function extractWithRegex(language: GrammarId, source: string): FileStruc
   const at = (index: number) => source.slice(0, index).split("\n").length
   if (language === "python") {
     lines.forEach((text, index) => {
-      const from = /^\s*from\s+([.\w]+)\s+import\s+(.+)$/.exec(text)
+      const from = /^[ \t]*from[ \t]+([.\w]+)[ \t]+import[ \t]+(.+)$/.exec(text)
       if (from) {
         const names = from[2]!
           .replace(/[()]/g, "")
           .split(",")
-          .map((name) => name.trim().split(/\s+as\s+/)[0]!)
+          .map((name) => name.trim().split(/[ \t]+as[ \t]+/)[0]!)
           .filter(Boolean)
         imports.push({ specifier: from[1]!, line: index + 1, kind: "static", names })
         return
       }
-      const plain = /^\s*import\s+(.+)$/.exec(text)
+      const plain = /^[ \t]*import[ \t]+(.+)$/.exec(text)
       if (plain)
         for (const part of plain[1]!.split(","))
-          imports.push({ specifier: part.trim().split(/\s+as\s+/)[0]!, line: index + 1, kind: "static" })
+          imports.push({ specifier: part.trim().split(/[ \t]+as[ \t]+/)[0]!, line: index + 1, kind: "static" })
       const def = /^\s*(?:async\s+)?def\s+(\w+)|^\s*class\s+(\w+)/.exec(text)
       if (def) {
         const name = (def[1] ?? def[2])!
@@ -283,7 +298,7 @@ export function extractWithRegex(language: GrammarId, source: string): FileStruc
     return { language, parser: "regex", imports, symbols }
   }
   if (language === "go") {
-    const stripped = source.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, " "))
+    const stripped = blankBlockComments(source)
     for (const block of stripped.matchAll(/^import\s*\(([\s\S]*?)\)/gm))
       for (const spec of block[1]!.matchAll(/"([^"]+)"/g))
         imports.push({ specifier: spec[1]!, line: at(block.index! + block[0].indexOf(spec[0])), kind: "static" })
@@ -313,9 +328,10 @@ export function extractWithRegex(language: GrammarId, source: string): FileStruc
     return { language, parser: "regex", imports, symbols, ...(pkg ? { package: pkg } : {}) }
   }
   // JS/TS: blank out comments, keep offsets.
-  const stripped = source
-    .replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:"'`\\])\/\/.*$/gm, (match, lead: string) => lead + " ".repeat(match.length - lead.length))
+  const stripped = blankBlockComments(source).replace(
+    /(^|[^:"'`\\])\/\/.*$/gm,
+    (match, lead: string) => lead + " ".repeat(match.length - lead.length),
+  )
   const patterns: Array<[RegExp, ImportRef["kind"]]> = [
     [/\bimport\s+type\s+[^'"`;]*?\bfrom\s*(['"])([^'"]+)\1/g, "type"],
     [/\bimport\s+(?!type\b)[^'"`;()]*?\bfrom\s*(['"])([^'"]+)\1/g, "static"],
@@ -335,7 +351,7 @@ export function extractWithRegex(language: GrammarId, source: string): FileStruc
   for (const decl of stripped.matchAll(
     /^(export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?(function\*?|abstract\s+class|class|interface|type|enum|const|let|var)\s+(\w+)/gm,
   )) {
-    const word = decl[2]!.replace(/^abstract\s+/, "").replace("*", "")
+    const word = decl[2]!.replace(/^abstract\s+/, "").replaceAll("*", "")
     const kind: SymbolRef["kind"] =
       word === "function"
         ? "function"

@@ -4,7 +4,7 @@
 // per-field provenance and explicit warnings. Reads of candidate content are
 // bounded by a per-candidate token budget (readCandidate), so the harvester
 // pays for what it reads.
-import { readFile, stat } from "node:fs/promises"
+import { open, readFile, stat } from "node:fs/promises"
 import path from "node:path"
 import { factoryLayout } from "../layout.ts"
 import type { HarvestProfile, LicenseFinding, Provenance } from "../schema/harvest.ts"
@@ -54,12 +54,28 @@ export function parseSource(spec: string): HarvestSource {
   return { kind: "local", path: trimmed }
 }
 
-export const candidateId = (name: string) =>
-  name
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64) || "candidate"
+export const candidateId = (name: string) => {
+  const slug = name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-")
+  let start = 0
+  let end = slug.length
+  while (start < end && slug[start] === "-") start += 1
+  while (end > start && slug[end - 1] === "-") end -= 1
+  return slug.slice(start, end).slice(0, 64) || "candidate"
+}
+
+/** Read a file through one descriptor so the size cap and the read cannot race. */
+async function readCapped(absolute: string, file: string): Promise<string> {
+  const handle = await open(absolute, "r").catch(() => undefined)
+  if (!handle) throw new Error(`no such file: ${file}`)
+  try {
+    const info = await handle.stat()
+    if (!info.isFile()) throw new Error(`no such file: ${file}`)
+    if (info.size > 2_000_000) throw new Error(`"${file}" is larger than 2 MB; read a slice by an editor instead`)
+    return await handle.readFile("utf8")
+  } finally {
+    await handle.close()
+  }
+}
 
 export const harvestRuntimeDir = (root: string, id: string) => path.join(factoryLayout(root).runtime, "harvest", id)
 export const harvestRepoDir = (root: string, id: string) => path.join(harvestRuntimeDir(root, id), "repo")
@@ -306,10 +322,7 @@ export async function readCandidate(
     throw new Error(
       `the read budget for "${id}" is exhausted (${spent}/${options.budgetTokens} tokens); use what you have or raise the budget`,
     )
-  const info = await stat(absolute).catch(() => undefined)
-  if (!info?.isFile()) throw new Error(`no such file: ${file}`)
-  if (info.size > 2_000_000) throw new Error(`"${file}" is larger than 2 MB; read a slice by an editor instead`)
-  const content = await readFile(absolute, "utf8")
+  const content = await readCapped(absolute, file)
   const offset = Math.max(0, options.offset ?? 0)
   const remainingChars = Math.max(0, (options.budgetTokens - spent) * 4)
   const maxChars = Math.min(options.maxChars ?? 8_000, remainingChars)

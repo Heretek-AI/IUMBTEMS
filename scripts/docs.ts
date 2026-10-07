@@ -83,7 +83,7 @@ const capabilitiesDoc = [
     "| --- | --- | --- | --- |",
     ...rows.map(
       (row) =>
-        `| ${row.capability} | ${row.support.toUpperCase()} | ${row.test ? `\`${row.test}\`` : "—"} | ${row.detail.replace(/\|/g, "\\|")} |`,
+        `| ${row.capability} | ${row.support.toUpperCase()} | ${row.test ? `\`${row.test}\`` : "—"} | ${row.detail.replace(/\\/g, "\\\\").replace(/\|/g, "\\|")} |`,
     ),
     "",
   ]),
@@ -115,7 +115,7 @@ const configDoc = [
   ...Object.entries(configJson.properties ?? {}).map(([name, property]) => {
     const type = property.type ?? (property.enum ? "enum" : property.anyOf ? "union" : "object")
     const fallback = property.default === undefined ? "—" : `\`${JSON.stringify(property.default)}\``
-    return `| \`${name}\` | ${type}${property.enum ? ` (${property.enum.join(", ")})` : ""} | ${fallback} | ${(property.description ?? "").replace(/\|/g, "\\|")} |`
+    return `| \`${name}\` | ${type}${property.enum ? ` (${property.enum.join(", ")})` : ""} | ${fallback} | ${(property.description ?? "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|")} |`
   }),
   "",
   "`es config show` and `/config` print the effective config and which files contributed.",

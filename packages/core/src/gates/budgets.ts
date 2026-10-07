@@ -8,9 +8,9 @@ import type { GateBudgets, GateFinding } from "../schema/gates.ts"
 import { git } from "../worktree/git.ts"
 
 const TEST_FILE =
-  /(^|\/)(test|tests|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.(py|go)$|(^|\/)tests\/.*\.rs$/
-const SOURCE_FILE = /\.([cm]?[jt]sx?|py|rs|go|java|kt|rb|php|cs|swift|c|cc|cpp|h|hpp)$/
-const DOC_OR_CONFIG = /(^|\/)(docs?|\.factory|\.github)\/|\.(md|mdx|txt|json|jsonc|ya?ml|toml|lock)$/
+  /(?:^|\/)(?:tests?|__tests__|spec)\/|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)test_[^/\n]+\.py$|_test\.(?:py|go)$|(?:^|\/)tests\/[^/\n]*\.rs$/
+const SOURCE_FILE = /\.(?:[cm]?[jt]sx?|hpp|cpp|swift|java|php|cs|kt|rb|py|rs|go|h|cc|c)$/
+const DOC_OR_CONFIG = /(?:(?:^|\/)(?:docs?|\.factory|\.github)\/)|(?:\.(?:md|mdx|txt|json|jsonc|ya?ml|toml|lock)$)/
 
 export const isTestFile = (file: string) => TEST_FILE.test(file)
 export const isSourceFile = (file: string) =>
@@ -167,7 +167,31 @@ export function complexity(file: string, text: string): FunctionComplexity[] {
 }
 
 function stripLiterals(line: string) {
-  return line.replace(/\/\/.*$/, "").replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""')
+  let out = ""
+  let i = 0
+  while (i < line.length) {
+    const char = line[i]!
+    if (char === "/" && line[i + 1] === "/") break
+    if (char === '"' || char === "'" || char === "`") {
+      i += 1
+      while (i < line.length) {
+        if (line[i] === "\\") {
+          i += 2
+          continue
+        }
+        if (line[i] === char) {
+          i += 1
+          break
+        }
+        i += 1
+      }
+      out += '""'
+      continue
+    }
+    out += char
+    i += 1
+  }
+  return out
 }
 
 function braceComplexity(text: string): FunctionComplexity[] {

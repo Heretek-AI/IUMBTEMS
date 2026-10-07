@@ -46,7 +46,7 @@ function jsonBlocks(output: string): unknown[] {
 
 const tsc: Parser = (output, dir, check) => {
   const findings: GateFinding[] = []
-  for (const match of output.matchAll(/^(.+?)\((\d+),(\d+)\): (error|warning) (TS\d+): (.+)$/gm))
+  for (const match of output.matchAll(/^([^()\n]+)\((\d+),(\d+)\): (error|warning) (TS\d+): (.+)$/gm))
     findings.push({
       file: relative(dir, match[1]!),
       line: Number(match[2]),
@@ -56,7 +56,7 @@ const tsc: Parser = (output, dir, check) => {
       message: match[6]!,
       check,
     })
-  for (const match of output.matchAll(/^(.+?):(\d+):(\d+) - (error|warning) (TS\d+): (.+)$/gm))
+  for (const match of output.matchAll(/^([^:\n]+):(\d+):(\d+) - (error|warning) (TS\d+): (.+)$/gm))
     findings.push({
       file: relative(dir, match[1]!),
       line: Number(match[2]),
@@ -158,17 +158,18 @@ const ruffFormat: Parser = (output, dir, check) => ({
 })
 
 const mypy: Parser = (output, dir, check) => ({
-  findings: [...output.matchAll(/^(.+?):(\d+):(?:(\d+):)? (error|warning): (.+?)(?:\s+\[([\w-]+)\])?$/gm)].map(
-    (match) => ({
+  findings: [...output.matchAll(/^([^:\n]+):(\d+):(?:(\d+):)?[ \t]+(error|warning):[ \t]+(.+)$/gm)].map((match) => {
+    const code = /\[([\w-]+)\]$/.exec(match[5]!)
+    return {
       file: relative(dir, match[1]!),
       line: Number(match[2]),
       ...(match[3] ? { column: Number(match[3]) } : {}),
-      rule: `mypy/${match[6] ?? "error"}`,
+      rule: `mypy/${code?.[1] ?? "error"}`,
       severity: match[4] === "warning" ? ("warning" as const) : ("error" as const),
-      message: match[5]!,
+      message: code ? match[5]!.slice(0, code.index).trim() : match[5]!,
       check,
-    }),
-  ),
+    }
+  }),
   failedTests: [],
 })
 
@@ -244,15 +245,13 @@ const bunTest: Parser = (output, dir, check) => {
       })
       continue
     }
-    const header = /^(\S+\.(?:test|spec|_test_|_spec_)\.[cm]?[jt]sx?|\S*(?:test|spec)\S*\.[cm]?[jt]sx?):$/.exec(
-      line.trim(),
-    )
-    if (header) {
+    const header = /^(\S+\.[cm]?[jt]sx?):$/.exec(line.trim())
+    if (header && /(?:test|spec)/.test(header[1]!)) {
       current = relative(dir, header[1]!)
       location = undefined
       continue
     }
-    const at = /\((\/[^)]+?):(\d+):\d+\)\s*$/.exec(line) ?? /at (\/\S+?):(\d+):\d+\s*$/.exec(line)
+    const at = /\((\/[^()\n]+):(\d+):\d+\)[ \t]*$/.exec(line) ?? /at (\/[^\s:]+):(\d+):\d+[ \t]*$/.exec(line)
     if (at && !at[1]!.includes("node_modules")) location = { file: relative(dir, at[1]!), line: Number(at[2]) }
     const fail = /^\(fail\) (.+?)(?: \[[\d.]+m?s\])?$/.exec(line.trim())
     if (fail) {
@@ -279,16 +278,17 @@ const vitestOrJest =
     const failed = new Set<string>()
     const pattern =
       style === "vitest"
-        ? /^\s*(?:FAIL|×)\s+(\S+\.[cm]?[jt]sx?)(?:\s*>\s*(.+))?$/gm
-        : /^\s*FAIL\s+(\S+\.[cm]?[jt]sx?)/gm
+        ? /^[ \t]*(?:FAIL|×)[ \t]+(\S+\.[cm]?[jt]sx?)(.*)$/gm
+        : /^[ \t]*FAIL[ \t]+(\S+\.[cm]?[jt]sx?)/gm
     for (const match of output.matchAll(pattern)) {
       const file = relative(dir, match[1]!)
+      const detail = style === "vitest" ? (match[2] ?? "").trim().replace(/^>\s*/, "") : ""
       failed.add(file)
       findings.push({
         file,
         rule: "test/failed",
         severity: "error",
-        message: match[2] ? `Test failed: ${match[2].trim()}` : "Test file has failures",
+        message: detail ? `Test failed: ${detail}` : "Test file has failures",
         check,
       })
     }
@@ -307,7 +307,9 @@ const vitestOrJest =
 const pytest: Parser = (output, dir, check) => {
   const findings: GateFinding[] = []
   const failed = new Set<string>()
-  for (const match of output.matchAll(/^(?:FAILED|ERROR) (\S+?\.py)(?:::(\S+))?(?: - (.+))?$/gm)) {
+  for (const match of output.matchAll(
+    /^(?:FAILED|ERROR)[ \t]+([^\s:]+\.py)(?:::[^\s]+)?(?:[ \t]+-[ \t]+(.*))?[ \t]*$/gm,
+  )) {
     const file = relative(dir, match[1]!)
     failed.add(file)
     findings.push({
@@ -345,9 +347,8 @@ const cargoTest: Parser = (output, _dir, check) => ({
 const generic: Parser = (output, dir, check) => {
   const findings: GateFinding[] = []
   const seen = new Set<string>()
-  for (const match of output.matchAll(
-    /(?:^|\s)((?:\.{0,2}\/)?[\w@.-]+(?:\/[\w@.-]+)*\.[a-zA-Z]{1,5}):(\d+)(?::(\d+))?:?\s*(.*)$/gm,
-  )) {
+  for (const match of output.matchAll(/(?:^|\s)([^\s:]+):(\d+)(?::(\d+))?:?[ \t]*(.*)$/gm)) {
+    if (!/\.[a-zA-Z]{1,5}$/.test(match[1]!)) continue
     const key = `${match[1]}:${match[2]}`
     if (seen.has(key) || findings.length >= 50) continue
     seen.add(key)
