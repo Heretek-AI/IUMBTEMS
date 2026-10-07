@@ -194,40 +194,113 @@ function stripLiterals(line: string) {
   return out
 }
 
+const HEADER_MODIFIERS = ["public", "private", "protected", "static", "async", "override", "readonly"]
+
+const isIdentChar = (char: string | undefined): boolean =>
+  char !== undefined &&
+  ((char >= "a" && char <= "z") ||
+    (char >= "A" && char <= "Z") ||
+    (char >= "0" && char <= "9") ||
+    char === "_" ||
+    char === "$")
+
+function readIdent(text: string, from: number): string {
+  let i = from
+  while (i < text.length && isIdentChar(text[i])) i++
+  return text.slice(from, i)
+}
+
+function skipSpaces(text: string, from: number): number {
+  let i = from
+  while (i < text.length && text[i] === " ") i++
+  return i
+}
+
+/** Index of `word` in `text` at a word boundary, or -1. */
+function wordAt(text: string, word: string, from = 0): number {
+  for (let i = text.indexOf(word, from); i >= 0; i = text.indexOf(word, i + 1)) {
+    if (!isIdentChar(i > 0 ? text[i - 1] : undefined) && !isIdentChar(text[i + word.length])) return i
+  }
+  return -1
+}
+
+/** The name a line declares a function/arrow/method under, without a regex. */
+function detectHeader(flat: string): string | undefined {
+  const candidates: Array<{ name: string; index: number }> = []
+  const push = (name: string, index: number) => {
+    if (name) candidates.push({ name, index })
+  }
+  const fn = wordAt(flat, "function")
+  if (fn >= 0) {
+    let i = fn + "function".length
+    if (flat[i] === "*") i++
+    i = skipSpaces(flat, i)
+    const name = readIdent(flat, i)
+    i = skipSpaces(flat, i + name.length)
+    if (flat[i] === "(") push(name, fn)
+  }
+  const rust = wordAt(flat, "fn")
+  if (rust >= 0) push(readIdent(flat, skipSpaces(flat, rust + 2)), rust)
+  const go = wordAt(flat, "func")
+  if (go >= 0) {
+    let i = skipSpaces(flat, go + "func".length)
+    if (flat[i] === "(") {
+      const closing = flat.indexOf(")", i)
+      i = closing < 0 ? i : skipSpaces(flat, closing + 1)
+    }
+    push(readIdent(flat, i), go)
+  }
+  for (let i = 0; i < flat.length; i++) {
+    if (!isIdentChar(flat[i]) || isIdentChar(i > 0 ? flat[i - 1] : undefined)) continue
+    const name = readIdent(flat, i)
+    let j = skipSpaces(flat, i + name.length)
+    if (flat[j] !== "=" && flat[j] !== ":") continue
+    j = skipSpaces(flat, j + 1)
+    if (flat.startsWith("async ", j)) j = skipSpaces(flat, j + "async".length)
+    if (flat.startsWith("function", j) && !isIdentChar(flat[j + "function".length])) {
+      push(name, i)
+      continue
+    }
+    if (flat[j] === "(") {
+      const closing = flat.indexOf(")", j)
+      const k = closing < 0 ? -1 : skipSpaces(flat, closing + 1)
+      if (k >= 0 && flat.startsWith("=>", k)) push(name, i)
+      continue
+    }
+    const target = readIdent(flat, j)
+    const k = skipSpaces(flat, j + target.length)
+    if (target && flat.startsWith("=>", k)) push(name, i)
+  }
+  {
+    let i = 0
+    while (flat[i] === " ") i++
+    for (;;) {
+      const modifier = HEADER_MODIFIERS.find((word) => flat.startsWith(`${word} `, i))
+      if (!modifier) break
+      i += modifier.length + 1
+    }
+    const name = readIdent(flat, i)
+    const j = skipSpaces(flat, i + name.length)
+    if (name && flat[j] === "(") {
+      const closing = flat.indexOf(")", j)
+      const k = closing < 0 ? -1 : skipSpaces(flat, closing + 1)
+      if (k >= 0 && flat[k] === "{") push(name, i)
+    }
+  }
+  candidates.sort((a, b) => a.index - b.index)
+  return candidates[0]?.name
+}
+
 function braceComplexity(text: string): FunctionComplexity[] {
   const results: FunctionComplexity[] = []
   const stack: Array<{ name: string; line: number; depth: number; score: number; opened: boolean }> = []
   let depth = 0
-  const headers: readonly RegExp[] = [
-    /\bfunction ?\*? ?(\w*) ?\(/,
-    /(\w+) ?[:=] ?(?:async )?(?:function\b|\([\w ,:?=]*\) ?=>|\w+ ?=>)/,
-    /\bfn (\w+)/,
-    /\bfunc (?:\([^)]*\) )?(\w+)/,
-  ]
-  const method = /^ ?(?:(?:public|private|protected|static|async|override|readonly) )*(\w+) ?\(/
   const close = (done: { name: string; line: number; score: number }) =>
     results.push({ name: done.name, line: done.line, score: done.score })
   text.split("\n").forEach((raw, index) => {
     const line = stripLiterals(raw)
     const flat = line.replace(/[ \t]+/g, " ")
-    const candidates: Array<{ name: string; index: number }> = []
-    for (const pattern of headers) {
-      const found = pattern.exec(flat)
-      if (found?.[1]) candidates.push({ name: found[1], index: found.index })
-    }
-    const declared = method.exec(flat)
-    if (declared?.[1]) {
-      const closing = flat.indexOf(")", declared.index + declared[0].length)
-      if (closing >= 0 && flat.indexOf("{", closing + 1) >= 0)
-        candidates.push({ name: declared[1], index: declared.index })
-    }
-    let name: string | undefined
-    let best = Number.POSITIVE_INFINITY
-    for (const candidate of candidates)
-      if (candidate.index < best) {
-        best = candidate.index
-        name = candidate.name
-      }
+    const name = detectHeader(flat)
     if (name && !/^(if|for|while|switch|catch|return)$/.test(name))
       stack.push({ name, line: index + 1, depth, score: 1, opened: false })
     const decisions = line.match(DECISION)?.length ?? 0
