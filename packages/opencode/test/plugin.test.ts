@@ -96,13 +96,17 @@ describe("integrity on the real host", () => {
     expect((factory?.tools ?? []).map((tool) => tool.function.name)).not.toContain("es_complete")
   })
 
-  test("a QA seat cannot write, and its shell writes vanish in the sandbox", async () => {
+  test("a QA seat cannot write, and its shell writes never escape (sandbox or allowlist)", async () => {
     const { tools } = await h.run(
       `qa ${call("write", { path: "src/x.ts", content: "x" })} ${call("shell", { command: "touch QA_TOUCHED && echo touched" })}`,
       { agent: "es-qa-functional" },
     )
     expect(tools[0]?.status).toBe("error")
-    expect(tools[1]?.text).toContain("touched")
+    // With bwrap the command runs and the write vanishes; without it the
+    // allowlist refuses the command outright. Either way nothing escapes.
+    const shell = tools[1]
+    if (shell?.status === "completed") expect(shell.text).toContain("touched")
+    else expect(shell?.text).toMatch(/allowlist|read-only seat/i)
     expect(await exists(path.join(h.directory, "QA_TOUCHED"))).toBe(false)
   })
 
