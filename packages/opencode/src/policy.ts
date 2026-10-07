@@ -60,7 +60,9 @@ export function createPolicyHooks(runtime: Runtime) {
       if (stop.stopped)
         deny(`The factory is stopped (.factory/STOP: ${stop.reason}). A human must remove it and resume.`)
     }
-    if (seat && !event.tool.startsWith("es_")) {
+    // A halted run (spend ceiling, runtime cap, drift, STOP) stops every seat
+    // tool except es_status, so no seat keeps spending through its own es_* tools.
+    if (seat && event.tool !== "es_status") {
       const state = await runtime.factory.read().catch(() => undefined)
       if (state?.stage === "HALTED")
         deny(`The factory is halted: ${state.halt?.reason}. Stop and report; a human must resume.`)

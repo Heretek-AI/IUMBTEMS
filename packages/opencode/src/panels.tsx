@@ -84,6 +84,18 @@ const FactoryPanel = (props: PanelProps) => {
             <Show when={data().pending.length}>
               <text>Waiting on human: {data().pending.join(", ")}</text>
             </Show>
+            <Show when={data().audits?.length}>
+              <text>Audits:</text>
+              <For each={data().audits}>
+                {(audit: any) => (
+                  <text>
+                    {"  "}
+                    {audit.id} · {audit.target} · {audit.status} r{audit.round} · t:{audit.thesis} a:{audit.antithesis}
+                    {audit.tiebreak ? ` x:${audit.tiebreak}` : ""}
+                  </text>
+                )}
+              </For>
+            </Show>
             <text>Phases:</text>
             <For each={data().phases}>
               {(phase: any) => (

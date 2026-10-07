@@ -36,6 +36,7 @@ const SCOPE_GLOBS: Record<Exclude<WriteScope, "worktree">, readonly string[]> = 
   brainstorm: [".factory/brainstorm/notes/**"],
   harvest: [".factory/harvest/notes/**"],
   design: [".factory/design/notes/**"],
+  scout: [".factory/scout/notes/**"],
 }
 
 function guardStateDir(context: PolicyContext, absolute: string): Decision | undefined {
@@ -105,8 +106,10 @@ export type ShellDecision =
 
 const HUMAN_ONLY_CLI =
   /(^|[\s;&|(`'"/])(es|epistemic-swarm)\s+(approve|trust|waive|resume|rebaseline|factory\s+(resume|pr)|gates\s+install-git|lsp\s+install|config\s+set|research\s+retract)\b/
+/** Human-launched jobs that drive a harness CLI: an agent must not start nested headless runs. */
+const HUMAN_ONLY_JOBS = /(^|[\s;&|(`'"/])(es|epistemic-swarm)\s+(audit\s+(?!(verify|show)\b)\S|scout\s+(?!show\b)\S)/
 const CONTROL_MENTION =
-  /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/
+  /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|audits\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design|scout)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/
 const MUTATING =
   /(>|\btee\b|\brm\b|\bmv\b|\bcp\b|\bln\b|\btruncate\b|\bchmod\b|\bchown\b|\btouch\b|\bsed\s+(-[a-zA-Z]*i|--in-place)|\bdd\b|\binstall\b|\bgit\s+(checkout|restore|rm|mv|reset|clean|apply|am|stash))/
 const SEAT_FORBIDDEN_GIT =
@@ -135,11 +138,11 @@ export function evaluateShell(
   options: { readonly sandboxAvailable: boolean },
 ): ShellDecision {
   const spec = agentSpec(agentId)
-  if (HUMAN_ONLY_CLI.test(command))
+  if (HUMAN_ONLY_CLI.test(command) || HUMAN_ONLY_JOBS.test(command))
     return {
       effect: "deny",
       reason:
-        "That command is human-only (approvals, trust, waivers, resume, rebaseline, config set, retractions); agents cannot run it.",
+        "That command is human-only (approvals, trust, waivers, resume, rebaseline, config set, retractions, audit and scout runs); agents cannot run it.",
     }
   const privateDir = canonicalPath(context.stateDir ?? stateDir())
   if (command.includes(privateDir) || /epistemic-swarm\/(key|trust)/.test(command))

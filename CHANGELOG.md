@@ -64,6 +64,44 @@ the fresh-run instruction, so 1.1 needs fresh runs.
     other control files, and it re-pins the project config.
 - The research auditor's `ClaimStatus` type is renamed `ClaimAuditStatus`.
 
+### M2: seats (#22)
+- **Breaking:** the factory state goes from version 1 to version 2. 1.0.x run
+  states are refused with the fresh-run instruction; there is no migration.
+- **Code-audit pair.** The hidden `es-auditor-thesis` seat maps invariants and
+  the hidden `es-auditor-antithesis` seat red-teams them with CWE ids.
+  - **The line-pointer law:** `es_audit_verdict` checks every finding against
+    the file on disk (it must exist inside the target, the lines must be in
+    range, the excerpt must be verbatim). A hallucinated reference refuses the
+    whole verdict.
+  - **Audits block.** A phase audit holds the merge until it passes, and a
+    failed one sends the phase back to the programmer. An open or failed path
+    audit refuses the next stage transition.
+  - Splits go to the manager: `es_tiebreak` gains `audit`. Only a human can
+    dismiss an audit (`es audit dismiss`).
+  - Each round writes `.factory/audits/<id>/{records,dossier}.json` and a
+    deterministic `REPORT.md`.
+- **OSS scout (`/scout`).** The scout plans, discovers (sharing darkharvest's
+  search), scans (darkharvest's fail-closed license detection), checks OSV
+  advisories (the responses are cached and cited) and records witnessed
+  assessments. Core recomputes every verdict, keeping `adopt` only for a
+  verified, whitelisted, permissive license, flags severe advisories, ranks the
+  candidates and writes `.factory/scout/REPORT.md`. Adoption stays a human
+  decision.
+- **CLI:** `es audit <target>` (plus `show` and `dismiss`), and
+  `es scout "<feature>"` (plus `show`). Both are headless, honour STOP and the
+  spend ceiling, and, with no run, start one at a terminal with `--max-usd N`.
+  Agents cannot launch them from a shell.
+- **A halted run now stops every seat tool except `es_status`.** Previously a
+  seat's own `es_*` tools kept running after a halt.
+- **Fires.** The deterministic `audit-fires` and `scout-fires` suites run on
+  the real host in CI. The same graders score the nightly model runs
+  (`evals/cases/*-fires.json`; cases can now seed files).
+- New ENFORCED capability rows: `claims`, `audit`, `scout`. Prompts:
+  `auditor-thesis` and `auditor-antithesis` v1, `scout` v1, `factory` v4 → v5,
+  `manager` v1 → v2.
+- When research completes, pruning the cache keeps every source that any
+  dossier cites.
+
 ## 1.0.5 — 2026-10-07
 
 Run-lifecycle gaps from dogfooding 1.0.4 (#19):

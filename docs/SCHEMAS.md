@@ -11,6 +11,9 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | approval-subject | `schemas/approval-subject.schema.json` |
 | approval | `schemas/approval.schema.json` |
 | audit-entry | `schemas/audit-entry.schema.json` |
+| audit-finding | `schemas/audit-finding.schema.json` |
+| audit-record | `schemas/audit-record.schema.json` |
+| audit-severity | `schemas/audit-severity.schema.json` |
 | brainstorm-brief | `schemas/brainstorm-brief.schema.json` |
 | brainstorm-idea | `schemas/brainstorm-idea.schema.json` |
 | brainstorm-plan | `schemas/brainstorm-plan.schema.json` |
@@ -55,6 +58,12 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | retraction | `schemas/retraction.schema.json` |
 | roadmap-phase | `schemas/roadmap-phase.schema.json` |
 | roadmap | `schemas/roadmap.schema.json` |
+| scout-advisory | `schemas/scout-advisory.schema.json` |
+| scout-assessment | `schemas/scout-assessment.schema.json` |
+| scout-plan | `schemas/scout-plan.schema.json` |
+| scout-proposal | `schemas/scout-proposal.schema.json` |
+| scout-result | `schemas/scout-result.schema.json` |
+| scout-verdict | `schemas/scout-verdict.schema.json` |
 | spend-ceiling | `schemas/spend-ceiling.schema.json` |
 | waiver | `schemas/waiver.schema.json` |
 | witness | `schemas/witness.schema.json` |

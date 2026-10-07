@@ -2,10 +2,12 @@
 
 exports[`agent assets prompt snapshot: a changed prompt must bump its version 1`] = `
 {
+  "auditor-antithesis": "v1:c6fbcd4af303e7be",
+  "auditor-thesis": "v1:9e085cf8e3b38d19",
   "brainstorm-critic": "v1:28fd3abc95c4a28a",
   "brainstormer": "v1:16eb524fe104f3af",
   "designer": "v1:35e5c6c80b4c6fc2",
-  "factory": "v4:d23d9f861d106d01",
+  "factory": "v5:d35e3dd7eac5fe59",
   "grill": "v2:5d9bfef8a8f63926",
   "harvester": "v1:7a2e578121cfc637",
   "lens-adjacent-possible": "v1:d6d768502ed2adf2",
@@ -16,11 +18,12 @@ exports[`agent assets prompt snapshot: a changed prompt must bump its version 1`
   "lens-inversion": "v1:7b604ebf4d2c29f7",
   "lens-scale-shift": "v1:ad2b32f67e038018",
   "lens-scamper": "v1:1911c873cee88192",
-  "manager": "v1:760534a1504318a5",
+  "manager": "v2:70f8c31bd61bb20b",
   "programmer": "v1:2c7323535a91ecbb",
   "qa-adversarial": "v1:b27954add6f55068",
   "qa-functional": "v1:b3b652e6326a13a7",
   "research-alpha": "v2:3d72fef07b5ebb27",
   "research-beta": "v2:5b8374b0db313097",
+  "scout": "v1:d16797f7d5408b18",
 }
 `;

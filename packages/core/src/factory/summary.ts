@@ -1,5 +1,5 @@
 import type { Frontier } from "../schema/frontier.ts"
-import type { FactoryState } from "./state.ts"
+import type { Audit, FactoryState } from "./state.ts"
 import { treeLine } from "./tree.ts"
 
 export interface SummaryExtras {
@@ -8,6 +8,10 @@ export interface SummaryExtras {
   /** Config research.depth, shown during RESEARCH. */
   readonly researchDepth?: number
 }
+
+/** `open r2 t:pass a:- x:-` — status, round, thesis/antithesis/tiebreak verdicts. */
+const auditBits = (audit: Audit) =>
+  `${audit.status} r${audit.round} t:${audit.thesis?.verdict ?? "-"} a:${audit.antithesis?.verdict ?? "-"}${audit.tiebreak ? ` x:${audit.tiebreak.verdict}` : ""}`
 
 const DEPTH = ["", "a brief", "thesis + antithesis", "thesis + antithesis, then a verification pass", "exhaustive"]
 
@@ -31,9 +35,11 @@ export function factorySummary(state: FactoryState | undefined, extras: SummaryE
         ? ` qa[f:${phase.qa.functional?.verdict ?? "-"} a:${phase.qa.adversarial?.verdict ?? "-"}${phase.qa.tiebreak ? ` t:${phase.qa.tiebreak.verdict}` : ""}]`
         : ""
     lines.push(
-      `${marker} ${phase.id} ${phase.status}${phase.failures ? ` failures:${phase.failures}` : ""}${phase.replanned ? " replanned" : ""}${qa}${phase.id === state.activePhase && phase.worktree ? ` worktree:${phase.worktree}` : ""}`,
+      `${marker} ${phase.id} ${phase.status}${phase.failures ? ` failures:${phase.failures}` : ""}${phase.replanned ? " replanned" : ""}${qa}${phase.audit ? ` audit[${phase.audit.id} ${auditBits(phase.audit)}]` : ""}${phase.id === state.activePhase && phase.worktree ? ` worktree:${phase.worktree}` : ""}`,
     )
   }
+  for (const audit of state.audits)
+    if (audit.target.kind === "path") lines.push(`audit ${audit.id} path:${audit.target.path} ${auditBits(audit)}`)
   if (state.release?.prUrl) lines.push(`PR: ${state.release.prUrl}`)
   return `<factory-state>\n${lines.join("\n")}\n</factory-state>`
 }

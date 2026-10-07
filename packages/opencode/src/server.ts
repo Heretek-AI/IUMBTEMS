@@ -4,10 +4,12 @@
 import { readdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import {
+  describeTarget,
   factoryLayout,
   formatReport,
   git,
   loadSkills,
+  parseAuditTarget,
   readJson,
   researchSourcesDir,
   runGates,
@@ -161,6 +163,58 @@ export default Plugin.define({
             text: prompt.text?.trim()
               ? `Run the design interview. Product: ${prompt.text}`
               : "Ask me for the product name and start the design interview, one question at a time.",
+            delivery,
+          } as any)
+        },
+      })
+      editor.add({
+        name: "scout",
+        description: "Find and vet open-source candidates for a feature: licenses, maintenance, CVEs (Epistemic Swarm)",
+        execute: async ({ sessionID, prompt, delivery }) => {
+          await ctx.session.switchAgent({ sessionID, agent: "scout" } as any)
+          await ctx.session.prompt({
+            ...prompt,
+            sessionID,
+            text: prompt.text?.trim()
+              ? `Scout: ${prompt.text}`
+              : "Ask me for the feature to scout and our license posture, then plan the candidates.",
+            delivery,
+          } as any)
+        },
+      })
+      editor.add({
+        name: "audit",
+        description: "Open a code audit of the active phase or a path and run the auditor pair (Epistemic Swarm)",
+        execute: async ({ sessionID, prompt, delivery }) => {
+          const target = prompt.text?.trim()
+          const say = async (text: string) => {
+            await ctx.session.synthetic({ sessionID, text } as any)
+          }
+          if (!target) return say("Usage: /audit <active phase id | path in the project>")
+          const state = await runtime.factory.read().catch(() => undefined)
+          if (state?.spendCeilingUSD === undefined)
+            return say(
+              "Audits run inside a factory run with a spend ceiling. Start one at a terminal with `es audit <target> --max-usd N`, or run /grill first.",
+            )
+          let opened: Awaited<ReturnType<typeof runtime.factory.openAudit>>
+          try {
+            // The human typed /audit: opening it is their action.
+            opened = await runtime.factory.openAudit(
+              "human:tui",
+              parseAuditTarget(
+                target,
+                state.phases.map((phase) => phase.id),
+              ),
+            )
+          } catch (error) {
+            return say(`Could not open the audit: ${error instanceof Error ? error.message : String(error)}`)
+          }
+          const { audit } = opened
+          await ctx.session.switchAgent({ sessionID, agent: "factory" } as any)
+          await ctx.session.prompt({
+            ...prompt,
+            sessionID,
+            text: `${await runtime.factory.summary()}\nThe human opened code audit ${audit.id} (round ${audit.round}) on ${describeTarget(audit.target)}. Launch es-auditor-thesis and es-auditor-antithesis in parallel with the audit id and target; if they split, have es-manager break the tie (es_tiebreak with audit). Report the verdicts and the report path when the audit settles.`,
             delivery,
           } as any)
         },

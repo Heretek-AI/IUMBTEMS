@@ -7,7 +7,7 @@ import { spawn } from "node:child_process"
 import { accessSync, constants } from "node:fs"
 import path from "node:path"
 import { createInterface } from "node:readline"
-import { Factory, type FactoryState, gateRunner, pendingApprovals } from "@heretek-ai/es-core"
+import { checkStopFile, Factory, type FactoryState, gateRunner, pendingApprovals } from "@heretek-ai/es-core"
 
 export type HeadlessEvent =
   | { type: "start"; runId: string; stage: string; driver: string }
@@ -16,7 +16,7 @@ export type HeadlessEvent =
   | { type: "waiting"; reason: string; stages?: string[] }
   | { type: "halted"; reason: string }
   | { type: "stalled"; turns: number }
-  | { type: "done"; prUrl?: string }
+  | { type: "done"; prUrl?: string; audit?: string; status?: string; report?: string }
   | { type: "error"; message: string }
 
 export interface DriverTurn {
@@ -112,7 +112,22 @@ export interface HeadlessOptions {
   readonly signal?: AbortSignal
 }
 
-export async function* runHeadless(options: HeadlessOptions): AsyncGenerator<HeadlessEvent> {
+/** One headless job: which seat to drive, what to tell it each turn, and when it is finished. */
+export interface HeadlessJob {
+  readonly agent: string
+  readonly prompt: (state: FactoryState, factory: Factory) => Promise<string>
+  /** An event that ends the job (done/waiting), or undefined to keep going. */
+  readonly finished: (state: FactoryState) => Promise<HeadlessEvent | undefined>
+  /** Progress fingerprint: a turn that leaves it unchanged counts toward a stall. */
+  readonly progress: (state: FactoryState) => Promise<string>
+}
+
+/**
+ * Drive one seat through a harness CLI until the job finishes, the run halts
+ * (STOP, spend ceiling, runtime cap, drift), progress stalls or the turn cap is
+ * reached. It never answers human checkpoints.
+ */
+export async function* driveHeadless(options: HeadlessOptions, job: HeadlessJob): AsyncGenerator<HeadlessEvent> {
   const factory = new Factory(options.root, {
     gates: gateRunner(options.stateDir ? { stateDir: options.stateDir } : {}),
     ...(options.stateDir ? { stateDir: options.stateDir } : {}),
@@ -133,33 +148,22 @@ export async function* runHeadless(options: HeadlessOptions): AsyncGenerator<Hea
   for (let n = 1; n <= maxTurns; n++) {
     state = await factory.read()
     if (!state) return
-    if (state.stage === "DONE") {
-      yield { type: "done", ...(state.release?.prUrl ? { prUrl: state.release.prUrl } : {}) }
+    const stop = await checkStopFile(options.root)
+    if (state.stage === "HALTED" || stop.stopped) {
+      yield { type: "halted", reason: state.halt?.reason ?? `STOP file: ${stop.reason}` }
       return
     }
-    if (state.stage === "HALTED") {
-      yield { type: "halted", reason: state.halt?.reason ?? "unknown" }
-      return
-    }
-    const pending = await pendingApprovals(options.root)
-    if (pending.length) {
-      yield {
-        type: "waiting",
-        reason: "a human must approve (es approve <stage>)",
-        stages: pending.map((item) => item.stage),
-      }
-      return
-    }
-    if (state.stage === "GRILL") {
-      yield { type: "waiting", reason: "the grill needs a human; run /grill interactively" }
+    const finished = await job.finished(state)
+    if (finished) {
+      yield finished
       return
     }
     yield { type: "turn", n, stage: state.stage, ...(state.activePhase ? { activePhase: state.activePhase } : {}) }
-    const before = fingerprint(state)
+    const before = await job.progress(state)
     const turn = options.driver.turn({
       root: options.root,
-      agent: "factory",
-      prompt: `${await factory.summary(state)}\nContinue the factory run from its current stage. This is a headless run: no human will answer questions.`,
+      agent: job.agent,
+      prompt: await job.prompt(state, factory),
       ...(session ? { session } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     })
@@ -176,11 +180,36 @@ export async function* runHeadless(options: HeadlessOptions): AsyncGenerator<Hea
       yield { type: "error", message: error instanceof Error ? error.message : String(error) }
       return
     }
-    unchanged = fingerprint(await factory.read()) === before ? unchanged + 1 : 0
+    const after = await factory.read()
+    unchanged = after && (await job.progress(after)) === before ? unchanged + 1 : 0
     if (unchanged >= (options.stallTurns ?? 3)) {
       yield { type: "stalled", turns: unchanged }
       return
     }
   }
   yield { type: "stalled", turns: maxTurns }
+}
+
+/** The factory run: until DONE, a pending approval, or the grill (which needs a human). */
+export function runHeadless(options: HeadlessOptions): AsyncGenerator<HeadlessEvent> {
+  return driveHeadless(options, {
+    agent: "factory",
+    prompt: async (state, factory) =>
+      `${await factory.summary(state)}\nContinue the factory run from its current stage. This is a headless run: no human will answer questions.`,
+    finished: async (state) => {
+      if (state.stage === "DONE")
+        return { type: "done", ...(state.release?.prUrl ? { prUrl: state.release.prUrl } : {}) }
+      const pending = await pendingApprovals(options.root)
+      if (pending.length)
+        return {
+          type: "waiting",
+          reason: "a human must approve (es approve <stage>)",
+          stages: pending.map((item) => item.stage),
+        }
+      if (state.stage === "GRILL")
+        return { type: "waiting", reason: "the grill needs a human; run /grill interactively" }
+      return undefined
+    },
+    progress: async (state) => fingerprint(state),
+  })
 }

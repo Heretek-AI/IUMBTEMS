@@ -9,6 +9,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { createInterface } from "node:readline"
 import { findExecutable } from "../util/proc.ts"
+import type { FireSpec } from "./fires.ts"
 import { type EvalChecks, type EvalTranscript, gradeTranscript, readTranscript } from "./grade.ts"
 
 export interface EvalCase {
@@ -17,6 +18,10 @@ export interface EvalCase {
   readonly agent: string
   readonly prompt: string
   readonly checks?: EvalChecks
+  /** Project files to seed the workspace with (relative path → content). */
+  readonly files?: Readonly<Record<string, string>>
+  /** A fire: after the turn, a deterministic grader scores what the seats left on disk. */
+  readonly fire?: FireSpec
 }
 
 export interface EvalWorkspace {
@@ -32,6 +37,8 @@ export async function evalWorkspace(options: {
   pluginDir: string
   model: string
   providers?: Record<string, unknown>
+  /** Seed files (relative path → content), written before the run. */
+  files?: Readonly<Record<string, string>>
 }): Promise<EvalWorkspace> {
   const base = await mkdtemp(path.join(tmpdir(), "es-eval-"))
   const dir = path.join(base, "project")
@@ -50,6 +57,12 @@ export async function evalWorkspace(options: {
       2,
     )}\n`,
   )
+  for (const [file, content] of Object.entries(options.files ?? {})) {
+    const target = path.join(dir, file)
+    if (path.relative(dir, target).startsWith("..")) throw new Error(`seed file escapes the workspace: ${file}`)
+    await mkdir(path.dirname(target), { recursive: true })
+    await writeFile(target, content)
+  }
   const git = findExecutable("git")
   if (git)
     await new Promise<void>((resolve) => {

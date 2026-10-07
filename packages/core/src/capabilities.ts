@@ -25,6 +25,9 @@ export const CAPABILITIES = [
   "brainstorm",
   "harvest",
   "design",
+  "claims",
+  "audit",
+  "scout",
 ] as const
 export type Capability = (typeof CAPABILITIES)[number]
 
@@ -120,6 +123,24 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
       support: "enforced",
       detail: "Queereye interview, DTCG tokens, contrast gate, generated guide and drift check.",
       test: "packages/opencode/test/design.test.ts",
+    },
+    claims: {
+      support: "enforced",
+      detail:
+        "Witnessed claims and dossiers: the evidence cache, dossiers and the claim ledger are tool-only; a forged source is denied on the host.",
+      test: PLUGIN,
+    },
+    audit: {
+      support: "enforced",
+      detail:
+        "Code-audit pair: only auditor seats record verdicts; every finding is witnessed on disk (a hallucinated line is refused); verdicts block.",
+      test: "packages/opencode/test/fires.test.ts",
+    },
+    scout: {
+      support: "enforced",
+      detail:
+        "OSS scout: cached-only web, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited.",
+      test: "packages/opencode/test/fires.test.ts",
     },
   }),
   claude: [

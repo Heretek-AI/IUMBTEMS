@@ -5,6 +5,7 @@
 import { seatOf } from "../agents/registry.ts"
 import { approvalSubject } from "../approval/record.ts"
 import { appendAuditEntry } from "../audit/chain.ts"
+import { auditRankView } from "../codeaudit/store.ts"
 import type { Factory } from "../factory/machine.ts"
 import { factorySummary } from "../factory/summary.ts"
 import { computeFrontier, treeCounts } from "../factory/tree.ts"
@@ -235,13 +236,26 @@ export function esTools(ops: OpsContext): EsToolDef[] {
     },
     {
       name: "es_tiebreak",
-      description: "Manager only: decide a phase when the two QA seats disagree.",
-      input: object({ verdict: { type: "string", enum: ["pass", "fail"] }, notes: { type: "string" } }, [
-        "verdict",
-        "notes",
-      ]),
-      execute: async ({ verdict, notes }, context) =>
-        factorySummary(await factory.tiebreak(context.agent, verdict, notes)),
+      description:
+        "Manager only: decide a phase when the two QA seats disagree, or (with audit) an audit round when the two auditors disagree.",
+      input: object(
+        {
+          verdict: { type: "string", enum: ["pass", "fail"] },
+          notes: { type: "string" },
+          audit: { type: "string", description: "The audit id, for an auditor split" },
+        },
+        ["verdict", "notes"],
+      ),
+      execute: async ({ verdict, notes, audit }, context) => {
+        if (!audit) return factorySummary(await factory.tiebreak(context.agent, verdict, notes))
+        const before = await factory.auditTree(String(audit)).catch(() => undefined)
+        const state = await factory.tiebreak(context.agent, verdict, notes, { audit: String(audit) })
+        const view = before ? await auditRankView(root, before.audit.id, before.audit.round) : []
+        return [
+          await factory.summary(state),
+          ...(view.length ? ["Findings, ranked:", ...view.map((line) => `  ${line}`)] : []),
+        ].join("\n")
+      },
     },
     {
       name: "es_replan",

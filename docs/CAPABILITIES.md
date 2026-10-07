@@ -24,6 +24,9 @@ and Antigravity adapters ship in 1.1–1.3). Generated: do not edit by hand.
 | brainstorm | ENFORCED | `packages/opencode/test/brainstorm.test.ts` | Lens fan-out, record/score/complete tools, dedupe, rubric, shortlist with a forced outlier. |
 | harvest | ENFORCED | `packages/opencode/test/harvest.test.ts` | Fail-closed SPDX detection, provenance profiles, policy-enforced matrix, clean-room specs. |
 | design | ENFORCED | `packages/opencode/test/design.test.ts` | Queereye interview, DTCG tokens, contrast gate, generated guide and drift check. |
+| claims | ENFORCED | `packages/opencode/test/plugin.test.ts` | Witnessed claims and dossiers: the evidence cache, dossiers and the claim ledger are tool-only; a forged source is denied on the host. |
+| audit | ENFORCED | `packages/opencode/test/fires.test.ts` | Code-audit pair: only auditor seats record verdicts; every finding is witnessed on disk (a hallucinated line is refused); verdicts block. |
+| scout | ENFORCED | `packages/opencode/test/fires.test.ts` | OSS scout: cached-only web, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited. |
 
 ## claude
 
@@ -44,6 +47,9 @@ and Antigravity adapters ship in 1.1–1.3). Generated: do not edit by hand.
 | brainstorm | UNSUPPORTED | — | The native Claude Code adapter (marketplace plugin, subagent frontmatter, hooks.json) ships in 1.1. |
 | harvest | UNSUPPORTED | — | The native Claude Code adapter (marketplace plugin, subagent frontmatter, hooks.json) ships in 1.1. |
 | design | UNSUPPORTED | — | The native Claude Code adapter (marketplace plugin, subagent frontmatter, hooks.json) ships in 1.1. |
+| claims | UNSUPPORTED | — | The native Claude Code adapter (marketplace plugin, subagent frontmatter, hooks.json) ships in 1.1. |
+| audit | UNSUPPORTED | — | The native Claude Code adapter (marketplace plugin, subagent frontmatter, hooks.json) ships in 1.1. |
+| scout | UNSUPPORTED | — | The native Claude Code adapter (marketplace plugin, subagent frontmatter, hooks.json) ships in 1.1. |
 
 ## pi
 
@@ -64,6 +70,9 @@ and Antigravity adapters ship in 1.1–1.3). Generated: do not edit by hand.
 | brainstorm | UNSUPPORTED | — | The Pi extension (in-process tool_call blocking, sequential pi -p roles) ships in 1.2. |
 | harvest | UNSUPPORTED | — | The Pi extension (in-process tool_call blocking, sequential pi -p roles) ships in 1.2. |
 | design | UNSUPPORTED | — | The Pi extension (in-process tool_call blocking, sequential pi -p roles) ships in 1.2. |
+| claims | UNSUPPORTED | — | The Pi extension (in-process tool_call blocking, sequential pi -p roles) ships in 1.2. |
+| audit | UNSUPPORTED | — | The Pi extension (in-process tool_call blocking, sequential pi -p roles) ships in 1.2. |
+| scout | UNSUPPORTED | — | The Pi extension (in-process tool_call blocking, sequential pi -p roles) ships in 1.2. |
 
 ## antigravity
 
@@ -84,6 +93,9 @@ and Antigravity adapters ship in 1.1–1.3). Generated: do not edit by hand.
 | brainstorm | UNSUPPORTED | — | The Antigravity adapter is rebuilt to the documented hook format and validated in CI in 1.3. |
 | harvest | UNSUPPORTED | — | The Antigravity adapter is rebuilt to the documented hook format and validated in CI in 1.3. |
 | design | UNSUPPORTED | — | The Antigravity adapter is rebuilt to the documented hook format and validated in CI in 1.3. |
+| claims | UNSUPPORTED | — | The Antigravity adapter is rebuilt to the documented hook format and validated in CI in 1.3. |
+| audit | UNSUPPORTED | — | The Antigravity adapter is rebuilt to the documented hook format and validated in CI in 1.3. |
+| scout | UNSUPPORTED | — | The Antigravity adapter is rebuilt to the documented hook format and validated in CI in 1.3. |
 
 ## Hook bridge detail
 

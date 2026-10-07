@@ -5,9 +5,11 @@
 import { randomBytes } from "node:crypto"
 import {
   type ApprovalStage,
+  allAudits,
   approvalSubject,
   capabilityLoss,
   commandSetHash,
+  describeTarget,
   factoryLayout,
   factorySummary,
   type HookEngine,
@@ -105,6 +107,15 @@ export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>,
           qa: Object.fromEntries(Object.entries(phase.qa).filter(([, verdict]) => verdict !== undefined)),
         })),
         pending: (await pendingApprovals(runtime.root)).map((item) => item.stage),
+        audits: (state ? allAudits(state) : []).map((audit) => ({
+          id: audit.id,
+          target: describeTarget(audit.target),
+          status: audit.status,
+          round: audit.round,
+          thesis: audit.thesis?.verdict ?? "-",
+          antithesis: audit.antithesis?.verdict ?? "-",
+          ...(audit.tiebreak ? { tiebreak: audit.tiebreak.verdict } : {}),
+        })),
       }
     },
     lspState: async () => {

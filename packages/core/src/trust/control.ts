@@ -36,6 +36,10 @@ export const FACTORY_CONTROL = [
   ".factory/research/sources/**",
   ".factory/research/{coverage,dossier,brief.pcrb}.json",
   ".factory/claims/**",
+  // Code-audit records, dossiers and reports; scout plan, profiles and results.
+  ".factory/audits/**",
+  ".factory/scout/*.{json,md}",
+  ".factory/scout/*/{profile,advisories}.json",
   ".git/config",
   ".git/hooks/**",
 ] as const

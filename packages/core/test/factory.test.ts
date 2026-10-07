@@ -384,6 +384,84 @@ describe("build and QA", () => {
   })
 })
 
+describe("phase audits (decision 2)", () => {
+  const verdictTool = async () => {
+    const { codeAuditTools } = await import("../src/codeaudit/index.ts")
+    return codeAuditTools({ root: fx.root, factory, stateDir: fx.state }).find(
+      (tool) => tool.name === "es_audit_verdict",
+    )!
+  }
+  const holds = {
+    kind: "invariant",
+    title: "The export is a constant",
+    severity: "info",
+    file: "src/alpha.ts",
+    lines: [1, 1],
+    excerpt: "export const alpha = 1",
+    detail: "alpha is a module-level constant; nothing mutates it.",
+    holds: true,
+  }
+  const defect = {
+    ...holds,
+    kind: "vulnerability",
+    title: "Magic constant without validation",
+    severity: "medium",
+    cwe: "CWE-1188",
+    remediation: "Derive it from validated config.",
+    holds: undefined,
+  }
+
+  test("an open phase audit holds the merge after QA passes; its pass merges the phase", async () => {
+    await toBuild(["alpha", "beta"])
+    const { audit } = await factory.openAudit("factory", { kind: "phase", phase: "alpha" })
+    await expect(factory.auditVerdict("es-auditor-thesis", audit.id, "pass", "early")).rejects.toThrow(
+      "phase audits take verdicts in QA",
+    )
+    await programmerCycle("alpha")
+    await factory.qaVerdict("es-qa-functional", "pass", "criteria met")
+    const held = await factory.qaVerdict("es-qa-adversarial", "pass", "nothing broke")
+    expect([held.stage, held.phases[0]!.status, held.phases[0]!.history.at(-1)?.event]).toEqual([
+      "QA",
+      "qa",
+      "qa-passed",
+    ])
+    const verdict = await verdictTool()
+    await verdict.execute(
+      { audit: audit.id, verdict: "pass", findings: [holds], notes: "sound" },
+      { agent: "es-auditor-thesis" },
+    )
+    await verdict.execute(
+      { audit: audit.id, verdict: "pass", findings: [], notes: "tried injection, races" },
+      { agent: "es-auditor-antithesis" },
+    )
+    const state = (await factory.read())!
+    expect([state.phases[0]!.status, state.phases[0]!.audit?.status, state.activePhase]).toEqual([
+      "passed",
+      "passed",
+      "beta",
+    ])
+  })
+
+  test("a failed phase audit sends the phase back to the programmer and re-opens the audit", async () => {
+    await toBuild()
+    const { audit } = await factory.openAudit("factory", { kind: "phase", phase: "alpha" })
+    await programmerCycle("alpha")
+    const verdict = await verdictTool()
+    await verdict.execute(
+      { audit: audit.id, verdict: "fail", findings: [defect], notes: "1. magic" },
+      { agent: "es-auditor-thesis" },
+    )
+    const out = await verdict.execute(
+      { audit: audit.id, verdict: "fail", findings: [defect], notes: "1. magic" },
+      { agent: "es-auditor-antithesis" },
+    )
+    expect(out).toContain("the phase went back to the programmer (audit re-opened as round 2)")
+    const phase = (await factory.read())!.phases[0]!
+    expect([phase.status, phase.failures, phase.audit?.status, phase.audit?.round]).toEqual(["building", 1, "open", 2])
+    expect(phase.history.at(-1)?.notes).toContain("audit audit-01: 1. magic")
+  })
+})
+
 describe("guards", () => {
   test("the STOP file halts every operation until a human resumes", async () => {
     await toBuild()

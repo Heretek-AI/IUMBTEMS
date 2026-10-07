@@ -158,6 +158,14 @@ describe("shell policy", () => {
     expect(shell("build", "es config set models.deep x/y").effect).toBe("deny")
     expect(shell("factory", `es research retract ${"c".repeat(64)} --event retracted`).effect).toBe("deny")
     expect(shell("build", "es config show").effect).toBe("allow")
+    // Audit and scout runs drive a harness CLI: never from an agent's shell.
+    expect(shell("build", "es audit src --max-usd 5").effect).toBe("deny")
+    expect(shell("factory", "es audit ./src").effect).toBe("deny")
+    expect(shell("build", 'es scout "a parser"').effect).toBe("deny")
+    expect(shell("build", "es audit dismiss audit-01 --reason x").effect).toBe("deny")
+    expect(shell("build", "es audit verify").effect).toBe("allow")
+    expect(shell("build", "es audit show").effect).toBe("allow")
+    expect(shell("build", "es scout show").effect).toBe("allow")
   })
 
   test("seats may not reach the evidence cache from the shell; others may read but not mutate it", () => {

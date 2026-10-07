@@ -2,6 +2,7 @@
 // ledger. Legacy runner/claim_store.py was a SQLite FTS index that could be
 // deleted and rebuilt from the same files; the files stay the source of truth
 // here too, so no database is needed (the CLI must run on Node 22).
+import { readdir } from "node:fs/promises"
 import { factoryLayout } from "../layout.ts"
 import type { SourceCache } from "../research/cache.ts"
 import type { Claim, Dossier, Witness } from "../schema/claims.ts"
@@ -10,8 +11,12 @@ import { applyDegradation, readRetractions, type StatusEvent } from "./degrade.t
 import { readDossier } from "./dossier.ts"
 import { witnessClaim } from "./witness.ts"
 
-/** Dossier files the store indexes. M2 adds the code-audit and scout dossiers with their control entries. */
-export const dossierFiles = (root: string): string[] => [factoryLayout(root).researchDossier]
+/** Dossier files the store indexes: research, every code audit, the scout. All are control files. */
+export async function dossierFiles(root: string): Promise<string[]> {
+  const layout = factoryLayout(root)
+  const audits = (await readdir(layout.audits).catch(() => [] as string[])).sort().map((id) => layout.auditDossier(id))
+  return [layout.researchDossier, ...audits, layout.scoutDossier]
+}
 
 export interface LoadedDossier {
   readonly file: string
@@ -35,7 +40,7 @@ export class ClaimStore {
   /** Index every dossier present, with retractions applied. Corrupt files throw; missing ones are skipped. */
   static async load(root: string): Promise<ClaimStore> {
     const loaded: LoadedDossier[] = []
-    for (const file of dossierFiles(root)) {
+    for (const file of await dossierFiles(root)) {
       const dossier = await readDossier(file)
       if (dossier) loaded.push({ file, dossier })
     }

@@ -391,3 +391,129 @@ describe("headless", () => {
     expect(events.at(-1)).toMatchObject({ type: "halted", reason: "test halt" })
   })
 })
+
+describe("es audit and es scout (headless jobs)", () => {
+  const AUTH = `export function login(db, user) {\n  const sql = "SELECT * FROM users WHERE name = '" + user + "'"\n  return db.query(sql)\n}\n`
+  /** A fake harness turn that plays the seats through the core tools. */
+  const seatDriver = (onTurn: (prompt: string) => Promise<void>): HarnessDriver => ({
+    id: "fake",
+    available: async () => true,
+    async *turn({ prompt }) {
+      yield { text: "working" }
+      await onTurn(prompt)
+      return "ses_fake"
+    },
+  })
+  const core = () => import("@heretek-ai/es-core")
+
+  test("--help has no side effects; no run and no ceiling is refused; creating a run needs a terminal", async () => {
+    const { DRIVERS } = await import("../src/headless.ts")
+    await mkdir(path.join(root, "src"), { recursive: true })
+    await writeFile(path.join(root, "src/auth.js"), AUTH)
+    for (const argv of [
+      ["audit", "src", "--help"],
+      ["scout", "x", "--help"],
+    ])
+      expect((await run(argv)).code).toBe(0)
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
+    const bare = await run(["audit", "src", "--open-only"])
+    expect([bare.code, bare.out]).toEqual([2, expect.stringContaining("--max-usd <USD>")])
+    expect((await run(["audit", "src", "--max-usd", "5", "--open-only"])).code).toBe(3)
+    DRIVERS.fake = seatDriver(async () => {})
+    try {
+      expect((await run(["scout", "a parser", "--max-usd", "5", "--driver", "fake"])).code).toBe(3)
+    } finally {
+      delete DRIVERS.fake
+    }
+    expect(await exists(factoryLayout(root).state)).toBe(false)
+  })
+
+  test("an unavailable driver starts nothing: no run, no audit round", async () => {
+    const { DRIVERS } = await import("../src/headless.ts")
+    await mkdir(path.join(root, "src"), { recursive: true })
+    await writeFile(path.join(root, "src/auth.js"), AUTH)
+    await run(["audit", "src", "--max-usd", "5", "--open-only"], human())
+    DRIVERS.down = { id: "down", available: async () => false, async *turn() {} }
+    try {
+      const audit = await run(["audit", "src", "--driver", "down"])
+      expect([audit.code, audit.out]).toEqual([2, expect.stringContaining("nothing was started")])
+      expect((await run(["scout", "a parser", "--driver", "down"])).code).toBe(2)
+    } finally {
+      delete DRIVERS.down
+    }
+    expect((await run(["audit", "show", "audit-01"])).out).toContain("open (round 1)")
+  })
+
+  test("es audit opens on a run (provisioning its ceiling at a TTY), drives the pair, and reports the verdict", async () => {
+    const { DRIVERS } = await import("../src/headless.ts")
+    const { codeAuditTools, Factory } = await core()
+    await mkdir(path.join(root, "src"), { recursive: true })
+    await writeFile(path.join(root, "src/auth.js"), AUTH)
+    const opened = await run(["audit", "src", "--max-usd", "5", "--open-only"], human())
+    expect([opened.code, opened.out]).toEqual([0, expect.stringContaining("Opened audit-01 (round 1) on path src.")])
+    // Now the run has a ceiling: no terminal needed for the next round.
+    const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+    const verdict = codeAuditTools({ root, factory, stateDir: state }).find((tool) => tool.name === "es_audit_verdict")!
+    const prompts: string[] = []
+    DRIVERS.fake = seatDriver(async (prompt) => {
+      prompts.push(prompt)
+      for (const agent of ["es-auditor-thesis", "es-auditor-antithesis"])
+        await verdict.execute({ audit: "audit-01", verdict: "pass", findings: [], notes: "ok" }, { agent })
+    })
+    try {
+      const driven = await run(["audit", "src", "--driver", "fake"])
+      expect(driven.code).toBe(0)
+      expect(driven.out).toContain("Opened audit-01 (round 2) on path src.")
+      expect(driven.out).toContain("Audit audit-01 passed. Report: .factory/audits/audit-01/REPORT.md")
+      expect(prompts[0]).toContain("Headless code audit audit-01 on path src")
+    } finally {
+      delete DRIVERS.fake
+    }
+    const shown = await run(["audit", "show"])
+    expect(shown.out).toContain("audit-01 · path src · passed (round 2)")
+  })
+
+  test("es audit dismiss is human-only and unblocks", async () => {
+    await mkdir(path.join(root, "src"), { recursive: true })
+    await writeFile(path.join(root, "src/auth.js"), AUTH)
+    await run(["audit", "src", "--max-usd", "5", "--open-only"], human())
+    expect((await run(["audit", "dismiss", "audit-01"], human())).code).toBe(2)
+    expect((await run(["audit", "dismiss", "audit-01", "--reason", "vendored"])).code).toBe(3)
+    expect((await run(["audit", "dismiss", "audit-01", "--reason", "vendored code we never ship"], human())).code).toBe(
+      0,
+    )
+    expect((await run(["audit", "show", "audit-01"])).out).toContain("dismissed by human:")
+  })
+
+  test("es scout drives the scout seat until it completes and prints the ranked verdicts", async () => {
+    const { DRIVERS } = await import("../src/headless.ts")
+    const { scoutTools } = await core()
+    await mkdir(path.join(root, "vendor/tiny"), { recursive: true })
+    await writeFile(path.join(root, "vendor/tiny/index.js"), "module.exports = () => 1\n")
+    await writeFile(path.join(root, "vendor/tiny/package.json"), '{"name":"tiny","version":"1.0.0"}')
+    const tool = (name: string) => scoutTools({ root, stateDir: state }).find((item) => item.name === name)!
+    DRIVERS.fake = seatDriver(async () => {
+      const scout = { agent: "scout" }
+      await tool("es_scout_plan").execute(
+        { objective: "a tiny helper", candidates: [{ name: "tiny", source: "local:./vendor/tiny" }] },
+        scout,
+      )
+      await tool("es_scout_scan").execute({ candidate: "tiny" }, scout)
+      await tool("es_scout_record").execute(
+        { candidate: "tiny", maintenance: "slow", proposal: "adopt", rationale: "small enough to keep", claims: [] },
+        scout,
+      )
+      await tool("es_scout_complete").execute({}, scout)
+    })
+    try {
+      const scouted = await run(["scout", "a tiny helper", "--max-usd", "3", "--driver", "fake"], human())
+      expect(scouted.code).toBe(0)
+      // No license file: adopt is downgraded by core, whatever the seat proposed.
+      expect(scouted.out).toContain("1. tiny: clean-room")
+      expect(scouted.out).toContain("Report: .factory/scout/REPORT.md. Adoption is your decision.")
+    } finally {
+      delete DRIVERS.fake
+    }
+    expect((await run(["scout", "show"])).out).toContain("1. tiny — unknown (unverified) — clean-room")
+  })
+})

@@ -1,0 +1,9 @@
+{
+  "note": "Planted defects the code-audit pair must catch (audit-fires). A plant is caught by a witnessed vulnerability finding in its file, with one of its CWE ids, whose line range overlaps the plant's.",
+  "plants": [
+    { "id": "sql-injection", "file": "src/injection.ts", "lines": [4, 5], "cwe": ["CWE-89"] },
+    { "id": "toctou-lock", "file": "src/race.ts", "lines": [4, 5], "cwe": ["CWE-362", "CWE-367"] },
+    { "id": "hardcoded-key", "file": "src/leak.ts", "lines": [2, 2], "cwe": ["CWE-798"] },
+    { "id": "secret-logged", "file": "src/leak.ts", "lines": [7, 7], "cwe": ["CWE-200", "CWE-532"] }
+  ]
+}

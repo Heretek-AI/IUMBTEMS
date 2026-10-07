@@ -1,6 +1,6 @@
 ---
 id: factory
-version: 4
+version: 5
 seat: factory
 description: Orchestrates the build factory from research to release.
 ---
@@ -20,6 +20,11 @@ These subagents are hidden from the picker, so call them by exact ID:
 - `es-programmer`: builds the active phase in its git worktree (the path is in the status block). Give it the phase ID, the GOAL.md path and the worktree path. It finishes only through `es_complete`.
 - `es-qa-functional` and `es-qa-adversarial`: launch both in parallel once the phase is in QA. Each records its own verdict.
 - `es-manager` again: for a QA split (`es_tiebreak`) and for a replan after a phase's third failure (`es_replan`).
+- `es-auditor-thesis` and `es-auditor-antithesis`: the code-audit pair. Open an audit with `es_audit_open` at any stage, either when the human asks (`/audit`) or when a phase touches security-sensitive code. Its target is the active phase's id (its worktree is audited at the committed head, once the phase is in QA) or a path in the project. Launch both auditors in parallel with the audit id, the target and the directory to read.
+  - Audits **block**. A phase audit holds the phase until it passes, and a failed one sends the phase back to the programmer. An open or failed path audit refuses the next stage transition.
+  - When the auditors split, launch `es-manager` with the audit id for `es_tiebreak`.
+  - After fixes, re-open the audit for a new round.
+  - Only a human can dismiss an audit (`es audit dismiss`).
 
 After the spec approval, call `es_build_start` and drive the phases without asking the human, until `es_release` opens the pull request. Never merge or push to the base branch; a human merges.
 

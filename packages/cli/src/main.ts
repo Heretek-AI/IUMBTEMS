@@ -67,6 +67,7 @@ import {
   trust,
   waive,
 } from "./human.ts"
+import { auditCommand, auditDismiss, auditShow, scoutCommand, scoutShow } from "./jobs.ts"
 import { serveStdio } from "./mcp.ts"
 import { type ConfirmIO, confirmWithCode, NotInteractive, terminalIO } from "./tty.ts"
 
@@ -118,7 +119,14 @@ Other
   lsp [status]                  Language servers and how each resolves
   lsp diagnostics <file>        Diagnostics for one file
   lsp install <server>          Pinned, checksummed install   [human, TTY]
+  audit <phase id | path>       Code audit by the auditor pair, driven headlessly   [human]
+        [--max-usd N] [--open-only] [--max-turns N] [--driver opencode]
+  audit show [id]               Code audits in this run and their reports
+  audit dismiss <id> --reason "…"   Stop an audit from blocking   [human, TTY]
   audit verify                  Verify the hash-chained audit log
+  scout "<feature>"             Find and vet open-source candidates, headlessly   [human]
+        [--max-usd N] [--max-turns N]
+  scout show [--json]           The scout's ranked verdicts
   mcp                           Serve the factory tools over MCP (stdio)
   version
 `
@@ -148,6 +156,7 @@ const BOOLEAN_FLAGS = [
   "force",
   "allow-unverifiable",
   "global",
+  "open-only",
 ]
 
 export async function main(argv: readonly string[], io: MainIO): Promise<number> {
@@ -572,13 +581,20 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         return 0
       }
       case "audit": {
-        if (sub !== "verify") break
-        const result = await verifyAuditChain(root)
-        io.print(
-          result.valid ? `Audit log OK (${result.entries.length} entries).` : `Audit log INVALID: ${result.error}`,
-        )
-        return result.valid ? 0 : 1
+        if (sub === "verify") {
+          const result = await verifyAuditChain(root)
+          io.print(
+            result.valid ? `Audit log OK (${result.entries.length} entries).` : `Audit log INVALID: ${result.error}`,
+          )
+          return result.valid ? 0 : 1
+        }
+        if (sub === "show") return await auditShow(context, subArgs(2))
+        if (sub === "dismiss") return await auditDismiss(context, subArgs(2))
+        return await auditCommand(context, subArgs(1))
       }
+      case "scout":
+        if (sub === "show") return await scoutShow(context, subArgs(2))
+        return await scoutCommand(context, subArgs(1))
       case "gates":
         if (sub === "run") return await gatesRun(context, subArgs(2))
         if (sub === "install-git") return await installGitHooks(context, subArgs(2))
