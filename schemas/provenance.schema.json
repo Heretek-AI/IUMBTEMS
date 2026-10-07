@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "local",
+        "clone",
+        "api",
+        "registry",
+        "inferred"
+      ]
+    },
+    "source": {
+      "type": "string"
+    },
+    "verified": {
+      "type": "boolean"
+    },
+    "note": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "verified"
+  ],
+  "additionalProperties": false
+}

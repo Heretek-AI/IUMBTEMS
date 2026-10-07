@@ -1,0 +1,43 @@
+{
+  "name": "@heretek-ai/es-core",
+  "version": "1.0.0",
+  "description": "Epistemic Swarm core: factory state machine, mechanical gates, audit log, trust, research, brainstorm, harvest, LSP and hook/agent compilers.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Heretek-AI/IUMBTEMS.git",
+    "directory": "packages/core"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./src/*.ts",
+      "bun": "./src/*.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "files": [
+    "src",
+    "dist",
+    "assets"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "prepublishOnly": "bun run build",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "vscode-jsonrpc": "9.0.3",
+    "vscode-languageserver-protocol": "3.18.4",
+    "web-tree-sitter": "0.27.0",
+    "zod": "4.6.5"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

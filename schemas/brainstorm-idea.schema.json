@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "lens": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "notes": {
+      "type": "string"
+    },
+    "duplicateOf": {
+      "type": "string"
+    },
+    "similarity": {
+      "type": "number"
+    },
+    "recordedAt": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "lens",
+    "title",
+    "text",
+    "recordedAt"
+  ],
+  "additionalProperties": false
+}

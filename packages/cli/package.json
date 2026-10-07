@@ -1,0 +1,34 @@
+{
+  "name": "@heretek-ai/es-cli",
+  "version": "1.0.0",
+  "description": "Epistemic Swarm CLI: factory control, human-only checkpoints, gates, headless runs and a coarse MCP server.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "es": "./bin/es.js",
+    "epistemic-swarm": "./bin/es.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/es.js"
+    }
+  },
+  "files": [
+    "bin",
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --target=node --outfile dist/es.js --packages=external",
+    "prepublishOnly": "bun run build",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@heretek-ai/es-core": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

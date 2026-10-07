@@ -1,0 +1,63 @@
+name: Nightly (OpenCode v2 HEAD)
+
+# The plan deliberately pins no OpenCode version: v2 moves fast, so this job
+# runs the real-host suite against the `v2` branch HEAD every night and turns
+# red when the host drifts. It is the mitigation, not a pin.
+#
+# Scheduled workflows only run from the default branch, so pre-cutover the job
+# is exercised through workflow_dispatch (and the push trigger on `rewrite`).
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  push:
+    branches: [rewrite]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  v2-head:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Third-party actions are pinned to commit SHAs (bump deliberately).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: scripts/v2-head.sh packages/opencode
+
+  # Opt-in, cost-capped behaviour evals: one real turn per case against
+  # vars.ES_EVAL_MODEL, killed at the per-case step cap (no cost events exist
+  # in the CLI stream, so steps bound the spend). Skipped unless both the
+  # model and secrets.ES_EVAL_API_KEY are configured; the key is exported as
+  # vars.ES_EVAL_KEY_VAR (default ANTHROPIC_API_KEY).
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Evals
+        env:
+          ES_EVAL_API_KEY: ${{ secrets.ES_EVAL_API_KEY }}
+          ES_EVAL_MODEL: ${{ vars.ES_EVAL_MODEL }}
+          ES_EVAL_KEY_VAR: ${{ vars.ES_EVAL_KEY_VAR || 'ANTHROPIC_API_KEY' }}
+          ES_EVAL_MAX_STEPS: "6"
+          ES_EVAL_TIMEOUT_MS: "300000"
+        run: |
+          if [ -z "$ES_EVAL_API_KEY" ] || [ -z "$ES_EVAL_MODEL" ]; then
+            echo "evals: secrets.ES_EVAL_API_KEY and vars.ES_EVAL_MODEL are not both set; skipping."
+            exit 0
+          fi
+          # The platform package carries the binary itself, so no install script runs.
+          npm install --global --ignore-scripts @opencode/cli-linux-x64@2.0.24
+          export PATH="$(npm root --global)/@opencode/cli-linux-x64/bin:$PATH"
+          export "$ES_EVAL_KEY_VAR=$ES_EVAL_API_KEY"
+          opencode --version
+          bun run evals

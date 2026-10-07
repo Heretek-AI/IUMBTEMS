@@ -1,6 +1,0 @@
-description = "Launch Socratic grilling and decision frontier exploration"
-prompt = """Launch IUMBTEMS Socratic grilling for: {{args}}.
-
-Follow skills/grilling/SKILL.md frontier methodology (rounds, assumption inversion,
-factual vs decisional separation). Persist with: python3 skills/grilling/socratic_tree.py --export
-"""

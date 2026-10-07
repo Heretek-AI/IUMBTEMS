@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "models": {
+      "type": "object",
+      "properties": {
+        "fast": {
+          "type": "string",
+          "description": "Model for fast-tier seats (lenses), \"provider/model\"."
+        },
+        "balanced": {
+          "type": "string",
+          "description": "Model for balanced-tier seats (programmer, QA, research)."
+        },
+        "deep": {
+          "type": "string",
+          "description": "Model for deep-tier seats (factory, grill, managers, critics)."
+        },
+        "agents": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Per-agent model overrides by agent id."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Abstract model tiers mapped to concrete provider/model ids; unset tiers inherit the session default."
+    },
+    "afterEdit": {
+      "default": "fast",
+      "type": "string",
+      "enum": [
+        "fast",
+        "off"
+      ],
+      "description": "Gates after each programmer edit: fast built-ins or off (the phase-end gates always run)."
+    },
+    "estimate": {
+      "type": "object",
+      "properties": {
+        "inputPerM": {
+          "default": 3,
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Estimated USD per million input tokens when the host reports no cost."
+        },
+        "outputPerM": {
+          "default": 15,
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Estimated USD per million output tokens."
+        }
+      },
+      "required": [
+        "inputPerM",
+        "outputPerM"
+      ],
+      "additionalProperties": false,
+      "description": "Spend estimates used when the host reports no cost; estimates are labelled as such. Global config or plugin options only."
+    },
+    "pr": {
+      "default": "gh",
+      "type": "string",
+      "enum": [
+        "gh",
+        "off"
+      ],
+      "description": "Release PR opener: the GitHub CLI, or off."
+    },
+    "embeddings": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "OpenAI-compatible embeddings endpoint (POST {model, input} → {data:[{embedding}]})."
+        },
+        "model": {
+          "type": "string",
+          "description": "Embedding model id."
+        },
+        "apiKeyEnv": {
+          "type": "string",
+          "description": "Environment variable holding the API key, sent as a Bearer token."
+        }
+      },
+      "required": [
+        "url",
+        "model"
+      ],
+      "additionalProperties": false,
+      "description": "Optional OpenAI-compatible embeddings for brainstorm dedupe; unset uses MinHash/n-gram. Global config or plugin options only."
+    },
+    "lspAfterEdit": {
+      "default": true,
+      "type": "boolean",
+      "description": "Append language-server diagnostics to edit results."
+    },
+    "searchProvider": {
+      "type": "string",
+      "enum": [
+        "brave",
+        "firecrawl",
+        "searxng"
+      ],
+      "description": "Web search provider; the default is the first one with credentials."
+    },
+    "licenseWhitelist": {
+      "default": [
+        "MIT",
+        "Apache-2.0",
+        "BSD-2-Clause",
+        "BSD-3-Clause",
+        "ISC",
+        "0BSD",
+        "Unlicense",
+        "CC0-1.0"
+      ],
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "SPDX ids darkharvest may depend on or vendor (a harvest plan may only narrow it); everything else is clean-room only."
+    }
+  },
+  "required": [
+    "afterEdit",
+    "pr",
+    "lspAfterEdit",
+    "licenseWhitelist"
+  ],
+  "additionalProperties": false
+}

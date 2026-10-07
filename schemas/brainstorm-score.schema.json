@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "novelty": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "upside": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "feasibility": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "fit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "note": {
+      "type": "string"
+    },
+    "scoredAt": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "novelty",
+    "upside",
+    "feasibility",
+    "fit",
+    "scoredAt"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "string",
+  "enum": [
+    "tsc",
+    "biome",
+    "eslint",
+    "prettier",
+    "ruff",
+    "ruff-format",
+    "mypy",
+    "cargo",
+    "gofmt",
+    "go-vet",
+    "bun-test",
+    "vitest",
+    "jest",
+    "pytest",
+    "go-test",
+    "cargo-test",
+    "generic"
+  ]
+}

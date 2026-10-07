@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "fg": {
+      "type": "string"
+    },
+    "bg": {
+      "type": "string"
+    },
+    "large_text": {
+      "type": "boolean"
+    },
+    "ratio": {
+      "type": "number"
+    },
+    "aa_threshold": {
+      "type": "number"
+    },
+    "aaa_enhanced": {
+      "type": "number"
+    },
+    "aaa_pass": {
+      "type": "boolean"
+    },
+    "pass": {
+      "type": "boolean"
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "name",
+    "fg",
+    "bg",
+    "large_text",
+    "ratio",
+    "aa_threshold",
+    "aaa_enhanced",
+    "aaa_pass",
+    "pass",
+    "errors"
+  ],
+  "additionalProperties": false
+}

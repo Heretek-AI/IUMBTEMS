@@ -1,53 +1,55 @@
-name: Publish to npm
+name: Publish
 
+# Human step, after the 1.0 merge. Publishes with npm trusted publishing
+# (OIDC) and provenance; no long-lived token is stored. Configure each package
+# as a trusted publisher for this workflow before the first run. Defaults to a
+# dry run.
 on:
-  release:
-    types: [published]
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run npm publish --dry-run (no upload)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    environment: IUMBTEMS
-    permissions:
-      contents: read
-      id-token: write
+    timeout-minutes: 30
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          python-version: '3.11'
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun run check
+      - run: bun run docs:check
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22.x'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Install pinned npm (required for OIDC trusted publishing)
-        # Node's bundled npm predates OIDC Trusted Publishing. Without a modern
-        # npm the publish still *signs provenance* (that is an older feature)
-        # but the registry then rejects the package PUT with a bare
-        #   npm error 404 Not Found - PUT https://registry.npmjs.org/@heretek-ai%2fepistemic-swarm
-        # because setup-node's .npmrc supplies an empty NODE_AUTH_TOKEN
-        # placeholder instead of the OIDC-derived credential.
-        #
-        # 41d5f6f removed the old `npm install -g npm@latest` step as "CI npm
-        # script protection" and broke publishing. That was the third
-        # hardening change in that commit to drop a load-bearing dependency
-        # (the others: a claude-code pin too old for `plugin validate --strict`,
-        # and `--ignore-scripts` blocking claude-code's native-binary
-        # postinstall). Pin an exact npm version so the supply-chain intent
-        # survives without floating.
-        run: npm install -g --ignore-scripts npm@12.1.0
-
-      - name: Run Test Suite
+          node-version: "22"
+      # Build and pack the way users install (`bun pm pack` rewrites
+      # workspace:* to real versions), smoke-test the installed tarballs, and
+      # publish exactly those tarballs.
+      - run: scripts/pack-smoke.sh packs
+      # Trusted publishing needs a recent npm CLI; it picks up the OIDC token
+      # from the environment automatically (no NODE_AUTH_TOKEN). Pinned, and no
+      # lifecycle scripts from the fetched tarball run.
+      - run: npm install --global --ignore-scripts npm@11.21.0
+      - name: Publish packages
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          python3 -m unittest discover -s runner/tests
-
-      - name: Publish Package to npm (Trusted Publishing OIDC)
-        run: npm publish --provenance --access public
+          # Dependency order: core, then the CLI and the OpenCode plugin.
+          for tgz in packs/heretek-ai-es-core-*.tgz packs/heretek-ai-es-cli-*.tgz packs/heretek-ai-epistemic-swarm-*.tgz; do
+            echo "::group::npm publish $tgz"
+            if [ "$DRY_RUN" = "true" ]; then
+              npm publish "$tgz" --provenance --access public --dry-run
+            else
+              npm publish "$tgz" --provenance --access public
+            fi
+            echo "::endgroup::"
+          done

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "brief": {
+      "type": "object",
+      "properties": {
+        "idea": {
+          "type": "string",
+          "minLength": 1
+        },
+        "context": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "idea"
+      ],
+      "additionalProperties": false
+    },
+    "lenses": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "ideasPerLens": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10
+    },
+    "maxIdeaChars": {
+      "type": "integer",
+      "minimum": 120,
+      "maximum": 9007199254740991
+    },
+    "shortlistSize": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 12
+    },
+    "dedupeThreshold": {
+      "type": "number",
+      "minimum": 0.5,
+      "maximum": 0.95
+    },
+    "dedupeMode": {
+      "default": "minhash",
+      "type": "string",
+      "enum": [
+        "ngram",
+        "minhash",
+        "embedding"
+      ]
+    },
+    "createdAt": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "brief",
+    "lenses",
+    "ideasPerLens",
+    "maxIdeaChars",
+    "shortlistSize",
+    "dedupeThreshold",
+    "dedupeMode",
+    "createdAt"
+  ],
+  "additionalProperties": false
+}

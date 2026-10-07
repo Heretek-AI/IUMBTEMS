@@ -1,0 +1,73 @@
+{
+  "name": "@heretek-ai/epistemic-swarm",
+  "version": "1.0.0",
+  "description": "Epistemic Swarm: an AI build factory for OpenCode v2 \u2014 grill, research, spec, build, QA and release, gated mechanically.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    },
+    "./server": {
+      "types": "./server.ts",
+      "default": "./server.ts"
+    },
+    "./tui": {
+      "types": "./tui.tsx",
+      "default": "./tui.tsx"
+    },
+    "./rpc": {
+      "types": "./rpc.ts",
+      "default": "./rpc.ts"
+    }
+  },
+  "files": [
+    "index.ts",
+    "server.ts",
+    "tui.tsx",
+    "rpc.ts",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@heretek-ai/es-core": "workspace:*",
+    "@opencode/plugin": "2.0.24"
+  },
+  "devDependencies": {
+    "@heretek-ai/es-testkit": "workspace:*",
+    "@opencode/sdk": "2.0.24",
+    "@opentui/core": "0.5.14",
+    "@opentui/solid": "0.5.14",
+    "solid-js": "1.9.15"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.5.14",
+    "@opentui/solid": ">=0.5.14",
+    "solid-js": ">=1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "ai",
+    "agents",
+    "factory"
+  ]
+}

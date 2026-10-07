@@ -1,9 +1,0 @@
----
-description: Coding-factory Manager loop with grill-gated phased builds
----
-
-Run the IUMBTEMS coding-factory Manager loop for `$1`:
-
-1. Grill until `.factory/frontier.json` is settled (max 5 swarm cycles per gate); explicit user approve advances each gate.
-2. Per gate: `python3 runner/research_swarm.py --mode brainstorm` plus `--mode darkharvest` (mock-first), then synthesize `.roadmap/<phase>/` GOAL.md + dossier.json.
-3. Programmer subagent per phase; qa-a plus qa-b per phase; retries tracked via the `iumbtems_factory` tool (phase-add / qa-record; 3 failures escalate). Never invoke factory helper scripts by relative path.

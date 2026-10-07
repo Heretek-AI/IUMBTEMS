@@ -1,8 +1,0 @@
-description = "Product competitor teardown with per-feature harvest verdicts"
-prompt = """Run a product competitor teardown for: {{args}}.
-
-Execute: python3 runner/research_swarm.py --mode darkharvest --objective "{{args}}"
-Seeds may be embedded as repo URLs in the objective; cap at --max-repos 6 live.
-Legal rule: permissive-only vendor; GPL/AGPL clean-room-rebuild only; workflows clonable, assets never.
-Report: .research/darkharvest_report.md (competitor x capability matrix + harvest backlog + SPDX blocks).
-"""

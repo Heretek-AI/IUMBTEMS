@@ -1,61 +1,99 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "frontier",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": [
-    "objective"
-  ],
   "properties": {
-    "objective": {
-      "type": "string"
+    "version": {
+      "default": "1.0",
+      "type": "string",
+      "const": "1.0"
     },
-    "is_complete": {
+    "idea": {
+      "type": "string",
+      "minLength": 1
+    },
+    "spendCeiling": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string",
+          "const": "USD"
+        },
+        "maxAmount": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": [
+        "currency",
+        "maxAmount"
+      ],
+      "additionalProperties": false
+    },
+    "settled": {
+      "default": false,
       "type": "boolean"
     },
     "nodes": {
-      "type": "object",
-      "additionalProperties": {
+      "default": [],
+      "type": "array",
+      "items": {
         "type": "object",
-        "required": [
-          "node_id",
-          "question"
-        ],
         "properties": {
-          "node_id": {
-            "type": "string"
+          "id": {
+            "type": "string",
+            "minLength": 1
           },
-          "title": {
+          "parent": {
             "type": "string"
           },
           "question": {
+            "type": "string",
+            "minLength": 1
+          },
+          "answer": {
             "type": "string"
           },
-          "recommended": {
+          "justification": {
             "type": "string"
           },
-          "options": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "prerequisites": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "settled_answer": {
-            "type": [
-              "string",
-              "null"
+          "status": {
+            "default": "open",
+            "type": "string",
+            "enum": [
+              "open",
+              "settled",
+              "deferred"
             ]
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
-        }
+        },
+        "required": [
+          "id",
+          "question",
+          "status"
+        ],
+        "additionalProperties": false
       }
     },
-    "settled_constraints": {
-      "type": "object"
+    "metadata": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
     }
-  }
+  },
+  "required": [
+    "version",
+    "idea",
+    "spendCeiling",
+    "settled",
+    "nodes"
+  ],
+  "additionalProperties": false
 }
