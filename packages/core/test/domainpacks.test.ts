@@ -43,7 +43,7 @@ const toClaim = (row: FixtureClaim): ConstitutionClaim => ({
   id: row.id,
   tag: row.tag,
   tier: row.tier,
-  source: { sha256: row.sourceHash, url: row.sourceUrl },
+  source: { sha256: row.sourceHash, quote: row.verbatimQuote, url: row.sourceUrl },
 })
 const claims = () => fixture.claims.map(toClaim)
 const retracted = () => new Set(fixture.retractedHashes)
@@ -133,6 +133,25 @@ describe("the domain-pack constitution (d66328c:runner/refinement.py)", () => {
     expect(flat.breakdown.verifiedPassed).toBe(18)
     expect(weighted.score).toBeLessThan(flat.score)
     expect(weighted.breakdown.verifiedWeight).toBeCloseTo(18 * 0.3, 3)
+  })
+
+  test("the legacy structural rules fire (VERIFIED evidence, INFERRED logic, HYPOTHESIS falsification, NK fields)", () => {
+    expect(claimVerdict({ id: "v", tag: "VERIFIED" }).reasons.join()).toContain("VERIFIED_REQUIRES_HASH")
+    expect(claimVerdict({ id: "v2", tag: "VERIFIED", source: { sha256: "a".repeat(64) } }).reasons.join()).toContain(
+      "VERIFIED_REQUIRES_QUOTE",
+    )
+    expect(claimVerdict({ id: "i", tag: "INFERRED" }).reasons.join()).toContain("INFERRED_REQUIRES_LOGIC")
+    expect(claimVerdict({ id: "h", tag: "HYPOTHESIS" }).reasons.join()).toContain("HYPOTHESIS_REQUIRES_FALSIFICATION")
+    const nk = claimVerdict({ id: "n", tag: "NEGATIVE_KNOWLEDGE" })
+    expect(nk.reasons.join()).toContain("NEG_KNOWLEDGE_REQUIRES_QUERY")
+    expect(nk.reasons.join()).toContain("NEG_KNOWLEDGE_REQUIRES_FINDING")
+    // A complete claim of each kind is accepted; a code location counts as
+    // VERIFIED evidence too (1.x addition).
+    expect(claimVerdict({ id: "ok", tag: "VERIFIED", source: { sha256: "a".repeat(64), quote: "q" } }).verdict).toBe(
+      "ACCEPTED",
+    )
+    expect(claimVerdict({ id: "loc", tag: "VERIFIED", location: { file: "src/a.ts" } }).verdict).toBe("ACCEPTED")
+    expect(claimVerdict({ id: "ok2", tag: "INFERRED", reasoning: "from the parent fact" }).verdict).toBe("ACCEPTED")
   })
 
   test("the legacy defaults are preserved exactly", () => {

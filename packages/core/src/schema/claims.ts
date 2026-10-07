@@ -58,6 +58,12 @@ export const ClaimSchema = z.object({
   /** NEGATIVE_KNOWLEDGE: what was searched, and what (nothing) was found. */
   query: z.string().optional(),
   finding: z.string().optional(),
+  /**
+   * NEGATIVE_KNOWLEDGE only: sha256 of the full cleaned (query, finding) pair
+   * before the storage cap. Legacy R11: identity and scoring dedupe on the
+   * full key, so distinct past-2k rows stay distinct.
+   */
+  nkKey: Sha256.optional(),
   severity: z.enum(["critical", "high", "medium", "low", "info"]).optional(),
   witness: WitnessSchema.optional(),
 })

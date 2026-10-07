@@ -14,6 +14,7 @@ import {
   ClaimStore,
   checkLocation,
   claimsFromAudit,
+  computeEpistemicScoreFromClaims,
   type Dossier,
   DossierRefusal,
   exportBrief,
@@ -151,12 +152,27 @@ describe("negative knowledge hardening (d66328c:runner/tests/test_nk_hardening.p
     expect([distinct.valid.length, distinct.dropped]).toEqual([2, 0])
   })
 
-  test("long fields truncate to the cap in code points (:152)", () => {
+  test("long fields truncate to the cap in code points (:152); the full-key nkKey keeps them distinct (R11)", () => {
     const big = "😀".repeat(NK_MAX_FIELD + 100)
     const { valid, dropped } = normalizeNegativeKnowledge([{ query: big, finding: big }])
     expect(dropped).toBe(0)
     expect([...valid[0]!.query!].length).toBe(NK_MAX_FIELD)
     expect([...valid[0]!.finding!].length).toBe(NK_MAX_FIELD)
+
+    // R11: identity and scoring dedupe on the full cleaned pre-truncate pair,
+    // so two rows that differ only past the cap stay distinct with distinct
+    // ids, and the score path counts both.
+    const prefix = "P".repeat(NK_MAX_FIELD)
+    const rows = normalizeNegativeKnowledge([
+      { query: `${prefix}X`, finding: "F" },
+      { query: `${prefix}Y`, finding: "F" },
+    ])
+    expect([rows.valid.length, rows.dropped]).toEqual([2, 0])
+    expect(rows.valid[0]!.id).not.toBe(rows.valid[1]!.id)
+    expect(rows.valid[0]!.nkKey).toBeDefined()
+    expect(computeEpistemicScoreFromClaims(rows.valid).breakdown.negativeKnowledgeCount).toBe(2)
+    // Exact duplicates still dedupe (the key matches).
+    expect(computeEpistemicScoreFromClaims([rows.valid[0]!, rows.valid[0]!]).breakdown.negativeKnowledgeCount).toBe(1)
   })
 
   test("a spoofed tag loses to the kind (:163, :318)", () => {
@@ -175,6 +191,17 @@ describe("witnessClaim (d66328c:runner/tests/test_claim_witness.py)", () => {
       checkedAt: at.toISOString(),
       reason: expect.stringContaining("needs evidence"),
     })
+  })
+
+  test("INFERRED needs its reasoning and HYPOTHESIS its falsification (legacy structural rules)", async () => {
+    const inferred = normalizeClaim({ tag: "INFERRED", statement: "therefore the sky is green" })
+    expect((await witnessClaim(inferred, { cache, now })).reason).toMatch(/reasoning/)
+    const hypothesis = normalizeClaim({ tag: "HYPOTHESIS", statement: "maybe the sky is green" })
+    expect((await witnessClaim(hypothesis, { cache, now })).reason).toMatch(/falsification/)
+    const reasoned = normalizeClaim({ tag: "INFERRED", statement: "derived", reasoning: "from the parent fact" })
+    expect((await witnessClaim(reasoned, { cache, now })).ok).toBe(true)
+    const tested = normalizeClaim({ tag: "HYPOTHESIS", statement: "guess", falsification: "run the experiment" })
+    expect((await witnessClaim(tested, { cache, now })).ok).toBe(true)
   })
 
   test("a real cache round trip verifies (:163); a missing or tampered source does not", async () => {

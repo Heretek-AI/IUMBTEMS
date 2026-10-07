@@ -66,11 +66,14 @@ async function check(claim: Claim, options: WitnessOptions): Promise<Check> {
     case "INFERRED": {
       const unknown = (claim.parents ?? []).filter((parent) => options.known && !options.known.has(parent))
       if (unknown.length) return fail(`unknown parent claim(s): ${unknown.map((id) => id.slice(0, 12)).join(", ")}`)
-      if ((claim.reasoning ?? claim.statement).length < 8) return fail("INFERRED needs substantive reasoning")
+      // Legacy INFERRED_REQUIRES_LOGIC: the reasoning is the claim's evidence;
+      // the statement is not a substitute for it.
+      if (!claim.reasoning?.trim()) return fail("INFERRED needs its reasoning (deductive logic)")
       return pass
     }
     case "HYPOTHESIS":
-      return claim.statement.length < 8 ? fail("HYPOTHESIS needs a substantive statement") : pass
+      // Legacy HYPOTHESIS_REQUIRES_FALSIFICATION.
+      return claim.falsification?.trim() ? pass : fail("HYPOTHESIS needs its falsification (how to test it)")
     case "NEGATIVE_KNOWLEDGE":
       return claim.query && claim.finding ? pass : fail("NEGATIVE_KNOWLEDGE needs a query and a finding")
   }

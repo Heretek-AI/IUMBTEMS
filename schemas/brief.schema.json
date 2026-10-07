@@ -124,6 +124,10 @@
           "finding": {
             "type": "string"
           },
+          "nkKey": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
           "severity": {
             "type": "string",
             "enum": [

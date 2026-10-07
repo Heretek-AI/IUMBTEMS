@@ -10,7 +10,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import type { ClaimStatus } from "../schema/claims.ts"
 import { type DomainPack, DomainPackSchema } from "../schema/domain.ts"
-import { normalizeNegativeKnowledge } from "./claim.ts"
+import { cleanNk } from "./claim.ts"
 
 export interface Constitution {
   /** Per-verified-claim weight by source tier; `__default__` covers unlisted tiers. */
@@ -73,8 +73,22 @@ export interface ConstitutionClaim {
   readonly tag?: string | undefined
   readonly status?: ClaimStatus | undefined
   readonly tier?: string | undefined
-  readonly source?: { readonly sha256?: string | undefined; readonly url?: string | undefined } | undefined
+  readonly source?:
+    | {
+        readonly sha256?: string | undefined
+        readonly quote?: string | undefined
+        readonly url?: string | undefined
+      }
+    | undefined
+  /** A verified code location is evidence too (1.x addition; legacy had sources only). */
+  readonly location?: unknown
   readonly parents?: readonly string[] | undefined
+  readonly reasoning?: string | undefined
+  readonly falsification?: string | undefined
+  readonly query?: string | undefined
+  readonly finding?: string | undefined
+  /** R11 full-key hash for NEGATIVE_KNOWLEDGE (set by normalizeClaim). */
+  readonly nkKey?: string | undefined
 }
 
 export interface ClaimVerdict {
@@ -93,10 +107,19 @@ export interface ClaimVerdictOptions {
 
 /**
  * The per-claim ACCEPTED/REJECTED gate used by domain packs. A claim is
- * REJECTED when any pack rule fires under this constitution (parent
- * unresolved, missing mandatory tag, banned domain), or when the retraction
- * policy is zero_tolerance and its source was retracted or its status is
- * STALE/SUSPECT (downgrade regardless of quote match or score).
+ * REJECTED when the legacy structural rules fire (VERIFIED needs its source
+ * hash + verbatim quote or a code location; INFERRED needs its reasoning;
+ * HYPOTHESIS needs its falsification; NEGATIVE_KNOWLEDGE needs query and
+ * finding), when any pack rule fires (parent unresolved, missing mandatory
+ * tag, banned domain), or when the retraction policy is zero_tolerance and
+ * its source was retracted or its status is STALE/SUSPECT (downgrade
+ * regardless of quote match or score).
+ *
+ * One legacy rule is deliberately not enforced: INFERRED's "parent_claims
+ * non-empty". 1.x REPORT.md claims carry no parent ids (the dossier graph is
+ * composed by the ranker), so enforcing it would reject every INFERRED line
+ * under a pack; the PARENT_UNRESOLVED rule still fires whenever parents are
+ * present and the known set says otherwise.
  */
 export function claimVerdict(claim: ConstitutionClaim, options: ClaimVerdictOptions = {}): ClaimVerdict {
   const constitution = options.constitution ?? LEGACY_CONSTITUTION
@@ -104,6 +127,21 @@ export function claimVerdict(claim: ConstitutionClaim, options: ClaimVerdictOpti
   const known = options.knownIds ?? new Set([claim.id])
   for (const parent of claim.parents ?? [])
     if (!known.has(parent)) reasons.push(`PARENT_UNRESOLVED: parent_claims '${parent}' not in dossier set`)
+  // Structural rules, ported from legacy check_invariants (R10: presence
+  // checks are trim-based, never truthiness on non-strings).
+  const nonEmpty = (value: unknown): boolean => typeof value === "string" && value.trim().length > 0
+  if (claim.tag === "VERIFIED" && !claim.location) {
+    if (!nonEmpty(claim.source?.sha256)) reasons.push("VERIFIED_REQUIRES_HASH: source_hash missing")
+    if (!nonEmpty(claim.source?.quote)) reasons.push("VERIFIED_REQUIRES_QUOTE: verbatim_quote missing")
+  }
+  if (claim.tag === "INFERRED" && !nonEmpty(claim.reasoning))
+    reasons.push("INFERRED_REQUIRES_LOGIC: deductive_logic missing")
+  if (claim.tag === "HYPOTHESIS" && !nonEmpty(claim.falsification))
+    reasons.push("HYPOTHESIS_REQUIRES_FALSIFICATION: falsification missing")
+  if (claim.tag === "NEGATIVE_KNOWLEDGE") {
+    if (!nonEmpty(claim.query)) reasons.push("NEG_KNOWLEDGE_REQUIRES_QUERY: query missing")
+    if (!nonEmpty(claim.finding)) reasons.push("NEG_KNOWLEDGE_REQUIRES_FINDING: finding missing")
+  }
   if (constitution.mandatoryTags.length && !claim.tag) reasons.push("MISSING_TAG: tag required by constitution")
   const url = claim.source?.url
   if (constitution.bannedDomains.length && typeof url === "string" && url) {
@@ -148,11 +186,23 @@ export function computeEpistemicScoreFromClaims(
   let tierWeighted = false
   for (const weight of Object.values(constitution.tierWeights)) if (Math.abs(weight - 1) > 1e-7) tierWeighted = true
 
-  const nk = normalizeNegativeKnowledge(
-    claims
-      .filter((claim) => claim.tag === "NEGATIVE_KNOWLEDGE")
-      .map((claim) => claim as { query?: unknown; finding?: unknown }),
-  )
+  // NEGATIVE_KNOWLEDGE: valid rows only (both sides non-empty after the R4
+  // clean), deduplicated on the full-key hash when present (R11 — the stored
+  // query/finding are capped copies, so the key is what keeps distinct
+  // past-2k rows distinct); hand-built claims without a key fall back to the
+  // cleaned stored pair.
+  const seenNk = new Set<string>()
+  let negKnowledge = 0
+  for (const claim of claims) {
+    if (claim.tag !== "NEGATIVE_KNOWLEDGE") continue
+    const q = cleanNk(typeof claim.query === "string" ? claim.query : undefined)
+    const f = cleanNk(typeof claim.finding === "string" ? claim.finding : undefined)
+    if (!q || !f) continue
+    const key = claim.nkKey ?? JSON.stringify([q, f])
+    if (seenNk.has(key)) continue
+    seenNk.add(key)
+    negKnowledge++
+  }
   const counts = { verified: 0, rejected: 0, inferred: 0, hypotheses: 0 }
   let weightSum = 0
   for (const claim of claims) {
@@ -167,8 +217,7 @@ export function computeEpistemicScoreFromClaims(
   }
   const totalAssertions = Math.max(1, counts.verified + counts.inferred + counts.hypotheses + counts.rejected)
   const rawScore =
-    (weightSum + constitution.negBonus * nk.valid.length - constitution.rejectPenalty * counts.rejected) /
-    totalAssertions
+    (weightSum + constitution.negBonus * negKnowledge - constitution.rejectPenalty * counts.rejected) / totalAssertions
   const score = Math.max(0, Math.min(1, Math.round(rawScore * 1000) / 1000))
   return {
     score,
@@ -176,7 +225,7 @@ export function computeEpistemicScoreFromClaims(
       totalClaimsAudited: counts.verified + counts.rejected,
       verifiedPassed: counts.verified,
       unverifiedRejected: counts.rejected,
-      negativeKnowledgeCount: nk.valid.length,
+      negativeKnowledgeCount: negKnowledge,
       inferredCount: counts.inferred,
       hypothesisCount: counts.hypotheses,
       verifiedWeight: weightSum,

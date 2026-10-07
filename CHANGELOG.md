@@ -147,6 +147,15 @@ the fresh-run instruction, so 1.1 needs fresh runs.
   only when the command is provably read-only (allowlisted segments; no
   redirection, here-doc or substitution); seats keep the stricter
   no-mention rule, and the forge test now covers the shell path.
+- **Post-audit parity hardening.** A parity audit against 0.7.25 found two
+  port drifts, both fixed: `NEGATIVE_KNOWLEDGE` claims keep a full-key hash
+  (`nkKey`, sha256 of the cleaned pre-truncate query/finding pair) so
+  distinct past-2k rows stay distinct in ids and scoring while the stored
+  fields stay capped (legacy R11); and the pack constitution carries the
+  legacy structural rules again (VERIFIED needs its hash + quote or a code
+  location; INFERRED its reasoning; HYPOTHESIS its falsification; NK query
+  and finding). The legacy INFERRED "parents non-empty" rule is documented
+  as not applicable to 1.x REPORT.md claims.
 - **System architecture doc.** `SYSTEM_ARCHITECTURE.md` now describes the
   pipeline, the seats, the claim flow and the trust invariants in one place.
 

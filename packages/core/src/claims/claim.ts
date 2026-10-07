@@ -32,10 +32,11 @@ const KIND_TAG: Record<ClaimKind, ClaimTag> = {
   negative_knowledge: "NEGATIVE_KNOWLEDGE",
 }
 
-/** Legacy NK_MAX_FIELD_LEN, counted in code points as Python's len() does. */
+/** Legacy NK_MAX_FIELD_LEN, counted in code points as Python's len() does. Caps the NK statement (R6) and the stored query/finding; `nkKey` retains the full key (R11). */
 export const NK_MAX_FIELD = 2000
 
-const cleanNk = (text: string | undefined) => (text ?? "").replace(/\p{Cf}/gu, "").trim()
+/** R4 cleaner: strip format/invisible characters, then trim (legacy _clean_nk_field). */
+export const cleanNk = (text: string | undefined) => (text ?? "").replace(/\p{Cf}/gu, "").trim()
 const cap = (text: string, max = NK_MAX_FIELD) => {
   const points = [...text]
   return points.length > max ? points.slice(0, max).join("") : text
@@ -43,7 +44,7 @@ const cap = (text: string, max = NK_MAX_FIELD) => {
 
 /** Content fields only: status and witness change over time, the claim does not. */
 export function claimId(claim: Omit<Claim, "id" | "status" | "witness">): string {
-  const { tag, statement, source, location, parents, reasoning, falsification, query, finding, severity } = claim
+  const { tag, statement, source, location, parents, reasoning, falsification, query, finding, nkKey, severity } = claim
   return hashJson({
     tag,
     statement,
@@ -54,6 +55,7 @@ export function claimId(claim: Omit<Claim, "id" | "status" | "witness">): string
     falsification,
     query,
     finding,
+    nkKey,
     severity,
   })
 }
@@ -83,11 +85,19 @@ export function normalizeClaim(raw: ClaimInput): Claim {
   const tag = tagOf(raw)
   let { query, finding } = raw
   let statement = (raw.statement ?? "").trim()
+  let nkKey: string | undefined
   if (tag === "NEGATIVE_KNOWLEDGE") {
-    query = cap(cleanNk(query))
-    finding = cap(cleanNk(finding))
-    if (!query || !finding)
+    const fullQuery = cleanNk(query)
+    const fullFinding = cleanNk(finding)
+    if (!fullQuery || !fullFinding)
       throw new ClaimError("NEGATIVE_KNOWLEDGE needs both what was searched (query) and what was found (finding)")
+    // R11 (d66328c:runner/claim_witness.py:139-172): identity and scoring
+    // dedupe on the FULL cleaned pre-truncate pair; the stored query/finding
+    // are capped copies (render/storage, legacy :171-172). Without this key,
+    // distinct past-2k rows would collapse to one witness.
+    nkKey = hashJson([fullQuery, fullFinding])
+    query = cap(fullQuery)
+    finding = cap(fullFinding)
     statement = cap(cleanNk(statement) || finding)
   }
   if (!statement) throw new ClaimError("the claim has no statement")
@@ -107,7 +117,7 @@ export function normalizeClaim(raw: ClaimInput): Claim {
     ...(parentsOf(raw.parents) ? { parents: parentsOf(raw.parents)! } : {}),
     ...(raw.reasoning?.trim() ? { reasoning: raw.reasoning.trim() } : {}),
     ...(raw.falsification?.trim() ? { falsification: raw.falsification.trim() } : {}),
-    ...(tag === "NEGATIVE_KNOWLEDGE" ? { query, finding } : {}),
+    ...(tag === "NEGATIVE_KNOWLEDGE" ? { query, finding, ...(nkKey ? { nkKey } : {}) } : {}),
     ...(raw.severity ? { severity: raw.severity } : {}),
   }
   const parsed = ClaimSchema.safeParse({ id: claimId(content), status: "LIVE", ...content })
