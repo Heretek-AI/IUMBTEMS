@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { Factory, factoryLayout, gateRunner, readApproval } from "@heretek-ai/es-core"
+import { exists, Factory, factoryLayout, gateRunner, readApproval } from "@heretek-ai/es-core"
 import { parseArgs, parseExpiry } from "../src/args.ts"
 import { type HarnessDriver, runHeadless } from "../src/headless.ts"
 import { main } from "../src/main.ts"
@@ -124,6 +124,13 @@ describe("rebaseline", () => {
 })
 
 describe("gates and audit", () => {
+  test("--help prints usage without minting a run", async () => {
+    const helped = await run(["factory", "begin", "--help"])
+    expect(helped.code).toBe(0)
+    expect(helped.out).toContain("Usage: es")
+    expect(await exists(factoryLayout(root).state)).toBe(false)
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
+  })
   test("gates run exits non-zero on findings; audit verify reports the chain", async () => {
     await writeFile(path.join(root, "leak.ts"), `export const t = "ghp_${"Ab3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6"}"\n`)
     const gates = await run(["gates", "run", "leak.ts"])

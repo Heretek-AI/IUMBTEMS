@@ -170,8 +170,15 @@ export default Plugin.define({
         name: "factory",
         description: "Drive the build factory from its current stage (Epistemic Swarm)",
         execute: async ({ sessionID, prompt, delivery }) => {
-          await ctx.session.switchAgent({ sessionID, agent: "factory" } as any)
           const state = await runtime.factory.read()
+          if (!state) {
+            await ctx.session.synthetic({
+              sessionID,
+              text: "No factory run here yet — run /grill first.",
+            } as any)
+            return
+          }
+          await ctx.session.switchAgent({ sessionID, agent: "factory" } as any)
           await ctx.session.prompt({
             ...prompt,
             sessionID,

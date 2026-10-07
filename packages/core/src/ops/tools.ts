@@ -113,7 +113,11 @@ export function esTools(ops: OpsContext): EsToolDef[] {
         if (!seat || !["factory", "grill", "manager"].includes(seat))
           throw new ToolRefusal("Only the factory, grill or manager seat may request approvals.")
         const subject = await approvalSubject(root, stage).catch((error: Error) => {
-          throw new ToolRefusal(`Not ready for approval: ${error.message}`)
+          const missing =
+            /missing artifact.*frontier|not settled yet|frontier/i.test(error.message) && stage === "frontier"
+          throw new ToolRefusal(
+            `Not ready for approval: ${error.message}${missing ? " Run /grill (or `es factory begin` + grill flow) to record the frontier, then request approval again." : ""}`,
+          )
         })
         const pending = (await pendingApprovals(root)).filter((item) => item.stage !== stage)
         pending.push({ stage, requestedBy: context.agent, at: new Date().toISOString(), ...(note ? { note } : {}) })
