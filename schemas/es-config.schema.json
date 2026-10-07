@@ -72,6 +72,29 @@
       ],
       "description": "Release PR opener: the GitHub CLI, or off."
     },
+    "embeddings": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "OpenAI-compatible embeddings endpoint (POST {model, input} → {data:[{embedding}]})."
+        },
+        "model": {
+          "type": "string",
+          "description": "Embedding model id."
+        },
+        "apiKeyEnv": {
+          "type": "string",
+          "description": "Environment variable holding the API key, sent as a Bearer token."
+        }
+      },
+      "required": [
+        "url",
+        "model"
+      ],
+      "additionalProperties": false,
+      "description": "Optional OpenAI-compatible embeddings for brainstorm dedupe; unset uses MinHash/n-gram."
+    },
     "lspAfterEdit": {
       "default": true,
       "type": "boolean",

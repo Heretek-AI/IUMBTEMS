@@ -1,0 +1,45 @@
+name: Publish
+
+# Human step, after the 1.0 merge. Publishes with npm trusted publishing
+# (OIDC) and provenance; no long-lived token is stored. Configure each package
+# as a trusted publisher for this workflow before the first run. Defaults to a
+# dry run.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run npm publish --dry-run (no upload)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun run check
+      - run: bun run docs:check
+      # Trusted publishing needs a recent npm CLI; it picks up the OIDC token
+      # from the environment automatically (no NODE_AUTH_TOKEN).
+      - run: npm install --global npm@latest
+      - name: Publish packages
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          flags="--provenance --access public"
+          if [ "$DRY_RUN" = "true" ]; then flags="$flags --dry-run"; fi
+          # Dependency order: core, then cli and the OpenCode plugin.
+          for pkg in packages/core packages/cli packages/opencode; do
+            echo "::group::npm publish $pkg"
+            (cd "$pkg" && npm publish $flags)
+            echo "::endgroup::"
+          done

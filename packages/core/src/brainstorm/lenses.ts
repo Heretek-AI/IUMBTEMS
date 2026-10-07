@@ -89,6 +89,7 @@ export interface PlanOptions {
   readonly ideasPerLens?: number
   readonly shortlistSize?: number
   readonly dedupeThreshold?: number
+  readonly dedupeMode?: "ngram" | "minhash" | "embedding"
   readonly maxIdeaChars?: number
   readonly now?: Date
 }
@@ -118,6 +119,7 @@ export function buildPlan(brief: BrainstormBrief, options: PlanOptions = {}): Pl
       maxIdeaChars: clampInt(options.maxIdeaChars ?? DEFAULT_MAX_IDEA_CHARS, 120, 2_000),
       shortlistSize: clampInt(options.shortlistSize ?? DEFAULT_SHORTLIST_SIZE, 2, 12),
       dedupeThreshold: clampFloat(options.dedupeThreshold ?? DEFAULT_DEDUPE_THRESHOLD, 0.5, 0.95),
+      dedupeMode: options.dedupeMode ?? "minhash",
       createdAt: (options.now ?? new Date()).toISOString(),
     },
   }

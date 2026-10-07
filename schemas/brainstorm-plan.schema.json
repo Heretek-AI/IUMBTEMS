@@ -55,6 +55,15 @@
       "minimum": 0.5,
       "maximum": 0.95
     },
+    "dedupeMode": {
+      "default": "minhash",
+      "type": "string",
+      "enum": [
+        "ngram",
+        "minhash",
+        "embedding"
+      ]
+    },
     "createdAt": {
       "type": "string"
     }
@@ -67,6 +76,7 @@
     "maxIdeaChars",
     "shortlistSize",
     "dedupeThreshold",
+    "dedupeMode",
     "createdAt"
   ],
   "additionalProperties": false

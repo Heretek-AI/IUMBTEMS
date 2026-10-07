@@ -20,7 +20,10 @@ export function registerTools(editor: { add(tool: any): void }, runtime: Runtime
     policy: () => runtime.policy(),
     ...(runtime.options.searchProvider ? { provider: runtime.options.searchProvider } : {}),
   })
-  const brainstorm = brainstormTools({ root: runtime.root })
+  const brainstorm = brainstormTools({
+    root: runtime.root,
+    ...(runtime.config.embeddings ? { embeddings: runtime.config.embeddings } : {}),
+  })
   const harvest = harvestTools({ root: runtime.root, whitelist: runtime.config.licenseWhitelist })
   const design = designTools({ root: runtime.root })
   for (const def of [

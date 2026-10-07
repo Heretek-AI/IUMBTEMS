@@ -25,6 +25,8 @@ export const BrainstormPlanSchema = z.object({
   shortlistSize: z.number().int().min(2).max(12),
   /** Similarity at or above which an idea is collapsed as a duplicate. */
   dedupeThreshold: z.number().min(0.5).max(0.95),
+  /** Dedupe similarity: n-gram, MinHash (default), or embeddings when configured. */
+  dedupeMode: z.enum(["ngram", "minhash", "embedding"]).default("minhash"),
   createdAt: z.string(),
 })
 export type BrainstormPlan = z.infer<typeof BrainstormPlanSchema>

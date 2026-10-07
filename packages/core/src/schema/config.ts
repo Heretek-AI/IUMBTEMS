@@ -32,6 +32,15 @@ export const EsConfigSchema = z
       .describe("Spend estimates used when the host reports no cost; estimates are labelled as such.")
       .optional(),
     pr: z.enum(["gh", "off"]).describe("Release PR opener: the GitHub CLI, or off.").default("gh"),
+    embeddings: z
+      .object({
+        url: z.string().describe("OpenAI-compatible embeddings endpoint (POST {model, input} → {data:[{embedding}]})."),
+        model: z.string().describe("Embedding model id."),
+        apiKeyEnv: z.string().describe("Environment variable holding the API key, sent as a Bearer token.").optional(),
+      })
+      .strict()
+      .describe("Optional OpenAI-compatible embeddings for brainstorm dedupe; unset uses MinHash/n-gram.")
+      .optional(),
     lspAfterEdit: z.boolean().describe("Append language-server diagnostics to edit results.").default(true),
     searchProvider: z
       .enum(["brave", "firecrawl", "searxng"])

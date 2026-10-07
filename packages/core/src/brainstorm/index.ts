@@ -1,3 +1,4 @@
+export * from "./embed.ts"
 export * from "./engine.ts"
 export * from "./lenses.ts"
 export * from "./ops.ts"

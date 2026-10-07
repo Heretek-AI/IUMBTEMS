@@ -88,6 +88,7 @@ Platform: Linux, Node ≥ 22 or Bun. No Python.
 - `docs/CAPABILITIES.md` — what each harness enforces, with proof references.
 - `docs/CONFIG.md` — the layered config (global → project → plugin options).
 - `docs/SCHEMAS.md` — every Zod contract as JSON Schema.
+- `CHANGELOG.md` — the 1.0 cutover and breaking changes.
 
 ## License
 

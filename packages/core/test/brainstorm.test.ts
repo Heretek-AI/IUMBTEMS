@@ -12,6 +12,7 @@ import {
   buildPlan,
   collapseDuplicates,
   LENSES,
+  minhashSimilarity,
   rankIdeas,
   readIdeas,
   readPlan,
@@ -78,6 +79,16 @@ describe("the deterministic engine", () => {
     const a = "ship anonymous telemetry by default so nobody needs to opt in"
     expect(similarity(a, "ship anonymous telemetry by default so nobody has to opt in")).toBeGreaterThanOrEqual(0.5)
     expect(similarity(a, "replace the database with an append-only event log")).toBeLessThan(0.15)
+  })
+
+  test("MinHash similarity agrees with the exact direction of the n-gram score", () => {
+    const a = "ship anonymous telemetry by default so nobody needs to opt in"
+    expect(minhashSimilarity(a, a)).toBe(1)
+    expect(minhashSimilarity(a, a, 2, 128)).toBe(1)
+    expect(minhashSimilarity(a, "replace the database with an append-only event log")).toBeLessThan(0.2)
+    expect(
+      minhashSimilarity(a, "ship anonymous telemetry on by default so nobody has to opt in", 2, 128),
+    ).toBeGreaterThan(0.4)
   })
 
   test("duplicates collapse against the first idea of the cluster", () => {

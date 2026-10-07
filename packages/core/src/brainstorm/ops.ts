@@ -16,7 +16,8 @@ import {
   BrainstormScoreSchema,
   RUBRIC,
 } from "../schema/brainstorm.ts"
-import { collapseDuplicates, rankIdeas, selectShortlist } from "./engine.ts"
+import { createEmbedder, type EmbeddingsConfig } from "./embed.ts"
+import { collapseDuplicates, collapseDuplicatesEmbedded, rankIdeas, selectShortlist } from "./engine.ts"
 import { buildPlan, LENSES, type PlanOptions } from "./lenses.ts"
 import {
   readIdeas,
@@ -31,6 +32,7 @@ import {
 
 export interface BrainstormOpsContext {
   readonly root: string
+  readonly embeddings?: EmbeddingsConfig
 }
 
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({
@@ -46,6 +48,18 @@ const list = (items: readonly string[], limit = 8) =>
 
 export function brainstormTools(context: BrainstormOpsContext): EsToolDef[] {
   const { root } = context
+  const embed = context.embeddings ? createEmbedder(context.embeddings) : undefined
+  const collapse = async (
+    ideas: readonly BrainstormIdea[],
+    mode: "ngram" | "minhash" | "embedding",
+    threshold: number,
+  ) => {
+    if (mode === "embedding") {
+      if (!embed) throw new ToolRefusal("This plan uses embedding dedupe but no embeddings endpoint is configured.")
+      return collapseDuplicatesEmbedded(ideas, threshold, embed)
+    }
+    return collapseDuplicates(ideas, threshold, { mode })
+  }
 
   return [
     {
@@ -68,6 +82,11 @@ export function brainstormTools(context: BrainstormOpsContext): EsToolDef[] {
           shortlistSize: {
             type: "number",
             description: "Shortlist size including the forced outlier (2-12, default 7).",
+          },
+          dedupe: {
+            type: "string",
+            enum: ["ngram", "minhash", "embedding"],
+            description: "Dedupe similarity: n-gram, MinHash (default), or embeddings when configured.",
           },
           force: { type: "boolean", description: "Replace an in-progress brainstorm." },
         },
@@ -95,6 +114,7 @@ export function brainstormTools(context: BrainstormOpsContext): EsToolDef[] {
             ...(Array.isArray(input.lenses) ? { lenses: input.lenses.map(String) } : {}),
             ...(input.ideasPerLens !== undefined ? { ideasPerLens: Number(input.ideasPerLens) } : {}),
             ...(input.shortlistSize !== undefined ? { shortlistSize: Number(input.shortlistSize) } : {}),
+            ...(input.dedupe ? { dedupeMode: String(input.dedupe) as "ngram" | "minhash" | "embedding" } : {}),
           } satisfies PlanOptions)
         } catch (error) {
           throw new ToolRefusal(error instanceof Error ? error.message : String(error))
@@ -174,7 +194,7 @@ export function brainstormTools(context: BrainstormOpsContext): EsToolDef[] {
           })
         }
         const all = [...existing, ...recorded]
-        const hits = collapseDuplicates(all, plan.dedupeThreshold)
+        const hits = await collapse(all, plan.dedupeMode, plan.dedupeThreshold)
         const byId = new Map(hits.map((hit) => [hit.id, hit]))
         const stored = all.map((idea) => {
           const hit = byId.get(idea.id)
@@ -296,7 +316,7 @@ export function brainstormTools(context: BrainstormOpsContext): EsToolDef[] {
         if (!plan) throw new ToolRefusal("No brainstorm plan. Call es_brainstorm_plan first.")
         const ideas = await readIdeas(root)
         if (!ideas.length) throw new ToolRefusal("No ideas recorded yet.")
-        const hits = collapseDuplicates(ideas, plan.dedupeThreshold)
+        const hits = await collapse(ideas, plan.dedupeMode, plan.dedupeThreshold)
         const hitById = new Map(hits.map((hit) => [hit.id, hit]))
         const survivors = ideas.filter((idea) => !hitById.has(idea.id))
         const coverage: Record<string, number> = {}

@@ -28,6 +28,7 @@
   ],
   "scripts": {
     "build": "tsc -b",
+    "prepublishOnly": "bun run build",
     "test": "bun test"
   },
   "dependencies": {
