@@ -1,0 +1,7 @@
+{
+  "id": "factory",
+  "description": "The factory reports its state without crashing or inventing a run.",
+  "agent": "factory",
+  "prompt": "Status?",
+  "checks": { "notContains": ["unhandled", "TypeError", "is not a function"] }
+}

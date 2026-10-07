@@ -1,0 +1,7 @@
+{
+  "id": "brainstorm",
+  "description": "The brainstormer recognises the lens fan-out and proposes ideas.",
+  "agent": "brainstormer",
+  "prompt": "Brainstorm: cut our CI cost in half.",
+  "checks": { "contains": ["idea"] }
+}
