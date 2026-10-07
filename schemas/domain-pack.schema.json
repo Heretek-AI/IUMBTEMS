@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "packId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Built-in pack id: the file name under assets/domain-packs/."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tierWeights": {
+      "default": {
+        "__default__": 1
+      },
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "number",
+        "minimum": 0
+      }
+    },
+    "negBonus": {
+      "default": 0.5,
+      "description": "Score bonus per counted negative-knowledge claim.",
+      "type": "number",
+      "minimum": 0
+    },
+    "rejectPenalty": {
+      "default": 2.5,
+      "description": "Score penalty per rejected claim.",
+      "type": "number",
+      "minimum": 0
+    },
+    "acceptThreshold": {
+      "default": 0.65,
+      "description": "Minimum E(D) score for a pack-gated audit.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "bannedDomains": {
+      "default": [],
+      "description": "Source URLs containing any of these are rejected.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "mandatoryTags": {
+      "default": [],
+      "description": "Every claim must carry one of these tags.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "VERIFIED",
+          "INFERRED",
+          "HYPOTHESIS",
+          "NEGATIVE_KNOWLEDGE"
+        ]
+      }
+    },
+    "retractionPolicy": {
+      "default": "standard",
+      "type": "string",
+      "enum": [
+        "standard",
+        "zero_tolerance"
+      ]
+    },
+    "exportTemplate": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "packId",
+    "description",
+    "tierWeights",
+    "negBonus",
+    "rejectPenalty",
+    "acceptThreshold",
+    "bannedDomains",
+    "mandatoryTags",
+    "retractionPolicy"
+  ],
+  "additionalProperties": false
+}

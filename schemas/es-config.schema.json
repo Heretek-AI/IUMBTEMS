@@ -145,6 +145,11 @@
       "additionalProperties": false,
       "description": "Research-stage tunables (ported from the 0.7 configure tool)."
     },
+    "domainPack": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Active domain-pack constitution for RESEARCH (quant, biopharma or legal); unset keeps the legacy flat behaviour."
+    },
     "licenseWhitelist": {
       "default": [
         "MIT",

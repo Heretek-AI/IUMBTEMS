@@ -23,7 +23,7 @@ and Antigravity adapters ship in 1.1–1.3). Generated: do not edit by hand.
 | research | ENFORCED | `packages/opencode/test/research.test.ts` | Cache, quote verifier, auditor, providers and the websearch bridge. |
 | brainstorm | ENFORCED | `packages/opencode/test/brainstorm.test.ts` | Lens fan-out, record/score/complete tools, dedupe, rubric, shortlist with a forced outlier. |
 | harvest | ENFORCED | `packages/opencode/test/harvest.test.ts` | Fail-closed SPDX detection, provenance profiles, policy-enforced matrix, clean-room specs. |
-| design | ENFORCED | `packages/opencode/test/design.test.ts` | Queereye interview, DTCG tokens, contrast gate, generated guide and drift check. |
+| design | ENFORCED | `packages/opencode/test/design.test.ts` | Queereye interview, DTCG tokens, contrast gate, generated guide and drift check; phase-02 specs/webref/csf/tui renders and the phase-03 ledger bundle with its cite-gate receipt. |
 | claims | ENFORCED | `packages/opencode/test/plugin.test.ts` | Witnessed claims and dossiers: the evidence cache, dossiers and the claim ledger are tool-only; a forged source is denied on the host. |
 | audit | ENFORCED | `packages/opencode/test/fires.test.ts` | Code-audit pair: only auditor seats record verdicts; every finding is witnessed on disk (a hallucinated line is refused); verdicts block. |
 | scout | ENFORCED | `packages/opencode/test/fires.test.ts` | OSS scout: cached-only web, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited. |

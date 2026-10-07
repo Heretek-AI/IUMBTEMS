@@ -121,7 +121,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     design: {
       support: "enforced",
-      detail: "Queereye interview, DTCG tokens, contrast gate, generated guide and drift check.",
+      detail:
+        "Queereye interview, DTCG tokens, contrast gate, generated guide and drift check; phase-02 specs/webref/csf/tui renders and the phase-03 ledger bundle with its cite-gate receipt.",
       test: "packages/opencode/test/design.test.ts",
     },
     claims: {

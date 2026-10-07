@@ -12,7 +12,7 @@ export interface ClaimInput {
   readonly kind?: ClaimKind
   readonly tag?: string | null
   readonly statement?: string
-  readonly source?: { readonly sha256: string; readonly quote: string }
+  readonly source?: { readonly sha256: string; readonly quote: string; readonly url?: string }
   readonly location?: ClaimLocation
   readonly parents?: string | readonly string[]
   readonly reasoning?: string
@@ -94,7 +94,15 @@ export function normalizeClaim(raw: ClaimInput): Claim {
   const content = {
     tag,
     statement,
-    ...(raw.source ? { source: { sha256: raw.source.sha256, quote: raw.source.quote } } : {}),
+    ...(raw.source
+      ? {
+          source: {
+            sha256: raw.source.sha256,
+            quote: raw.source.quote,
+            ...(raw.source.url ? { url: raw.source.url } : {}),
+          },
+        }
+      : {}),
     ...(raw.location ? { location: raw.location } : {}),
     ...(parentsOf(raw.parents) ? { parents: parentsOf(raw.parents)! } : {}),
     ...(raw.reasoning?.trim() ? { reasoning: raw.reasoning.trim() } : {}),

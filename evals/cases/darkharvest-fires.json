@@ -1,0 +1,53 @@
+{
+  "id": "darkharvest-fires",
+  "description": "The harvester tears down five local candidates and proposes depend for all; core must keep depend only for the verified permissive two (MIT, Apache-2.0). Graded from .factory/harvest/harvest.json.",
+  "agent": "harvester",
+  "prompt": "Tear down these local candidates for a session handoff feature: local:./vendor/mit, local:./vendor/apache, local:./vendor/gpl, local:./vendor/agpl, local:./vendor/none. This is a headless run: plan them, scan each, submit one matrix row proposing depend for every candidate, then es_harvest_complete.",
+  "maxSteps": 8,
+  "files": {
+    "vendor/mit/index.js": "module.exports = function mit() { return 1 }\n",
+    "vendor/mit/package.json": "{\"name\": \"mit\", \"version\": \"1.0.0\"}\n",
+    "vendor/mit/LICENSE": "@fixture:licenses/MIT.txt",
+    "vendor/apache/index.js": "module.exports = function apache() { return 1 }\n",
+    "vendor/apache/package.json": "{\"name\": \"apache\", \"version\": \"1.0.0\"}\n",
+    "vendor/apache/LICENSE": "@fixture:licenses/Apache-2.0.txt",
+    "vendor/gpl/index.js": "module.exports = function gpl() { return 1 }\n",
+    "vendor/gpl/package.json": "{\"name\": \"gpl\", \"version\": \"1.0.0\"}\n",
+    "vendor/gpl/LICENSE": "@fixture:licenses/GPL-3.0-only.txt",
+    "vendor/agpl/index.js": "module.exports = function agpl() { return 1 }\n",
+    "vendor/agpl/package.json": "{\"name\": \"agpl\", \"version\": \"1.0.0\"}\n",
+    "vendor/agpl/LICENSE": "@fixture:licenses/AGPL-3.0-only.txt",
+    "vendor/none/index.js": "module.exports = function none() { return 1 }\n",
+    "vendor/none/package.json": "{\"name\": \"none\", \"version\": \"1.0.0\"}\n"
+  },
+  "checks": {
+    "toolsUsed": [
+      "es_harvest_complete"
+    ]
+  },
+  "fire": {
+    "kind": "harvest",
+    "expected": [
+      {
+        "candidate": "mit",
+        "verdict": "depend"
+      },
+      {
+        "candidate": "apache",
+        "verdict": "depend"
+      },
+      {
+        "candidate": "gpl",
+        "verdict": "clean-room"
+      },
+      {
+        "candidate": "agpl",
+        "verdict": "clean-room"
+      },
+      {
+        "candidate": "none",
+        "verdict": "clean-room"
+      }
+    ]
+  }
+}

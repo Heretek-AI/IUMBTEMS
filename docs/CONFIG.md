@@ -14,6 +14,7 @@ plugin options in `opencode.json`. Unknown keys are rejected. Generated: do not 
 | `lspAfterEdit` | boolean | `true` | Append language-server diagnostics to edit results. |
 | `searchProvider` | string (brave, firecrawl, searxng) | — | Web search provider; the default is the first one with credentials. |
 | `research` | object | `{"depth":2}` | Research-stage tunables (ported from the 0.7 configure tool). |
+| `domainPack` | string | — | Active domain-pack constitution for RESEARCH (quant, biopharma or legal); unset keeps the legacy flat behaviour. |
 | `licenseWhitelist` | array | `["MIT","Apache-2.0","BSD-2-Clause","BSD-3-Clause","ISC","0BSD","Unlicense","CC0-1.0"]` | SPDX ids darkharvest may depend on or vendor (a harvest plan may only narrow it); everything else is clean-room only. |
 
 `es config show` and `/config` print the effective config and which files contributed.

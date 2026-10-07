@@ -100,6 +100,17 @@ describe("layered config", () => {
     expect(mergeConfig({ a: 1 }, { a: undefined })).toEqual({ a: 1 })
   })
 
+  test("domainPack is optional, kebab-case validated, and layered", async () => {
+    expect((await loadEsConfig(root, { env })).config.domainPack).toBeUndefined()
+    await writeProject({ domainPack: "biopharma" })
+    expect((await loadEsConfig(root, { env })).config.domainPack).toBe("biopharma")
+    await writeGlobal({ domainPack: "quant" })
+    await writeProject({ domainPack: "legal" })
+    expect((await loadEsConfig(root, { env })).config.domainPack).toBe("legal")
+    await writeProject({ domainPack: "Bad Pack!" })
+    await expect(loadEsConfig(root, { env })).rejects.toThrow(/domainPack/)
+  })
+
   test("the schema parses an empty object into the defaults", () => {
     const parsed = EsConfigSchema.parse({})
     expect(parsed.afterEdit).toBe("fast")

@@ -10,6 +10,7 @@ import { existsSync } from "node:fs"
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import * as z from "zod"
+import { findAssetDrift } from "../packages/core/src/agents/drift.ts"
 import { CAPABILITY_MATRIX, enforcedWithoutProof } from "../packages/core/src/capabilities.ts"
 import { HOOK_CAPABILITIES } from "../packages/core/src/hooks/compile.ts"
 import * as schemas from "../packages/core/src/schema/index.ts"
@@ -77,6 +78,20 @@ for (const harness of Object.keys(CAPABILITY_MATRIX) as Array<keyof typeof CAPAB
   for (const row of enforcedWithoutProof(harness)) missingProofs.push(`${harness}: ${row.capability} (no proof)`)
 if (missingProofs.length) {
   console.error(`docs: ENFORCED capability rows without a proof:\n${[...new Set(missingProofs)].map((item) => `  ${item}`).join("\n")}`)
+  process.exit(1)
+}
+
+// ------------------------------------------------- asset drift (M3-C)
+// Prompt, skill and registry drift, checked in one place for CI: a prompt
+// whose frontmatter seat has drifted from the registry, an orphaned prompt or
+// skill, a skill without a SKILL.md, an unknown spawn or tool. The canary in
+// packages/core/test/drift.test.ts proves each class is caught.
+const assetDriftProblems = await findAssetDrift({
+  promptsDir: path.join(root, "packages/core/assets/prompts"),
+  skillsDir: path.join(root, "packages/core/assets/skills"),
+})
+if (assetDriftProblems.length) {
+  console.error(`docs: asset drift:\n${assetDriftProblems.map((item) => `  ${item}`).join("\n")}`)
   process.exit(1)
 }
 

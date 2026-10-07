@@ -1,0 +1,10 @@
+{
+  "note": "Licence fixtures for darkharvest-fires: every candidate is proposed for depend; core must keep depend only for the verified permissive licenses. The harvester may not widen this line.",
+  "candidates": [
+    { "name": "mit", "license": "MIT", "verdict": "depend" },
+    { "name": "apache", "license": "Apache-2.0", "verdict": "depend" },
+    { "name": "gpl", "license": "GPL-3.0-only", "verdict": "clean-room" },
+    { "name": "agpl", "license": "AGPL-3.0-only", "verdict": "clean-room" },
+    { "name": "none", "license": null, "verdict": "clean-room" }
+  ]
+}

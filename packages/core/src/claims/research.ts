@@ -44,7 +44,15 @@ async function claimFor(statement: string, tag: Tag, cache: SourceCache): Promis
       return normalizeClaim({
         tag: "VERIFIED",
         statement,
-        ...(source && tag.quote ? { source: { sha256: source.meta.sha256, quote: tag.quote } } : {}),
+        ...(source && tag.quote
+          ? {
+              source: {
+                sha256: source.meta.sha256,
+                quote: tag.quote,
+                ...(source.meta.url ? { url: source.meta.url } : {}),
+              },
+            }
+          : {}),
       })
     }
     case "INFERRED":

@@ -192,6 +192,8 @@ export const AGENTS: readonly AgentSpec[] = [
       "es_design_skip",
       "es_design_complete",
       "es_design_check",
+      "es_design_specs",
+      "es_design_harvest",
     ],
     spawns: [],
     writes: ["design"],

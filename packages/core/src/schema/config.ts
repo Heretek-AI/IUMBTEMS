@@ -79,6 +79,13 @@ export const EsConfigSchema = z
       .strict()
       .describe("Research-stage tunables (ported from the 0.7 configure tool).")
       .default({ depth: 2 }),
+    domainPack: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9-]*$/, "pack ids are lowercase kebab-case")
+      .describe(
+        "Active domain-pack constitution for RESEARCH (quant, biopharma or legal); unset keeps the legacy flat behaviour.",
+      )
+      .optional(),
     licenseWhitelist: z
       .array(z.string())
       .describe(

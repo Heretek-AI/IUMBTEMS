@@ -17,6 +17,13 @@ import path from "node:path"
 import { seatOf } from "../agents/registry.ts"
 import { readApproval, verifyApproval } from "../approval/record.ts"
 import { appendAuditEntry } from "../audit/chain.ts"
+import {
+  claimVerdict,
+  computeEpistemicScoreFromClaims,
+  constitutionFromPack,
+  loadDomainPack,
+} from "../claims/constitution.ts"
+import { readRetractions } from "../claims/degrade.ts"
 import { buildDossier, writeDossier } from "../claims/dossier.ts"
 import { claimsFromAudit } from "../claims/research.ts"
 import { ClaimStore } from "../claims/store.ts"
@@ -109,6 +116,8 @@ export interface FactoryDeps {
   readonly requireRedFirst?: boolean
   /** Config research.depth, shown in the summary during RESEARCH (advisory). */
   readonly researchDepth?: number
+  /** Config domainPack: the constitution RESEARCH must satisfy (unset keeps the legacy behaviour). */
+  readonly domainPack?: string
 }
 
 export interface CompleteResult {
@@ -305,6 +314,7 @@ export class Factory {
     return factorySummary(current, {
       ...(frontier ? { frontier } : {}),
       ...(this.deps.researchDepth !== undefined ? { researchDepth: this.deps.researchDepth } : {}),
+      ...(this.deps.domainPack !== undefined ? { domainPack: this.deps.domainPack } : {}),
     })
   }
 
@@ -356,13 +366,42 @@ export class Factory {
               "; ",
             )}. Answer each on a tagged claim line in REPORT.md marked (fact:<id>), e.g. "- Postgres 16 is supported (fact:db) [VERIFIED: …]".`,
         )
-      // The report's claims become the research dossier (witnessed again on write).
+      // The report's claims become the research dossier (witnessed again on
+      // write). With a domain pack active, its constitution vets every claim
+      // and gates the report by the pack's accept threshold; no pack leaves
+      // the 1.0 behaviour unchanged.
+      const claims = await claimsFromAudit(audit, cache)
+      let packAudit: { readonly packId: string; readonly score: number } | undefined
+      if (this.deps.domainPack !== undefined) {
+        const pack = await loadDomainPack(this.deps.domainPack).catch((error: Error) => {
+          throw new FactoryError(`The configured domain pack cannot be loaded: ${error.message}`)
+        })
+        const constitution = constitutionFromPack(pack)
+        const retracted = new Set((await readRetractions(this.root)).map((entry) => entry.source))
+        const knownIds = new Set(claims.map((claim) => claim.id))
+        const rejected = claims
+          .map((claim) => claimVerdict(claim, { constitution, knownIds, retractedHashes: retracted }))
+          .filter((verdict) => verdict.verdict === "REJECTED")
+        if (rejected.length)
+          throw new FactoryError(
+            `The ${pack.packId} domain pack rejects ${rejected.length} claim(s):\n${rejected
+              .map((verdict) => `- ${verdict.claimId}: ${verdict.reasons.join("; ")}`)
+              .join("\n")}`,
+          )
+        const scored = computeEpistemicScoreFromClaims(claims, constitution)
+        if (scored.score < constitution.acceptThreshold)
+          throw new FactoryError(
+            `The ${pack.packId} domain pack scores this report ${scored.score.toFixed(3)}, below its threshold ${constitution.acceptThreshold}. ` +
+              `Verified ${scored.breakdown.verifiedPassed}, rejected ${scored.breakdown.unverifiedRejected}, negative knowledge ${scored.breakdown.negativeKnowledgeCount}, inferred ${scored.breakdown.inferredCount}, hypotheses ${scored.breakdown.hypothesisCount}.`,
+          )
+        packAudit = { packId: pack.packId, score: scored.score }
+      }
       const dossier = await writeDossier(
         this.layout.researchDossier,
         buildDossier({
           mode: "research",
           subject: frontier?.idea ?? "research",
-          claims: await claimsFromAudit(audit, cache),
+          claims,
           now: this.now(),
         }),
         { cache, now: () => this.now() },
@@ -384,6 +423,7 @@ export class Factory {
         prunedSources: removed.length,
         claims: dossier.claims.length,
         evidenceHash: dossier.evidenceHash,
+        ...(packAudit ? { domainPack: packAudit.packId, epistemicScore: packAudit.score } : {}),
       })
       return state
     })

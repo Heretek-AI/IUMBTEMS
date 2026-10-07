@@ -7,6 +7,8 @@ export interface SummaryExtras {
   readonly frontier?: Frontier
   /** Config research.depth, shown during RESEARCH. */
   readonly researchDepth?: number
+  /** Config domainPack: the active constitution, shown during RESEARCH. */
+  readonly domainPack?: string
 }
 
 /** `open r2 t:pass a:- x:-` — status, round, thesis/antithesis/tiebreak verdicts. */
@@ -22,6 +24,7 @@ export function factorySummary(state: FactoryState | undefined, extras: SummaryE
   if (extras.frontier) lines.push(treeLine(extras.frontier))
   if (state.stage === "RESEARCH" && extras.researchDepth !== undefined)
     lines.push(`research depth ${extras.researchDepth}: ${DEPTH[extras.researchDepth] ?? "custom"}`)
+  if (state.stage === "RESEARCH" && extras.domainPack !== undefined) lines.push(`domain pack: ${extras.domainPack}`)
   if (state.spendCeilingUSD !== undefined)
     lines.push(
       `spend $${state.spend.usd.toFixed(2)}${state.spend.estimated ? " (est.)" : ""} / ceiling $${state.spendCeilingUSD}`,

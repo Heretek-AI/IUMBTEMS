@@ -1,0 +1,237 @@
+// Domain packs (full port of 0.7.25 runner/refinement.py + tests): the
+// constitution's per-claim verdicts and tier-aware score, the three shipped
+// packs, and the machine wiring that gates completeResearch. The fixture is
+// the ported borderline_claims.json.
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
+import { writeFile } from "node:fs/promises"
+import path from "node:path"
+import {
+  type Constitution,
+  type ConstitutionClaim,
+  claimVerdict,
+  computeEpistemicScoreFromClaims,
+  constitutionFromPack,
+  Factory,
+  factoryLayout,
+  gateRunner,
+  LEGACY_CONSTITUTION,
+  loadDomainPack,
+  recordApproval,
+  researchSourcesDir,
+  SourceCache,
+  weightFor,
+} from "../src/index.ts"
+import { type Fixture, frontier, gitRepo } from "./helpers.ts"
+
+interface FixtureClaim {
+  readonly id: string
+  readonly tag: string
+  readonly statement: string
+  readonly sourceHash: string
+  readonly sourceUrl: string
+  readonly verbatimQuote: string
+  readonly tier: string
+}
+
+const fixture = JSON.parse(readFileSync(path.join(import.meta.dir, "fixtures/borderline-claims.json"), "utf8")) as {
+  readonly retractedHashes: string[]
+  readonly claims: FixtureClaim[]
+}
+
+const toClaim = (row: FixtureClaim): ConstitutionClaim => ({
+  id: row.id,
+  tag: row.tag,
+  tier: row.tier,
+  source: { sha256: row.sourceHash, url: row.sourceUrl },
+})
+const claims = () => fixture.claims.map(toClaim)
+const retracted = () => new Set(fixture.retractedHashes)
+
+const biopharma = async (): Promise<Constitution> => constitutionFromPack(await loadDomainPack("biopharma"))
+
+describe("the domain-pack constitution (d66328c:runner/refinement.py)", () => {
+  test("the fixture has the legacy shape: 20 claims, 2 retracted sources", () => {
+    expect(fixture.claims.length).toBe(20)
+    expect(fixture.retractedHashes.length).toBe(2)
+  })
+
+  test("all three packs load; an unknown pack is refused (no silent fallback)", async () => {
+    for (const id of ["biopharma", "quant", "legal"]) {
+      const pack = await loadDomainPack(id)
+      expect(Object.keys(pack.tierWeights)).toContain("PREPRINT")
+    }
+    // Whitespace is stripped first, as legacy did; blank or unknown ids raise.
+    expect((await loadDomainPack(" biopharma ")).packId).toBe("biopharma")
+    await expect(loadDomainPack("no-such-pack")).rejects.toThrow("domain pack not found")
+    await expect(loadDomainPack("")).rejects.toThrow("domain pack not found")
+  })
+
+  test("the probe: default accepts all 20, biopharma flips at least a quarter (ACCEPTED -> REJECTED)", async () => {
+    const pack = await biopharma()
+    const before = claims().map((claim) => claimVerdict(claim, { retractedHashes: retracted() }))
+    const after = claims().map((claim) => claimVerdict(claim, { constitution: pack, retractedHashes: retracted() }))
+    expect(before.every((verdict) => verdict.verdict === "ACCEPTED")).toBe(true)
+    const flips = fixture.claims
+      .map((_, index) => [before[index]!.verdict, after[index]!.verdict] as const)
+      .filter(([was, now]) => was !== now)
+    expect(flips.length / fixture.claims.length).toBeGreaterThanOrEqual(0.25)
+    expect(flips.every(([was, now]) => was === "ACCEPTED" && now === "REJECTED")).toBe(true)
+  })
+
+  test("banned-domain mechanism: the six planted domains are rejected", async () => {
+    const pack = await biopharma()
+    const banned = fixture.claims.filter(
+      (row) => row.sourceUrl.includes("mirror.example") || row.sourceUrl.includes("predatory-journal"),
+    )
+    expect(banned.length).toBe(6)
+    for (const row of banned) {
+      const verdict = claimVerdict(toClaim(row), { constitution: pack })
+      expect([row.id, verdict.verdict]).toEqual([row.id, "REJECTED"])
+      expect(verdict.reasons.some((reason) => reason.startsWith("BANNED_DOMAIN"))).toBe(true)
+    }
+  })
+
+  test("missing-tag mechanism: untagged claims are rejected", async () => {
+    const pack = await biopharma()
+    const untagged = fixture.claims.filter((row) => !row.tag)
+    expect(untagged.length).toBe(2)
+    for (const row of untagged) {
+      const verdict = claimVerdict(toClaim(row), { constitution: pack })
+      expect([row.id, verdict.verdict]).toEqual([row.id, "REJECTED"])
+      expect(verdict.reasons.some((reason) => reason.startsWith("MISSING_TAG"))).toBe(true)
+    }
+  })
+
+  test("zero-tolerance retraction: a retracted or STALE source is rejected regardless of score", async () => {
+    const pack = await biopharma()
+    const rows = fixture.claims.filter((row) => fixture.retractedHashes.includes(row.sourceHash))
+    expect(rows.length).toBe(2)
+    for (const row of rows) {
+      // Without the ledger: the status-based downgrade still fires.
+      const stale = { ...toClaim(row), status: "STALE" as const }
+      const verdict = claimVerdict(stale, { constitution: pack })
+      expect([row.id, verdict.verdict]).toEqual([row.id, "REJECTED"])
+      expect(verdict.reasons.some((reason) => reason.startsWith("ZERO_TOLERANCE_RETRACTION"))).toBe(true)
+      // Standard policy does not apply the rule.
+      expect(claimVerdict(stale, { constitution: LEGACY_CONSTITUTION }).verdict).toBe("ACCEPTED")
+      // With the ledger: the source-hash downgrade fires too.
+      // (ConstitutionClaim has no status, so only the hash rule can fire.)
+      const { status: _status, ...live } = stale
+      expect(
+        claimVerdict(live, { constitution: pack, retractedHashes: retracted() }).reasons.some((reason) =>
+          reason.startsWith("ZERO_TOLERANCE_RETRACTION"),
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test("tier weights move the score: 18 verified preprints weigh 18 x 0.3 under biopharma", async () => {
+    const pack = await biopharma()
+    const flat = computeEpistemicScoreFromClaims(claims(), LEGACY_CONSTITUTION)
+    const weighted = computeEpistemicScoreFromClaims(claims(), pack)
+    expect(flat.breakdown.verifiedPassed).toBe(18)
+    expect(weighted.score).toBeLessThan(flat.score)
+    expect(weighted.breakdown.verifiedWeight).toBeCloseTo(18 * 0.3, 3)
+  })
+
+  test("the legacy defaults are preserved exactly", () => {
+    expect(weightFor(LEGACY_CONSTITUTION, "PREPRINT")).toBe(1)
+    expect(LEGACY_CONSTITUTION.bannedDomains).toEqual([])
+    expect(LEGACY_CONSTITUTION.mandatoryTags).toEqual([])
+    expect(LEGACY_CONSTITUTION.retractionPolicy).toBe("standard")
+    expect(LEGACY_CONSTITUTION.acceptThreshold).toBe(0.65)
+    expect(LEGACY_CONSTITUTION.negBonus).toBe(0.5)
+    expect(LEGACY_CONSTITUTION.rejectPenalty).toBe(2.5)
+  })
+})
+
+describe("the pack gates completeResearch", () => {
+  let fx: Fixture
+  beforeEach(async () => {
+    fx = await gitRepo()
+  })
+  afterEach(() => fx.cleanup())
+
+  const factoryWith = (packId?: string) =>
+    new Factory(fx.root, {
+      gates: gateRunner({ stateDir: fx.state }),
+      stateDir: fx.state,
+      ...(packId ? { domainPack: packId } : {}),
+    })
+
+  const toResearch = async (packId?: string) => {
+    const factory = factoryWith(packId)
+    await factory.begin("human:tester")
+    await factory.writeFrontier("grill", frontier())
+    await recordApproval(fx.root, { stage: "frontier", channel: "cli", approvedBy: "tester", stateDir: fx.state })
+    await factory.beginResearch("human:tester")
+    return factory
+  }
+
+  const report = async (url: string, text: string, quote: string) => {
+    const cache = new SourceCache(researchSourcesDir(fx.root))
+    const source = await cache.put({ url, text, provider: "fetch" })
+    await writeFile(
+      factoryLayout(fx.root).researchReport,
+      `- A researched claim [VERIFIED: sha256:${source.meta.sha256} "${quote}"]\n`,
+    )
+  }
+
+  test("a clean report passes under biopharma and records the pack and score", async () => {
+    const factory = await toResearch("biopharma")
+    await report(
+      "https://journal.example/clean",
+      "The cohort met the primary efficacy bar in the per-protocol analysis.",
+      "primary efficacy bar",
+    )
+    const state = await factory.completeResearch("factory")
+    expect(state.stage).toBe("SPEC")
+    const events = await readAuditEntries(fx.root, "stage.spec")
+    const spec = events.at(-1)?.payload as { domainPack?: string; epistemicScore?: number }
+    expect(spec.domainPack).toBe("biopharma")
+    expect(spec.epistemicScore).toBe(1)
+  })
+
+  test("a banned-domain source is rejected under biopharma, and accepted without a pack", async () => {
+    const packed = await toResearch("biopharma")
+    await report(
+      "https://predatory-journal.example/x",
+      "Weak preprint finding about surrogate endpoints.",
+      "surrogate endpoints",
+    )
+    await expect(packed.completeResearch("factory")).rejects.toThrow("BANNED_DOMAIN")
+
+    // A fresh project without a pack: the same source passes (legacy unchanged).
+    await fx.cleanup()
+    fx = await gitRepo()
+    const unpacked = await toResearch()
+    await report(
+      "https://predatory-journal.example/x",
+      "Weak preprint finding about surrogate endpoints.",
+      "surrogate endpoints",
+    )
+    await expect(unpacked.completeResearch("factory")).resolves.toBeDefined()
+  })
+
+  test("an unknown configured pack fails closed at completion time", async () => {
+    const factory = await toResearch("no-such-pack")
+    await report("https://journal.example/clean", "A finding rests on a cached source.", "cached source")
+    await expect(factory.completeResearch("factory")).rejects.toThrow("domain pack not found")
+  })
+
+  test("the summary shows the active pack during RESEARCH", async () => {
+    const factory = await toResearch("biopharma")
+    expect(await factory.summary()).toContain("domain pack: biopharma")
+  })
+})
+
+// The stage.spec audit entries, read straight from the hash chain (no store helper needed).
+async function readAuditEntries(root: string, action: string) {
+  const text = await Bun.file(factoryLayout(root).audit).text()
+  return text
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { action: string; payload: Record<string, unknown> })
+    .filter((entry) => entry.action === action)
+}

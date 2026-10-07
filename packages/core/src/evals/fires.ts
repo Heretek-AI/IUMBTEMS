@@ -4,7 +4,9 @@
 // lines, and license fixtures whose scout verdicts core must get right. The
 // same graders run on scripted transcripts in CI and on real-model runs nightly.
 import { readAuditRecords } from "../codeaudit/store.ts"
+import { readHarvestResult } from "../harvest/store.ts"
 import type { AuditRecord } from "../schema/codeaudit.ts"
+import type { HarvestMatrix } from "../schema/harvest.ts"
 import type { ScoutResult } from "../schema/scout.ts"
 import { readScoutResult } from "../scout/store.ts"
 
@@ -64,14 +66,41 @@ export function gradeScoutFire(
   return { pass: failures.length === 0, caught, failures }
 }
 
+/** Every expected candidate's cells must carry the expected verdict (a harvest fire is one feature row). */
+export function gradeHarvestFire(
+  matrix: HarvestMatrix,
+  expected: ReadonlyArray<{ candidate: string; verdict: string }>,
+): FireGrade {
+  const caught: string[] = []
+  const failures: string[] = []
+  for (const want of expected) {
+    const cells = matrix.rows.flatMap((row) => row.cells).filter((cell) => cell.candidate === want.candidate)
+    if (!cells.length) failures.push(`no matrix cell for ${want.candidate}`)
+    else {
+      const wrong = cells.filter((cell) => cell.verdict !== want.verdict)
+      if (wrong.length)
+        failures.push(`${want.candidate}: ${wrong.map((cell) => cell.verdict).join(", ")}, expected ${want.verdict}`)
+      else caught.push(want.candidate)
+    }
+  }
+  return { pass: failures.length === 0, caught, failures }
+}
+
 /** How an eval case is graded from the workspace after its turn. */
 export type FireSpec =
   | { readonly kind: "audit"; readonly audit: string; readonly plants: readonly PlantedDefect[] }
   | { readonly kind: "scout"; readonly expected: ReadonlyArray<{ name: string; verdict: string }> }
+  | { readonly kind: "harvest"; readonly expected: ReadonlyArray<{ candidate: string; verdict: string }> }
 
-/** Grade a fire from what the seats left in the workspace (records, scout result). */
+/** Grade a fire from what the seats left in the workspace (records, scout result, harvest result). */
 export async function gradeFireCase(spec: FireSpec, root: string): Promise<FireGrade> {
   if (spec.kind === "audit") return gradeAuditFire(await readAuditRecords(root, spec.audit), spec.plants)
+  if (spec.kind === "harvest") {
+    const result = await readHarvestResult(root).catch(() => undefined)
+    if (!result)
+      return { pass: false, caught: [], failures: ["the harvest never completed (no .factory/harvest/harvest.json)"] }
+    return gradeHarvestFire(result.matrix, spec.expected)
+  }
   const result = await readScoutResult(root).catch(() => undefined)
   if (!result)
     return { pass: false, caught: [], failures: ["the scout never completed (no .factory/scout/scout.json)"] }

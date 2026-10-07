@@ -74,6 +74,7 @@ export async function createRuntime(root: string, raw: RawPluginOptions): Promis
     ...(options.pr === "off" ? {} : { pr: ghPrOpener }),
     stateDir,
     researchDepth: config.research.depth,
+    ...(config.domainPack ? { domainPack: config.domainPack } : {}),
   })
   return {
     root,

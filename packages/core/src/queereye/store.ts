@@ -26,6 +26,11 @@ export function designPaths(root: string) {
     css: layout.designCss,
     probes: layout.designProbes,
     guide: layout.designGuide,
+    components: layout.designComponents,
+    webref: layout.designWebref,
+    csf: layout.designCsf,
+    harvest: layout.designHarvest,
+    tuiNotes: layout.designTuiNotes,
   }
 }
 

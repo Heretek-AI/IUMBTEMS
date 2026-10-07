@@ -39,7 +39,14 @@ export const ClaimSchema = z.object({
   statement: z.string().min(1),
   status: ClaimStatusSchema.default("LIVE"),
   /** VERIFIED evidence from the source cache. */
-  source: z.object({ sha256: Sha256, quote: z.string().min(1) }).optional(),
+  source: z
+    .object({
+      sha256: Sha256,
+      quote: z.string().min(1),
+      /** The snapshot's URL, for domain packs (banned-domain checks). */
+      url: z.string().optional(),
+    })
+    .optional(),
   /** VERIFIED evidence from the code itself (code-audit findings). */
   location: ClaimLocationSchema.optional(),
   /** Claim ids an INFERRED claim reasons from. */

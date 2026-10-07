@@ -102,6 +102,47 @@ the fresh-run instruction, so 1.1 needs fresh runs.
 - When research completes, pruning the cache keeps every source that any
   dossier cites.
 
+### M3: rigor (#23)
+- **Domain packs, the full legacy port.** `quant`, `biopharma` and `legal`
+  constitutions (tier weights incl. `__default__`, negative-knowledge bonus,
+  reject penalty, accept threshold, banned domains, mandatory tags, standard
+  or zero-tolerance retraction), selected with `config.domainPack` (for
+  example `es config set domainPack biopharma`). With a pack active,
+  `es_research_complete` rejects claims that break the constitution — a
+  banned source domain, a missing tag, a retracted source — and refuses a
+  score below the pack's accept threshold; unknown packs fail closed. Without
+  a pack nothing changes. Claims now carry their source URL, and the summary
+  shows the active pack during RESEARCH.
+- **All five fire suites are merge-blocking.** `grill-fires` (no deleted
+  nodes, no silent settled edits, no round regress; deferred facts gate
+  research), `factory-gate` (the build starts only through the approvals;
+  STOP and the spend ceiling halt, `es_status` stays reportable when halted)
+  and `darkharvest-fires` (core keeps `depend` only for verified permissive
+  licences, whatever the harvester proposes) join `audit-fires` and
+  `scout-fires` on the real host. The same graders score the nightly
+  model-backed runs.
+- **Drift CI with a canary.** `docs:check` also fails on prompt, skill and
+  registry drift: a prompt whose frontmatter id or seat disagrees with the
+  registry, an orphaned prompt file or skill directory, a skill without its
+  `SKILL.md`, a spawn naming no agent, an unknown `es_*` tool, or a duplicate
+  agent id. The canary proves every class is caught.
+- **Queereye phases 02 and 03.** The designer seat now renders the full
+  design surface under `.factory/design/` (paths adapted from the legacy
+  `.queereye/`):
+  - `es_design_specs` (phase 02): behaviour-first component specs for
+    `button`, `dialog`, `form-input`, `table`, `nav` and `toast`, the pinned
+    MIT `webref.json` snapshot, the headless `csf.json` play harness and
+    deterministic `tui-notes.md`, with drift, coverage, freshness and
+    play-suite gates (`check:true` re-checks only).
+  - `es_design_harvest` (phase 03): the full skill-harvest ledger
+    (`harvest.json`: rows, SPDX blocks, transitive closure, negative
+    knowledge) with the fail-closed MIT/Apache-2.0/BSD-3-Clause/ISC
+    whitelist, the skill bundle and the factory cite-gate receipt, which is
+    verified against the live tokens and ledger. The bundle check script is
+    TypeScript against `es-core`; no Python is vendored.
+- **System architecture doc.** `SYSTEM_ARCHITECTURE.md` now describes the
+  pipeline, the seats, the claim flow and the trust invariants in one place.
+
 ## 1.0.5 — 2026-10-07
 
 Run-lifecycle gaps from dogfooding 1.0.4 (#19):

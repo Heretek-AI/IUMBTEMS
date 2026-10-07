@@ -1,5 +1,6 @@
 export * from "./brief.ts"
 export * from "./claim.ts"
+export * from "./constitution.ts"
 export * from "./degrade.ts"
 export * from "./dossier.ts"
 export * from "./rank.ts"

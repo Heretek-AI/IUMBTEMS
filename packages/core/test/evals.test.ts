@@ -3,7 +3,14 @@
 import { describe, expect, test } from "bun:test"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import path from "node:path"
-import { gradeAuditFire, gradeOutput, gradeScoutFire, gradeTranscript, readTranscript } from "../src/index.ts"
+import {
+  gradeAuditFire,
+  gradeHarvestFire,
+  gradeOutput,
+  gradeScoutFire,
+  gradeTranscript,
+  readTranscript,
+} from "../src/index.ts"
 
 describe("the eval grader", () => {
   test("empty checks always pass", () => {
@@ -122,6 +129,31 @@ describe("fire graders", () => {
     ).toEqual(["gpl: downgraded without a reason"])
     expect(gradeScoutFire(result([verdict("mit", "adopt", "adopt")]), want).failures).toEqual(["no verdict for gpl"])
   })
+
+  test("a harvest fire wants the licence line kept: permissive depend, copyleft clean-room", () => {
+    const cell = (candidate: string, verdict: "depend" | "clean-room") => ({ candidate, verdict })
+    const matrix = (cells: ReturnType<typeof cell>[]) =>
+      ({
+        version: 1,
+        candidates: cells.map((item) => item.candidate),
+        rows: [{ feature: "f", cells }],
+        licensePolicy: { whitelist: ["MIT"], failClosed: true },
+        builtAt: "t",
+      }) as any
+    const want = [
+      { candidate: "mit", verdict: "depend" },
+      { candidate: "gpl", verdict: "clean-room" },
+    ]
+    expect(gradeHarvestFire(matrix([cell("mit", "depend"), cell("gpl", "clean-room")]), want)).toEqual({
+      pass: true,
+      caught: ["mit", "gpl"],
+      failures: [],
+    })
+    expect(gradeHarvestFire(matrix([cell("mit", "depend"), cell("gpl", "depend")]), want).failures).toEqual([
+      "gpl: depend, expected clean-room",
+    ])
+    expect(gradeHarvestFire(matrix([cell("mit", "depend")]), want).failures).toEqual(["no matrix cell for gpl"])
+  })
 })
 
 describe("eval cases (evals/cases)", () => {
@@ -132,7 +164,7 @@ describe("eval cases (evals/cases)", () => {
 
   test("every case names an agent, a prompt and checks; seed fixtures exist; fires are well formed", () => {
     expect(cases.map((item) => item.file)).toEqual(
-      expect.arrayContaining(["audit-fires.json", "scout-fires.json", "grill.json"]),
+      expect.arrayContaining(["audit-fires.json", "darkharvest-fires.json", "scout-fires.json", "grill.json"]),
     )
     for (const { file, body } of cases) {
       expect([file, typeof body.id, typeof body.agent, typeof body.prompt]).toEqual([
@@ -148,7 +180,7 @@ describe("eval cases (evals/cases)", () => {
             value,
             true,
           ])
-      if (body.fire) expect([file, ["audit", "scout"].includes(body.fire.kind)]).toEqual([file, true])
+      if (body.fire) expect([file, ["audit", "scout", "harvest"].includes(body.fire.kind)]).toEqual([file, true])
     }
   })
 
