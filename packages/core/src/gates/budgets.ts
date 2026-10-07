@@ -199,11 +199,11 @@ function braceComplexity(text: string): FunctionComplexity[] {
   const stack: Array<{ name: string; line: number; depth: number; score: number; opened: boolean }> = []
   let depth = 0
   const headers: readonly RegExp[] = [
-    /\bfunction ?\*? ?([\w$]*) ?\(/,
-    /([\w$]+) ?[:=] ?(?:async )?(?:function\b|\([\w$ ,:?=]*\) ?=>|[\w$]+ ?=>)/,
-    /^ ?(?:(?:public|private|protected|static|async|override|readonly) )*([\w$]+) ?\([\w$ ,:?=*[\]<>|&.]*\) ?(?:: ?[\w$ <>,.[\]|&]*)?\{/,
-    /\bfn ([\w$]+)/,
-    /\bfunc (?:\([^)]*\) )?([\w$]+)/,
+    /\bfunction ?\*? ?(\w*) ?\(/,
+    /(\w+) ?[:=] ?(?:async )?(?:function\b|\([\w ,:?=]*\) ?=>|\w+ ?=>)/,
+    /^ ?(?:(?:public|private|protected|static|async|override|readonly) )*(\w+) ?\([\w ,:?=*[\]<>|&.]*\) ?(?:: ?[\w <>,.[\]|&]*)?\{/,
+    /\bfn (\w+)/,
+    /\bfunc (?:\([^)]*\) )?(\w+)/,
   ]
   const close = (done: { name: string; line: number; score: number }) =>
     results.push({ name: done.name, line: done.line, score: done.score })
