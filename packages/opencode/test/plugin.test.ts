@@ -81,6 +81,16 @@ describe("integrity on the real host", () => {
     }
     expect(await exists(path.join(h.directory, file))).toBe(false)
     expect(await exists(path.join(h.directory, ".factory/research/dossier.json"))).toBe(false)
+
+    // The adversarial audit (A3): the interpreter shell must not write
+    // control files either — the old rule only matched metacharacters.
+    const shellForgery = `.factory/research/sources/forged-shell.md`
+    const forged = await h.run(
+      `forge ${call("shell", { command: `python3 -c 'open("${shellForgery}","w").write("forged")'` })}`,
+      { agent: "build" },
+    )
+    expect(forged.tools[0]?.status).toBe("error")
+    expect(await exists(path.join(h.directory, shellForgery))).toBe(false)
   })
 
   test("search as policy: research seats are offered no host web tools, and a direct call is denied", async () => {

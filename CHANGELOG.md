@@ -140,6 +140,13 @@ the fresh-run instruction, so 1.1 needs fresh runs.
     whitelist, the skill bundle and the factory cite-gate receipt, which is
     verified against the live tokens and ledger. The bundle check script is
     TypeScript against `es-core`; no Python is vendored.
+- **Post-audit hardening (shell control files).** An adversarial audit found
+  that a non-seat agent could still write control files through interpreter
+  one-liners (`python3 -c`, `node -e`, …), which the shell rule never
+  matched. A control-file mention is now allowed in an agent's shell command
+  only when the command is provably read-only (allowlisted segments; no
+  redirection, here-doc or substitution); seats keep the stricter
+  no-mention rule, and the forge test now covers the shell path.
 - **System architecture doc.** `SYSTEM_ARCHITECTURE.md` now describes the
   pipeline, the seats, the claim flow and the trust invariants in one place.
 
