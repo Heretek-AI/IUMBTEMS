@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "file": {
+      "type": "string"
+    },
+    "line": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "column": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "rule": {
+      "type": "string"
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "error",
+        "warning"
+      ]
+    },
+    "message": {
+      "type": "string"
+    },
+    "fixHint": {
+      "type": "string"
+    },
+    "check": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "file",
+    "rule",
+    "severity",
+    "message"
+  ],
+  "additionalProperties": false
+}

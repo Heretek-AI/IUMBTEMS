@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "currency": {
+      "type": "string",
+      "const": "USD"
+    },
+    "maxAmount": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "currency",
+    "maxAmount"
+  ],
+  "additionalProperties": false
+}

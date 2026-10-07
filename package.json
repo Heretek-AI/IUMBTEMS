@@ -11,13 +11,16 @@
     "typecheck": "for p in core testkit opencode cli; do tsc -p packages/$p/tsconfig.json --noEmit --composite false || exit 1; done",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "check": "bun run lint && bun run typecheck && bun run test"
+    "check": "bun run lint && bun run typecheck && bun run test",
+    "docs:gen": "bun scripts/docs.ts",
+    "docs:check": "bun scripts/docs.ts --check"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "@types/bun": "1.4.2",
     "@types/node": "26.6.4",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "zod": "4.6.5"
   },
   "engines": {
     "node": ">=22",

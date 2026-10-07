@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "maxDiffLines": {
+      "default": 800,
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "maxFileLines": {
+      "default": 800,
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "maxComplexity": {
+      "default": 15,
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "requireDepJustification": {
+      "default": true,
+      "type": "boolean"
+    },
+    "requireTestWithBehavior": {
+      "default": true,
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "maxDiffLines",
+    "maxFileLines",
+    "maxComplexity",
+    "requireDepJustification",
+    "requireTestWithBehavior"
+  ],
+  "additionalProperties": false
+}

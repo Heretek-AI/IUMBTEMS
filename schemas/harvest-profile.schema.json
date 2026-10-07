@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "origin": {
+      "type": "string"
+    },
+    "commit": {
+      "type": "string"
+    },
+    "release": {
+      "type": "string"
+    },
+    "license": {
+      "type": "object",
+      "properties": {
+        "spdx": {
+          "type": "string"
+        },
+        "family": {
+          "type": "string",
+          "enum": [
+            "permissive",
+            "public-domain",
+            "weak-copyleft",
+            "copyleft",
+            "unknown"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "license-file",
+            "spdx-header",
+            "manifest",
+            "registry",
+            "api"
+          ]
+        },
+        "file": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "spdx",
+        "family",
+        "source",
+        "confidence",
+        "verified"
+      ],
+      "additionalProperties": false
+    },
+    "languages": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "properties": {
+        "runtime": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dev": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "runtime",
+        "dev"
+      ],
+      "additionalProperties": false
+    },
+    "size": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "tokens": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "files",
+        "bytes",
+        "tokens"
+      ],
+      "additionalProperties": false
+    },
+    "graph": {
+      "type": "object",
+      "properties": {
+        "internalEdges": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "external": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "parsers": {
+          "type": "object",
+          "properties": {
+            "treeSitter": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "regex": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "treeSitter",
+            "regex"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "internalEdges",
+        "external",
+        "parsers"
+      ],
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "local",
+              "clone",
+              "api",
+              "registry",
+              "inferred"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "verified"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "scannedAt": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "id",
+    "name",
+    "license",
+    "languages",
+    "dependencies",
+    "size",
+    "graph",
+    "provenance",
+    "warnings",
+    "scannedAt"
+  ],
+  "additionalProperties": false
+}

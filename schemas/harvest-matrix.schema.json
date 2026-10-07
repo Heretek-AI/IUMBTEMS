@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "feature": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cells": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "candidate": {
+                  "type": "string"
+                },
+                "verdict": {
+                  "type": "string",
+                  "enum": [
+                    "depend",
+                    "vendor",
+                    "clean-room",
+                    "skip"
+                  ]
+                },
+                "evidence": {
+                  "type": "string"
+                },
+                "attribution": {
+                  "type": "string"
+                },
+                "downgraded": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "candidate",
+                "verdict"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "feature",
+          "cells"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "licensePolicy": {
+      "type": "object",
+      "properties": {
+        "whitelist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "failClosed": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "whitelist",
+        "failClosed"
+      ],
+      "additionalProperties": false
+    },
+    "builtAt": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "candidates",
+    "rows",
+    "licensePolicy",
+    "builtAt"
+  ],
+  "additionalProperties": false
+}

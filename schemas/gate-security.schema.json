@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "secrets": {
+      "default": true,
+      "type": "boolean"
+    },
+    "gitleaks": {
+      "default": "auto",
+      "type": "string",
+      "enum": [
+        "auto",
+        "off"
+      ]
+    },
+    "osv": {
+      "default": "auto",
+      "type": "string",
+      "enum": [
+        "auto",
+        "api",
+        "off"
+      ]
+    }
+  },
+  "required": [
+    "secrets",
+    "gitleaks",
+    "osv"
+  ],
+  "additionalProperties": false
+}

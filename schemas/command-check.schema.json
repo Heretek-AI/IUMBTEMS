@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "format",
+        "lint",
+        "typecheck",
+        "test"
+      ]
+    },
+    "command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parser": {
+      "default": "generic",
+      "type": "string",
+      "enum": [
+        "tsc",
+        "biome",
+        "eslint",
+        "prettier",
+        "ruff",
+        "ruff-format",
+        "mypy",
+        "cargo",
+        "gofmt",
+        "go-vet",
+        "bun-test",
+        "vitest",
+        "jest",
+        "pytest",
+        "go-test",
+        "cargo-test",
+        "generic"
+      ]
+    },
+    "touchedArgs": {
+      "default": false,
+      "type": "boolean"
+    },
+    "extensions": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "related": {
+      "default": "none",
+      "type": "string",
+      "enum": [
+        "bun",
+        "vitest",
+        "jest",
+        "pytest",
+        "go",
+        "none"
+      ]
+    },
+    "timeoutMs": {
+      "default": 300000,
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "command",
+    "parser",
+    "touchedArgs",
+    "extensions",
+    "related",
+    "timeoutMs"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,21 @@
+name: Nightly (OpenCode v2 HEAD)
+
+# The plan deliberately pins no OpenCode version: v2 moves fast, so this job
+# runs the real-host suite against the `v2` branch HEAD every night and turns
+# red when the host drifts. It is the mitigation, not a pin.
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  v2-head:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      - run: scripts/v2-head.sh packages/opencode

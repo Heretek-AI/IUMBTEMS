@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent": {
+      "type": "string"
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1
+    },
+    "answer": {
+      "type": "string"
+    },
+    "justification": {
+      "type": "string"
+    },
+    "status": {
+      "default": "open",
+      "type": "string",
+      "enum": [
+        "open",
+        "settled",
+        "deferred"
+      ]
+    },
+    "choices": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "id",
+    "question",
+    "status"
+  ],
+  "additionalProperties": false
+}

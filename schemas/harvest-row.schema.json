@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "feature": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cells": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "candidate": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "depend",
+              "vendor",
+              "clean-room",
+              "skip"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "attribution": {
+            "type": "string"
+          },
+          "downgraded": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "candidate",
+          "verdict"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "feature",
+    "cells"
+  ],
+  "additionalProperties": false
+}

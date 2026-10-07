@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "spdx": {
+      "type": "string"
+    },
+    "family": {
+      "type": "string",
+      "enum": [
+        "permissive",
+        "public-domain",
+        "weak-copyleft",
+        "copyleft",
+        "unknown"
+      ]
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "license-file",
+        "spdx-header",
+        "manifest",
+        "registry",
+        "api"
+      ]
+    },
+    "file": {
+      "type": "string"
+    },
+    "sha256": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": "string",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "verified": {
+      "type": "boolean"
+    },
+    "note": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "spdx",
+    "family",
+    "source",
+    "confidence",
+    "verified"
+  ],
+  "additionalProperties": false
+}
