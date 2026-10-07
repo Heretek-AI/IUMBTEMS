@@ -28,7 +28,7 @@ spike as proof).
 - GENERATED — never hand-edit: `schemas/*.schema.json`, `docs/SCHEMAS.md`,
   `docs/CAPABILITIES.md`, `docs/CONFIG.md`. Edit the Zod schema / capability
   table, then run `bun run docs:gen`.
-- Hand-maintained: `README.md`, `AGENTS.md`, `spikes/*/RESULTS.md`, `.github/**`.
+- Hand-maintained: `README.md`, `AGENTS.md`, `docs/DOGFOOD.md`, `spikes/*/RESULTS.md`, `.github/**`.
 
 ## Commands
 - `bun install` · `bun run check` (biome + tsc + all tests) · `bun run test`
