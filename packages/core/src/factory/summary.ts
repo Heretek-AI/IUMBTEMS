@@ -9,6 +9,8 @@ export interface SummaryExtras {
   readonly researchDepth?: number
   /** Config domainPack: the active constitution, shown during RESEARCH. */
   readonly domainPack?: string
+  /** Config audit.phase: shown when required, so the factory opens phase audits. */
+  readonly auditPhase?: "required"
 }
 
 /** `open r2 t:pass a:- x:-` — status, round, thesis/antithesis/tiebreak verdicts. */
@@ -25,6 +27,10 @@ export function factorySummary(state: FactoryState | undefined, extras: SummaryE
   if (state.stage === "RESEARCH" && extras.researchDepth !== undefined)
     lines.push(`research depth ${extras.researchDepth}: ${DEPTH[extras.researchDepth] ?? "custom"}`)
   if (state.stage === "RESEARCH" && extras.domainPack !== undefined) lines.push(`domain pack: ${extras.domainPack}`)
+  if (extras.auditPhase === "required")
+    lines.push(
+      "audit phase: required (open the phase audit as the phase enters QA; QA-passed phases merge only with a passed or human-dismissed audit)",
+    )
   if (state.spendCeilingUSD !== undefined)
     lines.push(
       `spend $${state.spend.usd.toFixed(2)}${state.spend.estimated ? " (est.)" : ""} / ceiling $${state.spendCeilingUSD}`,

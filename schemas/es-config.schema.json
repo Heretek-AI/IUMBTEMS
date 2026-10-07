@@ -166,6 +166,28 @@
         "type": "string"
       },
       "description": "SPDX ids darkharvest may depend on or vendor (a harvest plan may only narrow it); everything else is clean-room only."
+    },
+    "audit": {
+      "default": {
+        "phase": "optional"
+      },
+      "type": "object",
+      "properties": {
+        "phase": {
+          "default": "optional",
+          "type": "string",
+          "enum": [
+            "optional",
+            "required"
+          ],
+          "description": "Phase audits: optional lets QA-passed phases merge without an audit; required refuses passPhase until the phase has a passed or human-dismissed audit."
+        }
+      },
+      "required": [
+        "phase"
+      ],
+      "additionalProperties": false,
+      "description": "Code-audit gating tunables (set with `es config set audit.phase required`)."
     }
   },
   "required": [
@@ -173,7 +195,8 @@
     "pr",
     "lspAfterEdit",
     "research",
-    "licenseWhitelist"
+    "licenseWhitelist",
+    "audit"
   ],
   "additionalProperties": false
 }

@@ -136,7 +136,7 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     audit: {
       support: "enforced",
       detail:
-        "Code-audit pair: only auditor seats record verdicts; every finding is witnessed on disk (a hallucinated line is refused); quote fragments carry >= 12 chars each and a thesis pass needs a witnessed invariant; verdicts block.",
+        "Code-audit pair: only auditor seats record verdicts; every finding is witnessed on disk (a hallucinated line is refused); quote fragments carry >= 12 chars each and a thesis pass needs a witnessed invariant; verdicts block (an opened phase audit holds the merge; audit.phase required also holds a missing one until it passes or a human dismisses it).",
       test: "packages/opencode/test/fires.test.ts",
     },
     scout: {

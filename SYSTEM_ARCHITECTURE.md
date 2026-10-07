@@ -15,7 +15,7 @@ This file is hand-maintained. `docs/SCHEMAS.md`, `docs/CAPABILITIES.md` and
 ```
 GRILL ──▶ RESEARCH ──▶ SPEC ──▶ BUILD ⇄ QA ──▶ RELEASE ──▶ DONE
    │           │           │        │  │          │
-   │           │           │        │  └─ phase audit pair (any stage, blocking)
+   │           │           │        │  └─ phase audit pair (any stage; an open one blocks, and a missing one blocks with audit.phase required)
    │           │           │        └─ dual QA verdicts (split → manager tiebreak)
    │           │           └─ spec approval (human, signed)
    │           └─ research audit (grounding + deferred facts + domain pack)

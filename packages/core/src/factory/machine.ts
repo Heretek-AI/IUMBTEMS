@@ -61,6 +61,9 @@ export class FactoryError extends Error {}
 /** The factory is halted; only a human can resume it. */
 export class FactoryHalted extends FactoryError {}
 
+/** A phase audit that lets the phase merge: passed, or dismissed by a human. */
+const auditClear = (audit: Audit | undefined): boolean => audit?.status === "passed" || audit?.status === "dismissed"
+
 export interface GateFindingLike {
   readonly file: string
   readonly line?: number
@@ -118,6 +121,13 @@ export interface FactoryDeps {
   readonly researchDepth?: number
   /** Config domainPack: the constitution RESEARCH must satisfy (unset keeps the legacy behaviour). */
   readonly domainPack?: string
+  /**
+   * Config audit.phase: "required" refuses passPhase until the phase has a
+   * passed or human-dismissed audit; unset (or "optional") keeps the legacy
+   * behaviour where only an opened audit blocks. Set with
+   * `es config set audit.phase required`.
+   */
+  readonly auditPhase?: "optional" | "required"
 }
 
 export interface CompleteResult {
@@ -326,6 +336,7 @@ export class Factory {
       ...(frontier ? { frontier } : {}),
       ...(this.deps.researchDepth !== undefined ? { researchDepth: this.deps.researchDepth } : {}),
       ...(this.deps.domainPack !== undefined ? { domainPack: this.deps.domainPack } : {}),
+      ...(this.deps.auditPhase === "required" ? { auditPhase: "required" as const } : {}),
     })
   }
 
@@ -717,12 +728,14 @@ export class Factory {
     const outcome = this.qaOutcome(phase)
     if (!outcome || !functional || !adversarial) return
     if (outcome === "pass") {
-      // An opened phase audit must pass (or be dismissed by a human) before the phase merges.
-      if (phase.audit && phase.audit.status !== "passed" && phase.audit.status !== "dismissed") {
+      // An opened phase audit must pass (or be dismissed by a human) before
+      // the phase merges; with audit.phase required, a missing audit blocks
+      // the same way (passPhase refuses without a passed/dismissed audit).
+      if (!auditClear(phase.audit) && (phase.audit || this.deps.auditPhase === "required")) {
         phase.history.push({
           at: this.now().toISOString(),
           event: "qa-passed",
-          notes: `awaiting audit ${phase.audit.id}`,
+          notes: phase.audit ? `awaiting audit ${phase.audit.id}` : "awaiting a phase audit (audit.phase is required)",
         })
         return
       }
@@ -739,6 +752,12 @@ export class Factory {
   }
 
   private async passPhase(state: FactoryState, phase: PhaseRuntime) {
+    // Backstop for audit.phase required: settleQa waits instead of calling,
+    // but no path may merge a phase without a passed or human-dismissed audit.
+    if (this.deps.auditPhase === "required" && !auditClear(phase.audit))
+      throw new FactoryError(
+        `Phase ${phase.id} needs a passed or human-dismissed audit first (audit.phase is required: open one with es_audit_open, or a human runs \`es audit dismiss <id> --reason …\`).`,
+      )
     const runBranch = state.runBranch!
     await once(this.root, `${state.runId}:${phase.id}:merge`, async () => {
       const tip = await Git.revParse(this.root, runBranch)

@@ -250,6 +250,18 @@ describe("es config set", () => {
     expect((await run(["config", "show"])).out).toContain('"depth": 3')
   })
 
+  test("audit.phase takes required in the project layer and rejects anything else (#33)", async () => {
+    const { verifyControl, rebaseline } = await import("@heretek-ai/es-core")
+    await rebaseline(root, "test")
+    expect((await run(["config", "set", "audit.phase", "sometimes"], human())).code).toBe(1)
+    const io = human()
+    expect((await run(["config", "set", "audit.phase", "required"], io)).code).toBe(0)
+    expect(io.output.join("")).toContain('audit.phase: (unset) → "required"')
+    expect(await projectConfig()).toEqual({ audit: { phase: "required" } })
+    expect((await verifyControl(root)).clean).toBe(true)
+    expect((await run(["config", "show"])).out).toContain('"phase": "required"')
+  })
+
   test("rejects unknown keys, invalid values and project-forbidden keys (those go --global)", async () => {
     const typo = await run(["config", "set", "reserch.depth", "3"], human())
     expect([typo.code, typo.out]).toEqual([1, expect.stringContaining("Refused")])

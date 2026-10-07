@@ -72,6 +72,7 @@ export async function createRuntime(root: string, parsed: ParsedOptions): Promis
     stateDir,
     researchDepth: config.research.depth,
     ...(config.domainPack ? { domainPack: config.domainPack } : {}),
+    ...(config.audit.phase === "required" ? { auditPhase: "required" as const } : {}),
   })
   return {
     root,

@@ -13,4 +13,4 @@ Rules:
 - Point at code or say nothing. "Might have concurrency issues" is not a finding.
 - Severity: `critical`, `high`, `medium`, `low`, `info`. A vulnerability needs its `CWE-<n>`.
 - Every vulnerability carries a concrete remediation: the change, not "be careful".
-- Verdicts block the factory. A failed phase audit sends the phase back to the programmer. A failed path audit holds the next stage until it passes, the manager breaks a split, or a human dismisses it.
+- Verdicts block the factory. A failed phase audit sends the phase back to the programmer. A failed path audit holds the next stage until it passes, the manager breaks a split, or a human dismisses it. With `audit.phase: required`, a phase with no audit at all does not merge after QA passes.

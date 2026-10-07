@@ -92,6 +92,18 @@ export const EsConfigSchema = z
         "SPDX ids darkharvest may depend on or vendor (a harvest plan may only narrow it); everything else is clean-room only.",
       )
       .default([...DEFAULT_LICENSE_WHITELIST]),
+    audit: z
+      .object({
+        phase: z
+          .enum(["optional", "required"])
+          .describe(
+            "Phase audits: optional lets QA-passed phases merge without an audit; required refuses passPhase until the phase has a passed or human-dismissed audit.",
+          )
+          .default("optional"),
+      })
+      .strict()
+      .describe("Code-audit gating tunables (set with `es config set audit.phase required`).")
+      .default({ phase: "optional" }),
   })
   .strict()
 

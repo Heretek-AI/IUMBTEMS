@@ -490,6 +490,52 @@ describe("phase audits (decision 2)", () => {
     expect([phase.status, phase.failures, phase.audit?.status, phase.audit?.round]).toEqual(["building", 1, "open", 2])
     expect(phase.history.at(-1)?.notes).toContain("audit audit-01: 1. magic")
   })
+
+  test("audit.phase required: a QA-passed phase with no audit waits instead of merging (#33)", async () => {
+    factory = make({ auditPhase: "required" })
+    await toBuild()
+    await programmerCycle("alpha")
+    await factory.qaVerdict("es-qa-functional", "pass", "criteria met")
+    const held = await factory.qaVerdict("es-qa-adversarial", "pass", "nothing broke")
+    expect([held.stage, held.phases[0]!.status, held.phases[0]!.history.at(-1)?.event]).toEqual([
+      "QA",
+      "qa",
+      "qa-passed",
+    ])
+    expect(held.phases[0]!.history.at(-1)?.notes).toContain("audit.phase is required")
+    // A late audit still unblocks: open, pass both verdicts, the phase merges.
+    const { audit } = await factory.openAudit("factory", { kind: "phase", phase: "alpha" })
+    const verdict = await verdictTool()
+    await verdict.execute(
+      { audit: audit.id, verdict: "pass", findings: [holds], notes: "sound" },
+      { agent: "es-auditor-thesis" },
+    )
+    await verdict.execute(
+      { audit: audit.id, verdict: "pass", findings: [], notes: "tried injection, races" },
+      { agent: "es-auditor-antithesis" },
+    )
+    expect((await factory.read())!.phases[0]!.status).toBe("passed")
+  })
+
+  test("audit.phase required: a human dismissal unblocks the merge without a pass (#33)", async () => {
+    factory = make({ auditPhase: "required" })
+    await toBuild()
+    const { audit } = await factory.openAudit("factory", { kind: "phase", phase: "alpha" })
+    await programmerCycle("alpha")
+    await factory.qaVerdict("es-qa-functional", "pass", "criteria met")
+    await factory.qaVerdict("es-qa-adversarial", "pass", "nothing broke")
+    expect((await factory.read())!.phases[0]!.status).toBe("qa")
+    const dismissed = await factory.dismissAudit("tester", audit.id, "docs-only change")
+    expect(dismissed.phases[0]!.status).toBe("passed")
+  })
+
+  test("audit.phase optional (default): QA-passed phases merge with no audit opened (#33)", async () => {
+    await toBuild()
+    await programmerCycle("alpha")
+    await factory.qaVerdict("es-qa-functional", "pass", "criteria met")
+    const done = await factory.qaVerdict("es-qa-adversarial", "pass", "nothing broke")
+    expect(done.phases[0]!.status).toBe("passed")
+  })
 })
 
 describe("guards", () => {

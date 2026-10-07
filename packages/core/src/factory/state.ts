@@ -25,7 +25,10 @@ export const describeTarget = (target: AuditTarget) =>
  * A code audit by the thesis/antithesis auditor pair. It settles like QA
  * (equal verdicts, or the manager's tiebreak) and blocks: a phase audit holds
  * passPhase, any other audit refuses the next stage transition while open or
- * failed. Re-opening bumps the round and clears the verdicts.
+ * failed. With `audit.phase: required` (Factory `auditPhase` dep) a missing
+ * phase audit holds passPhase too; the default `optional` merges QA-passed
+ * phases with no audit opened. Re-opening bumps the round and clears the
+ * verdicts.
  */
 export const AuditSchema = z.object({
   id: z.string().min(1),

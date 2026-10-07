@@ -181,7 +181,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
     ...(io.stateDir ? { stateDir: io.stateDir } : {}),
   }
   const subArgs = (from: number): Args => ({ positionals: args.positionals.slice(from), flags: args.flags })
-  const factory = (extra: { researchDepth?: number } = {}) =>
+  const factory = (extra: { researchDepth?: number; auditPhase?: "optional" | "required" } = {}) =>
     new Factory(root, {
       gates: gateRunner(io.stateDir ? { stateDir: io.stateDir } : {}),
       ...(io.stateDir ? { stateDir: io.stateDir } : {}),
@@ -198,11 +198,16 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         io.print(VERSION)
         return 0
       case "status": {
-        const depth = await loadEsConfig(root).then(
-          (loaded) => loaded.config.research.depth,
+        const loaded = await loadEsConfig(root).then(
+          (loaded) => ({ depth: loaded.config.research.depth, auditPhase: loaded.config.audit.phase }),
           () => undefined,
         )
-        io.print(await factory(depth === undefined ? {} : { researchDepth: depth }).summary())
+        io.print(
+          await factory({
+            ...(loaded?.depth === undefined ? {} : { researchDepth: loaded.depth }),
+            ...(loaded?.auditPhase === "required" ? { auditPhase: "required" as const } : {}),
+          }).summary(),
+        )
         return 0
       }
       case "approve":
