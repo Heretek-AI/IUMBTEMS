@@ -52,6 +52,25 @@
 | `schemas/`, `docs/` | Generated: JSON Schemas, capability matrix, config and schema docs. |
 | `spikes/` | Recorded proofs from the M0/M6 spikes. |
 
+## Known enforcement limits
+
+The integrity model is mechanical, but three limits are deliberate and visible
+rather than silently assumed:
+
+- **Read-only seats.** QA and manager shells run under `bwrap` when it is
+  installed. Without `bwrap` (some CI runners), the fallback is a command
+  allowlist plus a post-run tree fingerprint that halts the run on any change;
+  it catches writes to files in the checkout, not reads or side effects outside
+  it.
+- **Control-file baseline.** `verifyControl` hashes the files a human
+  authorises — `gates.json`, `frontier.json`, `approvals/**`, `waivers/**`.
+  Everything else in `.factory/**` and `.git/config` is deny-write for agents
+  but is not individually hashed on every run.
+- **MCP caller identity.** Over the stdio MCP server the calling agent's
+  identity is a model-supplied `agent` argument (or `ES_AGENT`), so it is
+  ADVISORY: the harness adapter, not the protocol, establishes it. There is no
+  MCP tool for approvals, trust, waivers or resume.
+
 ## Development
 
 ```bash

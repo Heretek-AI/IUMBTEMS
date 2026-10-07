@@ -14,28 +14,37 @@ export interface HookCapabilities {
   readonly notes: readonly string[]
 }
 
-const ALL_TYPES = {
-  command: "enforced",
-  http: "enforced",
-  mcp_tool: "enforced",
-  prompt: "enforced",
-  agent: "enforced",
-} as const
+/** Every event the canonical spec can carry. */
+export const HOOK_EVENTS = [
+  "PreToolUse",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "UserPromptSubmit",
+  "SessionStart",
+  "PermissionRequest",
+  "Stop",
+  "x-es.ShellPreExec",
+] as const
 
+/** Every handler type the canonical spec can carry. */
+export const HOOK_HANDLER_TYPES = ["command", "http", "prompt", "mcp_tool", "agent"] as const
+
+const allEvents = (support: Support): Readonly<Record<string, Support>> =>
+  Object.fromEntries(HOOK_EVENTS.map((event) => [event, support]))
+const allTypes = (support: Support): Readonly<Record<string, Support>> =>
+  Object.fromEntries(HOOK_HANDLER_TYPES.map((type) => [type, support]))
+
+// Only OpenCode is enforced in 1.0. The other harnesses have no shipping
+// adapter yet, so every row is UNSUPPORTED until 1.1 (Claude), 1.2 (Pi) and
+// 1.3 (Antigravity); claiming enforcement before then would be an unproven
+// capability claim. The capability-matrix contract test enforces this.
 export const HOOK_CAPABILITIES: Readonly<Record<Harness, HookCapabilities>> = {
   claude: {
-    events: {
-      PreToolUse: "enforced",
-      PostToolUse: "enforced",
-      PostToolUseFailure: "enforced",
-      UserPromptSubmit: "enforced",
-      SessionStart: "enforced",
-      PermissionRequest: "enforced",
-      Stop: "enforced",
-      "x-es.ShellPreExec": "unsupported",
-    },
-    handlerTypes: ALL_TYPES,
-    notes: ["Native: Claude Code reads the canonical spec as-is."],
+    events: allEvents("unsupported"),
+    handlerTypes: allTypes("unsupported"),
+    notes: [
+      "The canonical spec is Claude Code's own hook schema, but the installer adapter (marketplace plugin, hooks.json) ships in 1.1, so nothing is enforced in 1.0.",
+    ],
   },
   opencode: {
     events: {
@@ -63,44 +72,18 @@ export const HOOK_CAPABILITIES: Readonly<Record<Harness, HookCapabilities>> = {
     ],
   },
   pi: {
-    events: {
-      PreToolUse: "enforced",
-      PostToolUse: "enforced",
-      PostToolUseFailure: "enforced",
-      UserPromptSubmit: "advisory",
-      SessionStart: "enforced",
-      PermissionRequest: "unsupported",
-      Stop: "enforced",
-      "x-es.ShellPreExec": "enforced",
-    },
-    handlerTypes: {
-      command: "enforced",
-      http: "enforced",
-      prompt: "enforced",
-      mcp_tool: "unsupported",
-      agent: "unsupported",
-    },
-    notes: ["Planned for 1.2 through Pi's tool_call/tool_result/agent_before_settle events."],
+    events: allEvents("unsupported"),
+    handlerTypes: allTypes("unsupported"),
+    notes: [
+      "Planned for 1.2 through Pi's tool_call/tool_result/agent_before_settle events; the extension signature is confirmed (M0) but no adapter ships in 1.0.",
+    ],
   },
   antigravity: {
-    events: {
-      PreToolUse: "enforced",
-      PostToolUse: "advisory",
-      PostToolUseFailure: "advisory",
-      UserPromptSubmit: "advisory",
-      SessionStart: "unsupported",
-      PermissionRequest: "unsupported",
-      Stop: "enforced",
-      "x-es.ShellPreExec": "unsupported",
-    },
-    handlerTypes: {
-      command: "enforced",
-      http: "unsupported",
-      prompt: "unsupported",
-      mcp_tool: "unsupported",
-      agent: "unsupported",
-    },
-    notes: ["Planned for 1.3: Claude-schema commands wrapped by `es hooks adapt --from antigravity`."],
+    events: allEvents("unsupported"),
+    handlerTypes: allTypes("unsupported"),
+    notes: [
+      "Planned for 1.3: Claude-schema commands wrapped by `es hooks adapt --from antigravity`; the hooks.json contract is confirmed (M0) but no adapter ships in 1.0.",
+    ],
   },
 }
 

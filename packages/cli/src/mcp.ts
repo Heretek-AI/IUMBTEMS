@@ -48,7 +48,7 @@ export function createMcpServer(options: McpOptions) {
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: "epistemic-swarm", version: options.version ?? "1.0.0" },
           instructions:
-            "Epistemic Swarm factory operations. Approvals, trust, waivers and resume are human-only (TUI or `es` CLI).",
+            "Epistemic Swarm factory operations. Approvals, trust, waivers and resume are human-only (TUI or `es` CLI) and have no MCP tool. The `agent` argument identifies the caller ADVISORY: the harness adapter, not this protocol, establishes it.",
         })
       case "ping":
         return reply({})

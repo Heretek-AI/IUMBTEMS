@@ -331,7 +331,11 @@ describe("compiler", () => {
       }),
     )
     const loaded = await loadHooks(root, sources())
-    expect(capabilityLoss(loaded.handlers, "claude")).toEqual([])
+    // No native adapter ships for Claude/Pi/Antigravity in 1.0, so every event
+    // is a declared capability loss rather than an enforced row.
+    const claude = capabilityLoss(loaded.handlers, "claude")
+    expect(claude.every((item) => item.support === "unsupported")).toBe(true)
+    expect([...new Set(claude.map((item) => item.event))].sort()).toEqual(["PreToolUse", "Stop"])
     const opencode = capabilityLoss(loaded.handlers, "opencode")
     expect(opencode.map((item) => item.reason)).toEqual([
       "mcp_tool hooks are unsupported on opencode",

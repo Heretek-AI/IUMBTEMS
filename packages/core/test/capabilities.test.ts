@@ -38,6 +38,28 @@ describe("the capability matrix", () => {
   test("hook capabilities expose the per-harness detail", () => {
     expect(hookCapabilities("opencode").events.PreToolUse).toBe("enforced")
     expect(hookCapabilities("opencode").events.Stop).toBe("advisory")
-    expect(hookCapabilities("claude").events.Stop).toBe("enforced")
+    // No adapter ships for the later harnesses, so nothing is enforced yet.
+    expect(hookCapabilities("claude").events.Stop).toBe("unsupported")
+    expect(hookCapabilities("pi").events.PreToolUse).toBe("unsupported")
+    expect(hookCapabilities("antigravity").events.PreToolUse).toBe("unsupported")
+  })
+
+  test("enforced hook rows require an enforced, proven matrix row (no overclaiming)", () => {
+    for (const harness of Object.keys(CAPABILITY_MATRIX) as Array<keyof typeof CAPABILITY_MATRIX>) {
+      const hooksRow = CAPABILITY_MATRIX[harness].find((row) => row.capability === "hooks")!
+      const caps = hookCapabilities(harness)
+      const enforced = [...Object.values(caps.events), ...Object.values(caps.handlerTypes)].filter(
+        (support) => support === "enforced",
+      )
+      if (hooksRow.support === "enforced") {
+        // An enforced hooks capability must name a proof that exists.
+        expect(hooksRow.test).toBeTruthy()
+        expect(existsSync(path.join(repoRoot, hooksRow.test!))).toBe(true)
+      } else {
+        // A harness without an enforced hooks capability must not claim any enforced event or type.
+        expect(enforced).toEqual([])
+      }
+      expect(caps.notes.length).toBeGreaterThan(0)
+    }
   })
 })

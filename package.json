@@ -10,8 +10,9 @@
     "test": "bun test ./packages",
     "typecheck": "for p in core testkit opencode cli; do tsc -p packages/$p/tsconfig.json --noEmit --composite false || exit 1; done",
     "lint": "biome check .",
+    "deps:check": "bun scripts/deps.ts",
     "format": "biome format --write .",
-    "check": "bun run lint && bun run typecheck && bun run test",
+    "check": "bun run lint && bun run deps:check && bun run typecheck && bun run test",
     "docs:gen": "bun scripts/docs.ts",
     "docs:check": "bun scripts/docs.ts --check"
   },
