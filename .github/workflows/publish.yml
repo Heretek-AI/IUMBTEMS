@@ -47,7 +47,10 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           # Dependency order: core, then the CLI and the OpenCode plugin.
-          for tgz in packs/heretek-ai-es-core-*.tgz packs/heretek-ai-es-cli-*.tgz packs/heretek-ai-epistemic-swarm-*.tgz; do
+          # NOTE: the ./ prefix is load-bearing. A bare packs/foo.tgz is
+          # parsed as a GitHub user/repo shorthand (git ls-remote failure);
+          # ./packs/foo.tgz is resolved as the local tarball.
+          for tgz in ./packs/heretek-ai-es-core-*.tgz ./packs/heretek-ai-es-cli-*.tgz ./packs/heretek-ai-epistemic-swarm-*.tgz; do
             echo "::group::npm publish $tgz"
             if [ "$DRY_RUN" = "true" ]; then
               npm publish "$tgz" --provenance --access public --dry-run
