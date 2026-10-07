@@ -21,6 +21,8 @@ const relative = (dir: string, file: string) => {
 
 const none = (): ParsedOutput => ({ findings: [], failedTests: [] })
 
+const isDigits = (value: string) => /^\d+$/.test(value)
+
 function jsonBlocks(output: string): unknown[] {
   const out: unknown[] = []
   for (const line of output.split("\n")) {
@@ -171,9 +173,9 @@ const mypy: Parser = (output, dir, check) => {
       check,
     })
   }
-  for (const m of output.matchAll(/^([^:\n]+):(\d+):(\d+):[ \t]+(error|warning):[ \t]+(.+)$/gm))
+  for (const m of output.matchAll(/^([^:\n]+):(\d+):(\d+): (error|warning): (.+)$/gm))
     push(m[1]!, m[2]!, m[3], m[4]!, m[5]!)
-  for (const m of output.matchAll(/^([^:\n]+):(\d+):[ \t]+(error|warning):[ \t]+(.+)$/gm))
+  for (const m of output.matchAll(/^([^:\n]+):(\d+): (error|warning): (.+)$/gm))
     push(m[1]!, m[2]!, undefined, m[3]!, m[4]!)
   return { findings, failedTests: [] }
 }
@@ -281,18 +283,16 @@ const vitestOrJest =
   (output, dir, check) => {
     const findings: GateFinding[] = []
     const failed = new Set<string>()
-    const pattern = style === "vitest" ? /^[ \t]*(?:FAIL|×)[ \t]+(.+)$/gm : /^[ \t]*FAIL[ \t]+(.+)$/gm
-    for (const match of output.matchAll(pattern)) {
-      const rest = match[1]!.trim()
+    for (const raw of output.split("\n")) {
+      const line = raw.trimStart()
+      const marker = line.startsWith("FAIL") ? "FAIL" : style === "vitest" && line.startsWith("×") ? "×" : undefined
+      if (!marker) continue
+      const rest = line.slice(marker.length).trimStart()
+      if (!rest) continue
       const space = rest.indexOf(" ")
       const file = relative(dir, space < 0 ? rest : rest.slice(0, space))
-      const detail =
-        style === "vitest" && space >= 0
-          ? rest
-              .slice(space + 1)
-              .trim()
-              .replace(/^>\s*/, "")
-          : ""
+      let detail = style === "vitest" && space >= 0 ? rest.slice(space + 1).trim() : ""
+      if (detail.startsWith(">")) detail = detail.slice(1).trim()
       failed.add(file)
       findings.push({
         file,
@@ -317,16 +317,23 @@ const vitestOrJest =
 const pytest: Parser = (output, dir, check) => {
   const findings: GateFinding[] = []
   const failed = new Set<string>()
-  for (const match of output.matchAll(/^(?:FAILED|ERROR)[ \t]+([^\s:]+\.py)(?:::([^\s]+))?(.*)$/gm)) {
-    const file = relative(dir, match[1]!)
-    const node = match[2]
-    const tail = (match[3] ?? "").trim().replace(/^-[ \t]*/, "")
+  for (const raw of output.split("\n")) {
+    if (!raw.startsWith("FAILED ") && !raw.startsWith("ERROR ")) continue
+    const body = raw.slice(raw.indexOf(" ") + 1).trim()
+    const separator = body.indexOf(" - ")
+    const target = separator < 0 ? body : body.slice(0, separator)
+    const detail = separator < 0 ? "" : body.slice(separator + 3).trim()
+    const nodeAt = target.indexOf("::")
+    const filePath = nodeAt < 0 ? target : target.slice(0, nodeAt)
+    if (!filePath.endsWith(".py")) continue
+    const file = relative(dir, filePath)
+    const node = nodeAt < 0 ? undefined : target.slice(nodeAt + 2)
     failed.add(file)
     findings.push({
       file,
       rule: "test/failed",
       severity: "error",
-      message: `Test failed: ${node ?? file}${tail ? ` — ${tail}` : ""}`,
+      message: `Test failed: ${node ?? file}${detail ? ` — ${detail}` : ""}`,
       check,
     })
   }
@@ -357,20 +364,36 @@ const cargoTest: Parser = (output, _dir, check) => ({
 const generic: Parser = (output, dir, check) => {
   const findings: GateFinding[] = []
   const seen = new Set<string>()
-  for (const match of output.matchAll(/(?:^|\s)([^\s:]+):(\d+)(?::(\d+))?:?(.*)$/gm)) {
-    if (!/\.[a-zA-Z]{1,5}$/.test(match[1]!)) continue
-    const key = `${match[1]}:${match[2]}`
-    if (seen.has(key) || findings.length >= 50) continue
-    seen.add(key)
-    findings.push({
-      file: relative(dir, match[1]!),
-      line: Number(match[2]),
-      ...(match[3] ? { column: Number(match[3]) } : {}),
-      rule: `${check}/error`,
-      severity: "error",
-      message: match[4]?.trim() || "reported here",
-      check,
-    })
+  for (const raw of output.split("\n")) {
+    const line = raw.replace(/\t/g, " ")
+    let i = 0
+    while (i < line.length) {
+      if (line[i] === " ") {
+        i++
+        continue
+      }
+      const start = i
+      while (i < line.length && line[i] !== " ") i++
+      const parts = line.slice(start, i).split(":")
+      const file = parts[0]!
+      if (parts.length < 2 || !parts[1] || !isDigits(parts[1]) || !/\.[a-zA-Z]{1,5}$/.test(file)) continue
+      const key = `${file}:${parts[1]}`
+      if (seen.has(key) || findings.length >= 50) continue
+      seen.add(key)
+      const column = parts[2] && isDigits(parts[2]) ? parts[2] : undefined
+      let rest = line.slice(i)
+      if (rest.startsWith(":")) rest = rest.slice(1)
+      const message = rest.trim()
+      findings.push({
+        file: relative(dir, file),
+        line: Number(parts[1]),
+        ...(column ? { column: Number(column) } : {}),
+        rule: `${check}/error`,
+        severity: "error",
+        message: message || "reported here",
+        check,
+      })
+    }
   }
   return { findings, failedTests: [] }
 }

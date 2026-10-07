@@ -276,6 +276,18 @@ function lineCommentIndex(line: string): number {
   return -1
 }
 
+const isWordCode = (code: number) =>
+  (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95
+
+/** The last `\w+` run in `text` (Go receiver names), without a regex. */
+function lastWord(text: string): string {
+  let end = text.length
+  while (end > 0 && !isWordCode(text.charCodeAt(end - 1))) end--
+  let start = end
+  while (start > 0 && isWordCode(text.charCodeAt(start - 1))) start--
+  return text.slice(start, end)
+}
+
 /** Regex fallback: imports only (symbols best effort), comments stripped first. */
 export function extractWithRegex(language: GrammarId, source: string): FileStructure {
   const imports: ImportRef[] = []
@@ -333,7 +345,7 @@ export function extractWithRegex(language: GrammarId, source: string): FileStruc
     for (const single of stripped.matchAll(/^import\s+(?:[\w.]+\s+)?"([^"]+)"/gm))
       imports.push({ specifier: single[1]!, line: at(single.index!), kind: "static" })
     for (const fn of stripped.matchAll(/^func[ \t]+(?:\(([^)]*)\)[ \t]+)?(\w+)/gm)) {
-      const receiver = fn[1] ? /(\w+)$/.exec(fn[1].trim())?.[1] : undefined
+      const receiver = fn[1] ? lastWord(fn[1]) : undefined
       const name = fn[2]!
       symbols.push({
         name: receiver ? `${receiver}.${name}` : name,

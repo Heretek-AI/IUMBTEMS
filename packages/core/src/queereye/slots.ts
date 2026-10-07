@@ -345,7 +345,9 @@ export interface NextSlot {
 }
 
 export class SlotLoop {
-  readonly values: Record<Axis, Record<string, string>> = Object.fromEntries(AXES.map((axis) => [axis, {}])) as never
+  readonly values: Record<Axis, Record<string, string>> = Object.fromEntries(
+    AXES.map((axis) => [axis, Object.create(null) as Record<string, string>]),
+  ) as never
   readonly skipped: Record<Axis, Set<string>> = Object.fromEntries(AXES.map((axis) => [axis, new Set()])) as never
 
   requiredSlots(axis: Axis): string[] {

@@ -199,20 +199,21 @@ function braceComplexity(text: string): FunctionComplexity[] {
   const stack: Array<{ name: string; line: number; depth: number; score: number; opened: boolean }> = []
   let depth = 0
   const headers: readonly RegExp[] = [
-    /\bfunction[ \t]*\*?[ \t]*([\w$]*)[ \t]*\(/,
-    /([\w$]+)[ \t]*[:=][ \t]*(?:async[ \t]*)?(?:function\b|\([^)]*\)[ \t]*(?::[ \t]*[^=]+)?=>|[\w$]+[ \t]*=>)/,
-    /^[ \t]*(?:(?:public|private|protected|static|async|override|readonly)[ \t]+)*([\w$]+)[ \t]*\([^)]*\)[ \t]*(?::[ \t]*[^{]+)?\{/,
-    /\bfn[ \t]+([\w$]+)/,
-    /\bfunc[ \t]+(?:\([^)]*\)[ \t]*)?([\w$]+)/,
+    /\bfunction ?\*? ?([\w$]*) ?\(/,
+    /([\w$]+) ?[:=] ?(?:async )?(?:function\b|\([^)]*\) ?(?:: ?[^=]+)?=>|[\w$]+ ?=>)/,
+    /^ ?(?:(?:public|private|protected|static|async|override|readonly) )*([\w$]+) ?\([^)]*\) ?(?:: ?[^{]+)?\{/,
+    /\bfn ([\w$]+)/,
+    /\bfunc (?:\([^)]*\) )?([\w$]+)/,
   ]
   const close = (done: { name: string; line: number; score: number }) =>
     results.push({ name: done.name, line: done.line, score: done.score })
   text.split("\n").forEach((raw, index) => {
     const line = stripLiterals(raw)
+    const flat = line.replace(/[ \t]+/g, " ")
     let name: string | undefined
     let best = Number.POSITIVE_INFINITY
     for (const pattern of headers) {
-      const found = pattern.exec(line)
+      const found = pattern.exec(flat)
       if (found && found.index < best) {
         best = found.index
         name = found[1]

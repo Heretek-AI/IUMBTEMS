@@ -4,6 +4,8 @@
 // when an approval is pending, the grill needs a human, the run halts, or
 // progress stalls.
 import { spawn } from "node:child_process"
+import { accessSync, constants } from "node:fs"
+import path from "node:path"
 import { createInterface } from "node:readline"
 import { Factory, type FactoryState, factorySummary, gateRunner, pendingApprovals } from "@heretek-ai/es-core"
 
@@ -32,19 +34,25 @@ export interface HarnessDriver {
   turn(input: DriverTurn): AsyncGenerator<unknown, string | undefined>
 }
 
-async function onPath(binary: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    // `binary` is always an internal constant; PATH lookup is intended.
-    const child = spawn("sh", ["-c", `command -v ${binary}`], { stdio: "ignore" }) // NOSONAR
-    child.on("close", (code) => resolve(code === 0))
-    child.on("error", () => resolve(false))
-  })
+/** Absolute path of `binary` on PATH, or undefined. No shell, so no injection. */
+function resolveOnPath(binary: string): string | undefined {
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!dir) continue
+    const candidate = path.join(dir, binary)
+    try {
+      accessSync(candidate, constants.X_OK)
+      return candidate
+    } catch {
+      // not executable here; keep looking
+    }
+  }
+  return undefined
 }
 
 /** OpenCode v2: `opencode run --standalone --format json`. */
 export const opencodeDriver: HarnessDriver = {
   id: "opencode",
-  available: () => onPath("opencode"),
+  available: async () => resolveOnPath("opencode") !== undefined,
   async *turn({ root, agent, prompt, session, signal }) {
     const args = [
       "run",
@@ -56,9 +64,10 @@ export const opencodeDriver: HarnessDriver = {
       ...(session ? ["--session", session] : []),
       prompt,
     ]
-    // `opencode` is resolved from PATH by design.
-    const child = spawn("opencode", args, {
-      // NOSONAR -- PATH lookup is intended
+    // Resolve to an absolute path so the child is not looked up on PATH again.
+    const binary = resolveOnPath("opencode")
+    if (!binary) throw new Error("the opencode CLI is not on PATH")
+    const child = spawn(binary, args, {
       cwd: root,
       stdio: ["ignore", "pipe", "pipe"],
       ...(signal ? { signal } : {}),
