@@ -105,6 +105,22 @@ describe("audit-fires", () => {
     expect(hallucinated.tools[0]?.status).toBe("error")
     expect(await readAuditRecords(h.directory, "audit-01")).toEqual([])
 
+    // Issue #38: single letters between ellipses used to "witness" anything.
+    const lettered = await h.run(
+      call("es_audit_verdict", {
+        audit: "audit-01",
+        verdict: "fail",
+        findings: [{ ...caught[0], excerpt: "e ... e ... e ... e ... e ... e ... e" }],
+        notes: "blind",
+      }),
+      { agent: "es-auditor-antithesis" },
+    )
+    expect([lettered.tools[0]?.status, lettered.tools[0]?.text]).toEqual([
+      "error",
+      expect.stringContaining("not found verbatim"),
+    ])
+    expect(await readAuditRecords(h.directory, "audit-01")).toEqual([])
+
     const thesis = await h.run(
       call("es_audit_verdict", {
         audit: "audit-01",

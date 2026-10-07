@@ -458,8 +458,25 @@ describe("es audit and es scout (headless jobs)", () => {
     const prompts: string[] = []
     DRIVERS.fake = seatDriver(async (prompt) => {
       prompts.push(prompt)
-      for (const agent of ["es-auditor-thesis", "es-auditor-antithesis"])
-        await verdict.execute({ audit: "audit-01", verdict: "pass", findings: [], notes: "ok" }, { agent })
+      // The thesis maps an invariant that holds; the red team found nothing.
+      const mapped = {
+        kind: "invariant",
+        title: "Queries go through the db handle",
+        severity: "info",
+        file: "src/auth.js",
+        lines: [3, 3],
+        excerpt: "return db.query(sql)",
+        detail: "All database access in this module uses the passed-in db handle.",
+        holds: true,
+      }
+      await verdict.execute(
+        { audit: "audit-01", verdict: "pass", findings: [mapped], notes: "ok" },
+        { agent: "es-auditor-thesis" },
+      )
+      await verdict.execute(
+        { audit: "audit-01", verdict: "pass", findings: [], notes: "tried injection, races, secrets" },
+        { agent: "es-auditor-antithesis" },
+      )
     })
     try {
       const driven = await run(["audit", "src", "--driver", "fake"])

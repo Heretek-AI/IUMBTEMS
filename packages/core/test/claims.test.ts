@@ -261,6 +261,29 @@ describe("code locations (new in 1.1: legacy never checked line refs on disk)", 
     expect((await at("src/auth.ts", [2, 2], "SELECT * FROM accounts WHERE id")).ok).toBe(false)
   })
 
+  test("a code excerpt is one contiguous span inside the cited lines (spread syntax is literal)", async () => {
+    await writeFile(
+      path.join(root, "src/spread.ts"),
+      "export const merge = (a: object, b: object) => ({ ...a, ...b })\nexport const pick = 1\n",
+    )
+    // "..." is code here, not an ellipsis: matched literally.
+    expect(await at("src/spread.ts", [1, 1], "({ ...a, ...b })")).toEqual({ ok: true })
+    // Fragments joined by an ellipsis no longer match non-contiguous text (issue #38).
+    expect((await at("src/auth.ts", [1, 4], "export function ... return db.query")).ok).toBe(false)
+    expect((await at("src/auth.ts", [1, 4], "e ... e ... e ... e ... e ... e ... e")).ok).toBe(false)
+  })
+
+  test("a cited range spans at most 60 lines", async () => {
+    await writeFile(
+      path.join(root, "src/long.ts"),
+      `${Array.from({ length: 80 }, (_, i) => `export const v${i} = ${i}`).join("\n")}\n`,
+    )
+    expect((await at("src/long.ts", [1, 60], "export const v59 = 59")).ok).toBe(true)
+    expect(await at("src/long.ts", [1, 61], "export const v59 = 59")).toMatchObject({
+      reason: expect.stringMatching(/at most 60 lines/),
+    })
+  })
+
   test("hallucinated files, lines past the end and paths outside the tree are refused", async () => {
     expect(await at("src/missing.ts", [1, 1], "export function login")).toMatchObject({
       reason: expect.stringMatching(/does not exist/),

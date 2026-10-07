@@ -2,8 +2,8 @@
 
 exports[`agent assets prompt snapshot: a changed prompt must bump its version 1`] = `
 {
-  "auditor-antithesis": "v1:c6fbcd4af303e7be",
-  "auditor-thesis": "v1:9e085cf8e3b38d19",
+  "auditor-antithesis": "v2:15f4d7f75e5bb958",
+  "auditor-thesis": "v2:b903e1353177f342",
   "brainstorm-critic": "v1:28fd3abc95c4a28a",
   "brainstormer": "v1:16eb524fe104f3af",
   "designer": "v2:745908a2a4abff0b",

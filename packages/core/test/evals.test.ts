@@ -140,6 +140,8 @@ describe("fire graders", () => {
     expect(gradeAuditFire([record([vuln({ file: "src/b.ts" })])], plants).pass).toBe(false)
     expect(gradeAuditFire([record([vuln({ kind: "debt" })])], plants).pass).toBe(false)
     expect(gradeAuditFire([record([vuln()], "pass")], plants).failures).toContain("no auditor failed the audit")
+    // A blanket range that merely overlaps the plant is a guess, not a catch.
+    expect(gradeAuditFire([record([vuln({ lines: [1, 60] })])], plants).pass).toBe(false)
   })
 
   test("a scout fire needs every verdict right, and downgrades must say why", () => {
@@ -171,6 +173,14 @@ describe("fire graders", () => {
       gradeScoutFire(result([verdict("mit", "adopt", "adopt"), verdict("gpl", "adopt", "clean-room")]), want).failures,
     ).toEqual(["gpl: downgraded without a reason"])
     expect(gradeScoutFire(result([verdict("mit", "adopt", "adopt")]), want).failures).toEqual(["no verdict for gpl"])
+    // Extra or duplicate rows are not graded away (issue #48).
+    const both = [verdict("mit", "adopt", "adopt"), verdict("gpl", "adopt", "clean-room", "copyleft")]
+    expect(gradeScoutFire(result([...both, verdict("evil", "adopt", "adopt")]), want).failures).toEqual([
+      "unexpected verdict for evil",
+    ])
+    expect(gradeScoutFire(result([...both, verdict("gpl", "adopt", "adopt")]), want).failures).toEqual([
+      "2 verdicts for gpl",
+    ])
   })
 
   test("a harvest fire wants the licence line kept: permissive depend, copyleft clean-room", () => {

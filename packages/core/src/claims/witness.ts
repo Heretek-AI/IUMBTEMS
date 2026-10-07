@@ -3,12 +3,13 @@
 //   - a VERIFIED source quote against the content-addressed cache (tamper-
 //     refusing get + the one quote law, research/quote.ts);
 //   - a code location against the file on disk: inside the target root, the
-//     line range within the file, the excerpt verbatim in those lines.
+//     line range within the file and at most MAX_LOCATION_LINES long, the
+//     excerpt one contiguous verbatim span of those lines.
 // Legacy never checked code locations at all (its "hallucinated line" check
 // was the generic quote check), so the location rule is new in 1.1.
 import path from "node:path"
 import type { SourceCache } from "../research/cache.ts"
-import { verifyQuote } from "../research/quote.ts"
+import { verifyQuote, verifySpan } from "../research/quote.ts"
 import type { Claim, ClaimLocation, Witness } from "../schema/claims.ts"
 import { canonicalPath, relativeTo } from "../trust/paths.ts"
 import { readRegularFile } from "../util/fs.ts"
@@ -21,6 +22,9 @@ export interface WitnessOptions {
   readonly known?: ReadonlySet<string>
   readonly now?: () => Date
 }
+
+/** A code location names the code it means, not a whole file: at most this many lines. */
+export const MAX_LOCATION_LINES = 60
 
 type Check = { readonly ok: true } | { readonly ok: false; readonly reason: string }
 const pass: Check = { ok: true }
@@ -37,9 +41,13 @@ export async function checkLocation(root: string, location: ClaimLocation): Prom
   const lines = text.split("\n")
   if (text.endsWith("\n")) lines.pop()
   const [start, end] = location.lines
+  if (end - start + 1 > MAX_LOCATION_LINES)
+    return fail(
+      `${location.file}#L${start}-L${end} spans ${end - start + 1} lines; cite at most ${MAX_LOCATION_LINES} lines around the code you mean`,
+    )
   if (end > lines.length)
     return fail(`${location.file}#L${start}-L${end} is past the end of the file (${lines.length} lines)`)
-  const quoted = verifyQuote(lines.slice(start - 1, end).join("\n"), location.excerpt)
+  const quoted = verifySpan(lines.slice(start - 1, end).join("\n"), location.excerpt)
   if (!quoted.ok) return fail(`${location.file}#L${start}-L${end}: excerpt ${quoted.reason}`)
   return pass
 }

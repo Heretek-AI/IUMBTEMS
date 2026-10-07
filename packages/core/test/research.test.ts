@@ -40,6 +40,15 @@ describe("verbatim quotes", () => {
     expect(verifyQuote(SOURCE, "a slow runtime for JavaScript").ok).toBe(false)
     expect(verifyQuote(SOURCE, "Bun").reason).toContain("too short")
   })
+
+  test("every ellipsis fragment must be evidence on its own (12+ characters)", () => {
+    // Before 1.1.1 only the joined fragments had to reach 12 characters, so
+    // single letters matched almost any text (issue #38).
+    expect(verifyQuote(SOURCE, "a ... a ... a ... a ... a ... a ... a").ok).toBe(false)
+    expect(verifyQuote(SOURCE, "a ... a ... a ... a ... a ... a ... a").reason).toContain("fragment")
+    expect(verifyQuote(SOURCE, "Bun is a fast ... manager").ok).toBe(false)
+    expect(verifyQuote(SOURCE, "Bun is a fast all-in-one ... a package manager").ok).toBe(true)
+  })
 })
 
 describe("source cache", () => {

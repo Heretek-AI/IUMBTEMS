@@ -148,6 +148,17 @@ describe("the line-pointer law at es_audit_verdict", () => {
     await expect(call("fail", [invariant])).rejects.toThrow("A fail needs at least one witnessed defect")
     await expect(call("pass", [injection])).rejects.toThrow("A pass cannot carry defects (src/auth.ts#L2-L3)")
   })
+
+  test("a thesis pass must map at least one witnessed invariant; the red team may pass empty-handed", async () => {
+    const audit = await openPathAudit()
+    const verdict = tools()("es_audit_verdict")
+    const call = (agent: string, findings: unknown[]) =>
+      verdict.execute({ audit: audit.id, verdict: "pass", findings, notes: "tried the vectors" }, { agent })
+    // Before 1.1.1 a thesis "pass" with nothing witnessed was recorded (issue #46).
+    await expect(call("es-auditor-thesis", [])).rejects.toThrow("A thesis pass maps at least one invariant")
+    expect(await call("es-auditor-thesis", [invariant])).toContain("Recorded pass")
+    expect(await call("es-auditor-antithesis", [])).toContain("Recorded pass")
+  })
 })
 
 describe("blocking (decision 2)", () => {
