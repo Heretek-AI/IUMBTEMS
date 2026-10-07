@@ -191,6 +191,36 @@ describe("mcp", () => {
   })
 })
 
+describe("opencode driver", () => {
+  test("runs opencode in the project: PWD is the project root, not the caller's directory", async () => {
+    const { chmod, mkdtemp: mk } = await import("node:fs/promises")
+    const { opencodeDriver } = await import("../src/headless.ts")
+    const bin = await mk(path.join(tmpdir(), "es-fake-opencode-"))
+    // A Bun stub reports the PWD it inherited verbatim (sh would recompute it).
+    await writeFile(
+      path.join(bin, "opencode"),
+      `#!/usr/bin/env bun\nconsole.log(JSON.stringify({ type: "text", sessionID: "ses_fake1", part: { text: process.env.PWD } }))\n`,
+    )
+    await chmod(path.join(bin, "opencode"), 0o755)
+    const previous = process.env.PATH
+    process.env.PATH = `${bin}${path.delimiter}${previous}`
+    try {
+      const events: any[] = []
+      const turn = opencodeDriver.turn({ root, agent: "factory", prompt: "go" })
+      let step = await turn.next()
+      while (!step.done) {
+        events.push(step.value)
+        step = await turn.next()
+      }
+      expect(events[0]?.part?.text).toBe(root)
+      expect(step.value).toBe("ses_fake1")
+    } finally {
+      process.env.PATH = previous
+      await rm(bin, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("headless", () => {
   const collect = async (driver: HarnessDriver, maxTurns = 10) => {
     const events: any[] = []

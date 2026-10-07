@@ -11,6 +11,7 @@ import {
   brainstormTools,
   buildPlan,
   collapseDuplicates,
+  harvestTools,
   LENSES,
   minhashSimilarity,
   rankIdeas,
@@ -289,6 +290,33 @@ describe("the tool loop", () => {
     expect(result!.gaps).toEqual(["scamper"])
     expect(result!.shortlist).toHaveLength(1)
     expect(result!.shortlist[0]?.outlier).toBe(false)
+  })
+
+  test("prior art must come from a recorded es_harvest_prior_art search", async () => {
+    await call("es_brainstorm_plan", { idea: "x", lenses: ["inversion"] }, "brainstormer")
+    await call("es_brainstorm_record", { lens: "inversion", ideas: [idea(1)] }, "brainstormer")
+    const survivor = (await readIdeas(root)).find((item) => !item.duplicateOf)!
+    await call(
+      "es_brainstorm_score",
+      { scores: [{ id: survivor.id, novelty: 3, upside: 3, feasibility: 3, fit: 3 }] },
+      "es-brainstorm-critic",
+    )
+    const claimed = { title: "acme/cache", url: "https://github.com/acme/cache", relation: "similar" }
+    await expect(call("es_brainstorm_complete", { priorArt: [claimed] }, "brainstormer")).rejects.toThrow(
+      /not found by any recorded search: https:\/\/github.com\/acme\/cache/,
+    )
+    const fetch = (async () =>
+      Response.json({
+        items: [{ full_name: "acme/cache", name: "cache", html_url: "https://github.com/acme/cache" }],
+      })) as unknown as typeof globalThis.fetch
+    const priorArt = harvestTools({ root, fetch }).find((tool) => tool.name === "es_harvest_prior_art")!
+    await priorArt.execute(
+      { ideas: [{ id: survivor.id, title: survivor.title, text: survivor.text }] },
+      { agent: "harvester" },
+    )
+    const done = await call("es_brainstorm_complete", { priorArt: [claimed] }, "brainstormer")
+    expect(done).toContain("Shortlist")
+    expect((await readResult(root))?.priorArt?.[0]?.url).toBe("https://github.com/acme/cache")
   })
 
   test("a second plan replaces the run only with force", async () => {

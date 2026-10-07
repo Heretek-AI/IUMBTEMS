@@ -69,6 +69,8 @@ export const opencodeDriver: HarnessDriver = {
     if (!binary) throw new Error("the opencode CLI is not on PATH")
     const child = spawn(binary, args, {
       cwd: root,
+      // opencode resolves the project from PWD, not the spawn cwd.
+      env: { ...process.env, PWD: root },
       stdio: ["ignore", "pipe", "pipe"],
       ...(signal ? { signal } : {}),
     })

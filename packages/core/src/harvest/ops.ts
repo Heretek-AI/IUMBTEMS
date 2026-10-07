@@ -11,6 +11,7 @@ import type { EsToolDef } from "../ops/tools.ts"
 import { ToolRefusal } from "../ops/tools.ts"
 import { DEFAULT_LICENSE_WHITELIST, type HarvestProfile, type HarvestRow, HarvestRowSchema } from "../schema/harvest.ts"
 import { buildMatrix, checkVerdict, recheckMatrix, renderHarvest } from "./matrix.ts"
+import { type PriorArtSearch, recordPriorArt } from "./prior-art.ts"
 import {
   assertSourceAllowed,
   candidateId,
@@ -424,6 +425,7 @@ export function harvestTools(context: HarvestOpsContext): EsToolDef[] {
         const limit = Math.min(Number(input.limit ?? 3) || 3, 10)
         const github = githubApi(api())
         const lines: string[] = []
+        const searches: PriorArtSearch[] = []
         for (const idea of ideas) {
           const keywords = words(`${idea.title ?? ""} ${idea.text ?? ""}`)
             .slice(0, 6)
@@ -432,18 +434,34 @@ export function harvestTools(context: HarvestOpsContext): EsToolDef[] {
             lines.push(`- ${idea.id}: no keywords; relation "novel" by default`)
             continue
           }
+          const query = `${keywords} in:name,description,readme`
           try {
-            const results = await github.search(`${keywords} in:name,description,readme`, limit)
+            const results = await github.search(query, limit)
+            searches.push({
+              idea: String(idea.id),
+              query,
+              status: "ok",
+              results: results.map((repo) => ({ title: repo.fullName ?? repo.name, url: repo.url })),
+              searchedAt: new Date().toISOString(),
+            })
             lines.push(
               `- ${idea.id} "${idea.title}" — ${results.length ? "related projects:" : "no related projects found (candidate for novel):"}`,
               ...results.map((repo) => `  · ${repo.fullName ?? repo.name} — ${repo.url}`),
             )
           } catch (error) {
+            searches.push({
+              idea: String(idea.id),
+              query,
+              status: "failed",
+              results: [],
+              searchedAt: new Date().toISOString(),
+            })
             lines.push(
               `- ${idea.id}: prior-art search failed (${error instanceof Error ? error.message : String(error)}); UNVERIFIED — do not claim novelty`,
             )
           }
         }
+        await recordPriorArt(root, searches)
         return [
           "Prior-art candidates (relations and novelty are your judgement; searches that failed are UNVERIFIED):",
           lines.join("\n"),

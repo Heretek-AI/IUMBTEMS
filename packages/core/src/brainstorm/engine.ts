@@ -1,4 +1,4 @@
-// The deterministic part of brainstorming: word-trigram similarity, duplicate
+// The deterministic part of brainstorming: word-shingle (bigram) similarity and MinHash, duplicate
 // collapsing, rubric totals, and the diversified shortlist with a forced
 // outlier slot. No model calls here; given the same ideas and scores the
 // output is identical every time.

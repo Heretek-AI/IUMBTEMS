@@ -1,5 +1,6 @@
 export * from "./matrix.ts"
 export * from "./ops.ts"
+export * from "./prior-art.ts"
 export * from "./scan.ts"
 export * from "./sources.ts"
 export * from "./spdx.ts"

@@ -1,7 +1,8 @@
 {
   "id": "grill",
-  "description": "The grill agent interviews the user one question at a time.",
+  "description": "The grill interviews before it settles anything: it asks a question and does not write the frontier on the first turn.",
   "agent": "grill",
   "prompt": "Grill me on building a tiny CLI that prints the weather.",
-  "checks": { "contains": ["?"] }
+  "maxSteps": 4,
+  "checks": { "contains": ["?"], "toolsNotUsed": ["es_frontier_write"] }
 }

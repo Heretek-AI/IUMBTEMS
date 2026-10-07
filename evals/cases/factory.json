@@ -1,7 +1,8 @@
 {
   "id": "factory",
-  "description": "The factory reports its state without crashing or inventing a run.",
+  "description": "With no run in the project, the factory reports that and points at the grill instead of starting a build.",
   "agent": "factory",
   "prompt": "Status?",
-  "checks": { "notContains": ["unhandled", "TypeError", "is not a function"] }
+  "maxSteps": 3,
+  "checks": { "contains": ["grill"], "toolsNotUsed": ["es_build_start", "es_frontier_write"] }
 }

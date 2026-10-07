@@ -5,6 +5,7 @@
 // finish while a lens has no ideas or an idea has no score. Seat checks keep
 // the critic scoring and the brainstormer orchestrating.
 import { seatOf } from "../agents/registry.ts"
+import { priorArtUrls } from "../harvest/prior-art.ts"
 import { factoryLayout } from "../layout.ts"
 import type { EsToolDef } from "../ops/tools.ts"
 import { ToolRefusal } from "../ops/tools.ts"
@@ -332,6 +333,16 @@ export function brainstormTools(context: BrainstormOpsContext): EsToolDef[] {
           throw new ToolRefusal(
             `Still unscored: ${list(unscored.map((idea) => idea.id))}. Have es-brainstorm-critic score them (es_brainstorm_score) first.`,
           )
+        // Prior art must come from a recorded es_harvest_prior_art search, not from memory.
+        const priorArt = Array.isArray(input.priorArt) ? input.priorArt : []
+        if (priorArt.length) {
+          const found = await priorArtUrls(root)
+          const unrecorded = priorArt.filter((entry: { url?: unknown }) => !found.has(String(entry?.url ?? "")))
+          if (unrecorded.length)
+            throw new ToolRefusal(
+              `Prior art must come from es_harvest_prior_art results; not found by any recorded search: ${list(unrecorded.map((entry: { url?: unknown }) => String(entry?.url ?? "")))}.`,
+            )
+        }
         const ranked = rankIdeas(survivors, scores)
         const texts = new Map(survivors.map((idea) => [idea.id, `${idea.title}. ${idea.text}`]))
         const shortlist = selectShortlist(ranked, texts, plan.shortlistSize)
@@ -354,7 +365,7 @@ export function brainstormTools(context: BrainstormOpsContext): EsToolDef[] {
           shortlist,
           coverage,
           gaps,
-          ...(Array.isArray(input.priorArt) && input.priorArt.length ? { priorArt: input.priorArt } : {}),
+          ...(priorArt.length ? { priorArt } : {}),
           stats: {
             lenses: plan.lenses.length,
             ideas: survivors.length,
