@@ -17,6 +17,8 @@ import path from "node:path"
 import { seatOf } from "../agents/registry.ts"
 import { readApproval, verifyApproval } from "../approval/record.ts"
 import { appendAuditEntry } from "../audit/chain.ts"
+import { buildDossier, writeDossier } from "../claims/dossier.ts"
+import { claimsFromAudit } from "../claims/research.ts"
 import { factoryLayout } from "../layout.ts"
 import { auditMarkdown, formatCoverage } from "../research/auditor.ts"
 import { researchCache } from "../research/ops.ts"
@@ -39,6 +41,8 @@ import {
   type Stage,
   type Verdict,
 } from "./state.ts"
+import { factorySummary } from "./summary.ts"
+import { deferredFacts, diffFrontier, readFrontier, reopenedNodes, treeCounts } from "./tree.ts"
 
 /** The operation was refused; state is unchanged. */
 export class FactoryError extends Error {}
@@ -98,6 +102,8 @@ export interface FactoryDeps {
   readonly now?: () => Date
   /** Require a red test run before `complete` (failing test first). Default true. */
   readonly requireRedFirst?: boolean
+  /** Config research.depth, shown in the summary during RESEARCH (advisory). */
+  readonly researchDepth?: number
 }
 
 export interface CompleteResult {
@@ -242,21 +248,53 @@ export class Factory {
     )
   }
 
-  /** Grill writes the design tree through this (agents cannot write the control file directly). */
+  /**
+   * Grill writes the design tree through this (agents cannot write the control
+   * file directly). Each write carries the full tree and is checked against the
+   * previous one (see diffFrontier): no deleted nodes, no silent edits to
+   * settled answers, no going back a round.
+   */
   async writeFrontier(agentId: string | undefined, frontier: unknown): Promise<Frontier> {
     this.requireSeat(agentId, "grill", "factory")
     return this.mutate(
       `agent:${agentId}`,
       async (state) => {
         this.requireStage(state, "GRILL")
-        const parsed = FrontierSchema.parse(frontier)
-        await writeJson(this.layout.frontier, parsed)
+        const parsed = FrontierSchema.safeParse(frontier)
+        if (!parsed.success)
+          throw new FactoryError(
+            `The frontier is invalid: ${parsed.error.issues.map((issue) => `${issue.path.join(".") || "frontier"}: ${issue.message}`).join("; ")}`,
+          )
+        const previous = await readFrontier(this.root).catch((error: Error) => {
+          throw new FactoryError(error.message)
+        })
+        const problems = diffFrontier(previous, parsed.data)
+        if (problems.length) throw new FactoryError(`The frontier write was refused:\n- ${problems.join("\n- ")}`)
+        await writeJson(this.layout.frontier, parsed.data)
         await rebaseline(this.root, `agent:${agentId} via es_frontier_write`)
-        await this.audit(`agent:${agentId}`, "frontier.write", { settled: parsed.settled, nodes: parsed.nodes.length })
-        return parsed
+        const counts = treeCounts(parsed.data)
+        await this.audit(`agent:${agentId}`, "frontier.write", {
+          settled: parsed.data.settled,
+          nodes: counts.total,
+          round: counts.round,
+          open: counts.open,
+          deferred: counts.deferred,
+          reopened: reopenedNodes(previous, parsed.data),
+        })
+        return parsed.data
       },
       { create: true },
     )
+  }
+
+  /** The `<factory-state>` block with the design tree's progress line. */
+  async summary(state?: FactoryState): Promise<string> {
+    const current = state ?? (await this.read())
+    const frontier = await readFrontier(this.root).catch(() => undefined)
+    return factorySummary(current, {
+      ...(frontier ? { frontier } : {}),
+      ...(this.deps.researchDepth !== undefined ? { researchDepth: this.deps.researchDepth } : {}),
+    })
   }
 
   async beginResearch(actor: string): Promise<FactoryState> {
@@ -282,7 +320,7 @@ export class Factory {
         throw new FactoryError("Research is not done: .factory/research/REPORT.md does not exist.")
       const cache = researchCache(this.root)
       const audit = await auditMarkdown(report, cache)
-      await writeJson(path.join(this.layout.research, "coverage.json"), {
+      await writeJson(this.layout.researchCoverage, {
         ...audit.coverage,
         passed: audit.passed,
         at: this.now().toISOString(),
@@ -291,6 +329,33 @@ export class Factory {
         throw new FactoryError(
           `The research report does not pass the epistemic audit.\n${formatCoverage(audit)}\nFix or prune the claims (es_research_audit with prune:true), then try again.`,
         )
+      // Facts the grill could not settle from the repo are research's to answer:
+      // each deferred fact node must be cited on a (grounded) claim line.
+      const frontier = await readFrontier(this.root).catch(() => undefined)
+      const unanswered = (frontier ? deferredFacts(frontier) : []).filter(
+        (fact) => !audit.claims.some((claim) => claim.text.includes(`(fact:${fact.id})`)),
+      )
+      if (unanswered.length)
+        throw new FactoryError(
+          `Research must answer every fact the grill deferred to it. Missing: ${unanswered
+            .map((fact) => `${fact.id} — ${fact.question}`)
+            .join(
+              "; ",
+            )}. Answer each on a tagged claim line in REPORT.md marked (fact:<id>), e.g. "- Postgres 16 is supported (fact:db) [VERIFIED: …]".`,
+        )
+      // The report's claims become the research dossier (witnessed again on write).
+      const dossier = await writeDossier(
+        this.layout.researchDossier,
+        buildDossier({
+          mode: "research",
+          subject: frontier?.idea ?? "research",
+          claims: await claimsFromAudit(audit, cache),
+          now: this.now(),
+        }),
+        { cache, now: () => this.now() },
+      ).catch((error: Error) => {
+        throw new FactoryError(`The research dossier could not be written: ${error.message}`)
+      })
       // Keep only the evidence the report cites, so the tracked cache stays small.
       const removed = await cache.prune(new Set(audit.cited))
       state.stage = "SPEC"
@@ -298,6 +363,8 @@ export class Factory {
         reportHash: sha256(report),
         coverage: audit.coverage,
         prunedSources: removed.length,
+        claims: dossier.claims.length,
+        evidenceHash: dossier.evidenceHash,
       })
       return state
     })

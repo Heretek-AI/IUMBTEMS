@@ -50,6 +50,35 @@ export const EsConfigSchema = z
       .enum(["brave", "firecrawl", "searxng"])
       .describe("Web search provider; the default is the first one with credentials.")
       .optional(),
+    research: z
+      .object({
+        depth: z
+          .number()
+          .int()
+          .min(1)
+          .max(4)
+          .describe(
+            "Research depth (advisory, shown in <factory-state> during RESEARCH): 1 brief, 2 thesis + antithesis, 3 plus a verification pass, 4 exhaustive.",
+          )
+          .default(2),
+        cacheTtlDays: z
+          .number()
+          .int()
+          .nonnegative()
+          .describe(
+            "Days es_research_fetch serves a cached page without refetching; unset: 7, or 30 for documentation hosts.",
+          )
+          .optional(),
+        searchTimeoutS: z.number().min(1).describe("Timeout for one search-provider request, in seconds.").optional(),
+        searxngUrl: z
+          .string()
+          .regex(/^https?:\/\/[^\s/]+\S*$/, "expected an http(s) URL")
+          .describe("SearXNG instance (else SEARXNG_URL). Global config or plugin options only.")
+          .optional(),
+      })
+      .strict()
+      .describe("Research-stage tunables (ported from the 0.7 configure tool).")
+      .default({ depth: 2 }),
     licenseWhitelist: z
       .array(z.string())
       .describe(

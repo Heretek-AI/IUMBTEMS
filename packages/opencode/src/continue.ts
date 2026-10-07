@@ -2,7 +2,7 @@
 // work remains (not halted, not waiting on a human approval or the grill), we
 // re-prompt it to continue. Progress-aware: three idle turns without any state
 // change stop the loop so a confused agent cannot spin on budget.
-import { factorySummary, pendingApprovals } from "@heretek-ai/es-core"
+import { pendingApprovals } from "@heretek-ai/es-core"
 import type { Runtime } from "./runtime.ts"
 
 const ACTIVE = new Set(["RESEARCH", "SPEC", "BUILD", "QA", "RELEASE"])
@@ -34,7 +34,7 @@ export function createFactoryContinuation(
     if (count >= STALL_LIMIT) return
     await ctx.session.prompt({
       sessionID,
-      text: `${factorySummary(state)}\nThe factory run is not finished. Continue from the current stage (no human is needed unless an approval is due).`,
+      text: `${await runtime.factory.summary(state)}\nThe factory run is not finished. Continue from the current stage (no human is needed unless an approval is due).`,
     })
   }
 }

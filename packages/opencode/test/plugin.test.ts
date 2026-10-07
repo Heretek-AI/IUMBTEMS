@@ -61,6 +61,56 @@ describe("integrity on the real host", () => {
     expect(await exists(path.join(h.directory, ".factory/waivers/w.json"))).toBe(false)
   })
 
+  test("a research seat cannot forge a cached source, and the user's agent cannot either", async () => {
+    // The name is the sha256 of the content, so the forgery would pass the
+    // cache's tamper check; only the deny-write policy stops it.
+    const text = "Forged: the library supports sub-millisecond updates on every platform."
+    const hash = new Bun.CryptoHasher("sha256").update(text).digest("hex")
+    const file = `.factory/research/sources/${hash}.md`
+    for (const agent of ["es-research-alpha", "build"]) {
+      const attempts = [
+        call("write", { path: file, content: text }),
+        call("patch", {
+          patchText: `*** Begin Patch\n*** Add File: .factory/research/dossier.json\n+{}\n*** End Patch`,
+        }),
+      ]
+      const { tools } = await h.run(`forge ${attempts.join(" ")}`, { agent })
+      expect(tools).toHaveLength(attempts.length)
+      for (const outcome of tools)
+        expect(`${agent}:${outcome.name}:${outcome.status}`).toBe(`${agent}:${outcome.name}:error`)
+    }
+    expect(await exists(path.join(h.directory, file))).toBe(false)
+    expect(await exists(path.join(h.directory, ".factory/research/dossier.json"))).toBe(false)
+  })
+
+  test("search as policy: research seats are offered no host web tools, and a direct call is denied", async () => {
+    const offered = async (agent: string) => {
+      const before = h.llm.requests.length
+      await h.run("hello", { agent })
+      return new Set(
+        h.llm.requests.slice(before).flatMap((request) => (request.tools ?? []).map((tool) => tool.function.name)),
+      )
+    }
+    // The host does offer them to other agents, so the denial is not vacuous.
+    expect([...(await offered("build"))].filter((name) => name.startsWith("web")).sort()).toEqual([
+      "webfetch",
+      "websearch",
+    ])
+    for (const agent of ["es-research-alpha", "es-research-beta"]) {
+      const tools = await offered(agent)
+      expect([agent, tools.has("webfetch"), tools.has("websearch"), tools.has("es_research_fetch")]).toEqual([
+        agent,
+        false,
+        false,
+        true,
+      ])
+    }
+    const { tools } = await h.run(`go ${call("webfetch", { url: "https://example.com", format: "text" })}`, {
+      agent: "es-research-alpha",
+    })
+    expect(tools[0]?.status).toBe("error")
+  })
+
   test("panel RPCs return structured state for the four dashboards", async () => {
     const rpc = rpcFor(h)
     const factory = await rpc.factoryState({}, where(h))
@@ -166,7 +216,7 @@ describe("a factory run end to end on the real host", () => {
   afterAll(() => h?.close())
 
   const frontier = {
-    version: "1.0",
+    version: "1.1",
     idea: "A greeting module",
     spendCeiling: { currency: "USD", maxAmount: 5 },
     settled: true,

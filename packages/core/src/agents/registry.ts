@@ -45,6 +45,12 @@ export interface AgentSpec {
   readonly mcp: readonly string[]
   /** Language-server tools: "full" includes applying renames, "read" is navigation and diagnostics only. */
   readonly lsp: "full" | "read" | "none"
+  /**
+   * Web access. "cached": the host's websearch and webfetch are denied, so every
+   * web fact comes through es_research_search / es_research_fetch (cached,
+   * content-addressed, citable). "host": the host's own tools, unchanged.
+   */
+  readonly web: "host" | "cached"
 }
 
 const SEATS_SPAWNED_BY_FACTORY = [
@@ -75,6 +81,7 @@ const LENS_SPECS: AgentSpec[] = LENSES.map((lens) => ({
   skills: [],
   mcp: [],
   lsp: "none",
+  web: "host",
 }))
 
 export const AGENTS: readonly AgentSpec[] = [
@@ -102,6 +109,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: ["factory"],
     mcp: [],
     lsp: "read",
+    web: "host",
   },
   {
     id: "grill",
@@ -118,6 +126,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: ["grill"],
     mcp: [],
     lsp: "none",
+    web: "host",
   },
   {
     id: "brainstormer",
@@ -134,6 +143,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: ["brainstorm"],
     mcp: [],
     lsp: "none",
+    web: "host",
   },
   {
     id: "harvester",
@@ -159,6 +169,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: ["harvest"],
     mcp: [],
     lsp: "none",
+    web: "host",
   },
   {
     id: "designer",
@@ -182,6 +193,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: ["queereye"],
     mcp: [],
     lsp: "none",
+    web: "host",
   },
   {
     id: "es-manager",
@@ -198,6 +210,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: ["factory"],
     mcp: [],
     lsp: "read",
+    web: "host",
   },
   {
     id: "es-programmer",
@@ -214,6 +227,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: [],
     mcp: [],
     lsp: "full",
+    web: "host",
   },
   {
     id: "es-qa-functional",
@@ -230,6 +244,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: [],
     mcp: [],
     lsp: "read",
+    web: "host",
   },
   {
     id: "es-qa-adversarial",
@@ -246,6 +261,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: [],
     mcp: [],
     lsp: "read",
+    web: "host",
   },
   {
     id: "es-research-alpha",
@@ -262,6 +278,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: [],
     mcp: [],
     lsp: "none",
+    web: "cached",
   },
   {
     id: "es-research-beta",
@@ -278,6 +295,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: [],
     mcp: [],
     lsp: "none",
+    web: "cached",
   },
   {
     id: "es-brainstorm-critic",
@@ -294,6 +312,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: [],
     mcp: [],
     lsp: "none",
+    web: "host",
   },
   ...LENS_SPECS,
 ]

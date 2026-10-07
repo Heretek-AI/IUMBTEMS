@@ -11,6 +11,9 @@ import { type ConfirmIO, confirmWithCode, NotInteractive } from "../src/tty.ts"
 
 let root: string
 let state: string
+// The global config layer lives under XDG_CONFIG_HOME: point it into the
+// test's state dir so `--global` never touches the real ~/.config.
+const realXdgConfig = process.env.XDG_CONFIG_HOME
 const git = async (...args: string[]) => {
   const proc = Bun.spawn(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" })
   await proc.exited
@@ -19,12 +22,15 @@ const git = async (...args: string[]) => {
 beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), "es-cli-"))
   state = await mkdtemp(path.join(tmpdir(), "es-cli-state-"))
+  process.env.XDG_CONFIG_HOME = path.join(state, "xdg-config")
   await git("init", "-q", "-b", "main")
   await writeFile(path.join(root, "README.md"), "# x\n")
   await git("add", "-A")
   await git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
 })
 afterEach(async () => {
+  if (realXdgConfig === undefined) delete process.env.XDG_CONFIG_HOME
+  else process.env.XDG_CONFIG_HOME = realXdgConfig
   await rm(root, { recursive: true, force: true })
   await rm(state, { recursive: true, force: true })
 })
@@ -50,7 +56,7 @@ async function run(argv: string[], confirm: ConfirmIO = pipe) {
 async function grilledFrontier() {
   const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
   await factory.writeFrontier("grill", {
-    version: "1.0",
+    version: "1.1",
     idea: "cli test",
     spendCeiling: { currency: "USD", maxAmount: 3 },
     settled: true,
@@ -104,6 +110,124 @@ describe("human-only confirmation", () => {
     )
     expect(granted.code).toBe(0)
     expect(granted.out).toContain("granted")
+  })
+})
+
+describe("research brief and retractions", () => {
+  async function researched() {
+    const { buildDossier, normalizeClaim, researchSourcesDir, SourceCache, writeDossier } = await import(
+      "@heretek-ai/es-core"
+    )
+    const cache = new SourceCache(researchSourcesDir(root))
+    const source = await cache.put({
+      url: "https://x.test/cli",
+      text: "The CLI exports a signed brief that anyone holding the key can verify.",
+      provider: "fetch",
+    })
+    const claim = normalizeClaim({
+      tag: "VERIFIED",
+      statement: "Briefs are signed.",
+      source: { sha256: source.meta.sha256, quote: "exports a signed brief" },
+    })
+    await writeFile(path.join(root, ".factory/research/REPORT.md"), "# R\n")
+    await writeDossier(
+      factoryLayout(root).researchDossier,
+      buildDossier({ mode: "research", subject: "cli", claims: [claim] }),
+      { cache },
+    )
+    return source.meta.sha256
+  }
+
+  test("export writes a signed brief that verify-brief accepts, and a tampered one fails", async () => {
+    await researched()
+    expect((await run(["research", "export", "--help"])).code).toBe(0)
+    expect(await exists(factoryLayout(root).researchBrief)).toBe(false)
+    const exported = await run(["research", "export"])
+    expect(exported.code).toBe(0)
+    expect(exported.out).toContain("Exported .factory/research/brief.pcrb.json")
+    const verified = await run(["research", "verify-brief", ".factory/research/brief.pcrb.json"])
+    expect([verified.code, verified.out.split("\n")[0]]).toEqual([
+      0,
+      "Brief OK: source identity pass, manifest pass, signature valid, quotes pass",
+    ])
+    const file = factoryLayout(root).researchBrief
+    const brief = JSON.parse(await Bun.file(file).text())
+    brief.claims[0].statement = "Briefs are unsigned."
+    await writeFile(path.join(root, "tampered.json"), JSON.stringify(brief))
+    const tampered = await run(["research", "verify-brief", "tampered.json"])
+    expect(tampered.code).toBe(1)
+    expect(tampered.out).toContain("Brief FAILED")
+    expect((await run(["research", "verify-brief"])).code).toBe(2)
+  })
+
+  test("retract is human-only and degrades the claims that cite the source", async () => {
+    const { ClaimStore } = await import("@heretek-ai/es-core")
+    const source = await researched()
+    expect((await run(["research", "retract", source, "--event", "retracted"])).code).toBe(3)
+    expect(await exists(factoryLayout(root).retractions)).toBe(false)
+    expect((await run(["research", "retract", "abc", "--event", "retracted"], human())).code).toBe(2)
+    expect((await run(["research", "retract", source, "--event", "maybe"], human())).code).toBe(2)
+    const recorded = await run(["research", "retract", source, "--event", "retracted", "--note", "withdrawn"], human())
+    expect(recorded.code).toBe(0)
+    expect(recorded.out).toContain("1 claim(s) citing")
+    expect((await ClaimStore.load(root)).citing(source).map((claim) => claim.status)).toEqual(["STALE"])
+  })
+})
+
+describe("es config set", () => {
+  const projectConfig = () => Bun.file(factoryLayout(root).config).json()
+
+  test("is human-only, schema-validated, previewed, and re-pins the project config", async () => {
+    const { verifyAuditChain, verifyControl, rebaseline } = await import("@heretek-ai/es-core")
+    await rebaseline(root, "test")
+    expect((await run(["config", "set", "research.depth", "3", "--help"])).code).toBe(0)
+    expect((await run(["config", "set", "research.depth", "3"])).code).toBe(3)
+    expect(await exists(factoryLayout(root).config)).toBe(false)
+    const io = human()
+    const set = await run(["config", "set", "research.depth", "3"], io)
+    expect(set.code).toBe(0)
+    expect(io.output.join("")).toContain("research.depth: (unset) → 3")
+    expect(await projectConfig()).toEqual({ research: { depth: 3 } })
+    expect((await verifyControl(root)).clean).toBe(true)
+    const audit = await verifyAuditChain(root)
+    expect(audit.entries.map((entry) => entry.action)).toContain("config.set")
+    expect((await run(["config", "set", "research.depth", "3"], human())).out).toContain("already 3")
+    expect((await run(["config", "show"])).out).toContain('"depth": 3')
+  })
+
+  test("rejects unknown keys, invalid values and project-forbidden keys (those go --global)", async () => {
+    const typo = await run(["config", "set", "reserch.depth", "3"], human())
+    expect([typo.code, typo.out]).toEqual([1, expect.stringContaining("Refused")])
+    expect((await run(["config", "set", "research.depth", "9"], human())).code).toBe(1)
+    expect((await run(["config", "set", "afterEdit", "sometimes"], human())).code).toBe(1)
+    const forbidden = await run(["config", "set", "research.searxngUrl", "https://search.test"], human())
+    expect([forbidden.code, forbidden.out]).toEqual([1, expect.stringContaining("--global")])
+    expect(await exists(factoryLayout(root).config)).toBe(false)
+    const global = await run(["config", "set", "research.searxngUrl", "https://search.test", "--global"], human())
+    expect(global.code).toBe(0)
+    const file = path.join(state, "xdg-config", "epistemic-swarm", "config.json")
+    expect(await Bun.file(file).json()).toEqual({ research: { searxngUrl: "https://search.test" } })
+    expect((await run(["config", "set", "research.searxngUrl", "null", "--global"], human())).code).toBe(0)
+    expect(await Bun.file(file).json()).toEqual({ research: {} })
+    expect((await run(["config", "set", "research.depth"], human())).code).toBe(2)
+  })
+
+  test("never launders drift in other control files; accepts a pending hand edit to config.json only openly", async () => {
+    const { rebaseline, verifyControl } = await import("@heretek-ai/es-core")
+    await mkdir(factoryLayout(root).dir, { recursive: true })
+    await writeFile(factoryLayout(root).config, '{"pr":"off"}\n')
+    await rebaseline(root, "test")
+    await writeFile(factoryLayout(root).gates, '{"version":1}\n')
+    const refused = await run(["config", "set", "research.depth", "4"], human())
+    expect([refused.code, refused.out]).toEqual([1, expect.stringContaining("es rebaseline")])
+    expect(await projectConfig()).toEqual({ pr: "off" })
+    await rebaseline(root, "test")
+    await writeFile(factoryLayout(root).config, '{"pr":"gh"}\n')
+    const io = human()
+    expect((await run(["config", "set", "research.depth", "4"], io)).code).toBe(0)
+    expect(io.output.join("")).toContain("accepted along with it")
+    expect(await projectConfig()).toEqual({ pr: "gh", research: { depth: 4 } })
+    expect((await verifyControl(root)).clean).toBe(true)
   })
 })
 

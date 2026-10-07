@@ -1,9 +1,23 @@
+import type { Frontier } from "../schema/frontier.ts"
 import type { FactoryState } from "./state.ts"
+import { treeLine } from "./tree.ts"
+
+export interface SummaryExtras {
+  /** The design tree, for its progress line (read it with readFrontier). */
+  readonly frontier?: Frontier
+  /** Config research.depth, shown during RESEARCH. */
+  readonly researchDepth?: number
+}
+
+const DEPTH = ["", "a brief", "thesis + antithesis", "thesis + antithesis, then a verification pass", "exhaustive"]
 
 /** Compact factory-state block for system-context injection and compaction. */
-export function factorySummary(state: FactoryState | undefined): string {
+export function factorySummary(state: FactoryState | undefined, extras: SummaryExtras = {}): string {
   if (!state) return "<factory-state>No factory run in this project. Start one with /grill.</factory-state>"
   const lines = [`run ${state.runId} · stage ${state.stage}`]
+  if (extras.frontier) lines.push(treeLine(extras.frontier))
+  if (state.stage === "RESEARCH" && extras.researchDepth !== undefined)
+    lines.push(`research depth ${extras.researchDepth}: ${DEPTH[extras.researchDepth] ?? "custom"}`)
   if (state.spendCeilingUSD !== undefined)
     lines.push(
       `spend $${state.spend.usd.toFixed(2)}${state.spend.estimated ? " (est.)" : ""} / ceiling $${state.spendCeilingUSD}`,

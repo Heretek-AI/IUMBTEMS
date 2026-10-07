@@ -32,7 +32,7 @@ export async function gitRepo(prefix = "es-fx-"): Promise<Fixture> {
 }
 
 export const frontier = (overrides: Record<string, unknown> = {}) => ({
-  version: "1.0",
+  version: "1.1",
   idea: "A greeting library",
   spendCeiling: { currency: "USD", maxAmount: 25 },
   settled: true,

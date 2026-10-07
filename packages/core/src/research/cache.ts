@@ -1,11 +1,13 @@
 // Content-addressed source cache: <dir>/<sha256>.md holds the exact text a
 // claim may quote; <sha256>.json holds where it came from. Identical content
-// shares one entry; the URL index maps URLs to their latest snapshot.
+// shares one entry; the URL index maps canonical URLs (research/url.ts) to
+// their latest snapshot.
 import { readdir, readFile, rm } from "node:fs/promises"
 import path from "node:path"
 import { factoryLayout } from "../layout.ts"
 import { atomicWrite, readJson } from "../util/fs.ts"
 import { sha256 } from "../util/hash.ts"
+import { canonicalUrl } from "./url.ts"
 
 export interface SourceMeta {
   readonly sha256: string
@@ -66,7 +68,7 @@ export class SourceCache {
     await atomicWrite(file, text)
     await atomicWrite(path.join(this.dir, `${hash}.json`), `${JSON.stringify(meta, null, 2)}\n`)
     const index = (await readJson<Record<string, string>>(path.join(this.dir, "index.json"))) ?? {}
-    index[input.url] = hash
+    index[canonicalUrl(input.url) ?? input.url] = hash
     await atomicWrite(path.join(this.dir, "index.json"), `${JSON.stringify(index, null, 2)}\n`)
     return { meta, text, path: file }
   }
@@ -90,7 +92,8 @@ export class SourceCache {
 
   async byUrl(url: string): Promise<CachedSource | undefined> {
     const index = (await readJson<Record<string, string>>(path.join(this.dir, "index.json"))) ?? {}
-    const hash = index[url]
+    // Canonical key first; raw keys are what 1.0 caches recorded.
+    const hash = index[canonicalUrl(url) ?? url] ?? index[url]
     return hash ? this.get(hash) : undefined
   }
 

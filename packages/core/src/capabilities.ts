@@ -60,7 +60,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     permissions: {
       support: "enforced",
-      detail: "permission.evaluate + tool.execute.before enforce the write/read/shell policy; control files denied.",
+      detail:
+        "permission.evaluate + tool.execute.before enforce the write/read/shell policy; control files (incl. the evidence cache) denied; research seats get no host websearch/webfetch.",
       test: PLUGIN,
     },
     hooks: {
@@ -85,7 +86,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     websearch: {
       support: "enforced",
-      detail: "The configured provider registers as the host websearch; results are cached and citable.",
+      detail:
+        "The configured provider registers as the host websearch; results are cached and citable. Research seats are cached-only: es_research_search/fetch (fresh hits served from the cache).",
       test: "packages/opencode/test/research.test.ts",
     },
     lsp: {

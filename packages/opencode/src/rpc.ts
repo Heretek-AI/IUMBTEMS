@@ -15,12 +15,14 @@ import {
   installServer,
   isTrusted,
   loadGatesConfig,
+  readFrontier,
   readIdeas,
   readPlan,
   readResult,
   readScores,
   recordApproval,
   recordConsent,
+  treeCounts,
   trustProject,
   verifyControl,
   writeJson,
@@ -75,14 +77,16 @@ export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>,
     status: async () => {
       const state = await runtime.factory.read()
       return {
-        summary: factorySummary(state),
+        summary: await runtime.factory.summary(state),
         stage: state?.stage ?? "NONE",
         pending: (await pendingApprovals(runtime.root)).map((item) => item.stage),
       }
     },
     factoryState: async () => {
       const state = await runtime.factory.read()
+      const frontier = await readFrontier(runtime.root).catch(() => undefined)
       return {
+        ...(frontier ? { tree: treeCounts(frontier) } : {}),
         stage: state?.stage ?? "NONE",
         ...(state?.runId ? { runId: state.runId } : {}),
         ...(state?.halt ? { halt: state.halt.reason } : {}),

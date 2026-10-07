@@ -4,9 +4,19 @@ description: Socratic grilling technique for settling a design before building i
 ---
 # Grilling
 
-- Ask one question at a time. Give 2–4 concrete options and your recommendation.
-- Invert assumptions: what if the opposite were true, or the feature were not needed?
+- Map the idea as a design tree. The **frontier** is every open question whose parents are settled. Ask the whole frontier per round: number the questions, and give options plus your recommended answer for each.
+- Round 1 inverts the premises:
+  - Inversion: what if the goal were obsolete?
+  - Scale extremes: 100× load, zero resources.
+  - Adversarial posture: how would someone exploit or falsify this?
+- Facts are the agent's job, decisions are the human's.
+  - Never ask the human what the code does or what a dependency supports.
+  - Look repo facts up yourself.
+  - Defer what only research can answer as a `fact` node.
 - Push on non-goals, failure modes, security, data ownership and how the result will be tested.
-- Settle a decision only with an explicit answer and a one-line justification. Postpone explicitly (`deferred`), never silently.
-- Record the tree as you go. Revisit earlier nodes when a later answer contradicts them.
+- Settle a decision only with an explicit answer and a one-line justification.
+  - Postpone explicitly (`deferred`), never silently.
+  - Change a settled answer by reopening it first, never by overwriting it.
+- Record the tree after every round. Revisit earlier nodes when a later answer contradicts them.
+- Freeze only when the frontier is empty and the human confirms: summarise the settled constraints first.
 - The factory needs an explicit USD spend ceiling before any autonomous work.

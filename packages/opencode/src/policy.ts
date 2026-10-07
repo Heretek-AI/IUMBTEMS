@@ -4,6 +4,7 @@
 // read-only shells under bubblewrap, and get fast gate feedback after edits.
 import path from "node:path"
 import {
+  agentSpec,
   bwrapAvailable,
   checkStopFile,
   evaluateRead,
@@ -19,6 +20,7 @@ import {
   treeFingerprint,
 } from "@heretek-ai/es-core"
 import { Error as ToolError } from "@opencode/plugin/promise/tool"
+import { HOST_WEB_TOOLS } from "./agents.ts"
 import type { Runtime } from "./runtime.ts"
 
 const WRITE_TOOLS = new Set(["write", "edit"])
@@ -63,6 +65,10 @@ export function createPolicyHooks(runtime: Runtime) {
       if (state?.stage === "HALTED")
         deny(`The factory is halted: ${state.halt?.reason}. Stop and report; a human must resume.`)
     }
+    if (agentSpec(event.agent)?.web === "cached" && (HOST_WEB_TOOLS as readonly string[]).includes(event.tool))
+      deny(
+        `Seat "${event.agent}" gets web facts only through es_research_search and es_research_fetch (cached and citable); ${event.tool} is not available to it.`,
+      )
     const context = await runtime.policy()
     if (WRITE_TOOLS.has(event.tool) && typeof input.path === "string") {
       const decision = evaluateWrite(context, event.agent, input.path)

@@ -1,5 +1,69 @@
 # Changelog
 
+## 1.1.0 — unreleased
+
+"Dialectic Restoration" (#20) brings back the best of the 0.7 research
+harness, ported to TypeScript inside the 1.x trust model. Milestones: M1
+foundation (#21), M2 seats (#22), M3 rigor (#23).
+
+**Breaking, no migration.** The frontier schema moves from 1.0 to 1.1. 1.0.x
+frontiers are **not** migrated: a 1.0 `.factory/frontier.json` is refused with
+the fresh-run instruction, so 1.1 needs fresh runs.
+
+### M1: foundation (#21)
+- **Security: cached evidence is tool-only.** Before this release, a research
+  or factory seat could write `.factory/research/sources/<sha256>.md` with made-up
+  text. The cache's only tamper check is "content hashes to the file name",
+  which a forgery passes by construction, so the seat could then cite its own
+  text as VERIFIED. The source cache, `coverage.json`, the research dossier,
+  the signed brief and `.factory/claims/` are now control files: no agent may
+  write them, and seats may not mention them from the shell.
+- **Claim stack** (`packages/core/src/claims/`):
+  - Claims have content-hash ids and both an epistemic tag and a lifecycle
+    status.
+  - The witness re-checks every VERIFIED quote against the cache, and every
+    code location (file, line range and verbatim excerpt) against the file on
+    disk.
+  - Dossiers refuse any claim whose witness fails.
+    `es_research_complete` now writes `.factory/research/dossier.json`.
+  - Retracted sources make their claims STALE, and revised ones SUSPECT
+    (`es research retract`, human-only).
+  - `ClaimStore` indexes the dossiers.
+  - A deterministic, lexicographic ranker orders rival claims and dossiers.
+- **Proof-carrying research brief.** `es research export` writes a signed
+  `.factory/research/brief.pcrb.json`, and `es research verify-brief` checks
+  source identity, the manifest (it notices deleted members), the signature
+  and the quotes.
+- **Design tree (frontier 1.1).** Nodes gain `kind` (decision or fact),
+  `recommended` and `round`. `es_frontier_write` checks each save against the
+  previous one:
+  - no deleted nodes;
+  - no silent edits to settled answers (reopen first);
+  - no going back a round.
+
+  It also returns the next round's questions. `<factory-state>` gains a tree
+  progress line, and the factory panel shows it too.
+- **Facts versus decisions.** The grill settles repo facts itself and defers
+  web facts as `kind: "fact"` nodes. `es_research_complete` refuses until
+  every deferred fact is answered on a grounded claim line marked
+  `(fact:<id>)`.
+- **Prompts.** `grill` goes from v1 to v2: frontier rounds, round-1 premise
+  inversion, the freeze procedure. `factory` goes from v3 to v4: deferred
+  facts and research depth. The 1.0.5 no-run routing is kept.
+- **Search as policy.** Research seats no longer get the host `websearch`
+  or `webfetch` tools; every web fact goes through `es_research_search` and
+  `es_research_fetch`. Fetches are keyed by canonical URL (ported exactly from
+  the 0.7 webcache), and a fresh full-page snapshot is served from the cache.
+  The freshness window is 7 days, or 30 for documentation hosts;
+  `refresh: true` refetches.
+- **Configure.**
+  - New `research.depth` (1–4, advisory), `research.cacheTtlDays`,
+    `research.searchTimeoutS` and `research.searxngUrl` (global only).
+  - `es config set <key> <value> [--global]` is human-only, validated against
+    the schema and confirmed with a typed code. It refuses to accept drift in
+    other control files, and it re-pins the project config.
+- The research auditor's `ClaimStatus` type is renamed `ClaimAuditStatus`.
+
 ## 1.0.5 — 2026-10-07
 
 Run-lifecycle gaps from dogfooding 1.0.4 (#19):

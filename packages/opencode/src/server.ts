@@ -5,7 +5,6 @@ import { readdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import {
   factoryLayout,
-  factorySummary,
   formatReport,
   git,
   loadSkills,
@@ -102,7 +101,7 @@ export default Plugin.define({
     const notify = async () => {
       const state = await runtime.factory.read()
       await registration?.events
-        .emit("changed", { stage: state?.stage ?? "NONE", summary: factorySummary(state) })
+        .emit("changed", { stage: state?.stage ?? "NONE", summary: await runtime.factory.summary(state) })
         .catch(() => undefined)
     }
     registration = await ctx.rpc.register(EsRpc, createRpcHandlers(runtime, notify, bridge.engine) as any)
@@ -182,7 +181,7 @@ export default Plugin.define({
           await ctx.session.prompt({
             ...prompt,
             sessionID,
-            text: `${factorySummary(state)}\nContinue the factory run from its current stage.${prompt.text?.trim() ? `\nHuman note: ${prompt.text}` : ""}`,
+            text: `${await runtime.factory.summary(state)}\nContinue the factory run from its current stage.${prompt.text?.trim() ? `\nHuman note: ${prompt.text}` : ""}`,
             delivery,
           } as any)
         },
@@ -248,7 +247,7 @@ export default Plugin.define({
         name: "status",
         description: "Show the factory state (Epistemic Swarm)",
         execute: async ({ sessionID }) => {
-          await ctx.session.synthetic({ sessionID, text: factorySummary(await runtime.factory.read()) } as any)
+          await ctx.session.synthetic({ sessionID, text: await runtime.factory.summary() } as any)
         },
       })
       editor.add({

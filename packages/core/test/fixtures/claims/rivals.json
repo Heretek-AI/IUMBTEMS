@@ -1,0 +1,41 @@
+{
+  "note": "Rival claims and dossiers for claims/rank.ts. Sources are labels (S1, S2) resolved to the sha256 of their text by the test; parents are claim labels. Expected orders hold for every permutation of the input.",
+  "sources": {
+    "S1": "The scheduler commits each batch atomically and replays the journal after a crash.",
+    "S2": "Benchmarks on the reference machine show 4.2 GB/s sustained throughput for sequential reads."
+  },
+  "claims": [
+    { "label": "verified-a", "status": "LIVE", "witness": "ok", "input": { "tag": "VERIFIED", "statement": "Batches commit atomically.", "source": { "ref": "S1", "quote": "commits each batch atomically" } } },
+    { "label": "verified-b", "status": "LIVE", "witness": "ok", "input": { "tag": "VERIFIED", "statement": "Sequential reads sustain 4.2 GB/s.", "source": { "ref": "S2", "quote": "4.2 GB/s sustained throughput" } } },
+    { "label": "inferred-two-sources", "status": "LIVE", "witness": "ok", "input": { "tag": "INFERRED", "statement": "Crash recovery will not bottleneck reads.", "reasoning": "atomic batches plus fast reads", "parents": ["verified-a", "verified-b"] } },
+    { "label": "inferred-one-source", "status": "LIVE", "witness": "ok", "input": { "tag": "INFERRED", "statement": "Partial batches never reach readers.", "reasoning": "follows from atomic commits", "parents": ["verified-a"] } },
+    { "label": "nk", "status": "LIVE", "witness": "ok", "input": { "kind": "negative_knowledge", "query": "scheduler data loss reports", "finding": "No data-loss reports were found." } },
+    { "label": "inferred-loose", "status": "LIVE", "witness": "ok", "input": { "tag": "INFERRED", "statement": "The design probably scales to many writers.", "reasoning": "a hunch from the docs" } },
+    { "label": "hypothesis", "status": "LIVE", "witness": "ok", "input": { "tag": "HYPOTHESIS", "statement": "Throughput halves under random reads.", "falsification": "benchmark random reads" } },
+    { "label": "verified-unchecked", "status": "LIVE", "witness": null, "input": { "tag": "VERIFIED", "statement": "Replay runs after a crash.", "source": { "ref": "S1", "quote": "replays the journal after a crash" } } },
+    { "label": "verified-failed", "status": "LIVE", "witness": "failed", "input": { "tag": "VERIFIED", "statement": "Reads reach 9 GB/s.", "source": { "ref": "S2", "quote": "9 GB/s sustained throughput" } } },
+    { "label": "verified-suspect", "status": "SUSPECT", "witness": "ok", "input": { "tag": "VERIFIED", "statement": "The journal is replayed.", "source": { "ref": "S1", "quote": "replays the journal" } } },
+    { "label": "verified-stale", "status": "STALE", "witness": "ok", "input": { "tag": "VERIFIED", "statement": "Throughput is sustained.", "source": { "ref": "S2", "quote": "sustained throughput for sequential reads" } } },
+    { "label": "verified-rejected", "status": "REJECTED", "witness": "ok", "input": { "tag": "VERIFIED", "statement": "Batches are atomic.", "source": { "ref": "S1", "quote": "each batch atomically" } } }
+  ],
+  "expectedClaims": [
+    "verified-a|verified-b",
+    "inferred-two-sources",
+    "inferred-one-source",
+    "nk",
+    "inferred-loose",
+    "hypothesis",
+    "verified-unchecked",
+    "verified-failed",
+    "verified-suspect",
+    "verified-stale",
+    "verified-rejected"
+  ],
+  "dossiers": [
+    { "label": "clean", "subject": "storage engine", "claims": ["verified-a", "verified-b", "nk"] },
+    { "label": "thin", "subject": "storage engine", "claims": ["verified-a"] },
+    { "label": "degraded", "subject": "storage engine", "claims": ["verified-a", "verified-b", "verified-suspect"] },
+    { "label": "failed", "subject": "storage engine", "claims": ["verified-a", "verified-b", "verified-failed"] }
+  ],
+  "expectedDossiers": ["clean", "thin", "degraded", "failed"]
+}

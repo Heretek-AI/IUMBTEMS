@@ -30,6 +30,12 @@ export const FACTORY_CONTROL = [
   ".factory/harvest/*/profile.json",
   ".factory/harvest/clean-room/**",
   ".factory/design/*.{json,css,md}",
+  // Evidence: the content-addressed source cache, the research audit's
+  // outputs and the claim ledger. A seat that could write here could forge a
+  // source (its file name is just its own sha256) and cite it as VERIFIED.
+  ".factory/research/sources/**",
+  ".factory/research/{coverage,dossier,brief.pcrb}.json",
+  ".factory/claims/**",
   ".git/config",
   ".git/hooks/**",
 ] as const

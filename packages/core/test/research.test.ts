@@ -5,14 +5,17 @@ import path from "node:path"
 import {
   auditMarkdown,
   braveProvider,
+  canonicalUrl,
   firecrawlProvider,
   htmlToText,
+  isFresh,
   parseTags,
   pruneClaims,
   researchTools,
   SourceCache,
   searxngProvider,
   selectProvider,
+  ttlDays,
   verifyQuote,
 } from "../src/index.ts"
 
@@ -162,5 +165,72 @@ describe("providers", () => {
     expect(stored?.text).toContain("TypeScript-first schema validation")
     const search = tools.find((tool) => tool.name === "es_research_search")!
     await expect(search.execute({ query: "x" }, { agent: "es-research-alpha" })).rejects.toThrow("No search provider")
+  })
+})
+
+describe("the webcache gate (d66328c:skills/epistemic_search/scripts/webcache.py)", () => {
+  test("canonicalUrl matches the legacy canonical_url on every fixture case", async () => {
+    const fixture = (await Bun.file(path.join(import.meta.dir, "fixtures/canonical-urls.json")).json()) as {
+      cases: Array<{ url: string; canonical: string | null }>
+    }
+    expect(fixture.cases.length).toBeGreaterThan(20)
+    for (const item of fixture.cases)
+      expect([item.url, canonicalUrl(item.url) ?? null]).toEqual([item.url, item.canonical])
+  })
+
+  test("pages stay fresh 7 days, documentation hosts 30, unless overridden (ttl_days, is_fresh)", () => {
+    const now = new Date("2026-10-07T00:00:00Z")
+    const daysAgo = (days: number) => new Date(now.getTime() - days * 86_400_000).toISOString()
+    expect([
+      ttlDays("https://example.com/x"),
+      ttlDays("https://docs.python.org/3/"),
+      ttlDays("https://a.developer.mozilla.org/"),
+    ]).toEqual([7, 30, 30])
+    expect(ttlDays("https://docs.python.org/3/", 2)).toBe(2)
+    expect(isFresh(daysAgo(7), "https://example.com/x", { now })).toBe(true)
+    expect(isFresh(daysAgo(8), "https://example.com/x", { now })).toBe(false)
+    expect(isFresh(daysAgo(20), "https://docs.python.org/3/", { now })).toBe(true)
+    expect(isFresh("not a date", "https://example.com/x", { now })).toBe(false)
+  })
+
+  test("a fresh snapshot of the same canonical URL is served without the network; refresh or staleness fetches", async () => {
+    let calls = 0
+    let now = new Date("2026-10-07T00:00:00Z")
+    const tools = researchTools({
+      root: dir,
+      env: {},
+      policy: async () => ({ root: dir }),
+      now: () => now,
+      fetch: (async () => {
+        calls++
+        return new Response(`<p>Version ${calls} of the page says the limit is ten requests per second.</p>`, {
+          headers: { "content-type": "text/html" },
+        })
+      }) as unknown as typeof fetch,
+    })
+    const fetchTool = tools.find((tool) => tool.name === "es_research_fetch")!
+    const first = await fetchTool.execute({ url: "https://Limits.test/api?b=2&a=1" }, { agent: "es-research-alpha" })
+    expect(first).toContain("Cached https://Limits.test/api?b=2&a=1")
+    // Different spelling, same canonical URL: served from the cache.
+    const second = await fetchTool.execute(
+      { url: "https://limits.test:443/api?a=1&b=2#top" },
+      { agent: "es-research-alpha" },
+    )
+    expect(second).toContain("from the cache")
+    expect(second).toContain("Version 1 of the page")
+    expect(calls).toBe(1)
+    expect(
+      await fetchTool.execute({ url: "https://limits.test/api?a=1&b=2", refresh: true }, { agent: "x" }),
+    ).toContain("Version 2")
+    now = new Date("2026-10-20T00:00:00Z")
+    expect(await fetchTool.execute({ url: "https://limits.test/api?a=1&b=2" }, { agent: "x" })).toContain("Version 3")
+    expect(calls).toBe(3)
+    // A search result cached under the page's URL is a snippet, never served as the page.
+    await new SourceCache(path.join(dir, ".factory/research/sources")).put({
+      url: "https://limits.test/api?a=1&b=2",
+      text: "Snippet: limits are documented.",
+      provider: "searxng",
+    })
+    expect(await fetchTool.execute({ url: "https://limits.test/api?a=1&b=2" }, { agent: "x" })).toContain("Version 4")
   })
 })

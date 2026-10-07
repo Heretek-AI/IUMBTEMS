@@ -15,6 +15,7 @@ const data: Record<string, any> = {
       { id: "p2", title: "Gate", status: "building", failures: 1, qa: {} },
     ],
     pending: [],
+    tree: { round: 3, total: 9, settled: 6, open: 1, deferred: 2, facts: 1, frontier: 1 },
   },
   lspState: {
     enabled: true,

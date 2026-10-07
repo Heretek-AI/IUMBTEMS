@@ -68,6 +68,13 @@ const FactoryPanel = (props: PanelProps) => {
               {data().spend.ceilingUSD ? ` / $${data().spend.ceilingUSD}` : ""}
               {data().spend.estimated ? " (estimated)" : ""}
             </text>
+            <Show when={data().tree}>
+              <text>
+                Design tree (round {data().tree.round}): {data().tree.settled} settled · {data().tree.open} open ·{" "}
+                {data().tree.deferred} deferred
+                {data().tree.facts ? ` (${data().tree.facts} for research)` : ""}
+              </text>
+            </Show>
             <Show when={data().halt}>
               <text>HALTED: {data().halt}</text>
             </Show>

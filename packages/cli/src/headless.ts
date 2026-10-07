@@ -7,7 +7,7 @@ import { spawn } from "node:child_process"
 import { accessSync, constants } from "node:fs"
 import path from "node:path"
 import { createInterface } from "node:readline"
-import { Factory, type FactoryState, factorySummary, gateRunner, pendingApprovals } from "@heretek-ai/es-core"
+import { Factory, type FactoryState, gateRunner, pendingApprovals } from "@heretek-ai/es-core"
 
 export type HeadlessEvent =
   | { type: "start"; runId: string; stage: string; driver: string }
@@ -159,7 +159,7 @@ export async function* runHeadless(options: HeadlessOptions): AsyncGenerator<Hea
     const turn = options.driver.turn({
       root: options.root,
       agent: "factory",
-      prompt: `${factorySummary(state)}\nContinue the factory run from its current stage. This is a headless run: no human will answer questions.`,
+      prompt: `${await factory.summary(state)}\nContinue the factory run from its current stage. This is a headless run: no human will answer questions.`,
       ...(session ? { session } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     })

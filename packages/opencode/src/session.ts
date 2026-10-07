@@ -14,15 +14,17 @@ export function createSessionHooks(runtime: Runtime) {
     for (const name of ALL_ES_TOOLS) if (!visible.has(name)) delete event.tools[name]
     if (!FACTORY_AGENTS.has(event.agent)) return
     const state = await runtime.factory.read().catch(() => undefined)
-    event.system.push({ type: "text", text: factorySummary(state) })
+    const summary = state ? await runtime.factory.summary(state) : factorySummary(undefined)
+    event.system.push({ type: "text", text: summary })
   }
 
   const compaction = async (event: { agent: string; system: any[] }) => {
     if (!FACTORY_AGENTS.has(event.agent)) return
     const state = await runtime.factory.read().catch(() => undefined)
+    const summary = state ? await runtime.factory.summary(state) : factorySummary(undefined)
     event.system.push({
       type: "text",
-      text: `Preserve this factory state verbatim at the top of your summary; the run continues from it:\n${factorySummary(state)}`,
+      text: `Preserve this factory state verbatim at the top of your summary; the run continues from it:\n${summary}`,
     })
   }
 

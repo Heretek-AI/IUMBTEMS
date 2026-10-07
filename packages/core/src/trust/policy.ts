@@ -104,9 +104,9 @@ export type ShellDecision =
   | { readonly effect: "deny"; readonly reason: string }
 
 const HUMAN_ONLY_CLI =
-  /(^|[\s;&|(`'"/])(es|epistemic-swarm)\s+(approve|trust|waive|resume|rebaseline|factory\s+(resume|pr)|gates\s+install-git|lsp\s+install)\b/
+  /(^|[\s;&|(`'"/])(es|epistemic-swarm)\s+(approve|trust|waive|resume|rebaseline|factory\s+(resume|pr)|gates\s+install-git|lsp\s+install|config\s+set|research\s+retract)\b/
 const CONTROL_MENTION =
-  /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|(brainstorm|harvest|design)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/
+  /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/
 const MUTATING =
   /(>|\btee\b|\brm\b|\bmv\b|\bcp\b|\bln\b|\btruncate\b|\bchmod\b|\bchown\b|\btouch\b|\bsed\s+(-[a-zA-Z]*i|--in-place)|\bdd\b|\binstall\b|\bgit\s+(checkout|restore|rm|mv|reset|clean|apply|am|stash))/
 const SEAT_FORBIDDEN_GIT =
@@ -136,7 +136,11 @@ export function evaluateShell(
 ): ShellDecision {
   const spec = agentSpec(agentId)
   if (HUMAN_ONLY_CLI.test(command))
-    return { effect: "deny", reason: "Approvals, trust, waivers and resume are human-only; agents cannot run them." }
+    return {
+      effect: "deny",
+      reason:
+        "That command is human-only (approvals, trust, waivers, resume, rebaseline, config set, retractions); agents cannot run it.",
+    }
   const privateDir = canonicalPath(context.stateDir ?? stateDir())
   if (command.includes(privateDir) || /epistemic-swarm\/(key|trust)/.test(command))
     return { effect: "deny", reason: "Agents may not access Epistemic Swarm's private state dir." }

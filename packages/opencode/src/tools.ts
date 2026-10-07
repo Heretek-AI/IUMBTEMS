@@ -8,6 +8,7 @@ import {
   harvestTools,
   lspTools,
   pendingApprovals,
+  researchOptions,
   researchTools,
 } from "@heretek-ai/es-core"
 import { Error as ToolError } from "@opencode/plugin/promise/tool"
@@ -18,7 +19,7 @@ export function registerTools(editor: { add(tool: any): void }, runtime: Runtime
   const research = researchTools({
     root: runtime.root,
     policy: () => runtime.policy(),
-    ...(runtime.options.searchProvider ? { provider: runtime.options.searchProvider } : {}),
+    ...researchOptions(runtime.config),
   })
   const brainstorm = brainstormTools({
     root: runtime.root,

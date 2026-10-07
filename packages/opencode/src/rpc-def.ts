@@ -81,6 +81,15 @@ export const EsRpc = Rpc.define({
           ]),
           phases: { type: "array" },
           pending: strArray,
+          tree: obj(
+            Object.fromEntries(
+              ["round", "total", "settled", "open", "deferred", "facts", "frontier"].map((key) => [
+                key,
+                { type: "number" },
+              ]),
+            ),
+            ["round", "total", "settled", "open", "deferred", "facts", "frontier"],
+          ),
         },
         ["stage", "spend", "phases", "pending"],
       ),

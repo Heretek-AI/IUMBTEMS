@@ -3,7 +3,11 @@
 import { userInfo } from "node:os"
 import {
   type ApprovalStage,
+  applyConfigSet,
   approvalSubject,
+  ClaimStore,
+  ConfigError,
+  type ConfigSetPlan,
   commandSetHash,
   Factory,
   factoryLayout,
@@ -11,10 +15,14 @@ import {
   HookEngine,
   isTrusted,
   loadGatesConfig,
+  planConfigSet,
   readJson,
   rebaseline,
   recordApproval,
+  recordRetraction,
   recordWaiver,
+  researchSourcesDir,
+  SourceCache,
   trustProject,
   verifyControl,
   writeJson,
@@ -206,5 +214,97 @@ export async function recordPr(context: HumanContext, args: Args): Promise<numbe
   if (!(await confirmWithCode(context.io, "Record the release PR", [url]))) return 1
   const state = await factoryFor(context).recordPr(user(), url)
   context.print(`Recorded ${url}; factory is ${state.stage}.`)
+  return 0
+}
+
+/** Record that a cached source was retracted or revised; every claim citing it degrades. */
+export async function retract(context: HumanContext, args: Args): Promise<number> {
+  const source = args.positionals[0]
+  const event = flag(args, "event")?.toUpperCase()
+  const note = flag(args, "note") ?? ""
+  const supersedes = flag(args, "supersedes")
+  if (
+    !source ||
+    !/^[0-9a-f]{64}$/.test(source) ||
+    (event !== "RETRACTED" && event !== "REVISED") ||
+    (supersedes !== undefined && !/^[0-9a-f]{64}$/.test(supersedes))
+  ) {
+    context.print(
+      'Usage: es research retract <sha256> --event retracted|revised [--note "why"] [--supersedes <sha256>]',
+    )
+    return 2
+  }
+  const store = await ClaimStore.load(context.root)
+  const affected = store.citing(source)
+  const cached = await new SourceCache(researchSourcesDir(context.root)).get(source)
+  const to = event === "RETRACTED" ? "STALE" : "SUSPECT"
+  const lines = [
+    `Source:  ${source}`,
+    `         ${cached ? `${cached.meta.url} (retrieved ${cached.meta.retrieved})` : "not in this project's cache"}`,
+    `Event:   ${event}${note ? ` — ${note}` : ""}`,
+    ...(supersedes ? [`Replaced by: ${supersedes}`] : []),
+    `Claims citing it: ${affected.length} (they become ${to})`,
+    ...affected.slice(0, 10).map((claim) => `  - ${claim.statement.slice(0, 90)}`),
+  ]
+  if (!(await confirmWithCode(context.io, `Record source ${event.toLowerCase()} as ${user()}`, lines))) {
+    context.print("Cancelled; nothing was recorded.")
+    return 1
+  }
+  await recordRetraction(context.root, {
+    source,
+    event,
+    note,
+    by: `human:${user()}`,
+    ...(supersedes ? { supersedes } : {}),
+  })
+  context.print(`Recorded: ${affected.length} claim(s) citing ${source.slice(0, 16)} are now ${to}.`)
+  return 0
+}
+
+const show = (value: unknown) => (value === undefined ? "(unset)" : JSON.stringify(value))
+
+/** Set one config key in the project (default) or global layer: schema-validated, previewed, typed-code confirmed. */
+export async function configSet(context: HumanContext, args: Args): Promise<number> {
+  const [key, value] = args.positionals
+  if (!key || value === undefined) {
+    context.print("Usage: es config set <key> <value> [--global]   (value parses as JSON when it can; null unsets)")
+    return 2
+  }
+  const layer = args.flags.global === true ? "global" : "project"
+  let plan: ConfigSetPlan
+  try {
+    plan = await planConfigSet(context.root, { key, value, layer })
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error
+    context.print(`Refused: ${error.message}`)
+    return 1
+  }
+  if (plan.unchanged) {
+    context.print(`${key} is already ${show(plan.after)} in the ${layer} config; nothing to change.`)
+    return 0
+  }
+  const lines = [
+    `Layer:  ${layer} (${plan.file})`,
+    `${key}: ${show(plan.before)} → ${show(plan.after)}`,
+    ...(plan.drift.length
+      ? [
+          "Your pending hand edit to .factory/config.json is accepted along with it:",
+          ...plan.drift.map((item) => `  ${item}`),
+        ]
+      : []),
+    ...(layer === "project" ? ["The control baseline is re-recorded for .factory/config.json."] : []),
+  ]
+  if (!(await confirmWithCode(context.io, `Set ${key} as ${user()}`, lines))) {
+    context.print("Cancelled; the config is unchanged.")
+    return 1
+  }
+  try {
+    await applyConfigSet(context.root, plan, { actor: `human:${user()}` })
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error
+    context.print(`Refused: ${error.message}`)
+    return 1
+  }
+  context.print(`Set ${key} = ${show(plan.after)} in ${plan.file}.`)
   return 0
 }

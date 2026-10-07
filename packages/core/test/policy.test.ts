@@ -38,6 +38,14 @@ describe("control classification", () => {
     [".factory/runtime/audit.jsonl", "factory"],
     [".factory/worktrees/p1/.factory/approvals/spec.json", "factory"],
     [".git/hooks/pre-commit", "factory"],
+    [`.factory/research/sources/${"a".repeat(64)}.md`, "factory"],
+    [".factory/research/sources/index.json", "factory"],
+    [".factory/research/coverage.json", "factory"],
+    [".factory/research/dossier.json", "factory"],
+    [".factory/research/brief.pcrb.json", "factory"],
+    [".factory/claims/retractions.json", "factory"],
+    [".factory/research/REPORT.md", undefined],
+    [".factory/research/notes.md", undefined],
     ["opencode.jsonc", "config"],
     [".claude/settings.json", "config"],
     [".factory/specs/p1/GOAL.md", undefined],
@@ -80,6 +88,25 @@ describe("write policy", () => {
     expect(effect(evaluateWrite(ctx(), "brainstormer", ".factory/brainstorm/notes/x.md"))).toBe("allow")
     expect(effect(evaluateWrite(ctx(), "designer", ".factory/design/notes/x.md"))).toBe("allow")
     expect(effect(evaluateWrite(ctx(), "harvester", ".factory/brainstorm/notes/x.md"))).toBe("deny")
+  })
+
+  test("cached evidence is tool-only: no agent can forge a source, coverage, dossier or retraction", () => {
+    // A source file is named by its own sha256, so a hand-written one would
+    // pass the cache's tamper check by construction. Only core writes these.
+    const evidence = [
+      `.factory/research/sources/${"b".repeat(64)}.md`,
+      `.factory/research/sources/${"b".repeat(64)}.json`,
+      ".factory/research/sources/index.json",
+      ".factory/research/coverage.json",
+      ".factory/research/dossier.json",
+      ".factory/research/brief.pcrb.json",
+      ".factory/claims/retractions.json",
+    ]
+    for (const agent of [undefined, "build", "factory", "es-research-alpha", "es-research-beta", "es-manager"])
+      for (const file of evidence)
+        expect([agent, file, effect(evaluateWrite(ctx(), agent, file))]).toEqual([agent, file, "deny"])
+    expect(effect(evaluateWrite(ctx(), "es-research-alpha", ".factory/research/REPORT.md"))).toBe("allow")
+    expect(effect(evaluateWrite(ctx(), "factory", ".factory/research/REPORT.md"))).toBe("allow")
   })
 
   test("manager cannot escape docs/ with ..", () => {
@@ -128,6 +155,16 @@ describe("shell policy", () => {
   test("human-only CLIs are denied for every agent", () => {
     expect(shell("build", "es approve spec").effect).toBe("deny")
     expect(shell(undefined, "cd x && epistemic-swarm waive lint/check").effect).toBe("deny")
+    expect(shell("build", "es config set models.deep x/y").effect).toBe("deny")
+    expect(shell("factory", `es research retract ${"c".repeat(64)} --event retracted`).effect).toBe("deny")
+    expect(shell("build", "es config show").effect).toBe("allow")
+  })
+
+  test("seats may not reach the evidence cache from the shell; others may read but not mutate it", () => {
+    expect(shell("es-research-alpha", "cat .factory/research/sources/index.json").effect).toBe("deny")
+    expect(shell("build", "cat .factory/research/sources/index.json").effect).toBe("allow")
+    expect(shell("build", "echo x > .factory/research/sources/index.json").effect).toBe("deny")
+    expect(shell("build", "rm -rf .factory/claims").effect).toBe("deny")
   })
 
   test("mutating control files from the shell is denied; seats may not mention them at all", () => {

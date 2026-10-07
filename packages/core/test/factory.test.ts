@@ -131,6 +131,44 @@ describe("grill → research → spec", () => {
     const coverage = JSON.parse(await readFile(path.join(fx.root, ".factory/research/coverage.json"), "utf8"))
     expect(coverage).toMatchObject({ claims: 2, ungrounded: 1, untagged: 1, passed: false })
     await writeReport(fx.root)
+    expect(await Bun.file(factoryLayout(fx.root).researchDossier).exists()).toBe(false)
+    expect((await factory.completeResearch("factory")).stage).toBe("SPEC")
+    // The audited report's claims become the research dossier, witnessed.
+    const dossier = JSON.parse(await readFile(factoryLayout(fx.root).researchDossier, "utf8"))
+    expect(dossier).toMatchObject({ version: "1.1", mode: "research", subject: "A greeting library" })
+    expect(dossier.claims.map((claim: any) => [claim.tag, claim.statement, claim.witness.ok])).toEqual([
+      ["VERIFIED", "A greet function is the conventional API", true],
+    ])
+  })
+
+  test("the summary shows the configured research depth during RESEARCH only", async () => {
+    const deep = make({ researchDepth: 3 })
+    await deep.begin("human:tester")
+    await deep.writeFrontier("grill", frontier())
+    expect(await deep.summary()).not.toContain("research depth")
+    await approve("frontier")
+    await deep.beginResearch("human:tester")
+    expect(await deep.summary()).toContain("research depth 3: thesis + antithesis, then a verification pass")
+  })
+
+  test("research must answer every fact the grill deferred, on a grounded claim line", async () => {
+    const db = { id: "db", kind: "fact", status: "deferred", question: "Which Node versions does the runtime support?" }
+    await factory.begin("human:tester")
+    await factory.writeFrontier("grill", frontier({ nodes: [...frontier().nodes, db] }))
+    await approve("frontier")
+    await factory.beginResearch("human:tester")
+    await writeReport(fx.root)
+    await expect(factory.completeResearch("factory")).rejects.toThrow(
+      "Missing: db — Which Node versions does the runtime support?",
+    )
+    // An answer on an ungrounded line does not count: the audit fails first.
+    const report = await readFile(factoryLayout(fx.root).researchReport, "utf8")
+    await writeFile(factoryLayout(fx.root).researchReport, `${report}- Node 22 is supported (fact:db)\n`)
+    await expect(factory.completeResearch("factory")).rejects.toThrow("does not pass the epistemic audit")
+    await writeFile(
+      factoryLayout(fx.root).researchReport,
+      `${report}- Node 22 is the minimum (fact:db) [INFERRED: the package engines field requires node >=22]\n`,
+    )
     expect((await factory.completeResearch("factory")).stage).toBe("SPEC")
   })
 
@@ -146,6 +184,94 @@ describe("grill → research → spec", () => {
     await approve("spec")
     await writeGoal(fx.root, "alpha", "\nSneaky scope creep.")
     await expect(factory.startBuild("factory")).rejects.toThrow("changed after it was approved")
+  })
+})
+
+describe("design tree (frontier 1.1; d66328c:skills/grilling/socratic_tree.py)", () => {
+  const node = (id: string, extra: Record<string, unknown> = {}) => ({ id, question: `${id}?`, ...extra })
+  const tree = (nodes: Record<string, unknown>[], extra: Record<string, unknown> = {}) =>
+    frontier({ settled: false, round: 1, nodes, ...extra })
+
+  test("the frontier is every open node whose ancestors are all settled (compute_frontier)", async () => {
+    const { computeFrontier } = await import("../src/factory/tree.ts")
+    const { FrontierSchema } = await import("../src/schema/frontier.ts")
+    const ids = (raw: Record<string, unknown>) => computeFrontier(FrontierSchema.parse(raw)).map((item) => item.id)
+    expect(ids(tree([node("scope"), node("users", { parent: "scope" })]))).toEqual(["scope"])
+    const settledScope = node("scope", { status: "settled", answer: "CLI only" })
+    expect(ids(tree([settledScope, node("users", { parent: "scope" }), node("auth", { parent: "users" })]))).toEqual([
+      "users",
+    ])
+    // A deferred parent holds its children back; a deferred node is not asked.
+    expect(ids(tree([node("scope", { status: "deferred" }), node("users", { parent: "scope" })]))).toEqual([])
+  })
+
+  test("the schema refuses parent cycles, rounds ahead of the frontier, and unevidenced settled facts", async () => {
+    const { FrontierSchema } = await import("../src/schema/frontier.ts")
+    const issues = (raw: Record<string, unknown>) =>
+      FrontierSchema.safeParse(raw).error?.issues.map((issue) => issue.message) ?? []
+    expect(issues(tree([node("a", { parent: "b" }), node("b", { parent: "a" })]))).toContain('parent cycle through "a"')
+    expect(issues(tree([node("a", { round: 3 })]))).toContain("asked in round 3, but the frontier is at round 1")
+    expect(issues(tree([node("db", { kind: "fact", status: "settled", answer: "Postgres 16" })]))).toContain(
+      "a settled fact needs its evidence (where it was looked up)",
+    )
+    expect(issues({ ...tree([]), version: "1.0" })).not.toEqual([])
+  })
+
+  test("writes are checked against the previous tree; settled answers change only after a reopen", async () => {
+    await factory.begin("human:tester")
+    const lang = node("lang", { status: "settled", answer: "TypeScript", round: 1 })
+    await factory.writeFrontier("grill", tree([lang, node("runtime", { round: 1 })]))
+    const refused = (raw: Record<string, unknown>) => factory.writeFrontier("grill", raw)
+    await expect(refused(tree([lang]))).rejects.toThrow('node "runtime" was removed')
+    await expect(refused(tree([{ ...lang, answer: "Rust" }, node("runtime")]))).rejects.toThrow(
+      'settled node "lang" changed its answer; reopen it first',
+    )
+    await expect(refused(tree([{ ...lang, round: undefined }, node("runtime")], { round: 0 }))).rejects.toThrow(
+      "round went back from 1 to 0",
+    )
+    await expect(refused(tree([lang, node("runtime")], { idea: "Something else" }))).rejects.toThrow(
+      "the idea changed after decisions were settled",
+    )
+    // Reopen, then settle again with the new answer: two audited writes.
+    await factory.writeFrontier(
+      "grill",
+      tree([{ ...lang, status: "open", answer: undefined }, node("runtime")], { round: 2 }),
+    )
+    await factory.writeFrontier("grill", tree([{ ...lang, answer: "Rust" }, node("runtime")], { round: 2 }))
+    const writes = (await verifyAuditChain(fx.root)).entries.filter((entry) => entry.action === "frontier.write")
+    expect(writes.map((entry) => (entry.payload as { reopened: string[] }).reopened)).toEqual([[], ["lang"], []])
+  })
+
+  test("a 1.0 frontier on disk is refused with the fresh-run instruction", async () => {
+    await factory.begin("human:tester")
+    await mkdir(factoryLayout(fx.root).dir, { recursive: true })
+    await writeFile(factoryLayout(fx.root).frontier, JSON.stringify({ ...frontier(), version: "1.0" }))
+    await expect(factory.writeFrontier("grill", frontier())).rejects.toThrow("1.1 needs a fresh run")
+  })
+
+  test("the summary and es_frontier_write show tree progress and the next round", async () => {
+    const { esTools } = await import("../src/ops/tools.ts")
+    const write = esTools({ root: fx.root, factory, stateDir: fx.state }).find(
+      (def) => def.name === "es_frontier_write",
+    )!
+    const out = await write.execute(
+      {
+        frontier: tree([
+          node("scope", { status: "settled", answer: "CLI", round: 1 }),
+          node("users", { parent: "scope", round: 1 }),
+          node("db", { kind: "fact", status: "deferred", question: "Which Postgres versions are supported?" }),
+        ]),
+      },
+      { agent: "grill" },
+    )
+    expect(out).toContain("1 settled, 1 open, 1 deferred (1 fact(s) for research)")
+    expect(out).toContain("Next round (1): users.")
+    const summary = await factory.summary()
+    expect(summary.split("\n").slice(0, 3)).toEqual([
+      "<factory-state>",
+      expect.stringMatching(/^run run-\d{8}-\d{6}-[0-9a-f]{4} · stage GRILL$/),
+      "tree r1: 1 settled · 1 open · 1 deferred (1 fact for research)",
+    ])
   })
 })
 
