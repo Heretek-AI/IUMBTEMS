@@ -37,7 +37,7 @@ export function permissionRules(spec: AgentSpec, mcpServers: readonly string[]):
 }
 
 function modelFor(spec: AgentSpec, options: PluginOptions) {
-  const ref = options.models?.[spec.tier]
+  const ref = options.models?.agents?.[spec.id] ?? options.models?.[spec.tier]
   const slash = ref?.indexOf("/") ?? -1
   if (!ref || slash <= 0) return undefined
   return { providerID: ref.slice(0, slash), id: ref.slice(slash + 1) }

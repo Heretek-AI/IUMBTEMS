@@ -32,6 +32,7 @@ const SCOPE_GLOBS: Record<Exclude<WriteScope, "worktree">, readonly string[]> = 
     "README.md",
   ],
   research: [".factory/research/**"],
+  brainstorm: [".factory/brainstorm/**"],
 }
 
 function guardStateDir(context: PolicyContext, absolute: string): Decision | undefined {

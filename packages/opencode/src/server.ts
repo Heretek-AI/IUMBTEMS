@@ -111,6 +111,21 @@ export default Plugin.define({
         },
       })
       editor.add({
+        name: "brainstorm",
+        description: "Fan out divergent lenses on an idea and return a diversified shortlist (Epistemic Swarm)",
+        execute: async ({ sessionID, prompt, delivery }) => {
+          await ctx.session.switchAgent({ sessionID, agent: "brainstormer" } as any)
+          await ctx.session.prompt({
+            ...prompt,
+            sessionID,
+            text: prompt.text?.trim()
+              ? `Brainstorm: ${prompt.text}`
+              : "Ask me for the idea to brainstorm (one sentence), then run the lens fan-out.",
+            delivery,
+          } as any)
+        },
+      })
+      editor.add({
         name: "factory",
         description: "Drive the build factory from its current stage (Epistemic Swarm)",
         execute: async ({ sessionID, prompt, delivery }) => {

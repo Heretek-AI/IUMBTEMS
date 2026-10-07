@@ -6,7 +6,10 @@ export interface PluginOptions {
   /** Override the user-global state dir (signing key, trust store). Tests only. */
   readonly stateDir?: string
   /** Model per tier, "provider/model". Unset tiers inherit the session default. */
-  readonly models?: Partial<Record<"fast" | "balanced" | "deep", string>>
+  readonly models?: Partial<Record<"fast" | "balanced" | "deep", string>> & {
+    /** Optional per-agent overrides (e.g. a different model for one lens). */
+    readonly agents?: Readonly<Record<string, string>>
+  }
   /** Gates after each programmer edit: "fast" (built-ins + format + lint), "off". */
   readonly afterEdit?: "fast" | "off"
   /** USD per million tokens when the host reports no cost (labelled estimated). */

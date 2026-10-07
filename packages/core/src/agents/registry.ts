@@ -3,6 +3,8 @@
 // an agent that is not in this registry has no seat and gets only the
 // all-agent protections (control files, approval CLIs, state dir).
 
+import { LENSES } from "../brainstorm/lenses.ts"
+
 export type Seat =
   | "factory"
   | "grill"
@@ -12,9 +14,12 @@ export type Seat =
   | "qa-adversarial"
   | "research-alpha"
   | "research-beta"
+  | "brainstormer"
+  | "brainstorm-lens"
+  | "brainstorm-critic"
 
 /** Where a seat may write with the host's edit tools. */
-export type WriteScope = "factory-docs" | "research" | "worktree"
+export type WriteScope = "factory-docs" | "research" | "brainstorm" | "worktree"
 
 export type ModelTier = "fast" | "balanced" | "deep"
 
@@ -48,6 +53,27 @@ const SEATS_SPAWNED_BY_FACTORY = [
   "es-research-alpha",
   "es-research-beta",
 ]
+
+/** One fast-tier subagent per built-in lens, addressed as es-lens-<lens>. */
+export const LENS_AGENT_PREFIX = "es-lens-"
+export const lensAgentId = (lensId: string) => `${LENS_AGENT_PREFIX}${lensId}`
+
+const LENS_SPECS: AgentSpec[] = LENSES.map((lens) => ({
+  id: lensAgentId(lens.id),
+  seat: "brainstorm-lens",
+  mode: "subagent",
+  hidden: true,
+  tier: "fast",
+  description: `${lens.name} lens: ${lens.summary}`,
+  prompt: `lens-${lens.id}`,
+  tools: [],
+  spawns: [],
+  writes: [],
+  readonlyShell: true,
+  skills: [],
+  mcp: [],
+  lsp: "none",
+}))
 
 export const AGENTS: readonly AgentSpec[] = [
   {
@@ -88,6 +114,22 @@ export const AGENTS: readonly AgentSpec[] = [
     writes: [],
     readonlyShell: true,
     skills: ["grill"],
+    mcp: [],
+    lsp: "none",
+  },
+  {
+    id: "brainstormer",
+    seat: "brainstormer",
+    mode: "primary",
+    hidden: false,
+    tier: "deep",
+    description: "Fans out divergent lenses on an idea and returns a diversified shortlist.",
+    prompt: "brainstormer",
+    tools: ["es_status", "es_brainstorm_plan", "es_brainstorm_record", "es_brainstorm_complete"],
+    spawns: ["es-brainstorm-critic", ...LENSES.map((lens) => lensAgentId(lens.id))],
+    writes: ["brainstorm"],
+    readonlyShell: true,
+    skills: ["brainstorm"],
     mcp: [],
     lsp: "none",
   },
@@ -187,6 +229,23 @@ export const AGENTS: readonly AgentSpec[] = [
     mcp: [],
     lsp: "none",
   },
+  {
+    id: "es-brainstorm-critic",
+    seat: "brainstorm-critic",
+    mode: "subagent",
+    hidden: true,
+    tier: "deep",
+    description: "Scores brainstorm ideas 1-5 against the rubric and records the scores.",
+    prompt: "brainstorm-critic",
+    tools: ["es_brainstorm_score"],
+    spawns: [],
+    writes: [],
+    readonlyShell: true,
+    skills: [],
+    mcp: [],
+    lsp: "none",
+  },
+  ...LENS_SPECS,
 ]
 
 const byId = new Map(AGENTS.map((agent) => [agent.id, agent]))

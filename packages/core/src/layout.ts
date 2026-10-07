@@ -1,8 +1,8 @@
 // Single source of truth for where factory state lives.
 //
-// Tracked in git: frontier, roadmap, specs, research, gates config, waivers,
-// approvals. Ignored: runtime/ (state, journal, audit, control baseline,
-// pending requests), runs/ (gate logs, metrics), worktrees/, STOP.
+// Tracked in git: frontier, roadmap, specs, research, brainstorm, gates config,
+// waivers, approvals. Ignored: runtime/ (state, journal, audit, control
+// baseline, pending requests), runs/ (gate logs, metrics), worktrees/, STOP.
 import { homedir } from "node:os"
 import path from "node:path"
 
@@ -19,6 +19,12 @@ export function factoryLayout(root: string) {
     dependencies: (phaseId: string) => path.join(dir, "specs", phaseId, "DEPENDENCIES.md"),
     research: path.join(dir, "research"),
     researchReport: path.join(dir, "research", "REPORT.md"),
+    brainstorm: path.join(dir, "brainstorm"),
+    brainstormPlan: path.join(dir, "brainstorm", "plan.json"),
+    brainstormIdeas: path.join(dir, "brainstorm", "ideas.json"),
+    brainstormScores: path.join(dir, "brainstorm", "scores.json"),
+    brainstormResult: path.join(dir, "brainstorm", "brainstorm.json"),
+    brainstormReport: path.join(dir, "brainstorm", "BRAINSTORM.md"),
     gates: path.join(dir, "gates.json"),
     waivers: path.join(dir, "waivers"),
     approvals: path.join(dir, "approvals"),

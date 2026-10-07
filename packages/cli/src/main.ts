@@ -4,6 +4,8 @@
 import path from "node:path"
 import {
   atomicWrite,
+  brainstormPaths,
+  buildPlan,
   capabilityLoss,
   Factory,
   factoryLayout,
@@ -13,10 +15,17 @@ import {
   git,
   HookEngine,
   installServer,
+  LENSES,
   LspManager,
   loadHooks,
+  readIdeas as readBrainstormIdeas,
+  readPlan as readBrainstormPlan,
+  readResult as readBrainstormResult,
+  readScores as readBrainstormScores,
   recordConsent,
+  renderBrainstorm,
   researchTools,
+  startRun as startBrainstorm,
   verifyAuditChain,
 } from "@heretek-ai/es-core"
 import { type Args, flag, parseArgs } from "./args.ts"
@@ -56,6 +65,10 @@ Other
   research search <query>       Search with the configured provider
   research fetch <url>          Fetch and cache a source (prints its sha256)
   research audit [file] [--prune]  Epistemic audit of a research report
+  brainstorm plan "<idea>"      Freeze a lens fan-out plan (.factory/brainstorm)
+        [--lenses a,b] [--ideas N] [--shortlist N] [--force]
+  brainstorm show [--json]      Show the plan/progress or the finished shortlist
+  brainstorm lenses             List the built-in divergent lenses
   lsp [status]                  Language servers and how each resolves
   lsp diagnostics <file>        Diagnostics for one file
   lsp install <server>          Pinned, checksummed install   [human, TTY]
@@ -86,6 +99,7 @@ const BOOLEAN_FLAGS = [
   "extend-runtime",
   "uninstall",
   "help",
+  "force",
 ]
 
 export async function main(argv: readonly string[], io: MainIO): Promise<number> {
@@ -146,6 +160,86 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           return /Audit passed/.test(text) || /Pruned/.test(text) ? 0 : 1
         }
         io.print("Usage: es research search <query> | fetch <url> | audit [file] [--prune]")
+        return 2
+      }
+      case "brainstorm": {
+        const paths = brainstormPaths(root)
+        if (sub === "lenses") {
+          io.print(LENSES.map((lens) => `${lens.id.padEnd(18)} ${lens.name} — ${lens.summary}`).join("\n"))
+          return 0
+        }
+        if (sub === "plan") {
+          const idea = rest.join(" ").trim()
+          if (!idea) {
+            io.print('Usage: es brainstorm plan "<idea>" [--lenses a,b] [--ideas N] [--shortlist N] [--force]')
+            return 2
+          }
+          const existing = await readBrainstormPlan(root).catch(() => undefined)
+          const recorded = existing ? await readBrainstormIdeas(root).catch(() => []) : []
+          if (existing && recorded.length && args.flags.force !== true) {
+            io.print(
+              `A brainstorm is already in progress (${recorded.length} idea(s) in ${paths.dir}). Re-run with --force to replace it.`,
+            )
+            return 1
+          }
+          const lenses = flag(args, "lenses")
+            ?.split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+          const ideas = flag(args, "ideas") ? Number(flag(args, "ideas")) : undefined
+          const shortlist = flag(args, "shortlist") ? Number(flag(args, "shortlist")) : undefined
+          let built: ReturnType<typeof buildPlan>
+          try {
+            built = buildPlan(
+              { idea },
+              {
+                ...(lenses?.length ? { lenses } : {}),
+                ...(ideas !== undefined ? { ideasPerLens: ideas } : {}),
+                ...(shortlist !== undefined ? { shortlistSize: shortlist } : {}),
+              },
+            )
+          } catch (error) {
+            io.print(error instanceof Error ? error.message : String(error))
+            return 1
+          }
+          await startBrainstorm(root, built.plan)
+          io.print(
+            [
+              `Planned "${built.plan.brief.idea}" in ${paths.dir}`,
+              `Lenses: ${built.plan.lenses.join(", ")}`,
+              `Caps: ≤${built.plan.ideasPerLens} ideas/lens · shortlist ${built.plan.shortlistSize}`,
+              `Run it in OpenCode with /brainstorm, or record ideas manually (the brainstormer tools enforce the caps).`,
+            ].join("\n"),
+          )
+          return 0
+        }
+        if (sub === "show" || sub === undefined) {
+          const result = await readBrainstormResult(root).catch(() => undefined)
+          if (result) {
+            io.print(args.flags.json === true ? JSON.stringify(result, null, 2) : renderBrainstorm(result))
+            return 0
+          }
+          const plan = await readBrainstormPlan(root).catch(() => undefined)
+          if (plan) {
+            const ideas = await readBrainstormIdeas(root).catch(() => [])
+            const scores = await readBrainstormScores(root).catch(() => [])
+            const survivors = ideas.filter((idea) => !idea.duplicateOf)
+            io.print(
+              [
+                `Brainstorm in progress: "${plan.brief.idea}"`,
+                `Lenses: ${plan.lenses.join(", ")}`,
+                `Ideas: ${survivors.length} surviving (${ideas.length - survivors.length} duplicate(s)) · scored ${scores.length}/${survivors.length}`,
+                `Coverage: ${plan.lenses.map((lens) => `${lens} ${survivors.filter((idea) => idea.lens === lens).length}`).join(" · ")}`,
+              ].join("\n"),
+            )
+            return 0
+          }
+          io.print(
+            `No brainstorm in ${paths.dir}. Start one with /brainstorm in OpenCode, or \`es brainstorm plan "<idea>"\`.`,
+          )
+          return 1
+        }
+        io.print('Usage: es brainstorm plan "<idea>" | show [--json] | lenses')
         return 2
       }
       case "lsp": {

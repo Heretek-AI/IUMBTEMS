@@ -2,8 +2,18 @@
 
 exports[`agent assets prompt snapshot: a changed prompt must bump its version 1`] = `
 {
+  "brainstorm-critic": "v1:28fd3abc95c4a28a",
+  "brainstormer": "v1:16eb524fe104f3af",
   "factory": "v2:5facd8d7be82b2ee",
   "grill": "v1:9d41e78836cdb19c",
+  "lens-adjacent-possible": "v1:d6d768502ed2adf2",
+  "lens-constraint-removal": "v1:b6510755131beee1",
+  "lens-cross-domain": "v1:e2290cd43caa37e1",
+  "lens-extreme-user": "v1:2c1d58e7ce586de1",
+  "lens-failure-first": "v1:b54fb5a04144cd40",
+  "lens-inversion": "v1:7b604ebf4d2c29f7",
+  "lens-scale-shift": "v1:ad2b32f67e038018",
+  "lens-scamper": "v1:1911c873cee88192",
   "manager": "v1:760534a1504318a5",
   "programmer": "v1:2c7323535a91ecbb",
   "qa-adversarial": "v1:b27954add6f55068",

@@ -1,5 +1,6 @@
 export * from "./approval.ts"
 export * from "./audit.ts"
+export * from "./brainstorm.ts"
 export * from "./frontier.ts"
 export * from "./gates.ts"
 export * from "./goal.ts"
