@@ -58,7 +58,7 @@ export const opencodeDriver: HarnessDriver = {
     ]
     // `opencode` is resolved from PATH by design.
     const child = spawn("opencode", args, {
-      // NOSONAR
+      // NOSONAR -- PATH lookup is intended
       cwd: root,
       stdio: ["ignore", "pipe", "pipe"],
       ...(signal ? { signal } : {}),

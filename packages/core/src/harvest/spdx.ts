@@ -154,7 +154,7 @@ export async function detectLicense(
 
   // 1. LICENSE / COPYING files (the strongest evidence).
   const entries = await readdirImpl(dir).catch(() => [] as string[])
-  for (const name of entries.filter((entry) => LICENSE_FILE.test(entry)).sort()) {
+  for (const name of entries.filter((entry) => LICENSE_FILE.test(entry)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
     const file = path.join(dir, name)
     const text = await readFileImpl(file).catch(() => undefined)
     if (text === undefined) continue

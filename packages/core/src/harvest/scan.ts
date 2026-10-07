@@ -141,7 +141,10 @@ async function dependenciesOf(dir: string): Promise<{ runtime: string[]; dev: st
       for (const name of found.dev) dev.add(name)
     }
   }
-  return { runtime: [...runtime].sort(), dev: [...dev].sort() }
+  return {
+    runtime: [...runtime].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    dev: [...dev].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+  }
 }
 
 /** Scan a candidate and return its profile. Also records where its bytes live. */

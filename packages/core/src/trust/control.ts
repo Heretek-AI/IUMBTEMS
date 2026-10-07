@@ -91,7 +91,8 @@ export async function snapshotControl(root: string): Promise<Record<string, stri
     }
   }
   const out: Record<string, string | null> = {}
-  for (const file of files.sort()) out[path.relative(root, file).split(path.sep).join("/")] = await hashOrNull(file)
+  for (const file of files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)))
+    out[path.relative(root, file).split(path.sep).join("/")] = await hashOrNull(file)
   return out
 }
 
@@ -120,7 +121,7 @@ export async function verifyControl(root: string): Promise<ControlCheck> {
   const current = await snapshotControl(root)
   const violations: string[] = []
   const keys = new Set([...Object.keys(baseline.files), ...Object.keys(current)])
-  for (const key of [...keys].sort()) {
+  for (const key of [...keys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
     const before = baseline.files[key] ?? null
     const after = current[key] ?? null
     if (before === after) continue

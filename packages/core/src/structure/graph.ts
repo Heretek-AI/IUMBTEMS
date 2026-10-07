@@ -378,6 +378,6 @@ export async function affectedTests(
   if (!graph) return undefined
   const known = changed.filter((file) => graph.files.has(file))
   if (!known.length) return undefined
-  const tests = [...dependentsOf(graph, known)].filter(isTestFile).sort()
+  const tests = [...dependentsOf(graph, known)].filter(isTestFile).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
   return { tests, known, graph }
 }

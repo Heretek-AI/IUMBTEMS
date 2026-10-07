@@ -217,9 +217,6 @@ const MOTION_MS: Readonly<Record<string, string>> = { none: "0", subtle: "150", 
 
 const norm = (value: unknown) => String(value ?? "").trim()
 
-/** Reject slot names that could pollute Object.prototype via bracket access. */
-const unsafeSlotName = (slot: string) => slot === "__proto__" || slot === "constructor" || slot === "prototype"
-
 export const isVague = (value: unknown): boolean => {
   const text = norm(value).toLowerCase()
   return text.length < 2 || VAGUE_ANSWERS.has(text)
@@ -374,7 +371,12 @@ export class SlotLoop {
 
   /** Explicitly default one slot (the all-skip path). */
   skip(axis: Axis, slot: string): void {
-    if (!this.requiredSlots(axis).includes(slot) || unsafeSlotName(slot))
+    if (
+      !this.requiredSlots(axis).includes(slot) ||
+      slot === "__proto__" ||
+      slot === "constructor" ||
+      slot === "prototype"
+    )
       throw new Error(`unknown slot ${axis}.${slot}`)
     this.skipped[axis].add(slot)
     delete this.values[axis][slot]
@@ -382,7 +384,13 @@ export class SlotLoop {
 
   /** Validate and store one answer; throws on vague/smuggled/contradiction. */
   submit(axis: Axis, slot: string, value: unknown): string {
-    if (!AXES.includes(axis) || !this.requiredSlots(axis).includes(slot) || unsafeSlotName(slot))
+    if (
+      !AXES.includes(axis) ||
+      !this.requiredSlots(axis).includes(slot) ||
+      slot === "__proto__" ||
+      slot === "constructor" ||
+      slot === "prototype"
+    )
       throw new Error(`unknown slot ${axis}.${slot}`)
     const text = norm(value)
     if (SKIP_WORDS.has(text.toLowerCase())) {

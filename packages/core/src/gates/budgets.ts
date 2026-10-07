@@ -198,15 +198,27 @@ function braceComplexity(text: string): FunctionComplexity[] {
   const results: FunctionComplexity[] = []
   const stack: Array<{ name: string; line: number; depth: number; score: number; opened: boolean }> = []
   let depth = 0
-  const header =
-    /\bfunction\s*\*?\s*([\w$]*)\s*\(|([\w$]+)\s*[:=]\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*(?::\s*[^=]+)?=>|[\w$]+\s*=>)|^\s*(?:(?:public|private|protected|static|async|override|readonly)\s+)*([\w$]+)\s*\([^)]*\)\s*(?::\s*[^{]+)?\{|\bfn\s+([\w$]+)|\bfunc\s+(?:\([^)]*\)\s*)?([\w$]+)/
+  const headers: readonly RegExp[] = [
+    /\bfunction[ \t]*\*?[ \t]*([\w$]*)[ \t]*\(/,
+    /([\w$]+)[ \t]*[:=][ \t]*(?:async[ \t]*)?(?:function\b|\([^)]*\)[ \t]*(?::[ \t]*[^=]+)?=>|[\w$]+[ \t]*=>)/,
+    /^[ \t]*(?:(?:public|private|protected|static|async|override|readonly)[ \t]+)*([\w$]+)[ \t]*\([^)]*\)[ \t]*(?::[ \t]*[^{]+)?\{/,
+    /\bfn[ \t]+([\w$]+)/,
+    /\bfunc[ \t]+(?:\([^)]*\)[ \t]*)?([\w$]+)/,
+  ]
   const close = (done: { name: string; line: number; score: number }) =>
     results.push({ name: done.name, line: done.line, score: done.score })
   text.split("\n").forEach((raw, index) => {
     const line = stripLiterals(raw)
-    const match = header.exec(line)
-    const name = match?.slice(1).find(Boolean)
-    if (match && name && !/^(if|for|while|switch|catch|return)$/.test(name))
+    let name: string | undefined
+    let best = Number.POSITIVE_INFINITY
+    for (const pattern of headers) {
+      const found = pattern.exec(line)
+      if (found && found.index < best) {
+        best = found.index
+        name = found[1]
+      }
+    }
+    if (name && !/^(if|for|while|switch|catch|return)$/.test(name))
       stack.push({ name, line: index + 1, depth, score: 1, opened: false })
     const decisions = line.match(DECISION)?.length ?? 0
     if (stack.length) stack.at(-1)!.score += decisions

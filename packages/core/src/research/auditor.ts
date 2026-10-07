@@ -50,7 +50,7 @@ export interface AuditReport {
   readonly passed: boolean
 }
 
-const TAG = /\[(VERIFIED|INFERRED|HYPOTHESIS|NEGATIVE_KNOWLEDGE):[ \t]*(.*?)\]/g
+const TAG = /\[(VERIFIED|INFERRED|HYPOTHESIS|NEGATIVE_KNOWLEDGE):(.*?)\]/g
 
 export function parseTags(line: string): Tag[] {
   const tags: Tag[] = []

@@ -82,14 +82,14 @@ export default Plugin.define({
         id: "es-visible" as any,
         name: "es-visible" as any,
         description: "Visible probe skill",
-        path: "/tmp/es-visible/SKILL.md" as any,
+        path: "/tmp/es-visible/SKILL.md" as any, // NOSONAR -- probe fixture path
         content: "visible skill body",
       })
       editor.add({
         id: "es-hidden" as any,
         name: "es-hidden" as any,
         description: "Hidden probe skill",
-        path: "/tmp/es-hidden/SKILL.md" as any,
+        path: "/tmp/es-hidden/SKILL.md" as any, // NOSONAR -- probe fixture path
         content: "hidden skill body",
       })
     })

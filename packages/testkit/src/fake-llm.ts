@@ -92,7 +92,7 @@ export function startFakeLLM(initial: Script = () => ({ text: "ok" })): FakeLLM 
 
 /** Tool names advertised to the model in a recorded request. */
 export const advertised = (request: ChatRequest | undefined) =>
-  (request?.tools ?? []).map((tool) => tool.function.name).sort()
+  (request?.tools ?? []).map((tool) => tool.function.name).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 
 /** Messages with role "tool" (tool results fed back to the model). */
 export const toolResults = (request: ChatRequest | undefined) =>

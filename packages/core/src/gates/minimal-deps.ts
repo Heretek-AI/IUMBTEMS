@@ -32,7 +32,7 @@ export function checkDependencies(
   allowlist: readonly string[] = CORE_DEPENDENCY_ALLOWLIST,
 ): DependencyCheck {
   const violations: DependencyViolation[] = []
-  for (const name of Object.keys(dependencies).sort()) {
+  for (const name of Object.keys(dependencies).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
     if (allowlist.includes(name)) continue
     if ((justifications[name] ?? "").trim().length > 0) continue
     violations.push({ name, reason: "not in the allowlist and has no recorded justification" })

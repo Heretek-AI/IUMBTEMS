@@ -309,7 +309,9 @@ export function seatOf(agentId: string | undefined): Seat | undefined {
 }
 
 /** Every Epistemic Swarm tool name across all seats. */
-export const ALL_ES_TOOLS: readonly string[] = [...new Set(AGENTS.flatMap((agent) => agent.tools))].sort()
+export const ALL_ES_TOOLS: readonly string[] = [...new Set(AGENTS.flatMap((agent) => agent.tools))].sort((a, b) =>
+  a < b ? -1 : a > b ? 1 : 0,
+)
 
 export function seatMayUse(agentId: string | undefined, tool: string): boolean {
   return agentSpec(agentId)?.tools.includes(tool) ?? false

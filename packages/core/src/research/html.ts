@@ -117,24 +117,37 @@ interface Capture {
 }
 
 export function htmlToText(html: string): { title?: string; text: string } {
-  const titleMatch = /<title[^>]*>([^<]*)<\/title>/i.exec(html)
-  const title = titleMatch?.[1] !== undefined ? decodeEntities(titleMatch[1].trim()) : undefined
+  const lower = html.toLowerCase()
+  const titleOpen = lower.indexOf("<title")
+  let title: string | undefined
+  if (titleOpen >= 0) {
+    const openEnd = html.indexOf(">", titleOpen)
+    const closeStart = openEnd < 0 ? -1 : lower.indexOf("</title>", openEnd + 1)
+    if (openEnd >= 0 && closeStart > openEnd) title = decodeEntities(html.slice(openEnd + 1, closeStart).trim())
+  }
 
   // Prefer <body>, then <main>/<article> when it holds the bulk of the page.
   let body = html
-  const bodyOpen = /<body[^>]*>/i.exec(html)
-  if (bodyOpen) {
-    const start = bodyOpen.index + bodyOpen[0].length
-    const end = html.lastIndexOf("</body>")
-    body = end > start ? html.slice(start, end) : html.slice(start)
+  const bodyOpen = lower.indexOf("<body")
+  if (bodyOpen >= 0) {
+    const openEnd = html.indexOf(">", bodyOpen)
+    if (openEnd >= 0) {
+      const closeStart = lower.lastIndexOf("</body>")
+      body = closeStart > openEnd + 1 ? html.slice(openEnd + 1, closeStart) : html.slice(openEnd + 1)
+    }
   }
-  const mainOpen = /<(?:main|article)[^>]*>/i.exec(body)
-  if (mainOpen) {
-    const name = /^<(?:main|article)/i.exec(mainOpen[0])![0].slice(1).toLowerCase()
-    const start = mainOpen.index + mainOpen[0].length
-    const end = body.lastIndexOf(`</${name}>`)
-    const inner = end > start ? body.slice(start, end) : body.slice(start)
-    if (inner.length > 500) body = inner
+  const bodyLower = body.toLowerCase()
+  for (const name of ["main", "article"]) {
+    const open = bodyLower.indexOf(`<${name}`)
+    if (open < 0) continue
+    const openEnd = body.indexOf(">", open)
+    if (openEnd < 0) continue
+    const closeStart = bodyLower.lastIndexOf(`</${name}>`)
+    const inner = closeStart > openEnd + 1 ? body.slice(openEnd + 1, closeStart) : body.slice(openEnd + 1)
+    if (inner.length > 500) {
+      body = inner
+      break
+    }
   }
 
   const out: string[] = []

@@ -45,7 +45,7 @@ export interface SkillAsset {
 export async function loadSkills(): Promise<SkillAsset[]> {
   const dir = path.join(ASSETS, "skills")
   const out: SkillAsset[] = []
-  for (const id of (await readdir(dir)).sort()) {
+  for (const id of (await readdir(dir)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
     const file = path.join(dir, id, "SKILL.md")
     const text = await readFile(file, "utf8").catch(() => undefined)
     if (text === undefined) continue

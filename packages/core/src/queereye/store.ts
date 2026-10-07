@@ -77,7 +77,12 @@ export async function saveInterview(root: string, loop: SlotLoop): Promise<Write
   const paths = designPaths(root)
   const state: DesignAnswers = {
     values: Object.fromEntries(Object.entries(loop.values).map(([axis, values]) => [axis, { ...values }])),
-    skipped: Object.fromEntries(Object.entries(loop.skipped).map(([axis, skipped]) => [axis, [...skipped].sort()])),
+    skipped: Object.fromEntries(
+      Object.entries(loop.skipped).map(([axis, skipped]) => [
+        axis,
+        [...skipped].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+      ]),
+    ),
   }
   const errors = validateTokens(loop.toTokens())
   if (errors.length) state.token_errors = errors

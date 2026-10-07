@@ -249,6 +249,33 @@ function blankBlockComments(source: string): string {
   }
 }
 
+/** Blank out `//` line comments, keeping the preceding-character guard. */
+function blankLineComments(source: string): string {
+  let out = ""
+  let i = 0
+  for (;;) {
+    const newline = source.indexOf("\n", i)
+    const end = newline < 0 ? source.length : newline
+    const line = source.slice(i, end)
+    const at = lineCommentIndex(line)
+    out += at < 0 ? line : line.slice(0, at) + " ".repeat(line.length - at)
+    if (newline < 0) return out
+    out += "\n"
+    i = newline + 1
+  }
+}
+
+const COMMENT_GUARD = new Set([":", '"', "'", "`", "\\"])
+
+function lineCommentIndex(line: string): number {
+  for (let i = 0; i < line.length - 1; i++)
+    if (line[i] === "/" && line[i + 1] === "/") {
+      const previous = i > 0 ? line[i - 1]! : ""
+      if (i === 0 || !COMMENT_GUARD.has(previous)) return i
+    }
+  return -1
+}
+
 /** Regex fallback: imports only (symbols best effort), comments stripped first. */
 export function extractWithRegex(language: GrammarId, source: string): FileStructure {
   const imports: ImportRef[] = []
@@ -257,21 +284,22 @@ export function extractWithRegex(language: GrammarId, source: string): FileStruc
   const at = (index: number) => source.slice(0, index).split("\n").length
   if (language === "python") {
     lines.forEach((text, index) => {
-      const from = /^[ \t]*from[ \t]+([.\w]+)[ \t]+import[ \t]+(.+)$/.exec(text)
+      const flat = text.replace(/[ \t]+/g, " ")
+      const from = /^ *from ([.\w]+) import (.+)$/.exec(flat)
       if (from) {
         const names = from[2]!
           .replace(/[()]/g, "")
           .split(",")
-          .map((name) => name.trim().split(/[ \t]+as[ \t]+/)[0]!)
+          .map((name) => name.trim().split(" as ")[0]!)
           .filter(Boolean)
         imports.push({ specifier: from[1]!, line: index + 1, kind: "static", names })
         return
       }
-      const plain = /^[ \t]*import[ \t]+(.+)$/.exec(text)
+      const plain = /^ *import (.+)$/.exec(flat)
       if (plain)
         for (const part of plain[1]!.split(","))
-          imports.push({ specifier: part.trim().split(/[ \t]+as[ \t]+/)[0]!, line: index + 1, kind: "static" })
-      const def = /^\s*(?:async\s+)?def\s+(\w+)|^\s*class\s+(\w+)/.exec(text)
+          imports.push({ specifier: part.trim().split(" as ")[0]!, line: index + 1, kind: "static" })
+      const def = /^ *(?:async )?def (\w+)|^ *class (\w+)/.exec(flat)
       if (def) {
         const name = (def[1] ?? def[2])!
         symbols.push({
@@ -304,11 +332,12 @@ export function extractWithRegex(language: GrammarId, source: string): FileStruc
         imports.push({ specifier: spec[1]!, line: at(block.index! + block[0].indexOf(spec[0])), kind: "static" })
     for (const single of stripped.matchAll(/^import\s+(?:[\w.]+\s+)?"([^"]+)"/gm))
       imports.push({ specifier: single[1]!, line: at(single.index!), kind: "static" })
-    for (const fn of stripped.matchAll(/^func\s+(?:\([^)]*?\*?\s*(\w+)\)\s*)?(\w+)/gm)) {
+    for (const fn of stripped.matchAll(/^func[ \t]+(?:\(([^)]*)\)[ \t]+)?(\w+)/gm)) {
+      const receiver = fn[1] ? /(\w+)$/.exec(fn[1].trim())?.[1] : undefined
       const name = fn[2]!
       symbols.push({
-        name: fn[1] ? `${fn[1]}.${name}` : name,
-        kind: fn[1] ? "method" : "function",
+        name: receiver ? `${receiver}.${name}` : name,
+        kind: receiver ? "method" : "function",
         line: at(fn.index!),
         endLine: at(fn.index!),
         exported: /^\p{Lu}/u.test(name),
@@ -328,10 +357,7 @@ export function extractWithRegex(language: GrammarId, source: string): FileStruc
     return { language, parser: "regex", imports, symbols, ...(pkg ? { package: pkg } : {}) }
   }
   // JS/TS: blank out comments, keep offsets.
-  const stripped = blankBlockComments(source).replace(
-    /(^|[^:"'`\\])\/\/.*$/gm,
-    (match, lead: string) => lead + " ".repeat(match.length - lead.length),
-  )
+  const stripped = blankLineComments(blankBlockComments(source))
   const patterns: Array<[RegExp, ImportRef["kind"]]> = [
     [/\bimport\s+type\s+[^'"`;]*?\bfrom\s*(['"])([^'"]+)\1/g, "type"],
     [/\bimport\s+(?!type\b)[^'"`;()]*?\bfrom\s*(['"])([^'"]+)\1/g, "static"],
