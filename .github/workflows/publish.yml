@@ -20,6 +20,9 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Must match the Environment name on the npm trusted publisher entry
+    # (package Settings → Trusted Publisher). OIDC validation fails without it.
+    environment: IUMBTEMS
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
