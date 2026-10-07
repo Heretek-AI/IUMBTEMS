@@ -520,6 +520,15 @@ describe("guards", () => {
     expect((await factory.resume("tester", { acceptControlDrift: true })).stage).toBe("BUILD")
   })
 
+  test("async spend events never halt on control drift (they race human approvals)", async () => {
+    await toBuild()
+    await writeFile(factoryLayout(fx.root).frontier, "{}")
+    const state = await factory.recordSpend(1, true)
+    expect(state?.stage).not.toBe("HALTED")
+    expect(state?.spend.usd).toBeGreaterThan(0)
+    await expect(factory.complete("es-programmer")).rejects.toThrow("frontier.json changed")
+  })
+
   test("the runtime cap counts from autonomy start", async () => {
     let now = new Date("2026-10-06T10:00:00Z")
     factory = make({ now: () => now })

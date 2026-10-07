@@ -210,7 +210,7 @@ export class Factory {
   }
 
   /** Returns true when the state is (or just became) HALTED. */
-  private async guard(state: FactoryState, actor: string): Promise<boolean> {
+  private async guard(state: FactoryState, actor: string, options: { skipControl?: boolean } = {}): Promise<boolean> {
     if (state.stage === "HALTED") return true
     const halt = async (reason: string) => {
       state.halt = { reason, at: this.now().toISOString(), from: state.stage }
@@ -220,8 +220,14 @@ export class Factory {
     }
     const stop = await checkStopFile(this.root)
     if (stop.stopped) return halt(`STOP file: ${stop.reason}`)
-    const control = await verifyControl(this.root)
-    if (!control.clean) return halt(`control files changed outside a human action: ${control.violations.join("; ")}`)
+    // Skipped for async bookkeeping (recordSpend): spend events arrive at any
+    // moment, including mid-approval between the record write and its
+    // rebaseline, where a drift halt would be a false positive that persists
+    // (CI-only es_build_start refusal). Real transitions still enforce it.
+    if (!options.skipControl) {
+      const control = await verifyControl(this.root)
+      if (!control.clean) return halt(`control files changed outside a human action: ${control.violations.join("; ")}`)
+    }
     if (state.spendCeilingUSD !== undefined && state.spend.usd >= state.spendCeilingUSD)
       return halt(
         `spend ceiling reached: $${state.spend.usd.toFixed(2)}${state.spend.estimated ? " (estimated)" : ""} of $${state.spendCeilingUSD}`,
@@ -1099,7 +1105,7 @@ export class Factory {
       state.spend.usd += usd
       state.spend.estimated ||= estimated
       state.spend.events += 1
-      await this.guard(state, "system")
+      await this.guard(state, "system", { skipControl: true })
       await this.save(state)
       return state
     })
