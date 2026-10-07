@@ -29,7 +29,9 @@ export const EsConfigSchema = z
         outputPerM: z.number().positive().describe("Estimated USD per million output tokens.").default(15),
       })
       .strict()
-      .describe("Spend estimates used when the host reports no cost; estimates are labelled as such.")
+      .describe(
+        "Spend estimates used when the host reports no cost; estimates are labelled as such. Global config or plugin options only.",
+      )
       .optional(),
     pr: z.enum(["gh", "off"]).describe("Release PR opener: the GitHub CLI, or off.").default("gh"),
     embeddings: z
@@ -39,7 +41,9 @@ export const EsConfigSchema = z
         apiKeyEnv: z.string().describe("Environment variable holding the API key, sent as a Bearer token.").optional(),
       })
       .strict()
-      .describe("Optional OpenAI-compatible embeddings for brainstorm dedupe; unset uses MinHash/n-gram.")
+      .describe(
+        "Optional OpenAI-compatible embeddings for brainstorm dedupe; unset uses MinHash/n-gram. Global config or plugin options only.",
+      )
       .optional(),
     lspAfterEdit: z.boolean().describe("Append language-server diagnostics to edit results.").default(true),
     searchProvider: z
@@ -48,7 +52,9 @@ export const EsConfigSchema = z
       .optional(),
     licenseWhitelist: z
       .array(z.string())
-      .describe("SPDX ids darkharvest may depend on or vendor; everything else is clean-room only.")
+      .describe(
+        "SPDX ids darkharvest may depend on or vendor (a harvest plan may only narrow it); everything else is clean-room only.",
+      )
       .default([...DEFAULT_LICENSE_WHITELIST]),
   })
   .strict()

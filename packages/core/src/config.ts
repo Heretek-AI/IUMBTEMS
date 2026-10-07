@@ -46,6 +46,13 @@ async function readLayer(file: string): Promise<Record<string, unknown> | undefi
   return raw
 }
 
+/**
+ * Keys a project file may not set: where brainstorm text and an API key are
+ * sent (embeddings), and the spend estimate behind the ceiling (estimate).
+ * A cloned repository must not be able to choose either.
+ */
+export const PROJECT_FORBIDDEN_KEYS = ["embeddings", "estimate"] as const
+
 export async function loadEsConfig(
   root: string,
   options: { env?: NodeJS.ProcessEnv; overrides?: Record<string, unknown> } = {},
@@ -54,6 +61,11 @@ export async function loadEsConfig(
   const globalFile = globalConfigFile(env)
   const projectFile = factoryLayout(root).config
   const [globalLayer, projectLayer] = await Promise.all([readLayer(globalFile), readLayer(projectFile)])
+  const forbidden = PROJECT_FORBIDDEN_KEYS.filter((key) => projectLayer && key in projectLayer)
+  if (forbidden.length)
+    throw new Error(
+      `invalid config (${projectFile}): ${forbidden.map((key) => `"${key}"`).join(", ")} may only be set in the global config (${globalFile}) or plugin options — a project file must not choose where data and API keys are sent, or the spend estimate behind the ceiling`,
+    )
   const merged = mergeConfig(globalLayer ?? {}, projectLayer ?? {}, options.overrides ?? {})
   const parsed = EsConfigSchema.safeParse(merged)
   if (!parsed.success) {

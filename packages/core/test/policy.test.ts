@@ -54,6 +54,13 @@ describe("write policy", () => {
     }
   })
 
+  test("the project config is a control file for every agent, in the editor and the shell", () => {
+    for (const agent of [undefined, "build", "factory", "es-manager", "harvester"])
+      expect(effect(evaluateWrite(ctx(), agent, ".factory/config.json"))).toBe("deny")
+    const shell = evaluateShell(ctx(), undefined, `echo '{}' > .factory/config.json`, { sandboxAvailable: false })
+    expect(shell.effect).toBe("deny")
+  })
+
   test("engine-owned brainstorm/harvest/design state is tool-only; seats keep notes", () => {
     const engine = [
       ".factory/harvest/matrix.json",
@@ -153,5 +160,15 @@ describe("control baseline", () => {
     expect(check.violations[0]).toContain(".factory/gates.json changed")
     await writeFile(path.join(root, ".factory/approvals/forged.json"), "{}")
     expect((await verifyControl(root)).violations.join("\n")).toContain("forged.json appeared")
+  })
+
+  test("the project config is pinned: appearing or changing outside a human action is drift", async () => {
+    await rm(path.join(root, ".factory/approvals/forged.json"), { force: true })
+    await rebaseline(root, "test")
+    await writeFile(path.join(root, ".factory/config.json"), '{"afterEdit":"off"}')
+    expect((await verifyControl(root)).violations.join("\n")).toContain(".factory/config.json appeared")
+    await rebaseline(root, "test")
+    await writeFile(path.join(root, ".factory/config.json"), '{"afterEdit":"fast"}')
+    expect((await verifyControl(root)).violations.join("\n")).toContain(".factory/config.json changed")
   })
 })

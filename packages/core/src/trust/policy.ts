@@ -106,7 +106,7 @@ export type ShellDecision =
 const HUMAN_ONLY_CLI =
   /(^|[\s;&|(`'"/])(es|epistemic-swarm)\s+(approve|trust|waive|resume|rebaseline|factory\s+(resume|pr)|gates\s+install-git|lsp\s+install)\b/
 const CONTROL_MENTION =
-  /\.factory\/(gates\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|(brainstorm|harvest|design)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/
+  /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|(brainstorm|harvest|design)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/
 const MUTATING =
   /(>|\btee\b|\brm\b|\bmv\b|\bcp\b|\bln\b|\btruncate\b|\bchmod\b|\bchown\b|\btouch\b|\bsed\s+(-[a-zA-Z]*i|--in-place)|\bdd\b|\binstall\b|\bgit\s+(checkout|restore|rm|mv|reset|clean|apply|am|stash))/
 const SEAT_FORBIDDEN_GIT =

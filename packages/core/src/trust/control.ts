@@ -16,6 +16,7 @@ import { sha256 } from "../util/hash.ts"
 
 export const FACTORY_CONTROL = [
   ".factory/gates.json",
+  ".factory/config.json",
   ".factory/frontier.json",
   ".factory/waivers/**",
   ".factory/approvals/**",
@@ -66,7 +67,7 @@ export const isControlPath = (relative: string) => controlClass(relative) !== un
 /** Files whose hashes the baseline pins (existing, tracked control artifacts). */
 const PINNED = (root: string) => {
   const layout = factoryLayout(root)
-  return [layout.gates, layout.frontier]
+  return [layout.gates, layout.frontier, layout.config]
 }
 
 export interface ControlBaseline {

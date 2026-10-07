@@ -53,7 +53,7 @@ import {
 import { type Args, flag, parseArgs } from "./args.ts"
 import { gatesRun, installGitHooks } from "./gates.ts"
 import { DRIVERS, runHeadless } from "./headless.ts"
-import { approve, type HumanContext, recordPr, resume, trust, waive } from "./human.ts"
+import { approve, type HumanContext, rebaselineControl, recordPr, resume, trust, waive } from "./human.ts"
 import { serveStdio } from "./mcp.ts"
 import { type ConfirmIO, confirmWithCode, NotInteractive, terminalIO } from "./tty.ts"
 
@@ -76,6 +76,7 @@ Factory
 Checkpoints and exceptions                                      [human, TTY]
   approve <frontier|spec>       Approve a checkpoint (shows hashes; type the code)
   trust [--show]                Approve this project's gate commands by hash
+  rebaseline                    Accept hand edits to pinned control files (gates.json, config.json)
   waive <rule> --reason "…" [--files <glob>] [--expires 7d] [--id <name>]
 
 Gates
@@ -163,6 +164,8 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         return await approve(context, subArgs(1))
       case "trust":
         return await trust(context, subArgs(1))
+      case "rebaseline":
+        return await rebaselineControl(context)
       case "waive":
         return await waive(context, subArgs(1))
       case "research": {

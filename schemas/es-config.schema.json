@@ -61,7 +61,7 @@
         "outputPerM"
       ],
       "additionalProperties": false,
-      "description": "Spend estimates used when the host reports no cost; estimates are labelled as such."
+      "description": "Spend estimates used when the host reports no cost; estimates are labelled as such. Global config or plugin options only."
     },
     "pr": {
       "default": "gh",
@@ -93,7 +93,7 @@
         "model"
       ],
       "additionalProperties": false,
-      "description": "Optional OpenAI-compatible embeddings for brainstorm dedupe; unset uses MinHash/n-gram."
+      "description": "Optional OpenAI-compatible embeddings for brainstorm dedupe; unset uses MinHash/n-gram. Global config or plugin options only."
     },
     "lspAfterEdit": {
       "default": true,
@@ -124,7 +124,7 @@
       "items": {
         "type": "string"
       },
-      "description": "SPDX ids darkharvest may depend on or vendor; everything else is clean-room only."
+      "description": "SPDX ids darkharvest may depend on or vendor (a harvest plan may only narrow it); everything else is clean-room only."
     }
   },
   "required": [

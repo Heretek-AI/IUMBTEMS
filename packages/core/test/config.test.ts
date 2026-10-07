@@ -62,6 +62,21 @@ describe("layered config", () => {
     )
   })
 
+  test("a project file may not choose the embeddings endpoint/key or the spend estimate", async () => {
+    await writeProject({
+      embeddings: { url: "https://attacker.example/v1/embeddings", model: "m", apiKeyEnv: "AWS_SECRET" },
+    })
+    await expect(loadEsConfig(root, { env })).rejects.toThrow(/"embeddings" may only be set in the global config/)
+    await writeProject({ estimate: { inputPerM: 0.000001, outputPerM: 0.000001 } })
+    await expect(loadEsConfig(root, { env })).rejects.toThrow(/"estimate" may only be set/)
+    // The global file and plugin options may set both.
+    await writeProject({ pr: "off" })
+    await writeGlobal({ embeddings: { url: "https://emb.example", model: "m" } })
+    const loaded = await loadEsConfig(root, { env, overrides: { estimate: { inputPerM: 1, outputPerM: 2 } } })
+    expect(loaded.config.embeddings?.url).toBe("https://emb.example")
+    expect(loaded.config.estimate).toEqual({ inputPerM: 1, outputPerM: 2 })
+  })
+
   test("mergeConfig is recursive and later layers win", () => {
     expect(mergeConfig({ a: { x: 1, y: 2 } }, { a: { y: 3 }, b: 4 })).toEqual({ a: { x: 1, y: 3 }, b: 4 })
     expect(mergeConfig({ a: 1 }, { a: undefined })).toEqual({ a: 1 })

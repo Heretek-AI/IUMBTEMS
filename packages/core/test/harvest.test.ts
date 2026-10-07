@@ -487,6 +487,23 @@ describe("stored state is never trusted for policy", () => {
     expect((await readMatrix(root))?.rows[0]?.cells[0]?.verdict).toBe("clean-room")
   })
 
+  test("a plan may narrow the configured licence whitelist, never widen it", async () => {
+    const root = await tmp("es-harvest-whitelist-")
+    await write(root, "a/LICENSE", MIT)
+    const tools = harvestTools({ root, whitelist: ["Apache-2.0"] })
+    const plan = tools.find((tool) => tool.name === "es_harvest_plan")!
+    const out = await plan.execute(
+      { objective: "x", candidates: [{ name: "a", source: "local:a" }], whitelist: ["MIT", "Apache-2.0"] },
+      { agent: "harvester" },
+    )
+    expect(out).toContain("Ignored (not in the configured licence whitelist")
+    expect(out).toContain("whitelist: Apache-2.0")
+    const scan = await tools
+      .find((tool) => tool.name === "es_harvest_scan")!
+      .execute({ candidate: "a" }, { agent: "harvester" })
+    expect(scan).toContain("not on the license whitelist")
+  })
+
   test("candidate ids never collide with the reserved notes/ and clean-room/ dirs", async () => {
     const root = await tmp("es-harvest-reserved-")
     await write(root, "a/x.ts", "export const x = 1\n")

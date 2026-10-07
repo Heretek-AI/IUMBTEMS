@@ -107,6 +107,22 @@ describe("human-only confirmation", () => {
   })
 })
 
+describe("rebaseline", () => {
+  test("es rebaseline needs a terminal and accepts hand edits to pinned control files", async () => {
+    const { rebaseline, verifyControl } = await import("@heretek-ai/es-core")
+    await rebaseline(root, "test")
+    await mkdir(path.join(root, ".factory"), { recursive: true })
+    await writeFile(path.join(root, ".factory/config.json"), '{"pr":"off"}')
+    expect((await verifyControl(root)).clean).toBe(false)
+    expect((await run(["rebaseline"])).code).not.toBe(0)
+    expect((await verifyControl(root)).clean).toBe(false)
+    const accepted = await run(["rebaseline"], human())
+    expect(accepted.code).toBe(0)
+    expect(accepted.out).toContain("Re-baselined 1")
+    expect((await verifyControl(root)).clean).toBe(true)
+  })
+})
+
 describe("gates and audit", () => {
   test("gates run exits non-zero on findings; audit verify reports the chain", async () => {
     await writeFile(path.join(root, "leak.ts"), `export const t = "ghp_${"Ab3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6"}"\n`)

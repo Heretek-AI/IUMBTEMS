@@ -118,10 +118,12 @@ export function harvestTools(context: HarvestOpsContext): EsToolDef[] {
           seen.add(id)
           planned.push({ id, name, source: spec })
         }
-        const whitelist =
-          Array.isArray(input.whitelist) && input.whitelist.length
-            ? input.whitelist.map(String)
-            : [...DEFAULT_LICENSE_WHITELIST]
+        // The configured whitelist is the ceiling: a plan may narrow it, never widen it.
+        const allowed: readonly string[] = context.whitelist ?? DEFAULT_LICENSE_WHITELIST
+        const requested: string[] = Array.isArray(input.whitelist) ? input.whitelist.map(String) : []
+        const ignored = requested.filter((id) => !allowed.includes(id))
+        const narrowed = requested.filter((id) => allowed.includes(id))
+        const whitelist = requested.length ? narrowed : [...allowed]
         const plan = {
           version: 1 as const,
           objective,
@@ -134,7 +136,10 @@ export function harvestTools(context: HarvestOpsContext): EsToolDef[] {
         return [
           `Darkharvest planned: ${objective}`,
           `Candidates (${planned.length}): ${planned.map((item) => `${item.id} ← ${item.source}`).join(", ")}`,
-          `Read budget: ${plan.readTokensPerCandidate} tokens per candidate · whitelist: ${whitelist.join(", ")}`,
+          `Read budget: ${plan.readTokensPerCandidate} tokens per candidate · whitelist: ${whitelist.join(", ") || "(empty: nothing may be depended on or vendored)"}`,
+          ...(ignored.length
+            ? [`Ignored (not in the configured licence whitelist; a plan can only narrow it): ${ignored.join(", ")}`]
+            : []),
           "",
           "Next steps:",
           "1. es_harvest_scan each candidate (profiles land under .factory/harvest/<id>/).",

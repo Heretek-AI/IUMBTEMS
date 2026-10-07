@@ -1,4 +1,4 @@
-// Human-only commands: approve, trust, waive, resume. Each previews exactly
+// Human-only commands: approve, trust, waive, resume, rebaseline. Each previews exactly
 // what will be signed, then requires the typed confirmation code at a TTY.
 import { userInfo } from "node:os"
 import {
@@ -12,6 +12,7 @@ import {
   isTrusted,
   loadGatesConfig,
   readJson,
+  rebaseline,
   recordApproval,
   recordWaiver,
   trustProject,
@@ -104,6 +105,24 @@ export async function trust(context: HumanContext, args: Args): Promise<number> 
   if (hooks.projectHash)
     await trustProject(context.root, hooks.projectHash, hooks.projectLines, { ...options, kind: "hooks" })
   context.print(`Trusted ${lines.length} line(s) for ${context.root}.`)
+  return 0
+}
+
+/** Accept hand edits to pinned control files (gates.json, config.json, frontier) as the human's own. */
+export async function rebaselineControl(context: HumanContext): Promise<number> {
+  const check = await verifyControl(context.root)
+  if (check.clean) {
+    context.print(
+      check.hasBaseline ? "Control files match the baseline." : "No baseline yet; the first approval creates one.",
+    )
+    return 0
+  }
+  if (!(await confirmWithCode(context.io, `Accept these control-file changes as ${user()}`, [...check.violations]))) {
+    context.print("Cancelled; the baseline is unchanged.")
+    return 1
+  }
+  await rebaseline(context.root, `human:${user()} (es rebaseline)`)
+  context.print(`Re-baselined ${check.violations.length} control-file change(s).`)
   return 0
 }
 
