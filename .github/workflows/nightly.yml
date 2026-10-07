@@ -41,8 +41,12 @@ jobs:
           bun-version: "1.4.2"
       - run: bun install --frozen-lockfile --ignore-scripts
       - name: Evals
-        if: ${{ secrets.ES_EVAL_API_KEY != '' }}
         env:
           ES_EVAL_API_KEY: ${{ secrets.ES_EVAL_API_KEY }}
           ES_EVAL_TIMEOUT_MS: "300000"
-        run: bun run evals
+        run: |
+          if [ -z "$ES_EVAL_API_KEY" ]; then
+            echo "evals: ES_EVAL_API_KEY is not set; skipping."
+            exit 0
+          fi
+          bun run evals

@@ -36,11 +36,13 @@ jobs:
         env:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          flags="--provenance --access public"
-          if [ "$DRY_RUN" = "true" ]; then flags="$flags --dry-run"; fi
           # Dependency order: core, then cli and the OpenCode plugin.
           for pkg in packages/core packages/cli packages/opencode; do
             echo "::group::npm publish $pkg"
-            (cd "$pkg" && npm publish $flags)
+            if [ "$DRY_RUN" = "true" ]; then
+              (cd "$pkg" && npm publish --provenance --access public --dry-run)
+            else
+              (cd "$pkg" && npm publish --provenance --access public)
+            fi
             echo "::endgroup::"
           done
