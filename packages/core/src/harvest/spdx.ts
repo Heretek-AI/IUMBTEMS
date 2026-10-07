@@ -21,6 +21,8 @@ import { LICENSE_TEMPLATES, matchLicenseTemplate } from "./templates.ts"
 
 type Family = LicenseFinding["family"]
 
+const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+
 const FAMILIES: Readonly<Record<string, Family>> = {
   MIT: "permissive",
   "Apache-2.0": "permissive",
@@ -290,7 +292,7 @@ export async function detectLicense(
 
   if (files.length) return combine(files, headers)
   if (headers.length) {
-    const ids = [...new Set(headers.flatMap((header) => spdxIds(header.spdx)))].sort()
+    const ids = [...new Set(headers.flatMap((header) => spdxIds(header.spdx)))].sort(byText)
     const spdx = ids.join(" AND ")
     return {
       spdx,
@@ -344,7 +346,7 @@ function combine(files: readonly FileVerdict[], headers: readonly SpdxHeader[]):
   if (worst.spdx === "unknown")
     return { ...base, spdx: "unknown", family: "unknown", confidence: "low", verified: false }
   const restrictive = RANK[worst.family] >= RANK.unknown
-  const spdx = [...new Set(restrictive ? [worst.spdx, ...extra] : [...fileIds, ...extra])].sort().join(" AND ")
+  const spdx = [...new Set(restrictive ? [worst.spdx, ...extra] : [...fileIds, ...extra])].sort(byText).join(" AND ")
   const family = familyOf(spdx)
   return {
     ...base,
@@ -406,15 +408,26 @@ async function manifestLicense(dir: string, read: ReadImpl): Promise<{ spdx: str
       if (typeof value === "string" && value.trim()) return { spdx: value.trim(), file: "package.json" }
     } catch {}
   }
-  const pyproject = await read(path.join(dir, "pyproject.toml")).catch(() => undefined)
-  if (pyproject) {
-    const match = /^\s*license\s*=\s*["']([^"']+)["']/m.exec(pyproject)
-    if (match) return { spdx: match[1]!, file: "pyproject.toml" }
+  for (const file of ["pyproject.toml", "Cargo.toml"]) {
+    const text = await read(path.join(dir, file)).catch(() => undefined)
+    const value = text ? tomlString(text, "license") : undefined
+    if (value) return { spdx: value, file }
   }
-  const cargo = await read(path.join(dir, "Cargo.toml")).catch(() => undefined)
-  if (cargo) {
-    const match = /^\s*license\s*=\s*["']([^"']+)["']/m.exec(cargo)
-    if (match) return { spdx: match[1]!, file: "Cargo.toml" }
+  return undefined
+}
+
+/** The first `key = "value"` (or 'value') line of a TOML manifest, without a regex. */
+function tomlString(text: string, key: string): string | undefined {
+  for (const raw of text.split("\n")) {
+    const line = raw.trim()
+    if (!line.startsWith(key)) continue
+    const rest = line.slice(key.length).trimStart()
+    if (!rest.startsWith("=")) continue
+    const value = rest.slice(1).trimStart()
+    const quote = value[0]
+    if (quote !== '"' && quote !== "'") continue
+    const end = value.indexOf(quote, 1)
+    if (end > 1) return value.slice(1, end)
   }
   return undefined
 }

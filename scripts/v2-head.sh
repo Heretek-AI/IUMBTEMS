@@ -14,7 +14,7 @@ head_dir="${V2_HEAD_DIR:-${RUNNER_TEMP:-/tmp}/opencode-v2-head}"
 branch="${V2_HEAD_BRANCH:-v2}"
 repo="${V2_HEAD_REPO:-https://github.com/anomalyco/opencode.git}"
 
-if [ -d "$head_dir/.git" ]; then
+if [[ -d "$head_dir/.git" ]]; then
   git -C "$head_dir" fetch --depth 1 origin "$branch"
   git -C "$head_dir" reset --hard FETCH_HEAD
 else
@@ -28,14 +28,14 @@ echo "v2 HEAD: $(git -C "$head_dir" log -1 --format='%h %ci')"
 (cd "$head_dir" && bun install) # NOSONAR -- node-pty postinstall is required
 
 for target in "$root"/packages/*/node_modules/@opencode/sdk "$root"/packages/*/node_modules/@opencode/plugin; do
-  [ -e "$target" ] || [ -L "$target" ] || continue
+  [[ -e "$target" || -L "$target" ]] || continue
   name="$(basename "$target")"
   rm -rf "$target"
   ln -s "$head_dir/packages/$name" "$target"
 done
 
 cd "$root"
-if [ "$#" -gt 0 ]; then
+if [[ "$#" -gt 0 ]]; then
   exec bun test "$@"
 fi
 exec bun test packages/opencode

@@ -173,10 +173,19 @@ const mypy: Parser = (output, dir, check) => {
       check,
     })
   }
-  for (const m of output.matchAll(/^([^:\n]+):(\d+):(\d+): (error|warning): (.+)$/gm))
-    push(m[1]!, m[2]!, m[3], m[4]!, m[5]!)
-  for (const m of output.matchAll(/^([^:\n]+):(\d+): (error|warning): (.+)$/gm))
-    push(m[1]!, m[2]!, undefined, m[3]!, m[4]!)
+  // `file:line[:col]: error|warning: message`, split at the level marker.
+  for (const raw of output.split("\n")) {
+    const level = raw.includes(": error: ") ? "error" : raw.includes(": warning: ") ? "warning" : undefined
+    if (!level) continue
+    const at = raw.indexOf(`: ${level}: `)
+    const parts = raw.slice(0, at).split(":")
+    const tail = parts.slice(-2)
+    const text = raw.slice(at + level.length + 4)
+    if (parts.length >= 3 && isDigits(tail[0]!) && isDigits(tail[1]!))
+      push(parts.slice(0, -2).join(":"), tail[0]!, tail[1], level, text)
+    else if (parts.length >= 2 && isDigits(tail[1]!))
+      push(parts.slice(0, -1).join(":"), tail[1]!, undefined, level, text)
+  }
   return { findings, failedTests: [] }
 }
 
@@ -302,15 +311,19 @@ const vitestOrJest =
         check,
       })
     }
-    for (const match of output.matchAll(/^\s*● (.+)$/gm))
-      if (findings.length && !findings.some((item) => item.message.includes(match[1]!)))
+    for (const raw of output.split("\n")) {
+      const line = raw.trimStart()
+      if (!line.startsWith("● ")) continue
+      const name = line.slice(2)
+      if (name && findings.length && !findings.some((item) => item.message.includes(name)))
         findings.push({
           file: [...failed].at(-1) ?? ".",
           rule: "test/failed",
           severity: "error",
-          message: `Test failed: ${match[1]}`,
+          message: `Test failed: ${name}`,
           check,
         })
+    }
     return { findings, failedTests: [...failed] }
   }
 
@@ -345,7 +358,16 @@ const goTest: Parser = (output, _dir, check) => {
   const failed = new Set<string>()
   for (const match of output.matchAll(/^--- FAIL: (\S+)/gm))
     findings.push({ file: ".", rule: "test/failed", severity: "error", message: `Test failed: ${match[1]}`, check })
-  for (const match of output.matchAll(/^\s+(\S+_test\.go):(\d+):/gm)) failed.add(match[1]!)
+  // Indented `path/x_test.go:12:` lines name the failing test files.
+  for (const raw of output.split("\n")) {
+    if (!/^\s/.test(raw)) continue
+    const line = raw.trimStart()
+    const at = line.indexOf("_test.go:")
+    const rest = at > 0 ? line.slice(at + "_test.go:".length) : ""
+    const colon = rest.indexOf(":")
+    if (at > 0 && !/\s/.test(line.slice(0, at)) && colon > 0 && isDigits(rest.slice(0, colon)))
+      failed.add(line.slice(0, at + "_test.go".length))
+  }
   return { findings, failedTests: [...failed] }
 }
 
@@ -365,7 +387,7 @@ const generic: Parser = (output, dir, check) => {
   const findings: GateFinding[] = []
   const seen = new Set<string>()
   for (const raw of output.split("\n")) {
-    const line = raw.replace(/\t/g, " ")
+    const line = raw.replaceAll("\t", " ")
     let i = 0
     while (i < line.length) {
       if (line[i] === " ") {

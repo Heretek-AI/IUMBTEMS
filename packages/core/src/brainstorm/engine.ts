@@ -114,7 +114,7 @@ export function similarity(a: string, b: string, size = 2): number {
 function fnv1a(text: string): number {
   let hash = 0x811c9dc5
   for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i)
+    hash ^= text.codePointAt(i) ?? 0
     hash = Math.imul(hash, 0x01000193)
   }
   return hash >>> 0

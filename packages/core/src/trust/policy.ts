@@ -168,5 +168,5 @@ export function evaluateShell(
 
 /** Quote one argument for POSIX sh. */
 export function shellQuote(value: string): string {
-  return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`
+  return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`
 }

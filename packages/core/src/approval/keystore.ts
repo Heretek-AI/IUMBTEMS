@@ -1,7 +1,7 @@
 // The signing key that makes approval and waiver records unforgeable by
 // anything that cannot read the user-global state dir (agents are denied that
 // dir by policy). Created on first use with mode 0600.
-import { createHmac, randomBytes } from "node:crypto"
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 import { mkdir, open, readFile } from "node:fs/promises"
 import path from "node:path"
 import { stateDir } from "../layout.ts"
@@ -50,10 +50,9 @@ export async function verifyRecordMac(record: Record<string, unknown>, dir = sta
 }
 
 function timingSafeEqualHex(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let diff = 0
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return diff === 0
+  const left = Buffer.from(a)
+  const right = Buffer.from(b)
+  return left.length === right.length && timingSafeEqual(left, right)
 }
 
 /** A short code a human must type back to confirm an approval (CLI/TUI). */

@@ -65,7 +65,7 @@ export function prepareLicenseText(text: string): string {
     .replace(/[“”„‟″]/g, '"')
     .replace(/[‐-―−]/g, "-")
     .replace(/[  -​  　\f\v]/g, " ")
-    .replace(/©/g, "(c)")
+    .replaceAll("©", "(c)")
     .replace(/\bnon[- \t\n]+infringement\b/g, "noninfringement")
     .replace(/\blicenc(e|es|ed|ing)\b/g, "licens$1")
     .replace(/\backnowledgement\b/g, "acknowledgment")

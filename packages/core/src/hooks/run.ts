@@ -167,8 +167,10 @@ async function runPrompt(
         setTimeout(() => reject(new Error("prompt hook timed out")), timeoutMs(handler, context.event)),
       ),
     ])
-    const match = /\{[\s\S]*\}/.exec(reply)
-    const verdict = match ? JSON.parse(match[0]) : undefined
+    // The verdict is the outermost {...} in the reply.
+    const start = reply.indexOf("{")
+    const end = reply.lastIndexOf("}")
+    const verdict = start >= 0 && end > start ? JSON.parse(reply.slice(start, end + 1)) : undefined
     if (!verdict || typeof verdict.ok !== "boolean")
       return { status: "error", error: "prompt hook reply had no {ok} verdict", durationMs: Date.now() - started }
     return { status: "ok", json: { promptVerdict: verdict }, durationMs: Date.now() - started }

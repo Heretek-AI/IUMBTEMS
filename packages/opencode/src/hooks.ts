@@ -205,10 +205,11 @@ export async function createHookBridge(
         event.prompt.text = `${event.prompt.text}\n\n<system-reminder>\n${context.join("\n")}\n</system-reminder>`
     },
 
-    async context(event) {
+    context(event) {
       const texts = sessionContext.get(event.sessionID)
       if (texts?.length)
         event.system.push({ type: "text", text: `<session-start-hooks>\n${texts.join("\n")}\n</session-start-hooks>` })
+      return Promise.resolve()
     },
 
     async evaluate(event) {

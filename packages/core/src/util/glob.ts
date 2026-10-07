@@ -46,7 +46,7 @@ export function globToRegExp(glob: string): RegExp {
       else {
         let body = glob.slice(i + 1, close)
         if (body.startsWith("!")) body = `^${body.slice(1)}`
-        out += `[${body.replace(/\\/g, "\\\\")}]`
+        out += `[${body.replaceAll("\\", "\\\\")}]`
         i = close
       }
     } else out += /[.+^$()|\\]/.test(char) ? `\\${char}` : char
@@ -57,7 +57,7 @@ export function globToRegExp(glob: string): RegExp {
   return regex
 }
 
-const toPosix = (file: string) => file.replace(/\\/g, "/").replace(/^\.\//, "")
+const toPosix = (file: string) => file.replaceAll("\\", "/").replace(/^\.\//, "")
 
 export function matchGlob(file: string, glob: string): boolean {
   return globToRegExp(toPosix(glob)).test(toPosix(file))

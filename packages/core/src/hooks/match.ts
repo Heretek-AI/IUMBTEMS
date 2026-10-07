@@ -47,7 +47,7 @@ export function subcommands(command: string): { parts: string[]; opaque: boolean
 
 /** Claude permission-rule wildcards: "*" matches any run of characters (including "/" and spaces). */
 function wildcard(pattern: string, value: string): boolean {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\?]/g, "\\$&").replace(/\*/g, ".*")
+  const escaped = pattern.replaceAll(/[.+^${}()|[\]\\?]/g, "\\$&").replaceAll("*", ".*")
   // "git *" also matches bare "git"
   const regex = new RegExp(`^${escaped}$`)
   return regex.test(value) || (pattern.endsWith(" *") && value === pattern.slice(0, -2))

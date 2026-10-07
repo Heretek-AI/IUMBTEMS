@@ -171,7 +171,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
       case "research": {
         const tools = researchTools({
           root,
-          policy: async () => ({ root, ...(io.stateDir ? { stateDir: io.stateDir } : {}) }),
+          policy: () => Promise.resolve({ root, ...(io.stateDir ? { stateDir: io.stateDir } : {}) }),
         })
         const tool = (name: string) => tools.find((item) => item.name === name)!
         if (sub === "search" && rest.length) {

@@ -107,8 +107,9 @@ export interface CompleteResult {
   readonly criteria: ReadonlyArray<{ id: string; ok: boolean; detail: string }>
 }
 
+// run-20261007-043122-ab12: the ISO timestamp to the second, without separators.
 const newRunId = (now: Date) =>
-  `run-${now.toISOString().replace(/[-:]/g, "").replace(/\..*$/, "").replace("T", "-")}-${randomBytes(2).toString("hex")}`
+  `run-${now.toISOString().slice(0, 19).replaceAll("-", "").replaceAll(":", "").replace("T", "-")}-${randomBytes(2).toString("hex")}`
 
 const TEST_FILE =
   /(^|\/)(test|tests|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.(py|go)$/
@@ -161,7 +162,7 @@ export class Factory {
   /** Load-modify-save under the state lock. Guards run first unless the op is human-only. */
   private async mutate<T>(
     actor: string,
-    fn: (state: FactoryState) => Promise<T>,
+    fn: (state: FactoryState) => Promise<T> | T,
     options: { guard?: boolean; create?: boolean } = {},
   ): Promise<T> {
     return withLock(this.layout.state, async () => {
@@ -393,7 +394,7 @@ export class Factory {
 
   /** Record a gate run made during BUILD (red test runs are the failing-test-first evidence). */
   async recordGateRun(agentId: string | undefined, result: GateRunLike): Promise<void> {
-    await this.mutate(`agent:${agentId}`, async (state) => {
+    await this.mutate(`agent:${agentId}`, (state) => {
       if (state.stage !== "BUILD") return
       const phase = this.active(state)
       const failed = result.failedTests ?? []
@@ -459,7 +460,7 @@ export class Factory {
     findings.push(...gates.findings)
     const ok = gates.passed && findings.every((finding) => finding.severity !== "error")
     if (!ok) {
-      await this.mutate(`agent:${agentId}`, async (state) => {
+      await this.mutate(`agent:${agentId}`, (state) => {
         this.active(state).history.push({
           at: this.now().toISOString(),
           event: "complete-refused",
@@ -656,7 +657,7 @@ export class Factory {
 
   async release(agentId: string | undefined): Promise<FactoryState> {
     this.requireSeat(agentId, "factory")
-    const state = await this.mutate(`agent:${agentId}`, async (current) => {
+    const state = await this.mutate(`agent:${agentId}`, (current) => {
       this.requireStage(current, "RELEASE")
       return structuredClone(current)
     })

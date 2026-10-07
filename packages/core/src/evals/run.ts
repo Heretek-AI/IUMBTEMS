@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createInterface } from "node:readline"
+import { findExecutable } from "../util/proc.ts"
 import { type EvalChecks, type EvalTranscript, gradeTranscript, readTranscript } from "./grade.ts"
 
 export interface EvalCase {
@@ -49,11 +50,13 @@ export async function evalWorkspace(options: {
       2,
     )}\n`,
   )
-  await new Promise<void>((resolve) => {
-    const git = spawn("git", ["init", "-q"], { cwd: dir, stdio: "ignore" })
-    git.on("close", () => resolve())
-    git.on("error", () => resolve())
-  })
+  const git = findExecutable("git")
+  if (git)
+    await new Promise<void>((resolve) => {
+      const child = spawn(git, ["init", "-q"], { cwd: dir, stdio: "ignore" })
+      child.on("close", () => resolve())
+      child.on("error", () => resolve())
+    })
   return { dir, home, cleanup: () => rm(base, { recursive: true, force: true }) }
 }
 

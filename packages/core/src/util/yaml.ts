@@ -83,11 +83,11 @@ function parseMap(lines: Line[], state: { i: number }, indent: number): Record<s
     if (!line || line.indent < indent) return out
     if (line.indent > indent) throw new YamlError("bad indentation in map", line.number)
     if (line.text.startsWith("- ")) return out
-    const match = /^("(?:[^"\\]|\\.)*"|'[^']*'|[^:#]+?)\s*:(?:\s+(.*))?$/.exec(line.text)
-    if (!match) throw new YamlError(`expected "key: value", got "${line.text}"`, line.number)
-    const key = unquote(match[1]!.trim())
+    const split = splitKey(line.text)
+    if (!split) throw new YamlError(`expected "key: value", got "${line.text}"`, line.number)
+    const key = unquote(split.key.trim())
     if (key in out) throw new YamlError(`duplicate key "${key}"`, line.number)
-    const rest = (match[2] ?? "").trim()
+    const rest = split.rest.trim()
     state.i++
     if (rest === "") {
       skipBlank(lines, state)
@@ -128,8 +128,39 @@ function parseScalarOrBlock(
   return parseInline(rest, number)
 }
 
+/**
+ * `key: value` → { key, rest }. The key is "double-quoted" (with escapes),
+ * 'single-quoted', or bare (no ":" or "#"); a quoted key that is not followed
+ * by ":" is read as a bare key. After ":" comes the end of the line or
+ * whitespace and the value.
+ */
+function splitKey(text: string): { key: string; rest: string } | undefined {
+  const afterKey = (end: number) => {
+    const after = text.slice(end).trimStart()
+    if (!after.startsWith(":")) return undefined
+    const rest = after.slice(1)
+    if (rest !== "" && !/^\s/.test(rest)) return undefined
+    return { key: text.slice(0, end), rest }
+  }
+  let quoted: { key: string; rest: string } | undefined
+  if (text.startsWith('"')) {
+    let i = 1
+    while (i < text.length && text[i] !== '"') i += text[i] === "\\" ? 2 : 1
+    if (i < text.length) quoted = afterKey(i + 1)
+  } else if (text.startsWith("'")) {
+    const close = text.indexOf("'", 1)
+    if (close > 0) quoted = afterKey(close + 1)
+  }
+  if (quoted) return quoted
+  const colon = text.indexOf(":")
+  if (colon <= 0 || text.slice(0, colon).includes("#")) return undefined
+  return afterKey(colon)
+}
+
 function parseInline(text: string, number: number): unknown {
-  const value = text.replace(/\s+#.*$/, "").trim()
+  // A comment starts at whitespace followed by "#".
+  const hash = text.search(/\s#/)
+  const value = (hash < 0 ? text : text.slice(0, hash)).trim()
   if (value.startsWith("[")) {
     if (!value.endsWith("]")) throw new YamlError("unterminated inline list", number)
     const inner = value.slice(1, -1).trim()
@@ -177,7 +208,7 @@ function splitInline(text: string): string[] {
 
 function unquote(text: string): string {
   if (text.startsWith('"') && text.endsWith('"')) return JSON.parse(text) as string
-  if (text.startsWith("'") && text.endsWith("'")) return text.slice(1, -1).replace(/''/g, "'")
+  if (text.startsWith("'") && text.endsWith("'")) return text.slice(1, -1).replaceAll("''", "'")
   return text
 }
 

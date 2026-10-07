@@ -17,20 +17,20 @@ export default Plugin.define({
           additionalProperties: false,
         },
         options: { codemode: false },
-        execute: async (input: any) => ({ content: `p-echo:${input.text}` }),
+        execute: (input: any) => Promise.resolve({ content: `p-echo:${input.text}` }),
       })
       editor.add({
         name: "es_p_throw",
         description: "Throws from a promise executor",
         input: { type: "object", properties: {} },
         options: { codemode: false },
-        execute: async () => {
-          throw new ToolError({ message: "es_p_throw refused" })
-        },
+        execute: () => Promise.reject(new ToolError({ message: "es_p_throw refused" })),
       })
     })
-    await ctx.tool.hook("execute.before", async (event) => {
-      if (JSON.stringify(event.input ?? {}).includes("PBLOCK")) throw new ToolError({ message: "promise hook block" })
-    })
+    await ctx.tool.hook("execute.before", (event) =>
+      JSON.stringify(event.input ?? {}).includes("PBLOCK")
+        ? Promise.reject(new ToolError({ message: "promise hook block" }))
+        : Promise.resolve(),
+    )
   },
 })

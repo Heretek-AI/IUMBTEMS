@@ -76,8 +76,11 @@ export function untarFile(tar: Uint8Array, wanted: string): Uint8Array | undefin
   while (offset + 512 <= tar.length) {
     const header = tar.subarray(offset, offset + 512)
     if (header.every((byte) => byte === 0)) break
-    const field = (start: number, length: number) =>
-      decoder.decode(header.subarray(start, start + length)).replace(/\0.*$/s, "")
+    const field = (start: number, length: number) => {
+      const text = decoder.decode(header.subarray(start, start + length))
+      const nul = text.indexOf("\0")
+      return nul < 0 ? text : text.slice(0, nul)
+    }
     const name = field(0, 100)
     const prefix = field(345, 155)
     const size = Number.parseInt(field(124, 12).trim() || "0", 8)

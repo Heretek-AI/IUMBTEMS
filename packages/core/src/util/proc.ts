@@ -3,6 +3,23 @@
 // working directory (writes vanish when the process exits); without bwrap the
 // caller falls back to an allowlist plus a post-run diff check (see sandbox.ts).
 import { spawn, spawnSync } from "node:child_process"
+import { accessSync, constants } from "node:fs"
+import path from "node:path"
+
+/** Absolute path of an executable found on PATH (absolute entries only, no shell), or undefined. */
+export function findExecutable(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  for (const dir of (env.PATH ?? "").split(path.delimiter)) {
+    if (!dir || !path.isAbsolute(dir)) continue
+    const candidate = path.join(dir, name)
+    try {
+      accessSync(candidate, constants.X_OK)
+      return candidate
+    } catch {
+      // not here
+    }
+  }
+  return undefined
+}
 
 export interface RunOptions {
   readonly cwd: string

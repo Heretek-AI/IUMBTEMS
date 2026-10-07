@@ -308,7 +308,7 @@ export async function runGates(options: RunGatesOptions): Promise<GateReport> {
   const checks: CheckReport[] = []
   const findings: GateFinding[] = []
   const failedTests: string[] = []
-  const timed = async (id: string, fn: () => Promise<GateFinding[] | undefined>) => {
+  const timed = async (id: string, fn: () => Promise<GateFinding[] | undefined> | GateFinding[] | undefined) => {
     const started = Date.now()
     const result = await fn()
     if (result === undefined) {
@@ -350,7 +350,7 @@ export async function runGates(options: RunGatesOptions): Promise<GateReport> {
     }))
   })
   if (options.phaseId)
-    await timed("tool-config", async () =>
+    await timed("tool-config", () =>
       files
         .filter((file) => matchAny(file, TOOL_CONFIG))
         .map((file) => ({
@@ -506,7 +506,7 @@ export function formatReport(report: GateReport): string {
     lines.push(
       `${finding.severity === "error" ? "✗" : "!"} ${finding.file}${finding.line ? `:${finding.line}` : ""}${finding.column ? `:${finding.column}` : ""} ${finding.rule}: ${finding.message}`,
     )
-    if (finding.fixHint) lines.push(`    ↳ ${finding.fixHint.split("\n").join("\n      ")}`)
+    if (finding.fixHint) lines.push(`    ↳ ${finding.fixHint.replaceAll("\n", "\n      ")}`)
   }
   if (report.totalFindings > report.findings.length)
     lines.push(`… ${report.totalFindings - report.findings.length} more in ${report.logDir}/summary.json`)

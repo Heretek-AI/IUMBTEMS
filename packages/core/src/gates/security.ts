@@ -111,8 +111,15 @@ export async function lockfileDependencies(dir: string): Promise<Dependency[]> {
     }
   }
   const requirements = await read("requirements.txt")
-  for (const match of requirements?.matchAll(/^\s*([A-Za-z0-9_.-]+)\s*==\s*([\w.+-]+)/gm) ?? [])
-    out.push({ ecosystem: "PyPI", name: match[1]!, version: match[2]! })
+  // `name==version` pins (anything else — ranges, extras, URLs — is not a pin).
+  for (const raw of requirements?.split("\n") ?? []) {
+    const line = raw.trim()
+    const eq = line.indexOf("==")
+    if (eq <= 0) continue
+    const name = line.slice(0, eq).trimEnd()
+    const version = /^[\w.+-]+/.exec(line.slice(eq + 2).trimStart())?.[0]
+    if (version && /^[A-Za-z0-9_.-]+$/.test(name)) out.push({ ecosystem: "PyPI", name, version })
+  }
   const cargo = await read("Cargo.lock")
   for (const match of cargo?.matchAll(/\[\[package\]\]\s*\nname = "([^"]+)"\s*\nversion = "([^"]+)"/g) ?? [])
     out.push({ ecosystem: "crates.io", name: match[1]!, version: match[2]! })

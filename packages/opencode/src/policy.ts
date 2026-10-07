@@ -23,11 +23,17 @@ import type { Runtime } from "./runtime.ts"
 
 const WRITE_TOOLS = new Set(["write", "edit"])
 
+const PATCH_HEADERS = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "]
+
 /** Files a v2 `patch` touches (add, update, delete and move targets). */
 export function patchTargets(patchText: string): string[] {
-  return [...patchText.matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+?)\s*$/gm)].map(
-    (match) => match[1]!,
-  )
+  const targets: string[] = []
+  for (const line of patchText.split("\n")) {
+    const header = PATCH_HEADERS.find((prefix) => line.startsWith(prefix))
+    const target = header ? line.slice(header.length).trimEnd() : ""
+    if (target) targets.push(target)
+  }
+  return targets
 }
 
 const deny = (message: string): never => {

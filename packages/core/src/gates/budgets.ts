@@ -121,7 +121,20 @@ const MANIFESTS: Record<string, (text: string) => string[]> = {
     }
     return names
   },
-  "go.mod": (text) => [...text.matchAll(/^\s*(?:require\s+)?([\w.-]+\.[\w.-]+\/\S+)\s+v/gm)].map((match) => match[1]!),
+  "go.mod": (text) => {
+    // `require host.tld/path vX` lines and the lines of a require ( … ) block.
+    const names: string[] = []
+    for (const raw of text.split("\n")) {
+      let line = raw.trim()
+      if (/^require\s/.test(line)) line = line.slice("require".length).trimStart()
+      const [name = "", version = ""] = line.split(/\s+/)
+      const slash = name.indexOf("/")
+      const host = name.slice(0, Math.max(slash, 0))
+      if (version.startsWith("v") && slash > 0 && slash < name.length - 1 && /^[\w-]+(\.[\w-]+)+$/.test(host))
+        names.push(name)
+    }
+    return names
+  },
 }
 
 async function dependencyFindings(input: BudgetInput): Promise<GateFinding[]> {

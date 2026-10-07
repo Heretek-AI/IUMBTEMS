@@ -313,6 +313,47 @@ describe("parsers", () => {
     expect(py.findings[0]?.file).toBe("tests/test_a.py")
   })
 
+  test("mypy, jest and go test output", () => {
+    const mypy = parseOutput(
+      "mypy",
+      "src/a.py:3:5: error: Incompatible types in assignment [assignment]\nsrc/b.py:7: warning: unused 'type: ignore' comment\nFound 2 errors",
+      "/r",
+      "py-type",
+    )
+    expect(mypy.findings).toEqual([
+      {
+        file: "src/a.py",
+        line: 3,
+        column: 5,
+        rule: "mypy/assignment",
+        severity: "error",
+        message: "Incompatible types in assignment",
+        check: "py-type",
+      },
+      {
+        file: "src/b.py",
+        line: 7,
+        rule: "mypy/error",
+        severity: "warning",
+        message: "unused 'type: ignore' comment",
+        check: "py-type",
+      },
+    ])
+    const jest = parseOutput("jest", "FAIL src/a.test.ts\n  ● math › adds\n\n    expect(received)", "/r", "test")
+    expect(jest.findings.map((finding) => [finding.file, finding.message])).toEqual([
+      ["src/a.test.ts", "Test file has failures"],
+      ["src/a.test.ts", "Test failed: math › adds"],
+    ])
+    const go = parseOutput(
+      "go-test",
+      "--- FAIL: TestAdd (0.00s)\n    pkg/math_test.go:12: got 1, want 2\nFAIL",
+      "/r",
+      "go-test",
+    )
+    expect(go.findings[0]?.message).toBe("Test failed: TestAdd")
+    expect(go.failedTests).toEqual(["pkg/math_test.go"])
+  })
+
   test("complexity counts decisions per function, including one-liners and arrows", () => {
     const scores = complexity(
       "a.ts",

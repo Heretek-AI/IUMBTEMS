@@ -51,7 +51,7 @@ const data: Record<string, any> = {
 }
 
 const listeners = new Set<() => void>()
-const call = async (method: string) => structuredClone(data[method])
+const call = (method: string) => Promise.resolve(structuredClone(data[method]))
 const subscribe = (listener: () => void) => {
   listeners.add(listener)
   return () => listeners.delete(listener)

@@ -282,10 +282,42 @@ const isWordCode = (code: number) =>
 /** The last `\w+` run in `text` (Go receiver names), without a regex. */
 function lastWord(text: string): string {
   let end = text.length
-  while (end > 0 && !isWordCode(text.charCodeAt(end - 1))) end--
+  while (end > 0 && !isWordCode(text.codePointAt(end - 1) ?? 0)) end--
   let start = end
-  while (start > 0 && isWordCode(text.charCodeAt(start - 1))) start--
+  while (start > 0 && isWordCode(text.codePointAt(start - 1) ?? 0)) start--
   return text.slice(start, end)
+}
+
+const isWordChar = (char: string | undefined) => char !== undefined && /\w/.test(char)
+const isSpace = (char: string | undefined) => char !== undefined && /\s/.test(char)
+
+/**
+ * `import … from "x"` and `import type … from "x"`, scanned without a
+ * backtracking regex: after `import` (and `type`), the first quote must close
+ * a `… from` clause; a semicolon or backtick (and, outside type imports, a
+ * parenthesis) first means it is not one.
+ */
+function fromImports(text: string): Array<{ index: number; kind: "type" | "static"; specifier: string }> {
+  const out: Array<{ index: number; kind: "type" | "static"; specifier: string }> = []
+  for (let at = text.indexOf("import"); at >= 0; at = text.indexOf("import", at + 6)) {
+    if (isWordChar(text[at - 1]) || !isSpace(text[at + 6])) continue
+    let j = at + 6
+    while (isSpace(text[j])) j++
+    const type = text.startsWith("type", j) && !isWordChar(text[j + 4])
+    if (type && !isSpace(text[j + 4])) continue
+    const from = type ? j + 4 : j
+    let k = from
+    while (k < text.length && !`'"\`;`.includes(text[k]!) && (type || (text[k] !== "(" && text[k] !== ")"))) k++
+    const quote = text[k]
+    if (quote !== "'" && quote !== '"') continue
+    const before = text.slice(from, k).trimEnd()
+    if (!before.endsWith("from") || isWordChar(before[before.length - 5])) continue
+    let end = k + 1
+    while (end < text.length && text[end] !== "'" && text[end] !== '"') end++
+    if (text[end] !== quote || end === k + 1) continue
+    out.push({ index: at, kind: type ? "type" : "static", specifier: text.slice(k + 1, end) })
+  }
+  return out
 }
 
 /** Regex fallback: imports only (symbols best effort), comments stripped first. */
@@ -370,15 +402,19 @@ export function extractWithRegex(language: GrammarId, source: string): FileStruc
   }
   // JS/TS: blank out comments, keep offsets.
   const stripped = blankLineComments(blankBlockComments(source))
+  const seen = new Set<number>()
+  const found = fromImports(stripped)
+  for (const kind of ["type", "static"] as const)
+    for (const item of found.filter((entry) => entry.kind === kind)) {
+      seen.add(item.index)
+      imports.push({ specifier: item.specifier, line: at(item.index), kind })
+    }
   const patterns: Array<[RegExp, ImportRef["kind"]]> = [
-    [/\bimport\s+type\s+[^'"`;]*?\bfrom\s*(['"])([^'"]+)\1/g, "type"],
-    [/\bimport\s+(?!type\b)[^'"`;()]*?\bfrom\s*(['"])([^'"]+)\1/g, "static"],
     [/\bimport\s*(['"])([^'"]+)\1/g, "side-effect"],
     [/\bexport\s+(?:type\s+)?(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s*from\s*(['"])([^'"]+)\1/g, "reexport"],
     [/\bimport\s*\(\s*(['"])([^'"]+)\1\s*\)/g, "dynamic"],
     [/\brequire\s*\(\s*(['"])([^'"]+)\1\s*\)/g, "require"],
   ]
-  const seen = new Set<number>()
   for (const [pattern, kind] of patterns)
     for (const match of stripped.matchAll(pattern)) {
       if (seen.has(match.index!)) continue

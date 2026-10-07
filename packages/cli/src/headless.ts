@@ -52,7 +52,7 @@ function resolveOnPath(binary: string): string | undefined {
 /** OpenCode v2: `opencode run --standalone --format json`. */
 export const opencodeDriver: HarnessDriver = {
   id: "opencode",
-  available: async () => resolveOnPath("opencode") !== undefined,
+  available: () => Promise.resolve(resolveOnPath("opencode") !== undefined),
   async *turn({ root, agent, prompt, session, signal }) {
     const args = [
       "run",

@@ -12,7 +12,7 @@ const JS_CODE_EXT = [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts
 const check = (input: Partial<CommandCheck> & Pick<CommandCheck, "id" | "kind" | "command">) =>
   CommandCheckSchema.parse(input)
 
-async function readText(file: string) {
+function readText(file: string): Promise<string | undefined> {
   return readFile(file, "utf8").catch(() => undefined)
 }
 

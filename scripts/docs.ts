@@ -17,12 +17,24 @@ import * as schemas from "../packages/core/src/schema/index.ts"
 const root = path.resolve(import.meta.dir, "..")
 const check = process.argv.includes("--check")
 
-const kebab = (name: string) =>
-  name
-    .replace(/Schema$/, "")
-    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2")
-    .toLowerCase()
+const isUpper = (char: string | undefined) => char !== undefined && char >= "A" && char <= "Z"
+const isLowerOrDigit = (char: string | undefined) =>
+  char !== undefined && ((char >= "a" && char <= "z") || (char >= "0" && char <= "9"))
+
+/** GateFindingSchema → gate-finding, HTTPServer → http-server (a word starts at each case boundary). */
+const kebab = (name: string) => {
+  const base = name.endsWith("Schema") ? name.slice(0, -"Schema".length) : name
+  let out = ""
+  for (let i = 0; i < base.length; i++) {
+    const char = base[i]!
+    const boundary =
+      i > 0 &&
+      isUpper(char) &&
+      (isLowerOrDigit(base[i - 1]) || (isUpper(base[i - 1]) && isLowerOrDigit(base[i + 1]) && base[i + 1]! >= "a"))
+    out += boundary ? `-${char}` : char
+  }
+  return out.toLowerCase()
+}
 
 const schemaDir = path.join(root, "schemas")
 const docsFile = path.join(root, "docs", "SCHEMAS.md")
@@ -83,7 +95,7 @@ const capabilitiesDoc = [
     "| --- | --- | --- | --- |",
     ...rows.map(
       (row) =>
-        `| ${row.capability} | ${row.support.toUpperCase()} | ${row.test ? `\`${row.test}\`` : "—"} | ${row.detail.replace(/\\/g, "\\\\").replace(/\|/g, "\\|")} |`,
+        `| ${row.capability} | ${row.support.toUpperCase()} | ${row.test ? `\`${row.test}\`` : "—"} | ${row.detail.replaceAll("\\", "\\\\").replaceAll("|", "\\|")} |`,
     ),
     "",
   ]),
@@ -115,7 +127,7 @@ const configDoc = [
   ...Object.entries(configJson.properties ?? {}).map(([name, property]) => {
     const type = property.type ?? (property.enum ? "enum" : property.anyOf ? "union" : "object")
     const fallback = property.default === undefined ? "—" : `\`${JSON.stringify(property.default)}\``
-    return `| \`${name}\` | ${type}${property.enum ? ` (${property.enum.join(", ")})` : ""} | ${fallback} | ${(property.description ?? "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|")} |`
+    return `| \`${name}\` | ${type}${property.enum ? ` (${property.enum.join(", ")})` : ""} | ${fallback} | ${(property.description ?? "").replaceAll("\\", "\\\\").replaceAll("|", "\\|")} |`
   }),
   "",
   "`es config show` and `/config` print the effective config and which files contributed.",
