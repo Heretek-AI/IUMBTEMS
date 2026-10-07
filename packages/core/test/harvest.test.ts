@@ -138,6 +138,7 @@ describe("SPDX detection", () => {
     const header = await tmp("es-spdx-header-")
     await write(header, "LICENSE", MIT)
     await write(header, "src/vendored.c", "/* SPDX-License-Identifier: GPL-2.0-only */\nint x;\n")
+    await write(header, "src/page.html.ts", "// <!-- SPDX-License-Identifier: MIT -->\nexport {}\n")
     const withHeader = await detectLicense(header)
     expect(withHeader).toMatchObject({ spdx: "GPL-2.0 AND MIT", family: "copyleft" })
     expect(withHeader.note).toContain("GPL-2.0")

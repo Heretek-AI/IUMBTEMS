@@ -389,7 +389,14 @@ async function spdxHeaders(
         count += 1
         const text = await io.readFileImpl(path.join(dir, child)).catch(() => undefined)
         const match = text ? /spdx-license-identifier:[ \t]*([^\n*]+)/i.exec(text.slice(0, 4_000)) : undefined
-        if (text && match) found.push({ spdx: match[1]!.replace(/-->|\*\/|#/g, "").trim(), file: child, text })
+        // Keep the expression itself (ids, AND/OR/WITH, parentheses), not a trailing comment closer.
+        const expression = match
+          ? (/^[\w.+\-() ]+/.exec(match[1]!)?.[0] ?? "")
+              .split(/\s+/)
+              .filter((token) => /[A-Za-z0-9]/.test(token))
+              .join(" ")
+          : undefined
+        if (text && expression) found.push({ spdx: expression, file: child, text })
       }
     }
   }
