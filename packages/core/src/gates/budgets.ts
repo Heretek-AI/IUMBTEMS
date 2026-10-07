@@ -201,24 +201,33 @@ function braceComplexity(text: string): FunctionComplexity[] {
   const headers: readonly RegExp[] = [
     /\bfunction ?\*? ?(\w*) ?\(/,
     /(\w+) ?[:=] ?(?:async )?(?:function\b|\([\w ,:?=]*\) ?=>|\w+ ?=>)/,
-    /^ ?(?:(?:public|private|protected|static|async|override|readonly) )*(\w+) ?\([\w ,:?=*[\]<>|&.]*\) ?(?:: ?[\w <>,.[\]|&]*)?\{/,
     /\bfn (\w+)/,
     /\bfunc (?:\([^)]*\) )?(\w+)/,
   ]
+  const method = /^ ?(?:(?:public|private|protected|static|async|override|readonly) )*(\w+) ?\(/
   const close = (done: { name: string; line: number; score: number }) =>
     results.push({ name: done.name, line: done.line, score: done.score })
   text.split("\n").forEach((raw, index) => {
     const line = stripLiterals(raw)
     const flat = line.replace(/[ \t]+/g, " ")
-    let name: string | undefined
-    let best = Number.POSITIVE_INFINITY
+    const candidates: Array<{ name: string; index: number }> = []
     for (const pattern of headers) {
       const found = pattern.exec(flat)
-      if (found && found.index < best) {
-        best = found.index
-        name = found[1]
-      }
+      if (found?.[1]) candidates.push({ name: found[1], index: found.index })
     }
+    const declared = method.exec(flat)
+    if (declared?.[1]) {
+      const closing = flat.indexOf(")", declared.index + declared[0].length)
+      if (closing >= 0 && flat.indexOf("{", closing + 1) >= 0)
+        candidates.push({ name: declared[1], index: declared.index })
+    }
+    let name: string | undefined
+    let best = Number.POSITIVE_INFINITY
+    for (const candidate of candidates)
+      if (candidate.index < best) {
+        best = candidate.index
+        name = candidate.name
+      }
     if (name && !/^(if|for|while|switch|catch|return)$/.test(name))
       stack.push({ name, line: index + 1, depth, score: 1, opened: false })
     const decisions = line.match(DECISION)?.length ?? 0
