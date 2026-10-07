@@ -10,8 +10,16 @@ import { factoryLayout } from "../layout.ts"
 import type { EsToolDef } from "../ops/tools.ts"
 import { ToolRefusal } from "../ops/tools.ts"
 import { DEFAULT_LICENSE_WHITELIST, type HarvestProfile, type HarvestRow, HarvestRowSchema } from "../schema/harvest.ts"
-import { buildMatrix, checkVerdict, renderHarvest } from "./matrix.ts"
-import { assertSourceAllowed, candidateId, type HarvestSource, parseSource, readCandidate, scanSource } from "./scan.ts"
+import { buildMatrix, checkVerdict, recheckMatrix, renderHarvest } from "./matrix.ts"
+import {
+  assertSourceAllowed,
+  candidateId,
+  type HarvestSource,
+  parseSource,
+  readCandidate,
+  scanSource,
+  withCurrentLicenses,
+} from "./scan.ts"
 import { githubApi, gitlabApi, type RemoteRepo } from "./sources.ts"
 import {
   readHarvestPlan,
@@ -105,7 +113,8 @@ export function harvestTools(context: HarvestOpsContext): EsToolDef[] {
             throw new ToolRefusal(error instanceof Error ? error.message : String(error))
           }
           let id = candidateId(name)
-          while (seen.has(id)) id = `${id}-2`
+          // "notes" and "clean-room" are reserved directories under .factory/harvest.
+          while (seen.has(id) || id === "notes" || id === "clean-room") id = `${id}-2`
           seen.add(id)
           planned.push({ id, name, source: spec })
         }
@@ -306,7 +315,7 @@ export function harvestTools(context: HarvestOpsContext): EsToolDef[] {
             "Rows must be { feature, cells: [{ candidate, verdict: depend|vendor|clean-room|skip }] }.",
           )
         }
-        const profiles = new Map((await readProfiles(root)).map((profile) => [profile.id, profile]))
+        const profiles = await withCurrentLicenses(root, await readProfiles(root))
         const missing = plan.candidates.filter((candidate) => !profiles.has(candidate.id))
         if (missing.length)
           throw new ToolRefusal(`Scan these candidates first: ${missing.map((item) => item.id).join(", ")}.`)
@@ -355,18 +364,31 @@ export function harvestTools(context: HarvestOpsContext): EsToolDef[] {
           throw new ToolRefusal(
             `Candidates not scanned: ${missing.map((item) => item.id).join(", ")}. Scan them, or pass allowPartial:true to record them as gaps.`,
           )
-        const matrix = await readMatrix(root).catch((error: Error) => {
+        const stored = await readMatrix(root).catch((error: Error) => {
           throw new ToolRefusal(`Cannot read the matrix: ${error.message}`)
         })
-        if (!matrix) throw new ToolRefusal("No matrix yet. Build it with es_harvest_matrix first.")
-        const rendered = renderHarvest(plan.objective, profiles, matrix)
-        await writeHarvestResult(root, plan.objective, profiles, matrix, rendered)
+        if (!stored) throw new ToolRefusal("No matrix yet. Build it with es_harvest_matrix first.")
+        // Never trust verdicts or licences read back from disk: re-derive the
+        // licences from the scanned bytes and re-apply the policy.
+        const current = await withCurrentLicenses(root, profiles)
+        const rechecked = recheckMatrix(stored, current, plan.whitelist)
+        const matrix = rechecked.matrix
+        if (rechecked.downgrades.length) await writeMatrix(root, matrix)
+        const finalProfiles = [...current.values()]
+        const rendered = renderHarvest(plan.objective, finalProfiles, matrix)
+        await writeHarvestResult(root, plan.objective, finalProfiles, matrix, rendered)
         const counts = new Map<string, number>()
         for (const row of matrix.rows)
           for (const cell of row.cells) counts.set(cell.verdict, (counts.get(cell.verdict) ?? 0) + 1)
         const base = factoryLayout(root).dir
         return [
           `Darkharvest complete: ${profiles.length} profile(s), ${matrix.rows.length} feature(s)${missing.length ? `, ${missing.length} gap(s)` : ""}.`,
+          ...(rechecked.downgrades.length
+            ? [
+                `${rechecked.downgrades.length} stored verdict(s) no longer passed the licence policy and were downgraded:`,
+                ...rechecked.downgrades.map((item) => `- ${item.candidate} · ${item.feature}: ${item.reason}`),
+              ]
+            : []),
           `Verdicts: ${[...counts].map(([verdict, count]) => `${verdict} ${count}`).join(", ")}`,
           `Written: ${base}/harvest/harvest.json, HARVEST.md, VENDOR-PLAN.md${rendered.cleanRoom.length ? ` and ${rendered.cleanRoom.length} clean-room spec(s)` : ""}`,
         ].join("\n")

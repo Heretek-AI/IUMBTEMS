@@ -354,6 +354,37 @@ export async function scanSource(
   }
 }
 
+/**
+ * The licence to act on for a stored profile, re-detected from the scanned
+ * bytes: a profile read back from disk is never trusted for policy. Registry
+ * profiles (no bytes) stay unverified.
+ */
+export async function currentLicense(root: string, profile: HarvestProfile): Promise<LicenseFinding> {
+  const record = await readJson<{ dir?: string }>(path.join(harvestRuntimeDir(root, profile.id), "source.json"))
+  if (!record?.dir) return { ...profile.license, verified: false }
+  const info = await stat(record.dir).catch(() => undefined)
+  if (!info?.isDirectory())
+    return {
+      spdx: "unknown",
+      family: "unknown",
+      source: profile.license.source,
+      confidence: "low",
+      verified: false,
+      note: "the scanned bytes are gone; rescan the candidate",
+    }
+  return detectLicense(record.dir)
+}
+
+/** Stored profiles with their licences re-derived from bytes (see currentLicense). */
+export async function withCurrentLicenses(
+  root: string,
+  profiles: readonly HarvestProfile[],
+): Promise<Map<string, HarvestProfile>> {
+  const out = new Map<string, HarvestProfile>()
+  for (const profile of profiles) out.set(profile.id, { ...profile, license: await currentLicense(root, profile) })
+  return out
+}
+
 // ------------------------------------------------------------- bounded reads
 
 export interface HarvestRead {

@@ -54,6 +54,27 @@ describe("write policy", () => {
     }
   })
 
+  test("engine-owned brainstorm/harvest/design state is tool-only; seats keep notes", () => {
+    const engine = [
+      ".factory/harvest/matrix.json",
+      ".factory/harvest/plan.json",
+      ".factory/harvest/widget/profile.json",
+      ".factory/harvest/VENDOR-PLAN.md",
+      ".factory/harvest/clean-room/widget-search.md",
+      ".factory/brainstorm/scores.json",
+      ".factory/brainstorm/ideas.json",
+      ".factory/design/tokens.json",
+      ".factory/design/STYLE_GUIDE.md",
+    ]
+    for (const agent of [undefined, "build", "factory", "harvester", "brainstormer", "designer", "es-manager"])
+      for (const file of engine)
+        expect([agent, file, effect(evaluateWrite(ctx(), agent, file))]).toEqual([agent, file, "deny"])
+    expect(effect(evaluateWrite(ctx(), "harvester", ".factory/harvest/notes/teardown.md"))).toBe("allow")
+    expect(effect(evaluateWrite(ctx(), "brainstormer", ".factory/brainstorm/notes/x.md"))).toBe("allow")
+    expect(effect(evaluateWrite(ctx(), "designer", ".factory/design/notes/x.md"))).toBe("allow")
+    expect(effect(evaluateWrite(ctx(), "harvester", ".factory/brainstorm/notes/x.md"))).toBe("deny")
+  })
+
   test("manager cannot escape docs/ with ..", () => {
     expect(effect(evaluateWrite(ctx(), "es-manager", "docs/../src/x.ts"))).toBe("deny")
     expect(effect(evaluateWrite(ctx(), "es-manager", "docs/arch.md"))).toBe("allow")

@@ -100,6 +100,39 @@ export function buildMatrix(
   }
 }
 
+/**
+ * Re-apply the policy to a matrix read back from disk: its verdicts are only
+ * proposals. Earlier downgrade reasons are kept; new ones are reported.
+ */
+export function recheckMatrix(
+  matrix: HarvestMatrix,
+  profiles: ReadonlyMap<string, HarvestProfile>,
+  whitelist: readonly string[],
+): MatrixBuild {
+  const rows: HarvestRow[] = matrix.rows.map((row) => ({
+    feature: row.feature,
+    cells: row.cells.map((cell) => ({
+      candidate: cell.candidate,
+      verdict: cell.verdict,
+      ...(cell.evidence ? { evidence: cell.evidence } : {}),
+    })),
+  }))
+  const rebuilt = buildMatrix(matrix.candidates, profiles, rows, whitelist)
+  return {
+    downgrades: rebuilt.downgrades,
+    matrix: {
+      ...rebuilt.matrix,
+      rows: rebuilt.matrix.rows.map((row, r) => ({
+        ...row,
+        cells: row.cells.map((cell, c) => {
+          const earlier = matrix.rows[r]?.cells[c]?.downgraded
+          return cell.downgraded || !earlier ? cell : { ...cell, downgraded: earlier }
+        }),
+      })),
+    },
+  }
+}
+
 export interface HarvestRender {
   readonly report: string
   readonly vendorPlan: string

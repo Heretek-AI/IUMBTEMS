@@ -97,6 +97,23 @@ describe("darkharvest on the real host", () => {
     expect((await readProfile(h.directory, "gizmo"))?.license).toMatchObject({ spdx: "GPL-3.0", verified: true })
   })
 
+  test("the harvester cannot hand-edit engine state or plan outside the project", async () => {
+    const before = await Bun.file(path.join(h.directory, ".factory/harvest/matrix.json")).text()
+    const edit = await h.run(
+      `${call("write", { path: ".factory/harvest/matrix.json", content: "{}" })} ${call("write", { path: ".factory/harvest/notes/teardown.md", content: "notes" })}`,
+      { agent: "harvester" },
+    )
+    expect(edit.tools[0]?.status).toBe("error")
+    expect(edit.tools[1]?.status).toBe("completed")
+    expect(await Bun.file(path.join(h.directory, ".factory/harvest/matrix.json")).text()).toBe(before)
+    const outside = await h.run(
+      call("es_harvest_plan", { objective: "x", candidates: [{ name: "s", source: `local:${state}` }], force: true }),
+      { agent: "harvester" },
+    )
+    expect(outside.tools[0]?.status).toBe("error")
+    expect(outside.tools[0]?.text).toMatch(/private state|outside the project/)
+  })
+
   test("other seats cannot scan or plan", async () => {
     const scan = await h.run(call("es_harvest_scan", { candidate: "widget" }), { agent: "brainstormer" })
     expect(scan.tools[0]?.status).toBe("error")

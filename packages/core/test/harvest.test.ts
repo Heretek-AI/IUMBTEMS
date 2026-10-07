@@ -401,6 +401,59 @@ describe("the tool loop", () => {
   })
 })
 
+describe("stored state is never trusted for policy", () => {
+  const call = (root: string, name: string, input: Record<string, unknown>) =>
+    harvestTools({ root })
+      .find((tool) => tool.name === name)!
+      .execute(input, { agent: "harvester" })
+
+  const scanned = async () => {
+    const root = await tmp("es-harvest-seal-")
+    await write(root, "gpl/COPYING", GPL3)
+    await write(root, "gpl/src/b.ts", "export const b = 2\n")
+    await call(root, "es_harvest_plan", { objective: "x", candidates: [{ name: "gizmo", source: "local:gpl" }] })
+    await call(root, "es_harvest_scan", { candidate: "gizmo" })
+    return root
+  }
+  const vendorRow = { rows: [{ feature: "sync", cells: [{ candidate: "gizmo", verdict: "vendor" }] }] }
+
+  test("a hand-edited profile cannot authorize vendoring: licences come from the bytes", async () => {
+    const root = await scanned()
+    const file = harvestPaths(root).profile("gizmo")
+    const profile = JSON.parse(await Bun.file(file).text())
+    profile.license = { ...profile.license, spdx: "MIT", family: "permissive", verified: true }
+    await writeFile(file, JSON.stringify(profile))
+    expect(await call(root, "es_harvest_matrix", vendorRow)).toContain("clean-room 1")
+  })
+
+  test("a hand-edited matrix is re-checked at completion", async () => {
+    const root = await scanned()
+    await call(root, "es_harvest_matrix", vendorRow)
+    const file = harvestPaths(root).matrix
+    const matrix = JSON.parse(await Bun.file(file).text())
+    matrix.rows[0].cells[0] = { candidate: "gizmo", verdict: "vendor" }
+    await writeFile(file, JSON.stringify(matrix))
+    const done = await call(root, "es_harvest_complete", {})
+    expect(done).toContain("no longer passed the licence policy")
+    expect(await Bun.file(harvestPaths(root).vendorPlan).text()).not.toContain("(vendor)")
+    expect((await readMatrix(root))?.rows[0]?.cells[0]?.verdict).toBe("clean-room")
+  })
+
+  test("candidate ids never collide with the reserved notes/ and clean-room/ dirs", async () => {
+    const root = await tmp("es-harvest-reserved-")
+    await write(root, "a/x.ts", "export const x = 1\n")
+    const planned = await call(root, "es_harvest_plan", {
+      objective: "x",
+      candidates: [
+        { name: "notes", source: "local:a" },
+        { name: "clean room", source: "local:a" },
+      ],
+    })
+    expect(planned).toContain("notes-2")
+    expect(planned).toContain("clean-room-2")
+  })
+})
+
 describe("agent confinement", () => {
   const call = (root: string, name: string, input: Record<string, unknown>, stateDir?: string) =>
     harvestTools({ root, ...(stateDir ? { stateDir } : {}) })

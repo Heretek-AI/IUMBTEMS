@@ -22,6 +22,13 @@ export const FACTORY_CONTROL = [
   ".factory/runtime/**",
   ".factory/STOP",
   ".factory/git-hooks/**",
+  // Engine-owned brainstorm/harvest/design state: only the es_* tools write it
+  // (through core), so no seat can hand-edit what a gated tool reads back.
+  ".factory/brainstorm/*.{json,md}",
+  ".factory/harvest/*.{json,md}",
+  ".factory/harvest/*/profile.json",
+  ".factory/harvest/clean-room/**",
+  ".factory/design/*.{json,css,md}",
   ".git/config",
   ".git/hooks/**",
 ] as const
