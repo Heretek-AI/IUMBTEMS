@@ -43,9 +43,16 @@ this worktree; nothing here is inferred.
   (default `packages/opencode`). Used by `nightly.yml`; `bun install` restores
   the published links after a local run.
 - `.github/workflows/ci.yml` — push/PR: `bun install --frozen-lockfile`,
-  `bun run check`, `bun run docs:check`.
+  `bun run check`, `bun run docs:check`. Verified green on `rewrite`
+  (run 37558318390 failed once on an environment-dependent sandbox test — the
+  runner has no bwrap, so the allowlist refuses the command instead; the test
+  now accepts either mechanism and CI is green).
 - `.github/workflows/nightly.yml` — schedule + manual: `scripts/v2-head.sh
   packages/opencode` (the compatibility signal when the host drifts).
+  Operational note: GitHub only runs scheduled workflows (and registers
+  `workflow_dispatch`) from the default branch, so the nightly activates at
+  the 1.0 cutover; until then the same mechanics are verified locally via
+  `scripts/v2-head.sh`.
 - `scripts/docs.ts` + `docs:gen` / `docs:check` root scripts.
 - `schemas/*.schema.json` + `docs/SCHEMAS.md` (first generated batch; the
   capability matrix and config docs join this pipeline in M6c/M6d).
