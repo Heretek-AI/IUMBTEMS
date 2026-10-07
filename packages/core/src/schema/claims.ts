@@ -128,10 +128,10 @@ export const BriefSchema = z.object({
     members: z.array(z.string()),
   }),
   signature: z.object({
-    alg: z.literal("hmac-sha256"),
-    /** Public fingerprint of the signing key (not the key). */
+    alg: z.literal("ed25519"),
+    /** Public fingerprint of the human key (not the key). */
     keyId: z.string(),
-    mac: z.string(),
+    sig: z.string(),
   }),
 })
 export type Brief = z.infer<typeof BriefSchema>

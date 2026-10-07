@@ -1,8 +1,10 @@
 import { z } from "zod"
+import { RecordSignatureSchema } from "./approval.ts"
 
 /** A human-signed, expiring exception for findings matching `rule` (glob) in `files` (glob). */
 export const WaiverSchema = z.object({
-  version: z.literal(1),
+  /** 2 since 1.1.1 (Ed25519, passphrase-sealed); version-1 HMAC waivers are ignored. */
+  version: z.literal(2),
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
   rule: z.string().min(1),
   files: z.string().min(1).default("**"),
@@ -12,7 +14,7 @@ export const WaiverSchema = z.object({
   expiresAt: z.string().datetime(),
   channel: z.enum(["cli", "tui"]),
   auditHead: z.object({ seq: z.number().int().nonnegative(), hash: z.string().length(64) }).nullable(),
-  mac: z.string().length(64),
+  signature: RecordSignatureSchema,
 })
 
 export type Waiver = z.infer<typeof WaiverSchema>

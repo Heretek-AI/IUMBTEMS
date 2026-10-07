@@ -1,10 +1,12 @@
 // Trust store: gate commands and project hooks run project-controlled code,
 // so a human must approve each set by content hash before anything executes.
 // Any change to the set requires re-approval. Stored in the user-global state
-// dir, which agents can neither read nor write.
+// dir (masked in every agent sandbox), and each entry is signed with the human
+// key since 1.1.1, so a hand-written entry is not trust.
 import { readFile } from "node:fs/promises"
 import { userInfo } from "node:os"
 import path from "node:path"
+import { type HumanSigner, type RecordSignature, verifyRecordSignature } from "../approval/keystore.ts"
 import { stateDir } from "../layout.ts"
 import type { CommandCheck } from "../schema/gates.ts"
 import { readJson, withLock, writeJson } from "../util/fs.ts"
@@ -18,10 +20,12 @@ interface TrustEntry {
   lines: string[]
   approvedBy: string
   approvedAt: string
+  signature: RecordSignature
 }
 
+/** Version 3 since 1.1.1 (signed entries); a version-2 store holds nothing trusted. */
 interface TrustFile {
-  version: 2
+  version: 3
   projects: Record<string, Partial<Record<TrustKind, TrustEntry>>>
 }
 
@@ -54,33 +58,45 @@ export async function commandSetHash(
 
 async function read(dir?: string): Promise<TrustFile> {
   const file = await readJson<{ version?: number; projects?: Record<string, any> }>(trustFile(dir))
-  return file?.version === 2 ? (file as TrustFile) : { version: 2, projects: {} }
+  return file?.version === 3 ? (file as TrustFile) : { version: 3, projects: {} }
 }
+
+/** What a trust entry's signature covers: the project and kind as well as the entry. */
+const signedEntry = (project: string, kind: TrustKind, entry: Omit<TrustEntry, "signature">) => ({
+  trust: 1,
+  project,
+  kind,
+  ...entry,
+})
 
 export async function isTrusted(root: string, hash: string, dir?: string, kind: TrustKind = "gates"): Promise<boolean> {
-  return (await read(dir)).projects[canonicalPath(root)]?.[kind]?.hash === hash
+  const project = canonicalPath(root)
+  const entry = (await read(dir)).projects[project]?.[kind]
+  if (entry?.hash !== hash) return false
+  const { signature, ...unsigned } = entry
+  return verifyRecordSignature({ ...signedEntry(project, kind, unsigned), signature }, dir ?? stateDir())
 }
 
-/** Human-only: called from `es trust` (TTY) or the TUI trust dialog. */
+/** Human-only: called from `es trust` at a terminal, with the human key unlocked. */
 export async function trustProject(
   root: string,
   hash: string,
   lines: string[],
-  options: { approvedBy?: string; stateDir?: string; kind?: TrustKind } = {},
+  options: { approvedBy?: string; stateDir?: string; kind?: TrustKind; signer: HumanSigner },
 ) {
   const file = trustFile(options.stateDir)
+  const kind = options.kind ?? "gates"
   await withLock(file, async () => {
     const current = await read(options.stateDir)
-    const key = canonicalPath(root)
-    current.projects[key] = {
-      ...current.projects[key],
-      [options.kind ?? "gates"]: {
-        hash,
-        lines,
-        approvedBy: options.approvedBy ?? userInfo().username,
-        approvedAt: new Date().toISOString(),
-      },
+    const project = canonicalPath(root)
+    const unsigned = {
+      hash,
+      lines,
+      approvedBy: options.approvedBy ?? userInfo().username,
+      approvedAt: new Date().toISOString(),
     }
+    const signature = options.signer.sign(signedEntry(project, kind, unsigned))
+    current.projects[project] = { ...current.projects[project], [kind]: { ...unsigned, signature } }
     await writeJson(file, current)
   })
 }

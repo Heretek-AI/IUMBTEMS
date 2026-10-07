@@ -7,13 +7,22 @@ export type ApprovalStage = z.infer<typeof ApprovalStageSchema>
 export const ApprovalChannelSchema = z.enum(["cli", "tui"])
 export type ApprovalChannel = z.infer<typeof ApprovalChannelSchema>
 
+/** An Ed25519 signature by the human key (approval/keystore.ts) over the canonical record minus `signature`. */
+export const RecordSignatureSchema = z.object({
+  alg: z.literal("ed25519"),
+  /** Public fingerprint of the human key (not the key). */
+  keyId: z.string().length(16),
+  sig: z.string().min(1),
+})
+
 export const ApprovalSubjectSchema = z.object({
   path: z.string().min(1),
   sha256: z.string().length(64),
 })
 
 export const ApprovalSchema = z.object({
-  version: z.literal(1),
+  /** 2 since 1.1.1 (Ed25519, passphrase-sealed); version-1 HMAC records are refused. */
+  version: z.literal(2),
   stage: ApprovalStageSchema,
   subject: z.array(ApprovalSubjectSchema).min(1),
   approvedBy: z.string().min(1),
@@ -24,8 +33,7 @@ export const ApprovalSchema = z.object({
   auditHead: z.object({ seq: z.number().int().nonnegative(), hash: z.string().length(64) }).nullable(),
   spendCeilingUSD: z.number().positive().optional(),
   notes: z.string().optional(),
-  /** HMAC-SHA256 over the canonical record (minus mac) with the user-global signing key. */
-  mac: z.string().length(64),
+  signature: RecordSignatureSchema,
 })
 
 export type Approval = z.infer<typeof ApprovalSchema>

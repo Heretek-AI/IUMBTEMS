@@ -1,7 +1,8 @@
 // Human-only approvals. Callers never name the artifact: the subject is
-// derived from the factory layout for the stage, validated, hashed and signed.
-// Only the CLI (TTY + typed code) and the TUI dialog call recordApproval; no
-// agent tool or MCP tool does. Transitions call verifyApproval, which re-hashes
+// derived from the factory layout for the stage, validated, hashed and signed
+// with the human key, which only the human's passphrase unlocks (1.1.1). Only
+// the CLI (a TTY + the passphrase) calls recordApproval; no agent tool, MCP
+// tool or RPC does. Transitions call verifyApproval, which re-hashes
 // the current artifacts, so editing a spec after approval blocks the build.
 import { readFile } from "node:fs/promises"
 import { hostname, userInfo } from "node:os"
@@ -15,7 +16,7 @@ import { type Roadmap, RoadmapSchema } from "../schema/roadmap.ts"
 import { rebaseline } from "../trust/control.ts"
 import { readJson, writeJson } from "../util/fs.ts"
 import { sha256 } from "../util/hash.ts"
-import { signRecord, verifyRecordMac } from "./keystore.ts"
+import { type HumanSigner, signatureProblem } from "./keystore.ts"
 
 export class ApprovalError extends Error {}
 
@@ -108,13 +109,14 @@ export interface RecordApprovalInput {
   /** Defaults to the OS user running the CLI/TUI. */
   readonly approvedBy?: string
   readonly notes?: string
-  readonly stateDir?: string
+  /** The unlocked human key. */
+  readonly signer: HumanSigner
 }
 
 export async function recordApproval(root: string, input: RecordApprovalInput): Promise<Approval> {
   const { subject, spendCeilingUSD } = await approvalSubject(root, input.stage)
   const unsigned = {
-    version: 1 as const,
+    version: 2 as const,
     stage: input.stage,
     subject,
     approvedBy: input.approvedBy ?? userInfo().username,
@@ -125,7 +127,7 @@ export async function recordApproval(root: string, input: RecordApprovalInput): 
     ...(spendCeilingUSD !== undefined ? { spendCeilingUSD } : {}),
     ...(input.notes ? { notes: input.notes } : {}),
   }
-  const record = ApprovalSchema.parse({ ...unsigned, mac: await signRecord(unsigned, input.stateDir ?? stateDir()) })
+  const record = ApprovalSchema.parse({ ...unsigned, signature: input.signer.sign(unsigned) })
   await writeJson(factoryLayout(root).approval(input.stage), record)
   await appendAuditEntry(root, {
     actor: `human:${record.approvedBy}`,
@@ -149,13 +151,10 @@ export async function verifyApproval(
   const raw = await readJson<Record<string, unknown>>(factoryLayout(root).approval(stage)).catch(() => undefined)
   if (!raw)
     return { ok: false, reason: `no ${stage} approval; a human must run \`es approve ${stage}\` or /es-approve` }
+  const unsigned = await signatureProblem(raw, `the ${stage} approval`, options.stateDir ?? stateDir())
+  if (unsigned) return { ok: false, reason: `${unsigned} (\`es approve ${stage}\`)` }
   const parsed = ApprovalSchema.safeParse(raw)
   if (!parsed.success) return { ok: false, reason: `the ${stage} approval record is malformed` }
-  if (!(await verifyRecordMac(raw, options.stateDir ?? stateDir())))
-    return {
-      ok: false,
-      reason: `the ${stage} approval record is not signed by this machine's approval key (forged or foreign)`,
-    }
   for (const item of parsed.data.subject) {
     let text: string
     try {
