@@ -70,8 +70,9 @@ import {
 import { auditCommand, auditDismiss, auditShow, scoutCommand, scoutShow } from "./jobs.ts"
 import { serveStdio } from "./mcp.ts"
 import { type ConfirmIO, confirmWithCode, NotInteractive, terminalIO } from "./tty.ts"
+import { VERSION } from "./version.ts"
 
-export const VERSION = "1.0.0"
+export { VERSION }
 
 const HELP = `es ${VERSION} — Epistemic Swarm build factory
 

@@ -5,6 +5,7 @@
 // harness adapter sets per agent; over plain MCP it is ADVISORY, and the
 // capability matrix says so.
 import { esTools, Factory, gateRunner } from "@heretek-ai/es-core"
+import { VERSION } from "./version.ts"
 
 export const PROTOCOL_VERSION = "2025-06-18"
 
@@ -46,7 +47,7 @@ export function createMcpServer(options: McpOptions) {
         return reply({
           protocolVersion: typeof params?.protocolVersion === "string" ? params.protocolVersion : PROTOCOL_VERSION,
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "epistemic-swarm", version: options.version ?? "1.0.0" },
+          serverInfo: { name: "epistemic-swarm", version: options.version ?? VERSION },
           instructions:
             "Epistemic Swarm factory operations. Approvals, trust, waivers and resume are human-only (TUI or `es` CLI) and have no MCP tool. The `agent` argument identifies the caller ADVISORY: the harness adapter, not this protocol, establishes it.",
         })

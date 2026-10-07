@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { exists, Factory, factoryLayout, gateRunner, readApproval } from "@heretek-ai/es-core"
@@ -8,6 +8,7 @@ import { type HarnessDriver, runHeadless } from "../src/headless.ts"
 import { main } from "../src/main.ts"
 import { createMcpServer } from "../src/mcp.ts"
 import { type ConfirmIO, confirmWithCode, NotInteractive } from "../src/tty.ts"
+import { VERSION } from "../src/version.ts"
 
 let root: string
 let state: string
@@ -515,5 +516,18 @@ describe("es audit and es scout (headless jobs)", () => {
       delete DRIVERS.fake
     }
     expect((await run(["scout", "show"])).out).toContain("1. tiny — unknown (unverified) — clean-room")
+  })
+})
+
+describe("release version", () => {
+  test("VERSION equals the package version, and every version surface uses it", async () => {
+    const pkg = JSON.parse(await readFile(path.join(import.meta.dir, "..", "package.json"), "utf8")) as {
+      version: string
+    }
+    expect(VERSION).toBe(pkg.version)
+    expect((await run(["version"])).out).toBe(VERSION)
+    // The MCP serverInfo fallback must be the same constant, not a stale literal.
+    const source = await readFile(path.join(import.meta.dir, "..", "src", "mcp.ts"), "utf8")
+    expect(source).toContain("options.version ?? VERSION")
   })
 })

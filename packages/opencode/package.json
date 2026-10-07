@@ -1,6 +1,6 @@
 {
   "name": "@heretek-ai/epistemic-swarm",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "description": "Epistemic Swarm: an AI build factory for OpenCode v2 \u2014 grill, research, spec, build, QA and release, gated mechanically.",
   "type": "module",
   "license": "Apache-2.0",
