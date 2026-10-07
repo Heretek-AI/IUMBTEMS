@@ -5,6 +5,7 @@ import { readdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import {
   describeTarget,
+  ensureEngineKey,
   factoryLayout,
   formatReport,
   git,
@@ -19,7 +20,7 @@ import { compileAgents } from "./agents.ts"
 import { createFactoryContinuation } from "./continue.ts"
 import { createHookBridge } from "./hooks.ts"
 import { createPolicyHooks } from "./policy.ts"
-import { createWebfetchCache, registerWebsearch } from "./research.ts"
+import { createWebCache, PendingSearches, registerWebsearch } from "./research.ts"
 import { createRpcHandlers } from "./rpc.ts"
 import { EsRpc } from "./rpc-def.ts"
 import { createRuntime, parseOptions } from "./runtime.ts"
@@ -33,6 +34,9 @@ export default Plugin.define({
   async setup(ctx) {
     const options = parseOptions(ctx.options as Record<string, unknown>)
     const runtime = await createRuntime(ctx.location.directory, options)
+    // The engine key seals cached sources (#52); create it at setup so the
+    // masked state dir holds the key before any seat runs.
+    await ensureEngineKey(runtime.stateDir)
 
     // Agents: canonical registry → v2 agents with wildcard-deny scoping.
     const servers = await ctx.mcp.list().then(
@@ -66,7 +70,9 @@ export default Plugin.define({
     })
 
     await ctx.tool.transform((editor) => registerTools(editor, runtime))
-    await ctx.websearch.transform((editor) => registerWebsearch(editor as any, runtime))
+    // Search results wait here until the tool hook, which knows the agent, decides whether to cache them.
+    const searches = new PendingSearches()
+    await ctx.websearch.transform((editor) => registerWebsearch(editor as any, runtime, searches))
 
     // Our policy runs first, so its denials win over any user hook.
     const policy = createPolicyHooks(runtime)
@@ -82,8 +88,10 @@ export default Plugin.define({
     }
     await ctx.tool.hook("execute.before", policy.before as any)
     await ctx.tool.hook("execute.before", bridge.before as any)
+    // Last: the final (possibly hook-rewritten) shell command is re-checked and sandboxed.
+    await ctx.tool.hook("execute.before", policy.sandbox as any)
     await ctx.tool.hook("execute.after", policy.after as any)
-    await ctx.tool.hook("execute.after", createWebfetchCache(runtime) as any)
+    await ctx.tool.hook("execute.after", createWebCache(runtime, searches) as any)
     await ctx.tool.hook("execute.after", bridge.after as any)
     await ctx.permission.hook("evaluate", policy.evaluate as any)
     await ctx.permission.hook("evaluate", bridge.evaluate as any)
@@ -312,6 +320,7 @@ export default Plugin.define({
             runtime.configSources.length
               ? `Layers: ${runtime.configSources.join(" → ")} → plugin options`
               : "Layers: defaults only (no config files)",
+            ...runtime.warnings.map((warning) => `Warning: ${warning}`),
             JSON.stringify(runtime.config, null, 2),
           ]
           await ctx.session.synthetic({ sessionID, text: lines.join("\n") } as any)

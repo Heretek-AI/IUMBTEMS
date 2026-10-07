@@ -2,7 +2,7 @@
 // and audit (verify tags and quotes, optionally prune).
 import { readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { factoryLayout } from "../layout.ts"
+import { stateDir as defaultStateDir, factoryLayout } from "../layout.ts"
 import type { EsToolDef } from "../ops/tools.ts"
 import type { EsConfig } from "../schema/config.ts"
 import { evaluateWrite, type PolicyContext } from "../trust/policy.ts"
@@ -14,6 +14,8 @@ import { isFresh } from "./url.ts"
 export interface ResearchOpsContext {
   readonly root: string
   readonly policy: () => Promise<PolicyContext>
+  /** Engine-key dir for sealing cached sources (#52); seats get the runtime state dir. */
+  readonly stateDir?: string
   readonly provider?: string
   readonly fetch?: typeof fetch
   readonly env?: NodeJS.ProcessEnv
@@ -49,12 +51,17 @@ const object = (properties: Record<string, unknown>, required: string[] = []) =>
 /** Providers whose snapshots hold the whole page (es_research_fetch and the host's webfetch). */
 const FETCHED = new Set(["fetch", "webfetch"])
 
-export function researchCache(root: string) {
-  return new SourceCache(researchSourcesDir(root))
+/**
+ * The engine cache for a project. Entries are sealed with the engine key
+ * (#52); `stateDir` defaults to the global state dir, like every other core
+ * function that takes it. Tests pass an isolated dir.
+ */
+export function researchCache(root: string, stateDir: string = defaultStateDir()) {
+  return new SourceCache(researchSourcesDir(root), stateDir)
 }
 
 export function researchTools(context: ResearchOpsContext): EsToolDef[] {
-  const cache = researchCache(context.root)
+  const cache = researchCache(context.root, context.stateDir ?? defaultStateDir())
   const env = context.searxngUrl ? { ...(context.env ?? process.env), SEARXNG_URL: context.searxngUrl } : context.env
   const provider = (): SearchProvider => {
     const selected = selectProvider(context.provider, env)

@@ -119,7 +119,7 @@ export function codeAuditTools(ops: OpsContext): EsToolDef[] {
               .map((item) => `- ${item.pointer}: ${item.reason}`)
               .join("\n")}`,
           )
-        const problem = verdictProblem(verdict, parsed.data)
+        const problem = verdictProblem(verdict, parsed.data, seat)
         if (problem) throw new ToolRefusal(problem)
         // Evidence first, while the audited tree still exists: a passing phase
         // audit merges the phase and removes its worktree.

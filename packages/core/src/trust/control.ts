@@ -10,7 +10,7 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { factoryLayout } from "../layout.ts"
-import { readJson, writeJson } from "../util/fs.ts"
+import { readJson, withLock, writeJson } from "../util/fs.ts"
 import { matchAny } from "../util/glob.ts"
 import { sha256 } from "../util/hash.ts"
 
@@ -65,12 +65,17 @@ export type ControlClass = "factory" | "config"
  * inside a phase worktree (.factory/worktrees/<id>/...) are classified by their
  * path within that worktree, since they would ship on the phase branch.
  */
+// Matched case-insensitively: on a case-insensitive volume `.factory/GATES.json`
+// is the gates file, so a case variant must not slip past the policy (#45).
+const FACTORY_CONTROL_LOWER = FACTORY_CONTROL.map((glob) => glob.toLowerCase())
+const CONFIG_CONTROL_LOWER = CONFIG_CONTROL.map((glob) => glob.toLowerCase())
+
 export function controlClass(relative: string): ControlClass | undefined {
-  const normalized = relative.replace(/^\.\//, "")
+  const normalized = relative.replace(/^\.\//, "").toLowerCase()
   const inner = /^\.factory\/worktrees\/[^/]+\/(.+)$/.exec(normalized)?.[1]
   for (const candidate of inner ? [normalized, inner] : [normalized]) {
-    if (matchAny(candidate, FACTORY_CONTROL)) return "factory"
-    if (matchAny(candidate, CONFIG_CONTROL)) return "config"
+    if (matchAny(candidate, FACTORY_CONTROL_LOWER)) return "factory"
+    if (matchAny(candidate, CONFIG_CONTROL_LOWER)) return "config"
   }
   return undefined
 }
@@ -119,14 +124,44 @@ export async function snapshotControl(root: string): Promise<Record<string, stri
 
 /** Record the current control-file hashes. Call only from code acting for a human or the system. */
 export async function rebaseline(root: string, updatedBy: string): Promise<ControlBaseline> {
-  const baseline: ControlBaseline = {
-    version: 1,
-    files: await snapshotControl(root),
-    updatedAt: new Date().toISOString(),
-    updatedBy,
-  }
-  await writeJson(factoryLayout(root).control, baseline)
-  return baseline
+  // Held under the control lock (like repinControl): an interleaved re-pin
+  // must not overwrite a fresh baseline with a stale snapshot (#32, CI-only
+  // es_build_start refusal with a just-recorded approval missing).
+  const file = factoryLayout(root).control
+  return withLock(file, async () => {
+    const baseline: ControlBaseline = {
+      version: 1,
+      files: await snapshotControl(root),
+      updatedAt: new Date().toISOString(),
+      updatedBy,
+    }
+    await writeJson(file, baseline)
+    return baseline
+  })
+}
+
+/**
+ * Re-pin one control file after an agent write (#32). Unlike `rebaseline`,
+ * only `rel` is updated, so a concurrent hand edit to another control file
+ * (gates.json, config.json) is not absorbed into the baseline: it still shows
+ * as drift and halts the run. Acts only when a baseline exists; compare-and-
+ * swaps on `expectedOld` (the pin before our write) so a concurrent change to
+ * the same file is not silently absorbed either.
+ */
+export async function repinControl(root: string, rel: string, expectedOld: string | null): Promise<void> {
+  const file = factoryLayout(root).control
+  await withLock(file, async () => {
+    const baseline = await readJson<ControlBaseline>(file)
+    if (!baseline) return
+    if ((baseline.files[rel] ?? null) !== expectedOld) return
+    const current = await hashOrNull(path.join(root, ...rel.split("/")))
+    baseline.files[rel] = current
+    await writeJson(file, {
+      ...baseline,
+      updatedAt: new Date().toISOString(),
+      updatedBy: `${baseline.updatedBy} + repin:${rel}`,
+    })
+  })
 }
 
 export interface ControlCheck {

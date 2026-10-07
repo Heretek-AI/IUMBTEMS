@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { recordApproval } from "../src/approval/index.ts"
+import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import { codeAuditTools, renderAuditReport } from "../src/codeaudit/index.ts"
 import { Factory, FactoryError, FactoryHalted } from "../src/factory/index.ts"
 import { factoryLayout } from "../src/layout.ts"
@@ -21,8 +22,12 @@ const AUTH = [
 
 let fx: Fixture
 let factory: Factory
+const PASSPHRASE = "test-passphrase-1234"
+let signer: HumanSigner
 beforeEach(async () => {
   fx = await gitRepo("es-audit-")
+  await sealHumanKey(PASSPHRASE, fx.state)
+  signer = await unlockHumanKey(PASSPHRASE, fx.state)
   factory = new Factory(fx.root, {
     gates: async () => ({ passed: true, findings: [], summary: "green" }),
     stateDir: fx.state,
@@ -148,12 +153,23 @@ describe("the line-pointer law at es_audit_verdict", () => {
     await expect(call("fail", [invariant])).rejects.toThrow("A fail needs at least one witnessed defect")
     await expect(call("pass", [injection])).rejects.toThrow("A pass cannot carry defects (src/auth.ts#L2-L3)")
   })
+
+  test("a thesis pass must map at least one witnessed invariant; the red team may pass empty-handed", async () => {
+    const audit = await openPathAudit()
+    const verdict = tools()("es_audit_verdict")
+    const call = (agent: string, findings: unknown[]) =>
+      verdict.execute({ audit: audit.id, verdict: "pass", findings, notes: "tried the vectors" }, { agent })
+    // Before 1.1.1 a thesis "pass" with nothing witnessed was recorded (issue #46).
+    await expect(call("es-auditor-thesis", [])).rejects.toThrow("A thesis pass maps at least one invariant")
+    expect(await call("es-auditor-thesis", [invariant])).toContain("Recorded pass")
+    expect(await call("es-auditor-antithesis", [])).toContain("Recorded pass")
+  })
 })
 
 describe("blocking (decision 2)", () => {
   async function approvedFrontier() {
     await factory.writeFrontier("grill", frontier())
-    await recordApproval(fx.root, { stage: "frontier", channel: "cli", approvedBy: "tester", stateDir: fx.state })
+    await recordApproval(fx.root, { stage: "frontier", channel: "cli", approvedBy: "tester", signer })
   }
 
   test("a split goes to the manager; a failed path audit blocks the next transition until a re-audit passes", async () => {

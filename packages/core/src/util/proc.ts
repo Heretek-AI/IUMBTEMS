@@ -1,10 +1,13 @@
 // Subprocess execution with timeouts, output caps and a scrubbed environment.
-// Read-only mode uses bubblewrap with a discardable tmpfs overlay on the
-// working directory (writes vanish when the process exits); without bwrap the
-// caller falls back to an allowlist plus a post-run diff check (see sandbox.ts).
+// A sandboxed run goes through bubblewrap (trust/sandbox.ts): "readonly" makes
+// everything read-only (writes in the cwd land in a throwaway overlay where
+// bwrap supports one); a SandboxSpec runs, e.g., a gate with one writable
+// directory. Every sandbox masks Epistemic Swarm's private state dir.
 import { spawn, spawnSync } from "node:child_process"
 import { accessSync, constants } from "node:fs"
 import path from "node:path"
+import { stateDir } from "../layout.ts"
+import { type SandboxSpec, sandboxArgv } from "../trust/sandbox.ts"
 
 /** Absolute path of an executable found on PATH (absolute entries only, no shell), or undefined. */
 export function findExecutable(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -33,8 +36,8 @@ export interface RunOptions {
   /** Inherit the full parent environment (trusted hooks, like Claude Code). Overrides scrubbing. */
   readonly inheritEnv?: boolean
   readonly input?: string
-  /** "readonly": bwrap ro root + tmp-overlay on cwd. Throws if bwrap is unavailable. */
-  readonly sandbox?: "none" | "readonly"
+  /** "readonly" (everything read-only) or a sandbox spec (its cwd is this run's cwd). Throws if bwrap is unavailable. */
+  readonly sandbox?: "none" | "readonly" | Omit<SandboxSpec, "cwd">
   /** Disable network inside the sandbox. */
   readonly offline?: boolean
   readonly signal?: AbortSignal
@@ -112,44 +115,29 @@ export function bwrapAvailable(): boolean {
   return bwrapCache
 }
 
-/** For tests: forget the cached bwrap probe. */
-export const resetBwrapProbe = () => {
-  bwrapCache = undefined
+/** For tests: forget the cached bwrap probe, or pin its answer (e.g. to exercise "bwrap missing"). */
+export const resetBwrapProbe = (pinned?: boolean) => {
+  bwrapCache = pinned
 }
 
+/** Everything read-only (cwd writes are discarded where bwrap can overlay), secrets masked. */
 export function readonlyWrap(command: readonly string[], cwd: string, offline = false): string[] {
-  return [
-    "bwrap",
-    "--ro-bind",
-    "/",
-    "/",
-    "--dev",
-    "/dev",
-    "--proc",
-    "/proc",
-    "--tmpfs",
-    "/tmp",
-    "--overlay-src",
-    cwd,
-    "--tmp-overlay",
-    cwd,
-    "--chdir",
-    cwd,
-    "--die-with-parent",
-    "--unshare-pid",
-    ...(offline ? ["--unshare-net"] : []),
-    "--",
-    ...command,
-  ]
+  return sandboxArgv({ kind: "readonly", root: cwd, cwd, stateDir: stateDir(), offline }, command)
 }
 
 export function run(command: readonly string[], options: RunOptions): Promise<RunResult> {
   if (command.length === 0) throw new Error("run: empty command")
   const timeoutMs = options.timeoutMs ?? 120_000
   const cap = options.maxOutputBytes ?? 1_000_000
-  const sandboxed = options.sandbox === "readonly"
-  if (sandboxed && !bwrapAvailable()) throw new Error("readonly sandbox requested but bwrap is unavailable")
-  const argv = sandboxed ? readonlyWrap(command, options.cwd, options.offline) : [...command]
+  const sandbox = options.sandbox === "none" ? undefined : options.sandbox
+  const sandboxed = sandbox !== undefined
+  if (sandboxed && !bwrapAvailable()) throw new Error("a sandboxed run was requested but bwrap is unavailable")
+  const argv =
+    sandbox === undefined
+      ? [...command]
+      : sandbox === "readonly"
+        ? readonlyWrap(command, options.cwd, options.offline)
+        : sandboxArgv({ ...sandbox, cwd: options.cwd }, command)
   const started = Date.now()
   return new Promise((resolve, reject) => {
     const child = spawn(argv[0]!, argv.slice(1), {

@@ -1,14 +1,19 @@
 // Human confirmation for the CLI half of the human-only channel. Refuses
-// without an interactive terminal on both stdin and stdout, and requires the
-// human to type back a random code shown on screen (an agent piping "y"
-// cannot satisfy it).
+// without an interactive terminal on both stdin and stdout. Since 1.1.1 every
+// human action is confirmed with the human's passphrase, read with echo off,
+// which unlocks the human key (core approval/keystore.ts): an agent that
+// drives this prompt through a PTY can read everything on screen, but not the
+// passphrase. Signing actions use the unlocked key; the rest use the unlock
+// as proof that the human is at the keyboard.
 import { createInterface } from "node:readline"
-import { confirmationCode } from "@heretek-ai/es-core"
+import { HumanKeyError, type HumanSigner, unlockHumanKey } from "@heretek-ai/es-core"
 
 export interface ConfirmIO {
   readonly interactive: boolean
   write(text: string): void
   readLine(prompt: string): Promise<string>
+  /** Read a line without echoing it (passphrases). */
+  readSecret(prompt: string): Promise<string>
 }
 
 export const terminalIO = (): ConfirmIO => ({
@@ -22,6 +27,34 @@ export const terminalIO = (): ConfirmIO => ({
         resolve(answer)
       })
     }),
+  readSecret: (prompt) =>
+    new Promise((resolve) => {
+      const stdin = process.stdin
+      const wasRaw = stdin.isRaw
+      process.stdout.write(prompt)
+      stdin.setRawMode?.(true)
+      stdin.setEncoding("utf8")
+      stdin.resume()
+      let value = ""
+      const done = () => {
+        stdin.off("data", onData)
+        stdin.setRawMode?.(wasRaw ?? false)
+        stdin.pause()
+        process.stdout.write("\n")
+        resolve(value)
+      }
+      const onData = (chunk: string) => {
+        for (const char of chunk) {
+          if (char === "\r" || char === "\n" || char === "\u0004") return done()
+          if (char === "\u0003") {
+            value = ""
+            return done()
+          }
+          value = char === "\u007f" || char === "\b" ? value.slice(0, -1) : value + char
+        }
+      }
+      stdin.on("data", onData)
+    }),
 })
 
 export class NotInteractive extends Error {
@@ -30,13 +63,26 @@ export class NotInteractive extends Error {
   }
 }
 
-/** Show `lines`, then ask the human to type a fresh code. Returns true only on an exact match. */
-export async function confirmWithCode(io: ConfirmIO, action: string, lines: readonly string[]): Promise<boolean> {
+/**
+ * Show what the action does, then ask for the passphrase. Returns the unlocked
+ * human key, or undefined when the human cancels or the passphrase is wrong
+ * (the reason is written to the terminal).
+ */
+export async function confirmHuman(
+  io: ConfirmIO,
+  action: string,
+  lines: readonly string[],
+  stateDir?: string,
+): Promise<HumanSigner | undefined> {
   if (!io.interactive) throw new NotInteractive(action)
-  const code = confirmationCode()
-  io.write(
-    `\n${action}\n${"─".repeat(Math.min(72, action.length + 8))}\n${lines.join("\n")}\n\nType ${code} to confirm (anything else cancels): `,
-  )
-  const answer = (await io.readLine("")).trim()
-  return answer === code
+  io.write(`\n${action}\n${"─".repeat(Math.min(72, action.length + 8))}\n${lines.join("\n")}\n\n`)
+  const passphrase = await io.readSecret("Your Epistemic Swarm passphrase (empty cancels): ")
+  if (!passphrase) return undefined
+  try {
+    return await unlockHumanKey(passphrase, stateDir)
+  } catch (error) {
+    if (!(error instanceof HumanKeyError)) throw error
+    io.write(`${error.message}\n`)
+    return undefined
+  }
 }

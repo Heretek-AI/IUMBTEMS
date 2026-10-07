@@ -5,10 +5,15 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 1.0 in development.** This repository is the TypeScript rewrite on
-> the `rewrite` branch. The legacy Python harness is tagged `legacy-final` and
-> receives no further support; the 1.0 cutover replaces `main` in one reviewed
-> merge, after which the packages publish to npm.
+> **Status: 1.1.1 security release (unreleased).** Published 1.1.0 (and
+> 1.0.x) are deprecated. 1.1.1 ships the security fixes: the S1 quote law,
+> the S2 argv-aware shell policy, the S3 bubblewrap sandbox for every agent
+> shell and gate run, and the S4 passphrase-sealed Ed25519 human key with
+> terminal-only approvals — plus the engine-sealed source cache (#52) and
+> the per-file control re-pin (#32). Install from npm
+> (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`, `@heretek-ai/es-cli`);
+> run `es key seal` once, then re-record approvals, trust and waivers (v1
+> HMAC records are refused).
 
 ## Naming
 
@@ -21,8 +26,11 @@
 
 - **Factory stages, enforced by code.** Grill → Research → Spec → Build ⇄ QA →
   Release runs through a state machine; every `es_*` tool refuses an
-  out-of-order step. Approvals (frontier, spec) and waivers are human-only,
-  signed through a TUI/CLI dialog agents cannot call.
+  out-of-order step. Approvals (frontier, spec), waivers and trust are human-only,
+  signed with the passphrase-sealed Ed25519 human key at a terminal
+  (`es key seal` once, then `es approve` / `es trust` / `es waive`); agents
+  may request, never grant. The approve/trust/resume RPCs no longer exist:
+  the TUI previews, then points at the terminal command.
 - **Mechanical gates.** Format, lint and typecheck on touched files, affected
   tests from a tree-sitter import graph (runner-native fallback), secret
   scanning, OSV, budgets (diff size, file length, complexity, dependency
@@ -37,7 +45,8 @@
   contrast-gated DTCG token system with a generated style guide.
 - **OpenCode v2 native.** One plugin registers agents, tools, commands, the
   hook bridge, the LSP runtime and four TUI panels — additively, with no files
-  written. Claude Code (1.1), Pi (1.2) and Antigravity (1.3) adapters follow,
+  written. Host web results are cached (citable by hash) only for factory
+  seats in a project that already has `.factory/`. Claude Code (1.1), Pi (1.2) and Antigravity (1.3) adapters follow,
   each publishing capability-matrix rows with smoke tests.
 
 ## Repository layout
@@ -57,25 +66,29 @@
 The integrity model is mechanical, but these limits are deliberate and visible
 rather than silently assumed:
 
-- **Read-only seats.** QA and manager shells run under `bwrap` when it is
-  installed. Without `bwrap` (some CI runners), the fallback is a command
-  allowlist plus a post-run tree fingerprint that halts the run on any change;
-  it catches writes to files in the checkout, not reads or side effects outside
-  it.
+- **Seats require bubblewrap.** Every agent shell and every gate run is
+  sandboxed by `bwrap` (user, seat, programmer, readonly and gate kinds;
+  cached-web seats are `--unshare-net`). Without `bwrap`, factory seats are
+  refused a shell outright and factory gate runs halt; the user's own agents
+  fall back to the weaker argv-aware text policy (pattern matching a shell
+  can outwit, so that mode is documented as weaker, not equivalent).
 - **Control-file baseline.** `verifyControl` hashes the files a human
   authorises — `gates.json`, `config.json`, `frontier.json`, `approvals/**`,
   `waivers/**`; a hand edit is drift until a human accepts it (`es rebaseline`).
   Everything else that is a control file (engine-owned brainstorm, harvest and
   design state, `runtime/**`, `.git/config`) is deny-write for agents but is
-  not individually hashed on every run.
+  not individually hashed on every run. Signed sidecars for other artifacts
+  move to 1.1.2.
 - **Licence detection is strict.** A permissive verdict needs the whole licence
   file to match an SPDX template; mixed, notice-only (e.g. an Apache header
   without the licence text) or concatenated licence files are "unknown" and
   therefore clean-room only. Agents harvest local code only inside the
   project; a human can scan elsewhere with `es harvest scan`.
-- **Evals are opt-in and step-capped.** `bun run evals` needs the opencode CLI
-  and `ES_EVAL_MODEL`; each case is one real turn killed at a step cap, since
-  the CLI's event stream reports no cost.
+- **Evals are opt-in and capped.** `bun run evals` needs the opencode CLI
+  and `ES_EVAL_MODEL`; each case is one real turn killed at its own step cap
+  (bounded by `ES_EVAL_MAX_STEPS`) or once the run's spend, read from the
+  stream's `step_finish` cost, passes `ES_EVAL_MAX_USD`. A model with no
+  configured price reports $0, so for it only the step caps bound spend.
 - **MCP caller identity.** Over the stdio MCP server the calling agent's
   identity is a model-supplied `agent` argument (or `ES_AGENT`), so it is
   ADVISORY: the harness adapter, not the protocol, establishes it. There is no
@@ -100,7 +113,7 @@ Platform: Linux, Node ≥ 22 or Bun. No Python.
 - `docs/CAPABILITIES.md` — what each harness enforces, with proof references.
 - `docs/CONFIG.md` — the layered config (global → project → plugin options).
 - `docs/SCHEMAS.md` — every Zod contract as JSON Schema.
-- `CHANGELOG.md` — the 1.0 cutover and breaking changes.
+- `CHANGELOG.md` — release history and breaking changes.
 
 ## License
 

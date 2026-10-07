@@ -9,7 +9,7 @@
 import { existsSync } from "node:fs"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { factoryLayout } from "../layout.ts"
+import { stateDir as defaultStateDir, factoryLayout } from "../layout.ts"
 import {
   type CheckReport,
   type CommandCheck,
@@ -21,10 +21,11 @@ import {
 import { type AffectedTests, affectedTests, type GraphOptions } from "../structure/index.ts"
 import { verifyControl } from "../trust/control.ts"
 import { relativeTo } from "../trust/paths.ts"
+import { SANDBOX_MISSING } from "../trust/sandbox.ts"
 import { commandSetHash, isTrusted } from "../trust/store.ts"
 import { matchAny } from "../util/glob.ts"
 import { parseJsonc } from "../util/jsonc.ts"
-import { type RunResult, run, splitCommand } from "../util/proc.ts"
+import { bwrapAvailable, findExecutable, type RunResult, run, splitCommand } from "../util/proc.ts"
 import { changedFiles, diffStats, git } from "../worktree/git.ts"
 import { validateArtifacts } from "./artifacts.ts"
 import { checkBudgets, isTestFile } from "./budgets.ts"
@@ -54,6 +55,13 @@ export interface RunGatesOptions {
   readonly lsp?: { diagnostics(file: string, options?: { maxWaitMs?: number }): Promise<unknown> }
   /** Structural index options for touched-scope affected-test selection. */
   readonly structure?: GraphOptions
+  /**
+   * Gate commands run agent-written code (tests), so they run in the gate
+   * sandbox: only `dir` writable, .factory/ and git config read-only, secrets
+   * and credentials masked. "required" (factory runs) refuses without
+   * bubblewrap; "preferred" (default; human and user runs) uses it when present.
+   */
+  readonly sandbox?: "required" | "preferred"
 }
 
 const TOOL_CONFIG = [
@@ -198,6 +206,8 @@ async function runCommandCheck(
     logDir: string
     affected?: AffectedTests
     signal?: AbortSignal
+    sandbox: "required" | "preferred"
+    stateDir: string
   },
 ): Promise<{ report: CheckReport; findings: GateFinding[]; failedTests: string[] }> {
   const started = Date.now()
@@ -222,14 +232,41 @@ async function runCommandCheck(
   } else if (check.touchedArgs) argv = [...argv, "."]
   argv[0] = resolveBinary(argv[0]!, context.dir, context.root)
   const log = path.join(context.logDir, `${check.id}.log`)
+  // Resolve the tool first: inside bwrap a missing binary would look like a failing command.
+  const toolMissing = !argv[0]!.includes("/") && !findExecutable(argv[0]!)
+  const sandboxed = !toolMissing && bwrapAvailable()
+  // A missing tool is reported as missing, not as a sandbox problem: without
+  // bubblewrap there is nothing to sandbox, and with it the binary still
+  // would not resolve inside.
+  if (!sandboxed && context.sandbox === "required" && !toolMissing) {
+    await writeFile(log, `$ ${argv.join(" ")}\n${SANDBOX_MISSING}\n`)
+    return {
+      report: { id: check.id, status: "error", durationMs: 0, findings: 1, log, note: SANDBOX_MISSING },
+      findings: [
+        {
+          file: ".",
+          rule: "gates/sandbox-missing",
+          severity: "error",
+          message: `Did not run "${check.command}": ${SANDBOX_MISSING}`,
+          fixHint: "Install bubblewrap, then run the gates again.",
+          check: check.id,
+        },
+      ],
+      failedTests: [],
+    }
+  }
   let result: RunResult
   try {
+    if (toolMissing) throw new Error(`${argv[0]} is not installed (not found on PATH)`)
     result = await run(argv, {
       cwd: context.dir,
       timeoutMs: check.timeoutMs,
       maxOutputBytes: 5_000_000,
       signal: context.signal,
       passEnv: ["CARGO_TARGET_DIR", "GOFLAGS", "GOCACHE"],
+      ...(sandboxed
+        ? { sandbox: { kind: "gate" as const, root: context.root, writable: context.dir, stateDir: context.stateDir } }
+        : {}),
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -385,7 +422,7 @@ export async function runGates(options: RunGatesOptions): Promise<GateReport> {
     })
   })
   if (options.scope === "full" || files.some((file) => file.startsWith(".factory/")))
-    await timed("artifacts", () => validateArtifacts(root))
+    await timed("artifacts", () => validateArtifacts(root, options.stateDir))
   if (config.security.osv !== "off" && files.some((file) => DEPENDENCY_FILES.has(path.basename(file))))
     await timed("osv", () =>
       osvFindings(dir, {
@@ -451,6 +488,8 @@ export async function runGates(options: RunGatesOptions): Promise<GateReport> {
           scope: options.scope,
           files: present,
           logDir,
+          sandbox: options.sandbox ?? "preferred",
+          stateDir: options.stateDir ?? defaultStateDir(),
           ...(affected ? { affected } : {}),
           ...(options.signal ? { signal: options.signal } : {}),
         })
@@ -533,6 +572,8 @@ export function gateRunner(
   }) =>
     runGates({
       ...request,
+      // The factory's own gate runs execute the programmer's code: sandbox or refuse.
+      sandbox: "required",
       ...(options.stateDir ? { stateDir: options.stateDir } : {}),
       ...(options.fetch ? { fetch: options.fetch } : {}),
       ...(options.lsp ? { lsp: options.lsp } : {}),

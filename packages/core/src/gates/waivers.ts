@@ -4,7 +4,7 @@
 import { readdir, readFile } from "node:fs/promises"
 import { hostname, userInfo } from "node:os"
 import path from "node:path"
-import { signRecord, verifyRecordMac } from "../approval/keystore.ts"
+import { type HumanSigner, signatureProblem } from "../approval/keystore.ts"
 import { appendAuditEntry, auditHead } from "../audit/chain.ts"
 import { factoryLayout, stateDir } from "../layout.ts"
 import type { GateFinding } from "../schema/gates.ts"
@@ -21,7 +21,8 @@ export interface RecordWaiverInput {
   readonly expiresAt: Date
   readonly channel: "cli" | "tui"
   readonly approvedBy?: string
-  readonly stateDir?: string
+  /** The unlocked human key. */
+  readonly signer: HumanSigner
 }
 
 const MAX_WAIVER_DAYS = 90
@@ -32,7 +33,7 @@ export async function recordWaiver(root: string, input: RecordWaiverInput): Prom
   if (input.expiresAt.getTime() - now > MAX_WAIVER_DAYS * 86_400_000)
     throw new Error(`Waivers last at most ${MAX_WAIVER_DAYS} days.`)
   const unsigned = {
-    version: 1 as const,
+    version: 2 as const,
     id: input.id,
     rule: input.rule,
     files: input.files ?? "**",
@@ -43,7 +44,7 @@ export async function recordWaiver(root: string, input: RecordWaiverInput): Prom
     channel: input.channel,
     auditHead: await auditHead(root),
   }
-  const waiver = WaiverSchema.parse({ ...unsigned, mac: await signRecord(unsigned, input.stateDir ?? stateDir()) })
+  const waiver = WaiverSchema.parse({ ...unsigned, signature: input.signer.sign(unsigned) })
   await writeJson(path.join(factoryLayout(root).waivers, `${waiver.id}.json`), waiver)
   await appendAuditEntry(root, {
     actor: `human:${waiver.approvedBy}@${hostname()}`,
@@ -83,13 +84,14 @@ export async function loadWaivers(
       problem("not valid JSON; ignored")
       continue
     }
+    const unsigned = await signatureProblem(raw, "this waiver", options.stateDir ?? stateDir())
+    if (unsigned) {
+      problem(`${unsigned}; ignored (waivers are granted with \`es waive\`)`)
+      continue
+    }
     const parsed = WaiverSchema.safeParse(raw)
     if (!parsed.success) {
       problem("malformed waiver; ignored")
-      continue
-    }
-    if (!(await verifyRecordMac(raw, options.stateDir ?? stateDir()))) {
-      problem("not signed by this machine's approval key; ignored (waivers are granted with `es waive`)")
       continue
     }
     if (!isWaiverActive(parsed.data, options.now)) continue

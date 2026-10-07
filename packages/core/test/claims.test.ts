@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import {
   applyDegradation,
   auditMarkdown,
@@ -39,9 +40,13 @@ import {
 let root: string
 let state: string
 let cache: SourceCache
+const PASSPHRASE = "test-passphrase-1234"
+let signer: HumanSigner
 beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), "es-claims-"))
   state = await mkdtemp(path.join(tmpdir(), "es-claims-state-"))
+  await sealHumanKey(PASSPHRASE, state)
+  signer = await unlockHumanKey(PASSPHRASE, state)
   cache = new SourceCache(researchSourcesDir(root))
 })
 afterEach(async () => {
@@ -259,6 +264,29 @@ describe("code locations (new in 1.1: legacy never checked line refs on disk)", 
     expect(await at("src/auth.ts", [2, 3], `"SELECT * FROM users WHERE name = '" + user`)).toEqual({ ok: true })
     expect((await at("src/auth.ts", [3, 3], `"SELECT * FROM users WHERE name = '" + user`)).ok).toBe(false)
     expect((await at("src/auth.ts", [2, 2], "SELECT * FROM accounts WHERE id")).ok).toBe(false)
+  })
+
+  test("a code excerpt is one contiguous span inside the cited lines (spread syntax is literal)", async () => {
+    await writeFile(
+      path.join(root, "src/spread.ts"),
+      "export const merge = (a: object, b: object) => ({ ...a, ...b })\nexport const pick = 1\n",
+    )
+    // "..." is code here, not an ellipsis: matched literally.
+    expect(await at("src/spread.ts", [1, 1], "({ ...a, ...b })")).toEqual({ ok: true })
+    // Fragments joined by an ellipsis no longer match non-contiguous text (issue #38).
+    expect((await at("src/auth.ts", [1, 4], "export function ... return db.query")).ok).toBe(false)
+    expect((await at("src/auth.ts", [1, 4], "e ... e ... e ... e ... e ... e ... e")).ok).toBe(false)
+  })
+
+  test("a cited range spans at most 60 lines", async () => {
+    await writeFile(
+      path.join(root, "src/long.ts"),
+      `${Array.from({ length: 80 }, (_, i) => `export const v${i} = ${i}`).join("\n")}\n`,
+    )
+    expect((await at("src/long.ts", [1, 60], "export const v59 = 59")).ok).toBe(true)
+    expect(await at("src/long.ts", [1, 61], "export const v59 = 59")).toMatchObject({
+      reason: expect.stringMatching(/at most 60 lines/),
+    })
   })
 
   test("hallucinated files, lines past the end and paths outside the tree are refused", async () => {
@@ -616,7 +644,7 @@ describe("proof-carrying research brief (d66328c:runner/tests/test_pcrb.py)", ()
       buildDossier({ mode: "research", subject: "benchmarks", claims, now: at }),
       { cache, now },
     )
-    const { brief, file } = await exportBrief(root, { stateDir: state, now })
+    const { brief, file } = await exportBrief(root, { signer, now })
     return { brief, file, sources }
   }
 
@@ -733,9 +761,9 @@ describe("proof-carrying research brief (d66328c:runner/tests/test_pcrb.py)", ()
   })
 
   test("export needs a report and a research dossier", async () => {
-    await expect(exportBrief(root, { stateDir: state })).rejects.toThrow(/No research report/)
+    await expect(exportBrief(root, { signer })).rejects.toThrow(/No research report/)
     await mkdir(factoryLayout(root).research, { recursive: true })
     await writeFile(factoryLayout(root).researchReport, "# R\n")
-    await expect(exportBrief(root, { stateDir: state })).rejects.toThrow(/No research dossier/)
+    await expect(exportBrief(root, { signer })).rejects.toThrow(/No research dossier/)
   })
 })

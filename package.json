@@ -12,6 +12,7 @@
     "lint": "biome check .",
     "deps:check": "bun scripts/deps.ts",
     "evals": "bun scripts/evals.ts",
+    "evals:report": "bun scripts/e2e-report.ts",
     "format": "biome format --write .",
     "check": "bun run lint && bun run deps:check && bun run typecheck && bun run test",
     "docs:gen": "bun scripts/docs.ts",

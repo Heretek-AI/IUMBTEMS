@@ -1,18 +1,19 @@
 // Proof-Carrying Research Brief, ported from legacy runner/pcrb.py and
 // runner/pcrb_verify.py: the research report, its claims (ranked, each with a
 // fresh witness) and the cached sources they quote, bound by a manifest of
-// member hashes and an HMAC from the user-global signing key. The verifier
+// member hashes and an Ed25519 signature by the human key (1.1.1; the private
+// half is sealed by the human's passphrase). The verifier
 // runs the legacy four checks — source identity, manifest integrity,
 // signature, quotes — and fixes three legacy holes:
 //   B3: a member deleted from the bundle went unnoticed (the manifest now lists
 //       every member key), and alg:"none" was accepted even with a key (the
-//       schema accepts only hmac-sha256);
+//       schema accepts only ed25519);
 //   B7: a prefix-hash citation bundled its source under the prefix (sources
 //       are keyed by the full hash only);
 //   B8: export and verify read keys in opposite precedence (one key: the
-//       state-dir key the approvals use).
+//       human key the approvals use).
 import { readFile } from "node:fs/promises"
-import { hasSigningKey, signingKeyId, signRecord, verifyRecordMac } from "../approval/keystore.ts"
+import { type HumanSigner, humanKeyId, verifyRecordSignature } from "../approval/keystore.ts"
 import { factoryLayout, stateDir } from "../layout.ts"
 import { researchSourcesDir, SourceCache } from "../research/cache.ts"
 import { verifyQuote } from "../research/quote.ts"
@@ -25,7 +26,8 @@ import { ClaimStore } from "./store.ts"
 import { witnessClaim } from "./witness.ts"
 
 export interface ExportBriefOptions {
-  readonly stateDir?: string
+  /** The unlocked human key (`es research export` asks for the passphrase). */
+  readonly signer: HumanSigner
   /** Where to write the brief (default .factory/research/brief.pcrb.json). */
   readonly out?: string
   readonly now?: () => Date
@@ -45,10 +47,7 @@ const membersOf = (brief: Pick<Brief, "claims" | "sources">) =>
     ...Object.keys(brief.sources).map((hash) => `source:${hash}`),
   ].sort()
 
-export async function exportBrief(
-  root: string,
-  options: ExportBriefOptions = {},
-): Promise<{ file: string; brief: Brief }> {
+export async function exportBrief(root: string, options: ExportBriefOptions): Promise<{ file: string; brief: Brief }> {
   const layout = factoryLayout(root)
   const synthesis = await readFile(layout.researchReport, "utf8").catch(() => {
     throw new Error("No research report yet (.factory/research/REPORT.md).")
@@ -95,14 +94,10 @@ export async function exportBrief(
       members: membersOf({ claims, sources }),
     },
   }
-  const dir = options.stateDir ?? stateDir()
+  const signed = options.signer.sign(signedBody(unsigned))
   const brief = BriefSchema.parse({
     ...unsigned,
-    signature: {
-      alg: "hmac-sha256",
-      keyId: await signingKeyId(dir),
-      mac: await signRecord(signedBody(unsigned), dir),
-    },
+    signature: { alg: signed.alg, keyId: signed.keyId, sig: signed.sig },
   })
   const file = options.out ?? layout.researchBrief
   await atomicWrite(file, `${JSON.stringify(brief, null, 2)}\n`)
@@ -174,8 +169,10 @@ export async function verifyBrief(
   // 3. Signature: only a key this machine holds can vouch for the manifest.
   const dir = options.stateDir ?? stateDir()
   let signature: BriefVerification["checks"]["signature"] = "unverifiable"
-  if ((await hasSigningKey(dir)) && (await signingKeyId(dir)) === brief.signature.keyId)
-    signature = (await verifyRecordMac({ ...signedBody(brief), mac: brief.signature.mac }, dir)) ? "valid" : "invalid"
+  if ((await humanKeyId(dir)) === brief.signature.keyId)
+    signature = (await verifyRecordSignature({ ...signedBody(brief), signature: brief.signature }, dir))
+      ? "valid"
+      : "invalid"
   if (signature === "invalid") fail("signature", "the manifest signature does not match")
   if (signature === "unverifiable" && !options.allowUnverifiable)
     fail(

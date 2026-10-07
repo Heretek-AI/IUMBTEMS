@@ -38,9 +38,23 @@ export async function witnessFindings(
 export const isDefect = (finding: AuditFinding) =>
   finding.kind === "vulnerability" || (finding.kind === "invariant" && finding.holds === false)
 
-/** Why this verdict does not fit its findings (undefined when it does). */
-export function verdictProblem(verdict: "pass" | "fail", findings: readonly AuditFinding[]): string | undefined {
+/**
+ * Why this verdict does not fit its findings (undefined when it does). The
+ * thesis seat maps invariants, so its pass must show at least one that holds;
+ * the red team may pass with nothing found (its notes say what it tried).
+ */
+export function verdictProblem(
+  verdict: "pass" | "fail",
+  findings: readonly AuditFinding[],
+  seat?: "auditor-thesis" | "auditor-antithesis",
+): string | undefined {
   const defects = findings.filter(isDefect)
+  if (
+    verdict === "pass" &&
+    seat === "auditor-thesis" &&
+    !findings.some((finding) => finding.kind === "invariant" && finding.holds === true)
+  )
+    return "A thesis pass maps at least one invariant that holds, witnessed against the code (file, lines, verbatim excerpt)."
   if (verdict === "fail" && defects.length === 0)
     return "A fail needs at least one witnessed defect: a vulnerability (with its CWE) or an invariant that does not hold."
   if (verdict === "pass" && defects.length > 0)

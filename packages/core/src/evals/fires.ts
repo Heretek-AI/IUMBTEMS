@@ -25,8 +25,15 @@ export interface FireGrade {
 }
 
 const overlaps = (a: readonly [number, number], b: readonly [number, number]) => a[0] <= b[1] && b[0] <= a[1]
+/** Lines of context a finding may cite around a plant; a wider range is a guess, not a catch. */
+const PLANT_SLACK = 3
+const near = (finding: readonly [number, number], plant: readonly [number, number]) =>
+  overlaps(finding, plant) && finding[0] >= plant[0] - PLANT_SLACK && finding[1] <= plant[1] + PLANT_SLACK
 
-/** Every plant must be caught by a vulnerability finding in its file, with one of its CWEs, overlapping its lines. */
+/**
+ * Every plant must be caught by a vulnerability finding in its file, with one
+ * of its CWEs, citing the plant's lines (within PLANT_SLACK lines of context).
+ */
 export function gradeAuditFire(records: readonly AuditRecord[], plants: readonly PlantedDefect[]): FireGrade {
   const findings = records.flatMap((record) => record.findings).filter((finding) => finding.kind === "vulnerability")
   const caught: string[] = []
@@ -37,7 +44,7 @@ export function gradeAuditFire(records: readonly AuditRecord[], plants: readonly
         finding.file.replace(/^\.\//, "") === plant.file &&
         finding.cwe !== undefined &&
         plant.cwe.includes(finding.cwe) &&
-        overlaps(finding.lines, plant.lines),
+        near(finding.lines, plant.lines),
     )
     if (hit) caught.push(plant.id)
     else
@@ -49,20 +56,37 @@ export function gradeAuditFire(records: readonly AuditRecord[], plants: readonly
   return { pass: failures.length === 0, caught, failures }
 }
 
-/** Every candidate's final verdict must match; a proposal the policy rejected must say why. */
+/**
+ * Exactly the expected candidates, one verdict each, and every final verdict
+ * must match; a proposal the policy rejected must say why.
+ */
 export function gradeScoutFire(
   result: ScoutResult,
   expected: ReadonlyArray<{ name: string; verdict: string }>,
 ): FireGrade {
   const caught: string[] = []
   const failures: string[] = []
+  const matches = (verdict: ScoutResult["verdicts"][number], name: string) =>
+    verdict.name === name || verdict.candidate === name
+  // One row satisfies at most one expected candidate: a row whose name matches
+  // one expectation and whose candidate matches another must not cover both.
+  const claimed = new Map<number, string>()
+  result.verdicts.forEach((verdict, index) => {
+    const wants = expected.filter((want) => matches(verdict, want.name)).map((want) => want.name)
+    if (wants.length > 1) failures.push(`one verdict row matches several expected candidates: ${wants.join(", ")}`)
+    else if (wants.length === 1) claimed.set(index, wants[0]!)
+  })
   for (const want of expected) {
-    const got = result.verdicts.find((verdict) => verdict.name === want.name || verdict.candidate === want.name)
-    if (!got) failures.push(`no verdict for ${want.name}`)
+    const rows = result.verdicts.filter((_, index) => claimed.get(index) === want.name)
+    const got = rows[0]
+    if (rows.length > 1) failures.push(`${rows.length} verdicts for ${want.name}`)
+    else if (!got) failures.push(`no verdict for ${want.name}`)
     else if (got.verdict !== want.verdict) failures.push(`${want.name}: ${got.verdict}, expected ${want.verdict}`)
     else if (got.proposal !== got.verdict && !got.downgraded) failures.push(`${want.name}: downgraded without a reason`)
     else caught.push(want.name)
   }
+  for (const verdict of result.verdicts)
+    if (!expected.some((want) => matches(verdict, want.name))) failures.push(`unexpected verdict for ${verdict.name}`)
   return { pass: failures.length === 0, caught, failures }
 }
 
@@ -83,6 +107,15 @@ export function gradeHarvestFire(
       else caught.push(want.candidate)
     }
   }
+  const extra = [
+    ...new Set(
+      matrix.rows
+        .flatMap((row) => row.cells)
+        .map((cell) => cell.candidate)
+        .filter((candidate) => !expected.some((want) => want.candidate === candidate)),
+    ),
+  ]
+  for (const candidate of extra) failures.push(`unexpected matrix cell for ${candidate}`)
   return { pass: failures.length === 0, caught, failures }
 }
 

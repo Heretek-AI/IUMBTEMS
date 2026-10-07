@@ -1,9 +1,12 @@
 // Per-location runtime shared by the plugin's hooks, tools, commands and RPC.
 // Options are layered: the canonical config (global file → project file) with
-// plugin options as the most specific override.
+// plugin options as the most specific override. Plugin options are config
+// keys validated by the same strict schema; unknown keys are ignored with a
+// warning the TUI shows once.
 import {
   stateDir as defaultStateDir,
   type EsConfig,
+  EsConfigSchema,
   Factory,
   gateRunner,
   LspManager,
@@ -12,22 +15,14 @@ import {
 } from "@heretek-ai/es-core"
 import { ghPrOpener } from "./pr.ts"
 
-/** Raw plugin options from opencode.json; every field is optional. */
-export interface RawPluginOptions {
+/** Plugin options from opencode.json, split into config keys and the rest. */
+export interface ParsedOptions {
   /** Override the user-global state dir (signing key, trust store). Tests only. */
   readonly stateDir?: string
-  /** Model per tier, "provider/model". */
-  readonly models?: {
-    readonly fast?: string
-    readonly balanced?: string
-    readonly deep?: string
-    readonly agents?: Readonly<Record<string, string>>
-  }
-  readonly afterEdit?: "fast" | "off"
-  readonly estimate?: { readonly inputPerM?: number; readonly outputPerM?: number }
-  readonly pr?: "gh" | "off"
-  readonly lspAfterEdit?: boolean
-  readonly searchProvider?: "brave" | "firecrawl" | "searxng"
+  /** Config keys (docs/CONFIG.md), layered over the config files and validated with them. */
+  readonly overrides: Readonly<Record<string, unknown>>
+  /** Keys that are not config keys, sorted; ignored with a warning. */
+  readonly unknown: readonly string[]
 }
 
 /** Resolved options: config defaults applied; consumers read this shape. */
@@ -47,16 +42,18 @@ export interface Runtime {
   readonly config: EsConfig
   /** Config files that contributed values, in layer order. */
   readonly configSources: readonly string[]
+  /** Human-facing load warnings (e.g. ignored plugin options), shown once by the TUI. */
+  readonly warnings: readonly string[]
   readonly stateDir: string
   readonly factory: Factory
   readonly lsp: LspManager
   policy(): Promise<PolicyContext>
 }
 
-export async function createRuntime(root: string, raw: RawPluginOptions): Promise<Runtime> {
+export async function createRuntime(root: string, parsed: ParsedOptions): Promise<Runtime> {
   // stateDir is runtime-only; everything else can come from config files.
-  const { stateDir: rawStateDir, ...overrides } = raw
-  const loaded = await loadEsConfig(root, { overrides })
+  const rawStateDir = parsed.stateDir
+  const loaded = await loadEsConfig(root, { overrides: { ...parsed.overrides } })
   const config = loaded.config
   const options: PluginOptions = {
     ...(rawStateDir ? { stateDir: rawStateDir } : {}),
@@ -81,6 +78,7 @@ export async function createRuntime(root: string, raw: RawPluginOptions): Promis
     options,
     config,
     configSources: loaded.sources,
+    warnings: parsed.unknown.length ? [unknownOptionsWarning(parsed.unknown)] : [],
     stateDir,
     factory,
     lsp,
@@ -91,24 +89,30 @@ export async function createRuntime(root: string, raw: RawPluginOptions): Promis
   }
 }
 
-/** Keep only the keys the user actually set, so config files are not clobbered. */
-export function parseOptions(raw: Record<string, unknown> | undefined): RawPluginOptions {
-  const options = raw ?? {}
-  const models =
-    typeof options.models === "object" && options.models ? (options.models as RawPluginOptions["models"]) : undefined
-  const estimate =
-    typeof options.estimate === "object" && options.estimate
-      ? (options.estimate as RawPluginOptions["estimate"])
-      : undefined
-  return {
-    ...(typeof options.stateDir === "string" ? { stateDir: options.stateDir } : {}),
-    ...(models ? { models } : {}),
-    ...(options.afterEdit === "fast" || options.afterEdit === "off" ? { afterEdit: options.afterEdit } : {}),
-    ...(estimate ? { estimate } : {}),
-    ...(options.pr === "gh" || options.pr === "off" ? { pr: options.pr } : {}),
-    ...(typeof options.lspAfterEdit === "boolean" ? { lspAfterEdit: options.lspAfterEdit } : {}),
-    ...(typeof options.searchProvider === "string"
-      ? { searchProvider: options.searchProvider as RawPluginOptions["searchProvider"] }
-      : {}),
+const CONFIG_KEYS: ReadonlySet<string> = new Set(Object.keys(EsConfigSchema.shape))
+
+/**
+ * Split raw plugin options into config keys and the rest. Only keys the user
+ * set are passed on, so config files are not clobbered; their values are
+ * validated by the strict config schema (an invalid value fails the load, as
+ * it would in a config file).
+ */
+export function parseOptions(raw: Record<string, unknown> | undefined): ParsedOptions {
+  const overrides: Record<string, unknown> = {}
+  const unknown: string[] = []
+  let stateDir: string | undefined
+  for (const [key, value] of Object.entries(raw ?? {})) {
+    if (key === "stateDir" && typeof value === "string") stateDir = value
+    else if (CONFIG_KEYS.has(key)) overrides[key] = value
+    else unknown.push(key)
   }
+  return { ...(stateDir ? { stateDir } : {}), overrides, unknown: unknown.sort() }
+}
+
+export function unknownOptionsWarning(keys: readonly string[]): string {
+  return (
+    `Ignored unknown plugin option${keys.length === 1 ? "" : "s"}: ${keys.join(", ")}. ` +
+    "Plugin options take the config keys in docs/CONFIG.md (es config show); " +
+    "0.7-era options such as search_engine, max_iterations and mode were removed in 1.0."
+  )
 }

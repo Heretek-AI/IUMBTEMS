@@ -20,12 +20,15 @@ import {
   factoryLayout,
   gateRunner,
   gradeHarvestFire,
+  type HumanSigner,
   readFrontier,
   readHarvestResult,
   recordApproval,
   researchSourcesDir,
   SourceCache,
+  sealHumanKey,
   stringifyFrontmatter,
+  unlockHumanKey,
 } from "@heretek-ai/es-core"
 import { boot, directiveScript, type Harness } from "@heretek-ai/es-testkit"
 
@@ -40,6 +43,8 @@ const write = async (root: string, file: string, text: string) => {
 
 async function bootHost(prefix: string) {
   const state = await mkdtemp(path.join(tmpdir(), prefix))
+  await sealHumanKey("test-passphrase-1234", state)
+  const signer = await unlockHumanKey("test-passphrase-1234", state)
   const h = await boot({
     git: true,
     script: directiveScript,
@@ -47,15 +52,16 @@ async function bootHost(prefix: string) {
     files: { "README.md": "# fire suite\n" },
   })
   const factory = () => new Factory(h.directory, { gates: gateRunner({ stateDir: state }), stateDir: state })
-  return { state, h, factory }
+  return { state, h, factory, signer }
 }
 
 describe("grill-fires", () => {
   let h: Harness
   let state: string
   let factory: () => Factory
+  let signer: HumanSigner
   beforeAll(async () => {
-    ;({ h, state, factory } = await bootHost("es-grill-fires-"))
+    ;({ h, state, factory, signer } = await bootHost("es-grill-fires-"))
   }, 60_000)
   afterAll(async () => {
     await h?.close()
@@ -149,9 +155,9 @@ describe("grill-fires", () => {
     expect(fourth.tools[0]?.text).toContain("frozen")
 
     // A granted frontier approval starts RESEARCH; the fact gates its completion.
-    await recordApproval(h.directory, { stage: "frontier", channel: "cli", approvedBy: "tester", stateDir: state })
+    await recordApproval(h.directory, { stage: "frontier", channel: "cli", approvedBy: "tester", signer })
     await factory().beginResearch("human:tester")
-    const cache = new SourceCache(researchSourcesDir(h.directory))
+    const cache = new SourceCache(researchSourcesDir(h.directory), state)
     const source = await cache.put({
       url: "https://example.test/handoff",
       text: "Session handoff writes a file the next agent reads.",
@@ -181,8 +187,9 @@ describe("factory-gate", () => {
   let h: Harness
   let state: string
   let factory: () => Factory
+  let signer: HumanSigner
   beforeAll(async () => {
-    ;({ h, state, factory } = await bootHost("es-factory-gate-"))
+    ;({ h, state, factory, signer } = await bootHost("es-factory-gate-"))
   }, 60_000)
   afterAll(async () => {
     await h?.close()
@@ -207,9 +214,9 @@ describe("factory-gate", () => {
       settled: true,
       nodes: [{ id: "scope", question: "Which harness first?", status: "settled", answer: "opencode", round: 1 }],
     })
-    await recordApproval(h.directory, { stage: "frontier", channel: "cli", approvedBy: "tester", stateDir: state })
+    await recordApproval(h.directory, { stage: "frontier", channel: "cli", approvedBy: "tester", signer })
     await factory().beginResearch("human:tester")
-    const cache = new SourceCache(researchSourcesDir(h.directory))
+    const cache = new SourceCache(researchSourcesDir(h.directory), state)
     const source = await cache.put({
       url: "https://example.test/handoff",
       text: "Session handoff writes a file the next agent reads.",
@@ -246,9 +253,13 @@ describe("factory-gate", () => {
     expect(existsSync(path.join(h.directory, ".factory/worktrees"))).toBe(false)
 
     // The human approves; the scripted factory seat can now build.
-    await recordApproval(h.directory, { stage: "spec", channel: "cli", approvedBy: "tester", stateDir: state })
+    await recordApproval(h.directory, { stage: "spec", channel: "cli", approvedBy: "tester", signer })
     const started = await h.run(call("es_build_start"), { agent: "factory" })
-    expect(started.tools[0]?.status).toBe("completed")
+    // [status, text]: the text names the refusal reason.
+    expect([started.tools[0]?.status, started.tools[0]?.text]).toEqual([
+      "completed",
+      expect.stringContaining("worktree:"),
+    ])
     expect(existsSync(path.join(h.directory, ".factory/worktrees/alpha"))).toBe(true)
 
     // Release is a RELEASE-stage action, not a build-stage one.

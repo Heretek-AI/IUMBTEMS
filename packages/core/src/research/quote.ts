@@ -1,8 +1,13 @@
 // Pure verbatim-quote verification. A quote matches when, after normalising
 // whitespace and typographic punctuation (curly quotes, dashes, NBSP), it
-// appears in the source exactly. An ellipsis ("..." or "…") splits a quote into
-// fragments that must appear in order. No fuzzy matching: a quote is either in
-// the source or it is not.
+// appears in the source exactly. An ellipsis ("..." or "…") splits a prose
+// quote into fragments that must appear in order, and each fragment must be
+// evidence on its own (MIN_QUOTE characters). Code excerpts are one contiguous
+// span (verifySpan): "..." there is code, not an ellipsis. No fuzzy matching:
+// a quote is either in the source or it is not.
+
+/** Shortest quote, and shortest ellipsis fragment, that counts as evidence (normalised characters). */
+export const MIN_QUOTE = 12
 
 const TYPOGRAPHY: Array<[RegExp, string]> = [
   [/[‘’‚‛′]/g, "'"],
@@ -52,8 +57,14 @@ export function verifyQuote(source: string, quote: string): QuoteCheck {
     .map((fragment) => fragment.trim())
     .filter(Boolean)
   if (fragments.length === 0) return { ok: false, reason: "empty quote" }
-  if (fragments.join(" ").length < 12)
-    return { ok: false, reason: "quote too short to be evidence (need at least 12 characters)" }
+  if (fragments.length === 1 && fragments[0]!.length < MIN_QUOTE)
+    return { ok: false, reason: `quote too short to be evidence (need at least ${MIN_QUOTE} characters)` }
+  const short = fragments.find((fragment) => fragment.length < MIN_QUOTE)
+  if (short !== undefined)
+    return {
+      ok: false,
+      reason: `quote fragment too short to be evidence: "${short.slice(0, 40)}" (each fragment between ellipses needs at least ${MIN_QUOTE} characters)`,
+    }
   const haystack = normalizeForQuote(source)
   let from = 0
   let first: number | undefined
@@ -64,4 +75,13 @@ export function verifyQuote(source: string, quote: string): QuoteCheck {
     from = at + fragment.length
   }
   return { ok: true, index: first! }
+}
+
+/** One contiguous verbatim span (code excerpts): no ellipsis splitting, at least MIN_QUOTE characters. */
+export function verifySpan(source: string, span: string): QuoteCheck {
+  const needle = normalizeForQuote(span)
+  if (needle.length < MIN_QUOTE)
+    return { ok: false, reason: `too short to be evidence (need at least ${MIN_QUOTE} characters)` }
+  const at = normalizeForQuote(source).indexOf(needle)
+  return at < 0 ? { ok: false, reason: `not found verbatim: "${needle.slice(0, 80)}"` } : { ok: true, index: at }
 }

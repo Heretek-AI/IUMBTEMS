@@ -64,8 +64,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     permissions: {
       support: "enforced",
       detail:
-        "permission.evaluate + tool.execute.before enforce the write/read/shell policy; control files (incl. the evidence cache) denied; research seats get no host websearch/webfetch.",
-      test: PLUGIN,
+        "permission.evaluate + tool.execute.before enforce the write/read/shell policy; control files (incl. the engine-sealed evidence cache) denied; research seats get no host websearch/webfetch. Every agent shell runs under bubblewrap by seat kind (cached-web seats offline); seats are refused without it and the user's agents fall back to the weaker argv-aware text policy.",
+      test: "packages/core/test/policy.test.ts",
     },
     hooks: {
       support: "enforced",
@@ -79,7 +79,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     subagents: {
       support: "enforced",
-      detail: "Depth 1; hidden seats are unlisted but invocable by ID, and only from the seats allowed to spawn them.",
+      detail:
+        "Depth 1; hidden seats are unlisted but invocable by ID, and only from the seats allowed to spawn them. Factory seats are not offered Code Mode execute.",
       test: PLUGIN,
     },
     compaction: {
@@ -90,7 +91,7 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     websearch: {
       support: "enforced",
       detail:
-        "The configured provider registers as the host websearch; results are cached and citable. Research seats are cached-only: es_research_search/fetch (fresh hits served from the cache).",
+        "The configured provider registers as the host websearch; results are cached and citable. Research, scout and auditor seats are cached-only (es_research_search/fetch) under an offline (--unshare-net) sandbox; host web caching applies only in a project that already has .factory/, and the cache is engine-sealed (planted entries refused).",
       test: "packages/opencode/test/research.test.ts",
     },
     lsp: {
@@ -106,8 +107,9 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     research: {
       support: "enforced",
-      detail: "Cache, quote verifier, auditor, providers and the websearch bridge.",
-      test: "packages/opencode/test/research.test.ts",
+      detail:
+        "Engine-sealed cache (#52), fragment-level quote verifier (every ellipsis fragment >= 12 chars; code excerpts one contiguous span of at most 60 lines), auditor, providers and the websearch bridge.",
+      test: "packages/core/test/research.test.ts",
     },
     brainstorm: {
       support: "enforced",
@@ -128,19 +130,19 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     claims: {
       support: "enforced",
       detail:
-        "Witnessed claims and dossiers: the evidence cache, dossiers and the claim ledger are tool-only; a forged source is denied on the host.",
-      test: PLUGIN,
+        "Witnessed claims and dossiers: the evidence cache, dossiers and the claim ledger are tool-only; planted cache entries are refused (engine seal) and every VERIFIED quote and code span is re-checked against the bytes on disk.",
+      test: "packages/core/test/research.test.ts",
     },
     audit: {
       support: "enforced",
       detail:
-        "Code-audit pair: only auditor seats record verdicts; every finding is witnessed on disk (a hallucinated line is refused); verdicts block.",
+        "Code-audit pair: only auditor seats record verdicts; every finding is witnessed on disk (a hallucinated line is refused); quote fragments carry >= 12 chars each and a thesis pass needs a witnessed invariant; verdicts block.",
       test: "packages/opencode/test/fires.test.ts",
     },
     scout: {
       support: "enforced",
       detail:
-        "OSS scout: cached-only web, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited.",
+        "OSS scout: cached-only web under an offline (--unshare-net) sandbox, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited.",
       test: "packages/opencode/test/fires.test.ts",
     },
   }),

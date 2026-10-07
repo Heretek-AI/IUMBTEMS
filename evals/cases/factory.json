@@ -3,6 +3,6 @@
   "description": "With no run in the project, the factory reports that and points at the grill instead of starting a build.",
   "agent": "factory",
   "prompt": "Status?",
-  "maxSteps": 3,
+  "maxSteps": 5,
   "checks": { "contains": ["grill"], "toolsNotUsed": ["es_build_start", "es_frontier_write"] }
 }

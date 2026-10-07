@@ -4,7 +4,7 @@ import path from "node:path"
 import { formatReport, git, runGates } from "@heretek-ai/es-core"
 import type { Args } from "./args.ts"
 import type { HumanContext } from "./human.ts"
-import { confirmWithCode } from "./tty.ts"
+import { confirmHuman } from "./tty.ts"
 
 async function changedFiles(root: string, staged: boolean) {
   if (staged)
@@ -51,7 +51,7 @@ export async function installGitHooks(context: HumanContext, args: Args): Promis
     `Writes .factory/git-hooks/pre-commit (gates on staged files) and pre-push (full gates),`,
     `then sets core.hooksPath=.factory/git-hooks${current ? ` (replacing "${current}")` : ""}.`,
   ]
-  if (!(await confirmWithCode(context.io, "Install git hooks", lines))) return 1
+  if (!(await confirmHuman(context.io, "Install git hooks", lines, context.stateDir))) return 1
   await mkdir(dir, { recursive: true })
   for (const mode of ["pre-commit", "pre-push"] as const) {
     await writeFile(path.join(dir, mode), HOOK(mode))

@@ -23,6 +23,14 @@ jobs:
     steps:
       # Third-party actions are pinned to commit SHAs (bump deliberately).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The agent sandbox (1.1.1): factory seats and gate runs require
+      # bubblewrap; Ubuntu 24.04 also restricts unprivileged user namespaces.
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --ro-bind / / --dev /dev -- true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.4.2"
@@ -30,15 +38,26 @@ jobs:
       - run: scripts/v2-head.sh packages/opencode
 
   # Opt-in, cost-capped behaviour evals: one real turn per case against
-  # vars.ES_EVAL_MODEL, killed at the per-case step cap (no cost events exist
-  # in the CLI stream, so steps bound the spend). Skipped unless both the
-  # model and secrets.ES_EVAL_API_KEY are configured; the key is exported as
-  # vars.ES_EVAL_KEY_VAR (default ANTHROPIC_API_KEY).
+  # vars.ES_EVAL_MODEL, killed at the case's own step cap (bounded by
+  # ES_EVAL_MAX_STEPS) or the spend budget read from the stream's step_finish
+  # cost. Skipped unless both the model and secrets.ES_EVAL_API_KEY are
+  # configured; the key is exported as vars.ES_EVAL_KEY_VAR (default
+  # ANTHROPIC_API_KEY). Scheduled and manual runs only: on push, the E2E
+  # feedback workflow runs the same evals once, with a debug report.
   evals:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The agent sandbox (1.1.1): factory seats and gate runs require
+      # bubblewrap; Ubuntu 24.04 also restricts unprivileged user namespaces.
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --ro-bind / / --dev /dev -- true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.4.2"
@@ -48,7 +67,7 @@ jobs:
           ES_EVAL_API_KEY: ${{ secrets.ES_EVAL_API_KEY }}
           ES_EVAL_MODEL: ${{ vars.ES_EVAL_MODEL }}
           ES_EVAL_KEY_VAR: ${{ vars.ES_EVAL_KEY_VAR || 'ANTHROPIC_API_KEY' }}
-          ES_EVAL_MAX_STEPS: "6"
+          ES_EVAL_MAX_STEPS: "16"
           ES_EVAL_TIMEOUT_MS: "300000"
         run: |
           if [ -z "$ES_EVAL_API_KEY" ] || [ -z "$ES_EVAL_MODEL" ]; then

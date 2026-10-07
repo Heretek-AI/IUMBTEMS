@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, readFile, truncate, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { approvalSubject, recordApproval, verifyApproval } from "../src/approval/index.ts"
+import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import { verifyAuditChain } from "../src/audit/index.ts"
 import { Factory, FactoryError, FactoryHalted, type GateRequest, type GateRunLike } from "../src/factory/index.ts"
 import { factoryLayout } from "../src/layout.ts"
@@ -11,6 +12,8 @@ import { type Fixture, frontier, gitRepo, writeGoal, writeReport, writeSpecs } f
 let fx: Fixture
 let gateCalls: GateRequest[]
 let nextGate: GateRunLike
+const PASSPHRASE = "test-passphrase-1234"
+let signer: HumanSigner
 const prs: string[] = []
 
 const gates = async (request: GateRequest) => {
@@ -33,6 +36,8 @@ const make = (overrides: Partial<ConstructorParameters<typeof Factory>[1]> = {})
 
 beforeEach(async () => {
   fx = await gitRepo()
+  await sealHumanKey(PASSPHRASE, fx.state)
+  signer = await unlockHumanKey(PASSPHRASE, fx.state)
   gateCalls = []
   nextGate = green
   factory = make()
@@ -40,14 +45,14 @@ beforeEach(async () => {
 afterEach(() => fx.cleanup())
 
 const approve = (stage: "frontier" | "spec") =>
-  recordApproval(fx.root, { stage, channel: "cli", approvedBy: "tester", stateDir: fx.state })
+  recordApproval(fx.root, { stage, channel: "cli", approvedBy: "tester", signer })
 
 async function toBuild(phases = ["alpha"]) {
   await factory.begin("human:tester")
   await factory.writeFrontier("grill", frontier())
   await approve("frontier")
   await factory.beginResearch("human:tester")
-  await writeReport(fx.root)
+  await writeReport(fx.root, fx.state)
   await factory.completeResearch("factory")
   await writeSpecs(fx.root, phases)
   await approve("spec")
@@ -83,6 +88,30 @@ describe("grill → research → spec", () => {
     expect(JSON.parse(await readFile(factoryLayout(fx.root).frontier, "utf8")).idea).toBe("A greeting library")
   })
 
+  test("#32: a hand edit to gates.json around a frontier write still halts as drift", async () => {
+    const { repinControl, verifyControl } = await import("../src/trust/control.ts")
+    const { readJson } = await import("../src/util/fs.ts")
+    await factory.begin("human:tester")
+    await factory.writeFrontier("grill", frontier())
+    await approve("frontier") // human rebaseline: baseline pins frontier + approvals
+    expect((await verifyControl(fx.root)).clean).toBe(true)
+    const before = await readJson<{ files: Record<string, string | null> }>(factoryLayout(fx.root).control)
+    const frontierPin = before?.files[".factory/frontier.json"] ?? null
+    await writeFile(path.join(fx.root, ".factory/gates.json"), '{"commands":[]}\n')
+    // The agent rewrite re-pins only its own file: the hand edit is not absorbed...
+    await writeFile(
+      factoryLayout(fx.root).frontier,
+      JSON.stringify({ ...frontier(), idea: "A greeting library, revised" }),
+    )
+    await repinControl(fx.root, ".factory/frontier.json", frontierPin)
+    const check = await verifyControl(fx.root)
+    expect(check.clean).toBe(false)
+    expect(check.violations.join(";")).toContain(".factory/gates.json")
+    expect(check.violations.some((v) => v.includes(".factory/frontier.json"))).toBe(false)
+    // ...so the next guarded transition halts on the drift.
+    await expect(factory.writeFrontier("grill", frontier())).rejects.toThrow(FactoryHalted)
+  })
+
   test("a missing or unsettled frontier points at the grill recording step", async () => {
     await expect(approvalSubject(fx.root, "frontier")).rejects.toThrow("/grill")
     await factory.begin("human:tester")
@@ -103,9 +132,10 @@ describe("grill → research → spec", () => {
     await factory.writeFrontier("grill", frontier())
     await expect(factory.beginResearch("human:tester")).rejects.toThrow("no frontier approval")
 
-    // A hand-written approval record is not signed by the machine key.
+    // A hand-written approval record is not signed by the human key.
     await mkdir(factoryLayout(fx.root).approvals, { recursive: true })
-    const forged = { ...(await approve("frontier")), mac: "0".repeat(64) }
+    const genuine = await approve("frontier")
+    const forged = { ...genuine, signature: { ...genuine.signature, sig: "0".repeat(64) } }
     await writeFile(factoryLayout(fx.root).approval("frontier"), JSON.stringify(forged))
     expect((await verifyApproval(fx.root, "frontier", { stateDir: fx.state })).ok).toBe(false)
 
@@ -130,7 +160,7 @@ describe("grill → research → spec", () => {
     await expect(factory.completeResearch("factory")).rejects.toThrow("does not pass the epistemic audit")
     const coverage = JSON.parse(await readFile(path.join(fx.root, ".factory/research/coverage.json"), "utf8"))
     expect(coverage).toMatchObject({ claims: 2, ungrounded: 1, untagged: 1, passed: false })
-    await writeReport(fx.root)
+    await writeReport(fx.root, fx.state)
     expect(await Bun.file(factoryLayout(fx.root).researchDossier).exists()).toBe(false)
     expect((await factory.completeResearch("factory")).stage).toBe("SPEC")
     // The audited report's claims become the research dossier, witnessed.
@@ -157,7 +187,7 @@ describe("grill → research → spec", () => {
     await factory.writeFrontier("grill", frontier({ nodes: [...frontier().nodes, db] }))
     await approve("frontier")
     await factory.beginResearch("human:tester")
-    await writeReport(fx.root)
+    await writeReport(fx.root, fx.state)
     await expect(factory.completeResearch("factory")).rejects.toThrow(
       "Missing: db — Which Node versions does the runtime support?",
     )
@@ -178,7 +208,7 @@ describe("grill → research → spec", () => {
     await approve("frontier")
     await factory.beginResearch("human:tester")
     await expect(factory.completeResearch("factory")).rejects.toThrow("REPORT.md")
-    await writeReport(fx.root)
+    await writeReport(fx.root, fx.state)
     await factory.completeResearch("factory")
     await writeSpecs(fx.root, ["alpha"])
     await approve("spec")
@@ -488,6 +518,15 @@ describe("guards", () => {
     await expect(factory.complete("es-programmer")).rejects.toThrow("frontier.json changed")
     await expect(factory.resume("tester")).rejects.toThrow("Control files changed")
     expect((await factory.resume("tester", { acceptControlDrift: true })).stage).toBe("BUILD")
+  })
+
+  test("async spend events never halt on control drift (they race human approvals)", async () => {
+    await toBuild()
+    await writeFile(factoryLayout(fx.root).frontier, "{}")
+    const state = await factory.recordSpend(1, true)
+    expect(state?.stage).not.toBe("HALTED")
+    expect(state?.spend.usd).toBeGreaterThan(0)
+    await expect(factory.complete("es-programmer")).rejects.toThrow("frontier.json changed")
   })
 
   test("the runtime cap counts from autonomy start", async () => {

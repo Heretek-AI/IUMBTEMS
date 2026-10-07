@@ -1,7 +1,8 @@
 // Mechanical enforcement in the host: every write, edit, patch and shell call
 // from any agent passes through core's policy (canonical paths, control files,
-// seat scopes); factory seats additionally stop on STOP or a halted run, run
-// read-only shells under bubblewrap, and get fast gate feedback after edits.
+// seat scopes), and every shell command runs inside the bubblewrap sandbox its
+// decision names (trust/sandbox.ts). Factory seats additionally stop on STOP
+// or a halted run and get fast gate feedback after edits.
 import path from "node:path"
 import {
   agentSpec,
@@ -13,11 +14,10 @@ import {
   formatDiagnostics,
   formatReport,
   loadGatesConfig,
-  readonlyWrap,
   runGates,
+  sandboxArgv,
   seatOf,
   shellQuote,
-  treeFingerprint,
 } from "@heretek-ai/es-core"
 import { Error as ToolError } from "@opencode/plugin/promise/tool"
 import { HOST_WEB_TOOLS } from "./agents.ts"
@@ -50,8 +50,6 @@ const appendContent = (content: unknown, text: string) =>
       : text
 
 export function createPolicyHooks(runtime: Runtime) {
-  const fingerprints = new Map<string, { dir: string; print: string }>()
-
   const before = async (event: { tool: string; agent: string; id: string; input: unknown }) => {
     const seat = seatOf(event.agent)
     const input = (event.input ?? {}) as Record<string, any>
@@ -88,14 +86,37 @@ export function createPolicyHooks(runtime: Runtime) {
     if (event.tool === "shell" && typeof input.command === "string") {
       const decision = evaluateShell(context, event.agent, input.command, { sandboxAvailable: bwrapAvailable() })
       if (decision.effect === "deny") deny(decision.reason)
-      const cwd =
-        typeof input.workdir === "string"
-          ? path.resolve(runtime.root, input.workdir)
-          : (context.worktree ?? runtime.root)
-      if (decision.effect === "allow" && decision.mode === "readonly-sandbox") {
-        event.input = { ...input, command: readonlyWrap(["sh", "-c", input.command], cwd).map(shellQuote).join(" ") }
-      } else if (decision.effect === "allow" && decision.mode === "readonly-checked") {
-        fingerprints.set(event.id, { dir: cwd, print: await treeFingerprint(cwd) })
+    }
+  }
+
+  /**
+   * The last execute.before hook: re-evaluates the final shell command (a
+   * PreToolUse hook may have rewritten it) and wraps it in its sandbox, so no
+   * later rewrite can run unsandboxed and hook matchers see the plain command.
+   */
+  const sandbox = async (event: { tool: string; agent: string; id: string; input: unknown }) => {
+    const input = (event.input ?? {}) as Record<string, any>
+    if (event.tool === "shell" && typeof input.command === "string") {
+      const context = await runtime.policy()
+      const decision = evaluateShell(context, event.agent, input.command, { sandboxAvailable: bwrapAvailable() })
+      if (decision.effect === "deny") deny(decision.reason)
+      if (decision.effect === "allow" && decision.mode === "sandbox") {
+        const cwd =
+          typeof input.workdir === "string"
+            ? path.resolve(runtime.root, input.workdir)
+            : (context.worktree ?? runtime.root)
+        const argv = sandboxArgv(
+          {
+            kind: decision.kind,
+            root: runtime.root,
+            cwd,
+            stateDir: runtime.stateDir,
+            offline: decision.offline,
+            ...(decision.kind === "programmer" && context.worktree ? { writable: context.worktree } : {}),
+          },
+          ["sh", "-c", input.command],
+        )
+        event.input = { ...input, command: argv.map(shellQuote).join(" ") }
       }
     }
   }
@@ -109,23 +130,6 @@ export function createPolicyHooks(runtime: Runtime) {
     result?: any
   }) => {
     const seat = seatOf(event.agent)
-    const checked = fingerprints.get(event.id)
-    if (checked) {
-      fingerprints.delete(event.id)
-      if ((await treeFingerprint(checked.dir)) !== checked.print) {
-        await runtime.factory
-          .halt(`agent:${event.agent}`, `read-only seat ${event.agent} changed files via the shell`)
-          .catch(() => undefined)
-        if (event.status === "completed")
-          event.result = {
-            ...event.result,
-            content: appendContent(
-              event.result?.content,
-              "VIOLATION: this read-only seat modified the checkout. The factory has been halted.",
-            ),
-          }
-      }
-    }
     if (event.status !== "completed") return
     const input = (event.input ?? {}) as Record<string, any>
     const files =
@@ -165,6 +169,7 @@ export function createPolicyHooks(runtime: Runtime) {
         commands: config.commands.filter((check) => check.kind === "format" || check.kind === "lint"),
       },
       stateDir: runtime.stateDir,
+      sandbox: "required",
     })
     if (report.findings.length || !report.passed)
       event.result = {
@@ -225,5 +230,5 @@ export function createPolicyHooks(runtime: Runtime) {
     for (const key of Object.keys(event.env)) if (/^OPENCODE_(SERVER_)?PASSWORD$/.test(key)) delete event.env[key]
   }
 
-  return { before, after, evaluate, shellEnv }
+  return { before, sandbox, after, evaluate, shellEnv }
 }

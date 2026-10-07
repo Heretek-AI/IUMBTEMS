@@ -46,7 +46,7 @@ Seats are what the trust policy reasons about; the registry is
 | `programmer` | subagent | its phase worktree | red-test-first completion |
 | `qa-functional`, `qa-adversarial` | subagents | nothing | verdicts only, blocking |
 | `auditor-thesis`, `auditor-antithesis` | subagents | nothing | line-witnessed findings, blocking |
-| `research-alpha`, `research-beta` | subagents | research notes | web facts via cached `es_research_*` only |
+| `research-alpha`, `research-beta` | subagents | research notes | `web: "cached"`: web facts via cached `es_research_*` only, `--unshare-net` sandboxed |
 | `harvester` | primary | harvest notes | fail-closed licence policy for depend/vendor |
 | `scout` | primary | scout notes | core computes adoption verdicts |
 | `brainstormer`, `brainstorm-lens` (×8), `brainstorm-critic` | subagents | brainstorm notes | lens fan-out, dedupe, rubric |
@@ -77,23 +77,40 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
 - Claims/dossiers live under `.factory/`: `research/`, `claims/`, `audits/`,
   `scout/`, `harvest/`. All are control files: agents may only write them
   through `es_*` tools; hand-edits are refused and hash-checked at gates.
+- The source cache is engine-sealed: each entry's metadata carries an
+  HMAC-SHA256 seal from a key kept in the masked private state dir
+  (`engine.key`), so a planted entry an agent drops into
+  `.factory/research/sources/` is refused on read.
 - The design tree (`frontier.json`) is the same shape for humans: nodes are
   decisions or deferred facts, saves are diff-checked (no deletions, no silent
   edits, no round regress), and the tree is the single source for the idea.
 
 ## 4. Trust model (non-negotiable invariants)
 
-1. **Approvals, waivers, trust and resume are human-only** — TTY/TUI dialogs,
-   signed and hash-bound; agents may request (`es_request_approval`) but never
-   grant.
+1. **Approvals, waivers, trust and resume are human-only** — terminal
+   passphrase confirmation unlocks the passphrase-sealed Ed25519 human key
+   (scrypt + AES-256-GCM; `es key seal` once, `es key status` shows the
+   fingerprint), which signs the record; agents may request
+   (`es_request_approval`) but never grant. The approve/trust/resume RPCs no
+   longer exist; the TUI previews, then points at the terminal command. v1
+   HMAC records are refused and must be re-recorded.
 2. **Control files are deny-write for every agent**: gates, config, frontier,
    approvals, waivers, runtime state, the research evidence, claim ledger,
    audit records, scout and harvest state, and the design artifacts
    (`trust/control.ts`).
 3. **Gate command sets are trust-pinned by hash**; untrusted commands never run.
 4. **Every `.factory/` write is atomic and lock-protected** (`util/fs.ts`).
-5. **Search as policy**: research seats, auditor seats, scout and harvester get
-   web facts only through the cached, citable `es_research_*` tools.
+5. **Search as policy, under a sandbox**: research, scout and auditor seats
+   are `web: "cached"` (host websearch/webfetch denied, web facts only
+   through the cached, citable `es_research_*` tools) and run under an
+   `--unshare-net` bubblewrap sandbox, so no live network hides behind the
+   tools. The user's own agents keep host web tools. Every agent shell and
+   gate run is sandboxed by kind — `user` (project writable, `.factory/`
+   read-only), `seat`, `programmer` (only its worktree writable), `readonly`
+   (nothing writable) and `gate` (only the gate dir writable) — with the
+   private state dir and service credentials masked; factory seats are
+   refused a shell without bubblewrap and the user's agents fall back to the
+   weaker argv-aware text policy.
 6. **Generated files are never hand-edited**; `docs:check` fails on drift
    (schemas, capability proofs, config docs, and the prompt/skill/registry
    asset drift checker with its canary).

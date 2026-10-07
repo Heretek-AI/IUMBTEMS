@@ -54,6 +54,7 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | probe-row | `schemas/probe-row.schema.json` |
 | provenance | `schemas/provenance.schema.json` |
 | queereye-tokens | `schemas/queereye-tokens.schema.json` |
+| record-signature | `schemas/record-signature.schema.json` |
 | related-tests | `schemas/related-tests.schema.json` |
 | retraction-ledger | `schemas/retraction-ledger.schema.json` |
 | retraction-policy | `schemas/retraction-policy.schema.json` |

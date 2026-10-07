@@ -247,19 +247,19 @@
       "properties": {
         "alg": {
           "type": "string",
-          "const": "hmac-sha256"
+          "const": "ed25519"
         },
         "keyId": {
           "type": "string"
         },
-        "mac": {
+        "sig": {
           "type": "string"
         }
       },
       "required": [
         "alg",
         "keyId",
-        "mac"
+        "sig"
       ],
       "additionalProperties": false
     }

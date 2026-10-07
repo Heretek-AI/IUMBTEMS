@@ -1,6 +1,7 @@
-// RPC contract between the server plugin and the TUI. These methods are the
-// TUI half of the human-only channel: no agent tool reaches them, and the TUI
-// only calls them after a human confirms a dialog showing what is approved.
+// RPC contract between the server plugin and the TUI. Previews are shown in
+// the TUI; human-only mutations (approve, trust, resume) happen at a terminal
+// with the passphrase (`es approve`, `es trust`, `es factory resume`), never
+// through an agent tool or RPC. Only lspInstall still mutates via RPC.
 import { Rpc } from "@opencode/plugin/rpc"
 
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
@@ -26,43 +27,20 @@ export const EsRpc = Rpc.define({
       input: obj({}),
       output: obj({ summary: str, stage: str, pending: strArray }, ["summary", "stage", "pending"]),
     },
+    /** The effective config (JSON), the files it came from, and load warnings to show once. */
+    configState: {
+      input: obj({}),
+      output: obj({ config: str, sources: strArray, warnings: strArray }, ["config", "sources", "warnings"]),
+    },
     previewApproval: {
       input: obj({ stage: { type: "string", enum: ["frontier", "spec"] } }, ["stage"]),
       output: Preview,
     },
-    approve: {
-      input: obj({ stage: { type: "string", enum: ["frontier", "spec"] }, user: str, token: str }, [
-        "stage",
-        "user",
-        "token",
-      ]),
-      output: obj({ message: str }, ["message"]),
-      errors: { refused: obj({ reason: str }, ["reason"]) },
-    },
     previewTrust: { input: obj({}), output: Preview },
-    trust: {
-      input: obj({ user: str, token: str }, ["user", "token"]),
-      output: obj({ message: str }, ["message"]),
-      errors: { refused: obj({ reason: str }, ["reason"]) },
-    },
     previewResume: { input: obj({}), output: Preview },
     previewLspInstall: { input: obj({ id: str }, ["id"]), output: Preview },
     lspInstall: {
       input: obj({ id: str, user: str, token: str }, ["id", "user", "token"]),
-      output: obj({ message: str }, ["message"]),
-      errors: { refused: obj({ reason: str }, ["reason"]) },
-    },
-    resume: {
-      input: obj(
-        {
-          user: str,
-          token: str,
-          acceptControlDrift: { type: "boolean" },
-          raiseCeilingUSD: { type: "number" },
-          extendRuntime: { type: "boolean" },
-        },
-        ["user", "token"],
-      ),
       output: obj({ message: str }, ["message"]),
       errors: { refused: obj({ reason: str }, ["reason"]) },
     },

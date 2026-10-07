@@ -1,7 +1,7 @@
 // `es audit <target>` and `es scout <objective>`: open the job as the human at
 // the terminal, then drive the seat headlessly until it settles. Both run on a
 // factory run with a spend ceiling (decision 7): with none, `--max-usd N`
-// starts a GRILL run with that provisional ceiling, confirmed with a typed code.
+// starts a GRILL run with that provisional ceiling, confirmed with the passphrase.
 import { userInfo } from "node:os"
 import path from "node:path"
 import {
@@ -19,7 +19,7 @@ import {
 import { type Args, flag } from "./args.ts"
 import { DRIVERS, driveHeadless, type HeadlessEvent } from "./headless.ts"
 import type { HumanContext } from "./human.ts"
-import { confirmWithCode } from "./tty.ts"
+import { confirmHuman } from "./tty.ts"
 
 const user = () => userInfo().username
 
@@ -48,7 +48,9 @@ async function ensureCeiling(context: HumanContext, args: Args, purpose: string)
       : `A factory run starts in GRILL with a provisional spend ceiling of $${ceiling}.`,
     "Seats halt when the spend reaches it; a later frontier approval sets the real ceiling.",
   ]
-  if (!(await confirmWithCode(context.io, `${purpose}: set a $${ceiling} ceiling as ${user()}`, lines))) {
+  if (
+    !(await confirmHuman(context.io, `${purpose}: set a $${ceiling} ceiling as ${user()}`, lines, context.stateDir))
+  ) {
     context.print("Cancelled; nothing was started.")
     return 1
   }
@@ -188,7 +190,7 @@ export async function auditDismiss(context: HumanContext, args: Args): Promise<n
     `Reason: ${reason}`,
     "It stops blocking the factory; the dismissal is signed into the audit log.",
   ]
-  if (!(await confirmWithCode(context.io, `Dismiss ${audit.id} as ${user()}`, lines))) {
+  if (!(await confirmHuman(context.io, `Dismiss ${audit.id} as ${user()}`, lines, context.stateDir))) {
     context.print("Cancelled; the audit still blocks.")
     return 1
   }

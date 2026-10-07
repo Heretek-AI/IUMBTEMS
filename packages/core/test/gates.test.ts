@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import {
   commandSetHash,
   complexity,
@@ -12,15 +13,19 @@ import {
   runGates,
   trustProject,
 } from "../src/index.ts"
-import { run } from "../src/util/proc.ts"
+import { bwrapAvailable, resetBwrapProbe, run } from "../src/util/proc.ts"
 import { type Fixture, gitRepo } from "./helpers.ts"
 
 const BIOME = path.resolve(import.meta.dir, "../../../node_modules/.bin/biome")
 const FAKE_TOKEN = `ghp_${"Ab3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6"}`
 
 let fx: Fixture
+const PASSPHRASE = "test-passphrase-1234"
+let signer: HumanSigner
 beforeEach(async () => {
   fx = await gitRepo("es-gates-")
+  await sealHumanKey(PASSPHRASE, fx.state)
+  signer = await unlockHumanKey(PASSPHRASE, fx.state)
 })
 afterEach(() => fx.cleanup())
 
@@ -39,7 +44,7 @@ const config = (commands: unknown[], extra: Record<string, unknown> = {}) =>
   GatesConfigSchema.parse({ commands, security: { gitleaks: "off", osv: "off" }, ...extra })
 const trust = async (cfg: ReturnType<typeof config>) => {
   const { hash, lines } = await commandSetHash(fx.root, cfg.commands)
-  await trustProject(fx.root, hash, lines, { stateDir: fx.state })
+  await trustProject(fx.root, hash, lines, { stateDir: fx.state, signer })
 }
 
 describe("detection", () => {
@@ -63,6 +68,57 @@ describe("detection", () => {
     await write("go.mod", "module x\n")
     const ids = (await detectGates(fx.root)).commands.map((item) => item.id)
     expect(ids).toEqual(["test", "py-format", "py-lint", "py-test", "go-format", "go-lint", "go-test"])
+  })
+})
+
+describe("the gate sandbox (#51)", () => {
+  // Gate commands are trusted, but what they run (tests) is agent-written.
+  const probe = (key: string) =>
+    [
+      `cat ${key} > leak.txt 2>/dev/null`,
+      "mkdir -p .factory/research/sources && echo forged > .factory/research/sources/forged.md",
+      "git config core.hooksPath /tmp/evil-hooks",
+      "echo ran > ran.txt",
+      "true",
+    ].join("; ")
+
+  test.skipIf(!bwrapAvailable())(
+    "agent-written test code cannot read the key, forge evidence or retarget git",
+    async () => {
+      const key = path.join(fx.state, "key")
+      await writeFile(key, "SECRET-SIGNING-KEY\n")
+      await mkdir(path.join(fx.root, ".factory"), { recursive: true })
+      await write("probe.sh", `${probe(key)}\n`)
+      const cfg = config([{ id: "probe", kind: "test", command: "sh probe.sh" }])
+      await trust(cfg)
+      const report = await gates({ scope: "full", config: cfg, sandbox: "required" })
+      expect(report.checks.find((check) => check.id === "probe")?.status).toBe("pass")
+      expect(await Bun.file(path.join(fx.root, "ran.txt")).text()).toBe("ran\n")
+      expect(await Bun.file(path.join(fx.root, "leak.txt")).text()).not.toContain("SECRET-SIGNING-KEY")
+      expect(await Bun.file(path.join(fx.root, ".factory/research/sources/forged.md")).exists()).toBe(false)
+      expect(await Bun.file(path.join(fx.root, ".git/config")).text()).not.toContain("hooksPath")
+    },
+  )
+
+  test("a required sandbox refuses to run when bubblewrap is missing", async () => {
+    const cfg = config([{ id: "probe", kind: "test", command: "touch RAN" }])
+    await trust(cfg)
+    resetBwrapProbe(false)
+    try {
+      const report = await gates({ scope: "full", config: cfg, sandbox: "required" })
+      expect(report.findings.map((finding) => finding.rule)).toContain("gates/sandbox-missing")
+      expect(await Bun.file(path.join(fx.root, "RAN")).exists()).toBe(false)
+    } finally {
+      resetBwrapProbe()
+    }
+  })
+
+  test("a missing tool is reported as missing, not as a sandbox problem", async () => {
+    const cfg = config([{ id: "probe", kind: "test", command: "definitely-not-installed-xyz" }])
+    await trust(cfg)
+    const report = await gates({ scope: "full", config: cfg, sandbox: "required" })
+    expect(report.findings.map((finding) => finding.rule)).toContain("gates/tool-missing")
+    expect(report.findings.map((finding) => finding.rule)).not.toContain("gates/sandbox-missing")
   })
 })
 
@@ -126,7 +182,7 @@ describe("built-in checks", () => {
       reason: "fixture value, not a real token",
       expiresAt: new Date(Date.now() + 86_400_000),
       channel: "cli",
-      stateDir: fx.state,
+      signer,
     })
     const waived = await gates({ touched: ["src/config.ts"], config: config([]) })
     expect(waived.findings.some((finding) => finding.rule === "security/secret-github-token")).toBe(false)

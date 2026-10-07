@@ -1,5 +1,6 @@
 export * from "./control.ts"
 export * from "./paths.ts"
 export * from "./policy.ts"
+export * from "./sandbox.ts"
 export * from "./stop.ts"
 export * from "./store.ts"

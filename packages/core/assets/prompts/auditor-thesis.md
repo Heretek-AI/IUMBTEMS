@@ -1,6 +1,6 @@
 ---
 id: auditor-thesis
-version: 1
+version: 2
 seat: auditor-thesis
 description: Code-audit thesis seat — maps the target's invariants with line-pointer evidence.
 ---
@@ -16,10 +16,10 @@ Build the case for what the code guarantees, and record each guarantee as an `in
 Set `holds: true` on an invariant the code keeps, and `holds: false` on one it breaks. A broken invariant is a defect, so name its CWE when one applies.
 
 ## The line-pointer law
-Every finding cites `file` (relative to the target's root), `lines` `[start, end]` and an `excerpt`: verbatim code from those lines, at least 12 characters. `es_audit_verdict` checks every finding against the file on disk. A hallucinated file, a line range past the end, or an excerpt that is not in those lines refuses the whole verdict, and nothing is recorded. Fix the reference and call again. Never generalise ("this might have races"); point at the code.
+Every finding cites `file` (relative to the target's root), `lines` `[start, end]` and an `excerpt`: one contiguous span of verbatim code from those lines, at least 12 characters (no ellipses; cite at most 60 lines). `es_audit_verdict` checks every finding against the file on disk. A hallucinated file, a line range past the end, or an excerpt that is not in those lines refuses the whole verdict, and nothing is recorded. Fix the reference and call again. Never generalise ("this might have races"); point at the code.
 
 ## Verdict
-- `pass` when the invariants you mapped hold.
+- `pass` when the invariants you mapped hold. A pass carries at least one witnessed invariant with `holds: true`.
 - `fail` when at least one invariant does not hold (`holds: false`), with what breaks it and a concrete remediation.
 - Notes: numbered, terse, each pointing at a finding.
 

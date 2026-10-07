@@ -157,7 +157,7 @@ export function esTools(ops: OpsContext): EsToolDef[] {
         "Validate .factory/roadmap.json and every phase GOAL.md against their schemas. Run until it reports no errors.",
       input: object(),
       execute: async () => {
-        const problems = await validateArtifacts(root)
+        const problems = await validateArtifacts(root, ops.stateDir)
         const subject = await approvalSubject(root, "spec").then(
           (result) => result,
           (error: Error) => error,
@@ -205,6 +205,8 @@ export function esTools(ops: OpsContext): EsToolDef[] {
           ...(worktree && phase?.baseCommit ? { base: phase.baseCommit, phaseId: phase.id } : {}),
           ...(state ? { runId: state.runId } : {}),
           stateDir: ops.stateDir,
+          // A seat's gate run executes agent-written code: sandbox or refuse.
+          sandbox: seat ? "required" : "preferred",
           ...(ops.lsp ? { lsp: ops.lsp } : {}),
           ...(context.signal ? { signal: context.signal } : {}),
         })

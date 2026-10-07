@@ -1,5 +1,61 @@
 # Changelog
 
+## 1.1.1 — 2026-10-07
+
+Security release (#35). The 1.1.0 adversarial audit broke the text-matched
+shell policy six ways, forged VERIFIED claims through the shell, and drove
+approvals through a stealable service password; 1.1.1 moves that enforcement
+into the OS, the crypto and the sandbox. Published 1.1.0 is deprecated.
+
+**Breaking.**
+- Re-approve, re-trust and re-waive after `es key seal`: v1 HMAC records
+  were MACed with a key agents could read; they are refused with the
+  re-record hint.
+- Bubblewrap is required for factory seats (refused a shell without it) and
+  factory gate runs (halt with `gates/sandbox-missing`); CI, nightly, E2E
+  and publish install it and allow unprivileged user namespaces.
+- Approvals, waivers, trust and resume happen at a terminal only: the
+  approve/trust/resume RPCs no longer exist and the TUI only previews, then
+  points at the terminal command.
+
+- **S1: quotes are evidence fragment by fragment (#38, #46, #48).** Every
+  ellipsis fragment must be at least 12 characters on its own; code excerpts
+  are one contiguous verbatim span of the cited lines (at most 60 lines); a
+  thesis pass needs at least one witnessed invariant that holds; the
+  audit/scout/harvest fire graders are exact (plants cited within 3 lines,
+  no extra or duplicate rows).
+- **S2: argv-aware shell policy (#37, #40–#45, #50, #51).** Quotes and escapes
+  are stripped before matching, human-only verbs are found behind wrappers,
+  git subcommands past global options, and control paths match
+  case-insensitively; any `.factory/` mention needs a provably read-only
+  command. This is defence in depth and the only layer for the user's own
+  agents without bubblewrap — documented as weaker.
+- **S3: every agent shell and gate run is sandboxed by bubblewrap.** Kinds:
+  `user`, `seat`, `programmer`, `readonly` and `gate`; cached-web seats get
+  `--unshare-net`; the private state dir and service credentials are masked
+  in every kind. Seats lose Code Mode `execute`; the shell is re-checked by
+  the last hook after the hook bridge.
+- **S4: passphrase-sealed Ed25519 human key, terminal-only approvals (#39).**
+  `es key seal` (asked twice, at least 10 characters) seals the key with
+  scrypt + AES-256-GCM; every human action unlocks it with a passphrase at a
+  TTY. A wrong or empty passphrase records nothing.
+- **#49: no approval RPC for a stolen service password.** Verified: the
+  mutating RPC methods are gone (previews still work) and `service.json` is
+  masked in every agent sandbox.
+- **#52: engine-sealed source cache.** Each entry's metadata carries an
+  HMAC-SHA256 seal from a key in the masked state dir; unsealed (planted)
+  entries are refused on read.
+- **#32: per-file control re-pin.** `es_frontier_write` re-pins only
+  `frontier.json` when its baseline matches, so a concurrent hand edit to
+  another control file still halts as drift instead of being absorbed.
+- **#31: host web caching only for factory seats in a factory project.**
+  Without `.factory/`, nothing is cached and no `.factory/` is created;
+  the user's agent never caches.
+- **M1: eval harness that can pass (#25–#29, #36).** Case caps authoritative
+  under a ceiling of 16, `toolsUsed` counts completed calls, spend read from
+  `step_finish` cost under `ES_EVAL_MAX_USD`, failed workspaces kept and
+  uploaded, nightly evals off push, agent feedback uses PWD.
+
 ## 1.1.0 — 2026-10-07
 
 "Dialectic Restoration" (#20) brings back the best of the 0.7 research

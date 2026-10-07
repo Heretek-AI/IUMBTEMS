@@ -4,7 +4,24 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { researchSourcesDir, SourceCache } from "@heretek-ai/es-core"
+import {
+  bwrapAvailable,
+  commandSetHash,
+  Factory,
+  factoryLayout,
+  gateRunner,
+  HookEngine,
+  type HumanSigner,
+  loadGatesConfig,
+  pendingApprovals,
+  recordApproval,
+  researchSourcesDir,
+  SourceCache,
+  sealHumanKey,
+  trustProject,
+  unlockHumanKey,
+  writeJson,
+} from "@heretek-ai/es-core"
 import { boot, directiveScript, type Harness, lastAgentRequest, systemText } from "@heretek-ai/es-testkit"
 import { EsRpc } from "../src/rpc-def.ts"
 
@@ -12,8 +29,11 @@ const pluginDir = path.resolve(import.meta.dir, "..")
 const call = (name: string, args: Record<string, unknown> = {}) => `@@CALL ${name} ${JSON.stringify(args)}@@`
 
 let state: string
+let signer: HumanSigner
 beforeAll(async () => {
   state = await mkdtemp(path.join(tmpdir(), "es-plugin-state-"))
+  await sealHumanKey("test-passphrase-1234", state)
+  signer = await unlockHumanKey("test-passphrase-1234", state)
 })
 afterAll(() => rm(state, { recursive: true, force: true }))
 
@@ -173,6 +193,16 @@ describe("integrity on the real host", () => {
     expect(systemText(programmer)).not.toContain("<id>grill</id>")
   })
 
+  test("seats are not offered Code Mode; the user's own agent still is (issue #50)", async () => {
+    const offered = async (agent: string) => {
+      await h.run("hello", { agent })
+      return (lastAgentRequest(h.llm.requests)?.tools ?? []).map((tool) => tool.function.name)
+    }
+    expect(await offered("build")).toContain("execute")
+    for (const agent of ["factory", "grill", "brainstormer", "harvester", "es-research-alpha", "es-programmer"])
+      expect([agent, (await offered(agent)).includes("execute")]).toEqual([agent, false])
+  })
+
   test("the factory invokes a hidden seat by id; compaction keeps the factory state", async () => {
     const { sessionID } = await h.run(
       `delegate ${call("subagent", { agent: "es-manager", description: "plan", prompt: "summarise the roadmap" })}`,
@@ -191,19 +221,53 @@ describe("integrity on the real host", () => {
     expect(systemText(compaction)).toContain("<factory-state>")
   })
 
-  test("a QA seat cannot write, and its shell writes never escape (sandbox or allowlist)", async () => {
+  test("a QA seat cannot write, and its shell writes never escape (sandboxed, or refused without bwrap)", async () => {
     const { tools } = await h.run(
-      `qa ${call("write", { path: "src/x.ts", content: "x" })} ${call("shell", { command: "touch QA_TOUCHED && echo touched" })}`,
+      `qa ${call("write", { path: "src/x.ts", content: "x" })} ${call("shell", { command: "touch QA_TOUCHED; echo tried" })}`,
       { agent: "es-qa-functional" },
     )
     expect(tools[0]?.status).toBe("error")
-    // With bwrap the command runs and the write vanishes; without it the
-    // allowlist refuses the command outright. Either way nothing escapes.
+    // With bwrap the command runs and the write fails or vanishes; without it
+    // factory seats get no shell at all (1.1.1). Either way nothing escapes.
     const shell = tools[1]
-    if (shell?.status === "completed") expect(shell.text).toContain("touched")
-    else expect(shell?.text).toMatch(/allowlist|read-only seat/i)
+    if (bwrapAvailable()) expect(shell?.text).toContain("tried")
+    else expect(shell?.text).toMatch(/bubblewrap/i)
     expect(await exists(path.join(h.directory, "QA_TOUCHED"))).toBe(false)
   })
+
+  test.skipIf(!bwrapAvailable())(
+    "the 1.1.0 audit's shell attacks fail in the sandbox even when they evade the text rules",
+    async () => {
+      await mkdir(path.join(h.directory, ".factory/research/sources"), { recursive: true })
+      await writeFile(path.join(state, "key"), "PLANTED-SIGNING-KEY\n")
+      const sh = async (agent: string, command: string) =>
+        (await h.run(`x ${call("shell", { command })}`, { agent })).tools[0]
+      // P1/P5: variable indirection hides the factory dir from any text rule.
+      for (const agent of ["build", "es-programmer"]) {
+        const forged = await sh(agent, 'F=.fac; cd "${F}tory" && echo forged > research/sources/forged.md; echo done')
+        expect([agent, forged?.status]).toEqual([agent, "completed"])
+        expect(await exists(path.join(h.directory, ".factory/research/sources/forged.md"))).toBe(false)
+      }
+      // P3: the programmer reads the signing key through a glob.
+      const leak = await sh(
+        "es-programmer",
+        `D=${path.dirname(state)}; cat "$D"/${path.basename(state)}/k* ; echo done`,
+      )
+      expect(leak?.text ?? "").not.toContain("PLANTED-SIGNING-KEY")
+      // P4: a cached-web research seat reaches a local server.
+      const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("NET-REACHED") })
+      try {
+        const net = await sh(
+          "es-research-alpha",
+          `python3 -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:${server.port}/').read())"; echo done`,
+        )
+        expect(net?.text ?? "").not.toContain("NET-REACHED")
+      } finally {
+        server.stop(true)
+      }
+    },
+    60_000,
+  )
 
   test("the STOP file stops factory seats and es tools, not the user's own agent", async () => {
     await mkdir(path.join(h.directory, ".factory"), { recursive: true })
@@ -214,6 +278,18 @@ describe("integrity on the real host", () => {
     const user = await h.run(`go ${call("read", { path: "README.md" })}`)
     expect(user.tools[0]?.status).toBe("completed")
     await rm(path.join(h.directory, ".factory/STOP"))
+  })
+
+  test("issue #49: no approval RPC exists for a stolen service password to call", async () => {
+    // S3 masks service.json in every agent sandbox (sandbox.test.ts); S4
+    // removed the mutate methods, so even a caller with a valid preview token
+    // has no RPC to redeem it through. Previews still work for the TUI.
+    const rpc = rpcFor(h) as any
+    for (const method of ["approve", "trust", "resume"]) expect(typeof rpc[method]).not.toBe("function")
+    const approval = await rpc.previewApproval({ stage: "frontier" }, where(h))
+    expect(typeof approval.title).toBe("string")
+    expect(Array.isArray(approval.lines)).toBe(true)
+    expect(((await rpc.previewTrust({}, where(h))).lines ?? []).length).toBeGreaterThan(0)
   })
 })
 
@@ -262,13 +338,19 @@ describe("a factory run end to end on the real host", () => {
     const preview = await rpc.previewApproval({ stage: "frontier" }, where(h))
     expect(preview.ok).toBe(true)
     expect(preview.lines.join("\n")).toContain("$5 USD")
-    await expect(rpc.approve({ stage: "frontier", user: "tester", token: "bogus" }, where(h))).rejects.toBeDefined()
-    expect(
-      (await rpc.approve({ stage: "frontier", user: "tester", token: preview.token }, where(h))).message,
-    ).toContain("Approved frontier")
+    // S4: approve/trust/resume RPCs removed — TUI previews, terminal signs with the sealed key.
+    expect(typeof (rpc as any).approve).not.toBe("function")
+    await recordApproval(h.directory, { stage: "frontier", channel: "cli", signer })
+    await writeJson(
+      factoryLayout(h.directory).pending,
+      (await pendingApprovals(h.directory)).filter((item) => item.stage !== "frontier"),
+    )
+    const fac = new Factory(h.directory, { gates: gateRunner({ stateDir: state }), stateDir: state })
+    if (!(await fac.read())) await fac.begin("human:tester")
+    if ((await fac.read())?.stage === "GRILL") await fac.beginResearch("human:tester")
     expect((await rpc.status({}, where(h))).stage).toBe("RESEARCH")
 
-    const cache = new SourceCache(researchSourcesDir(h.directory))
+    const cache = new SourceCache(researchSourcesDir(h.directory), state)
     const source = await cache.put({
       url: "https://example.test/greet",
       text: "A greeting module exports greet(name) and returns a string.",
@@ -305,7 +387,12 @@ describe("a factory run end to end on the real host", () => {
     const early = await h.run(call("es_build_start"), { agent: "factory" })
     expect(early.tools[0]?.text).toContain("no spec approval")
     const spec = await rpc.previewApproval({ stage: "spec" }, where(h))
-    await rpc.approve({ stage: "spec", user: "tester", token: spec.token }, where(h))
+    expect(spec.ok).toBe(true)
+    await recordApproval(h.directory, { stage: "spec", channel: "cli", signer })
+    await writeJson(
+      factoryLayout(h.directory).pending,
+      (await pendingApprovals(h.directory)).filter((item) => item.stage !== "spec"),
+    )
     const build = await h.run(call("es_build_start"), { agent: "factory" })
     expect(build.tools[0]?.status).toBe("completed")
     expect(build.tools[0]?.text).toContain(`worktree:.factory/worktrees/${phase}`)
@@ -317,7 +404,17 @@ describe("a factory run end to end on the real host", () => {
     const rpc = rpcFor(h)
     const preview = await rpc.previewTrust({}, where(h))
     expect(preview.lines.join("\n")).toContain("bun test")
-    expect((await rpc.trust({ user: "tester", token: preview.token }, where(h))).message).toContain("Trusted")
+    expect(typeof (rpc as any).trust).not.toBe("function")
+    const { config } = await loadGatesConfig(h.directory)
+    const gates = await commandSetHash(h.directory, config.commands)
+    const hooks = (await HookEngine.create({ root: h.directory, stateDir: state, audit: false })).status()
+    await trustProject(h.directory, gates.hash, gates.lines, { stateDir: state, signer })
+    if (hooks.projectHash)
+      await trustProject(h.directory, hooks.projectHash, hooks.projectLines, {
+        stateDir: state,
+        kind: "hooks",
+        signer,
+      })
   }, 60_000)
 
   test("programmer: red test first, implement in the worktree, gated complete", async () => {

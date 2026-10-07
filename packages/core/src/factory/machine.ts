@@ -33,7 +33,7 @@ import { researchCache } from "../research/ops.ts"
 import { type Frontier, FrontierSchema } from "../schema/frontier.ts"
 import { type AcceptanceCriterion, parseGoalMarkdown } from "../schema/goal.ts"
 import { RoadmapSchema } from "../schema/roadmap.ts"
-import { rebaseline, verifyControl } from "../trust/control.ts"
+import { rebaseline, repinControl, verifyControl } from "../trust/control.ts"
 import { checkStopFile } from "../trust/stop.ts"
 import { appendLine, exists, readJson, relativeInside, withLock, writeJson } from "../util/fs.ts"
 import { sha256 } from "../util/hash.ts"
@@ -210,7 +210,7 @@ export class Factory {
   }
 
   /** Returns true when the state is (or just became) HALTED. */
-  private async guard(state: FactoryState, actor: string): Promise<boolean> {
+  private async guard(state: FactoryState, actor: string, options: { skipControl?: boolean } = {}): Promise<boolean> {
     if (state.stage === "HALTED") return true
     const halt = async (reason: string) => {
       state.halt = { reason, at: this.now().toISOString(), from: state.stage }
@@ -220,8 +220,14 @@ export class Factory {
     }
     const stop = await checkStopFile(this.root)
     if (stop.stopped) return halt(`STOP file: ${stop.reason}`)
-    const control = await verifyControl(this.root)
-    if (!control.clean) return halt(`control files changed outside a human action: ${control.violations.join("; ")}`)
+    // Skipped for async bookkeeping (recordSpend): spend events arrive at any
+    // moment, including mid-approval between the record write and its
+    // rebaseline, where a drift halt would be a false positive that persists
+    // (CI-only es_build_start refusal). Real transitions still enforce it.
+    if (!options.skipControl) {
+      const control = await verifyControl(this.root)
+      if (!control.clean) return halt(`control files changed outside a human action: ${control.violations.join("; ")}`)
+    }
     if (state.spendCeilingUSD !== undefined && state.spend.usd >= state.spendCeilingUSD)
       return halt(
         `spend ceiling reached: $${state.spend.usd.toFixed(2)}${state.spend.estimated ? " (estimated)" : ""} of $${state.spendCeilingUSD}`,
@@ -290,8 +296,13 @@ export class Factory {
         })
         const problems = diffFrontier(previous, parsed.data)
         if (problems.length) throw new FactoryError(`The frontier write was refused:\n- ${problems.join("\n- ")}`)
+        const before = await readJson<{ files?: Record<string, string | null> }>(this.layout.control).catch(
+          () => undefined,
+        )
         await writeJson(this.layout.frontier, parsed.data)
-        await rebaseline(this.root, `agent:${agentId} via es_frontier_write`)
+        // Re-pin only the frontier file (#32): a concurrent hand edit to
+        // gates.json or config.json must still halt the run as drift.
+        await repinControl(this.root, ".factory/frontier.json", before?.files?.[".factory/frontier.json"] ?? null)
         const counts = treeCounts(parsed.data)
         await this.audit(`agent:${agentId}`, "frontier.write", {
           settled: parsed.data.settled,
@@ -341,7 +352,7 @@ export class Factory {
       const report = await readFile(this.layout.researchReport, "utf8").catch(() => undefined)
       if (report === undefined)
         throw new FactoryError("Research is not done: .factory/research/REPORT.md does not exist.")
-      const cache = researchCache(this.root)
+      const cache = researchCache(this.root, this.deps.stateDir)
       const audit = await auditMarkdown(report, cache)
       await writeJson(this.layout.researchCoverage, {
         ...audit.coverage,
@@ -1086,13 +1097,15 @@ export class Factory {
 
   async recordSpend(usd: number, estimated: boolean): Promise<FactoryState | undefined> {
     if (!(usd > 0)) return this.read()
+    // No run, nothing to charge; taking the lock would create .factory/runtime/ in any project.
+    if (!(await this.read())) return undefined
     return withLock(this.layout.state, async () => {
       const state = await this.read()
       if (!state || state.stage === "HALTED" || state.stage === "DONE") return state
       state.spend.usd += usd
       state.spend.estimated ||= estimated
       state.spend.events += 1
-      await this.guard(state, "system")
+      await this.guard(state, "system", { skipControl: true })
       await this.save(state)
       return state
     })

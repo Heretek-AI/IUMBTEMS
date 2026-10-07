@@ -1,7 +1,7 @@
-// Epistemic Swarm TUI plugin: the human-only dialogs. Approvals, trust and
-// resume happen here (or in the `es` CLI), never through an agent tool. Each
-// dialog shows a server-computed preview; confirming redeems that preview's
-// token, so what the human saw is exactly what gets signed.
+// Epistemic Swarm TUI plugin: previews for the human-only actions. Approvals,
+// trust and resume are previewed here, then recorded at a terminal with the
+// passphrase-sealed human key (`es approve`, `es trust`, `es factory resume`),
+// never through an agent tool or RPC. Only lspInstall still mutates via RPC.
 import { userInfo } from "node:os"
 import { Plugin } from "@opencode/plugin/tui"
 import { registerPanels } from "./panels.tsx"
@@ -19,6 +19,12 @@ export default Plugin.define({
     const user = userInfo().username
     const toast = (message: string, variant: "success" | "error" | "info" = "info") =>
       context.ui.toast.show({ title: "Epistemic Swarm", message, variant })
+    // Load warnings (e.g. ignored plugin options) are shown once per TUI start.
+    void call("configState")
+      .then((view: { warnings: string[] }) => {
+        for (const warning of view.warnings) toast(warning, "error")
+      })
+      .catch(() => undefined)
 
     const confirm = async (preview: Preview, label: string) => {
       if (!preview.ok || !preview.token) {
@@ -58,36 +64,44 @@ export default Plugin.define({
               ],
             }))
       if (stage !== "frontier" && stage !== "spec") return
-      const token = await confirm(await call("previewApproval", { stage }), "Approve")
+      const preview: Preview = await call("previewApproval", { stage })
+      const token = await confirm(preview, "Approve")
       if (!token) return
-      toast((await call("approve", { stage, user, token })).message, "success")
+      await context.ui.dialog.alert({
+        title: preview.title,
+        message: `${preview.lines.join("\n")}\n\nRun \`es approve ${stage}\` at a terminal with your passphrase (1.1.1: approvals need the sealed human key).`,
+      })
     })
 
     const trust = guarded(async () => {
-      const token = await confirm(await call("previewTrust"), "Trust")
+      const preview: Preview = await call("previewTrust")
+      const token = await confirm(preview, "Trust")
       if (!token) return
-      toast((await call("trust", { user, token })).message, "success")
+      await context.ui.dialog.alert({
+        title: preview.title,
+        message: `${preview.lines.join("\n")}\n\nRun \`es trust\` at a terminal with your passphrase to sign these.`,
+      })
     })
 
     const resume = guarded(async () => {
       const preview: Preview = await call("previewResume")
       const token = await confirm(preview, "Resume")
       if (!token) return
+      const lines = preview.lines.join("\n")
       const drift = preview.lines.some((line) => line.startsWith("Control-file drift"))
-      let raiseCeilingUSD: number | undefined
+      // The halt reason names the remedy: a ceiling halt takes a new ceiling,
+      // a runtime halt restarts the cap. The values still come from the human.
+      let raise = ""
       if (/spend ceiling/i.test(preview.lines[0] ?? "")) {
         const raised = await context.ui.dialog.prompt({ title: "New spend ceiling (USD)", placeholder: "e.g. 50" })
-        raiseCeilingUSD = raised ? Number(raised) : undefined
+        if (raised) raise = ` --raise-ceiling ${raised}`
       }
-      const extendRuntime = /runtime cap/i.test(preview.lines[0] ?? "")
-      const result = await call("resume", {
-        user,
-        token,
-        ...(drift ? { acceptControlDrift: true } : {}),
-        ...(raiseCeilingUSD ? { raiseCeilingUSD } : {}),
-        ...(extendRuntime ? { extendRuntime: true } : {}),
+      const extend = /runtime cap/i.test(lines) ? " --extend-runtime" : ""
+      const flags = `${drift ? " --accept-drift" : ""}${raise}${extend}`
+      await context.ui.dialog.alert({
+        title: preview.title,
+        message: `${preview.lines.join("\n")}\n\nRun \`es factory resume${flags}\` at a terminal with your passphrase.`,
       })
-      toast(result.message, "success")
     })
 
     const lspInstall = guarded(async (input) => {

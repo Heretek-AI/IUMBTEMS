@@ -1,7 +1,7 @@
-// Server side of the human-only channel. Each mutating method needs a token
-// from a preview made in the last two minutes over the same subject, so the
-// human confirms exactly what the dialog showed (no swap between preview and
-// confirm).
+// Server side of the TUI previews. Human-only mutations (approve, trust,
+// resume) happen at a terminal with the passphrase-sealed key, never via RPC:
+// the TUI previews, then points at `es approve`, `es trust`, `es factory
+// resume`. Only lspInstall still mutates via a preview token.
 import { randomBytes } from "node:crypto"
 import {
   type ApprovalStage,
@@ -10,7 +10,6 @@ import {
   capabilityLoss,
   commandSetHash,
   describeTarget,
-  factoryLayout,
   factorySummary,
   type HookEngine,
   hashJson,
@@ -22,12 +21,9 @@ import {
   readPlan,
   readResult,
   readScores,
-  recordApproval,
   recordConsent,
   treeCounts,
-  trustProject,
   verifyControl,
-  writeJson,
 } from "@heretek-ai/es-core"
 import type { Runtime } from "./runtime.ts"
 import { pendingApprovals } from "./tools.ts"
@@ -40,7 +36,7 @@ interface Ticket {
 
 const TTL_MS = 120_000
 
-export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>, hooks?: HookEngine) {
+export function createRpcHandlers(runtime: Runtime, _notify: () => Promise<void>, hooks?: HookEngine) {
   const tickets = new Map<string, Ticket>()
   const issue = (kind: string, subject: unknown) => {
     const token = randomBytes(12).toString("hex")
@@ -84,6 +80,11 @@ export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>,
         pending: (await pendingApprovals(runtime.root)).map((item) => item.stage),
       }
     },
+    configState: async () => ({
+      config: JSON.stringify(runtime.config),
+      sources: [...runtime.configSources],
+      warnings: [...runtime.warnings],
+    }),
     factoryState: async () => {
       const state = await runtime.factory.read()
       const frontier = await readFrontier(runtime.root).catch(() => undefined)
@@ -204,31 +205,6 @@ export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>,
         }
       }
     },
-    approve: async (input: unknown, context: any) => {
-      const { stage, user, token } = input as { stage: ApprovalStage; user: string; token: string }
-      try {
-        redeem(token, `approve:${stage}`, (await approvalSubject(runtime.root, stage)).subject)
-        const record = await recordApproval(runtime.root, {
-          stage,
-          channel: "tui",
-          approvedBy: user,
-          stateDir: runtime.stateDir,
-        })
-        await writeJson(
-          factoryLayout(runtime.root).pending,
-          (await pendingApprovals(runtime.root)).filter((item) => item.stage !== stage),
-        )
-        if (stage === "frontier") {
-          const state = await runtime.factory.read()
-          if (!state) await runtime.factory.begin(`human:${user}`)
-          if ((await runtime.factory.read())?.stage === "GRILL") await runtime.factory.beginResearch(`human:${user}`)
-        }
-        await notify()
-        return { message: `Approved ${stage} as ${record.approvedBy}.` }
-      } catch (error) {
-        return refused(context, error)
-      }
-    },
     previewTrust: async () => {
       const subject = await trustSubject()
       const trusted =
@@ -240,27 +216,6 @@ export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>,
         lines: subject.lines.length ? subject.lines : ["No gate commands or project hooks detected."],
         problems: [],
         token: issue("trust", subject.key),
-      }
-    },
-    trust: async (input: unknown, context: any) => {
-      const { user, token } = input as { user: string; token: string }
-      try {
-        const subject = await trustSubject()
-        redeem(token, "trust", subject.key)
-        await trustProject(runtime.root, subject.gates.hash, subject.gates.lines, {
-          approvedBy: user,
-          stateDir: runtime.stateDir,
-        })
-        if (subject.hooks.hash)
-          await trustProject(runtime.root, subject.hooks.hash, subject.hooks.lines, {
-            approvedBy: user,
-            stateDir: runtime.stateDir,
-            kind: "hooks",
-          })
-        await hooks?.refresh()
-        return { message: `Trusted ${subject.lines.length} command/hook line(s).` }
-      } catch (error) {
-        return refused(context, error)
       }
     },
     previewLspInstall: async (input: unknown) => {
@@ -319,27 +274,6 @@ export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>,
         ],
         problems: [],
         token: issue("resume", state.halt),
-      }
-    },
-    resume: async (input: unknown, context: any) => {
-      const { user, token, acceptControlDrift, raiseCeilingUSD, extendRuntime } = input as {
-        user: string
-        token: string
-        acceptControlDrift?: boolean
-        raiseCeilingUSD?: number
-        extendRuntime?: boolean
-      }
-      try {
-        redeem(token, "resume", (await runtime.factory.read())?.halt)
-        const state = await runtime.factory.resume(user, {
-          ...(acceptControlDrift ? { acceptControlDrift } : {}),
-          ...(raiseCeilingUSD ? { raiseCeilingUSD } : {}),
-          ...(extendRuntime ? { extendRuntime } : {}),
-        })
-        await notify()
-        return { message: `Resumed at ${state.stage}.` }
-      } catch (error) {
-        return refused(context, error)
       }
     },
   }

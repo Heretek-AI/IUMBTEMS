@@ -4,7 +4,7 @@
 // human-only. Caller identity is the `agent` argument (or ES_AGENT), which the
 // harness adapter sets per agent; over plain MCP it is ADVISORY, and the
 // capability matrix says so.
-import { esTools, Factory, gateRunner } from "@heretek-ai/es-core"
+import { stateDir as defaultStateDir, esTools, Factory, gateRunner } from "@heretek-ai/es-core"
 import { VERSION } from "./version.ts"
 
 export const PROTOCOL_VERSION = "2025-06-18"
@@ -23,7 +23,7 @@ export function createMcpServer(options: McpOptions) {
     gates: gateRunner(options.stateDir ? { stateDir: options.stateDir } : {}),
     ...(options.stateDir ? { stateDir: options.stateDir } : {}),
   })
-  const tools = esTools({ root: options.root, factory, stateDir: options.stateDir ?? "" })
+  const tools = esTools({ root: options.root, factory, stateDir: options.stateDir ?? defaultStateDir() })
   const byName = new Map(tools.map((tool) => [tool.name.replace(/^es_/, ""), tool]))
   const listed = [...byName].map(([name, tool]) => ({
     name,
