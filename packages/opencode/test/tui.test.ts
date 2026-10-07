@@ -30,6 +30,8 @@ function fakeContext(confirmAnswer: boolean) {
               token: "tok-1",
             }
           if (method === "approve") return { message: "Approved frontier as tester." }
+          if (method === "configState")
+            return { config: "{}", sources: [], warnings: ["Ignored unknown plugin option: mode."] }
           return {}
         }
       },
@@ -74,6 +76,11 @@ test("slash commands register; approval goes preview → confirm → approve(tok
   const plugin = (await import("../src/tui.tsx")).default as any
   const confirmed = fakeContext(true)
   plugin.setup(confirmed.context)
+  // Load warnings are fetched once at startup and shown as a toast.
+  await Bun.sleep(0)
+  expect(confirmed.calls.map(([method]) => method)).toEqual(["configState"])
+  expect(confirmed.toasts).toContain("Ignored unknown plugin option: mode.")
+  confirmed.calls.length = 0
   const commands = confirmed.layers[0].commands
   expect(commands.map((command: any) => command.slash.name)).toEqual([
     "es-approve",
@@ -94,7 +101,10 @@ test("slash commands register; approval goes preview → confirm → approve(tok
   const cancelled = fakeContext(false)
   plugin.setup(cancelled.context)
   await cancelled.layers[0].commands[0].run()
-  expect(cancelled.calls.map(([method]) => method)).toEqual(["status", "previewApproval"])
+  expect(cancelled.calls.map(([method]) => method).filter((method) => method !== "configState")).toEqual([
+    "status",
+    "previewApproval",
+  ])
 })
 
 test("four panels claim session.panel and their commands open them", async () => {

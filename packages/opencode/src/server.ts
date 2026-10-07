@@ -19,7 +19,7 @@ import { compileAgents } from "./agents.ts"
 import { createFactoryContinuation } from "./continue.ts"
 import { createHookBridge } from "./hooks.ts"
 import { createPolicyHooks } from "./policy.ts"
-import { createWebfetchCache, registerWebsearch } from "./research.ts"
+import { createWebCache, PendingSearches, registerWebsearch } from "./research.ts"
 import { createRpcHandlers } from "./rpc.ts"
 import { EsRpc } from "./rpc-def.ts"
 import { createRuntime, parseOptions } from "./runtime.ts"
@@ -66,7 +66,9 @@ export default Plugin.define({
     })
 
     await ctx.tool.transform((editor) => registerTools(editor, runtime))
-    await ctx.websearch.transform((editor) => registerWebsearch(editor as any, runtime))
+    // Search results wait here until the tool hook, which knows the agent, decides whether to cache them.
+    const searches = new PendingSearches()
+    await ctx.websearch.transform((editor) => registerWebsearch(editor as any, runtime, searches))
 
     // Our policy runs first, so its denials win over any user hook.
     const policy = createPolicyHooks(runtime)
@@ -83,7 +85,7 @@ export default Plugin.define({
     await ctx.tool.hook("execute.before", policy.before as any)
     await ctx.tool.hook("execute.before", bridge.before as any)
     await ctx.tool.hook("execute.after", policy.after as any)
-    await ctx.tool.hook("execute.after", createWebfetchCache(runtime) as any)
+    await ctx.tool.hook("execute.after", createWebCache(runtime, searches) as any)
     await ctx.tool.hook("execute.after", bridge.after as any)
     await ctx.permission.hook("evaluate", policy.evaluate as any)
     await ctx.permission.hook("evaluate", bridge.evaluate as any)

@@ -1086,6 +1086,8 @@ export class Factory {
 
   async recordSpend(usd: number, estimated: boolean): Promise<FactoryState | undefined> {
     if (!(usd > 0)) return this.read()
+    // No run, nothing to charge; taking the lock would create .factory/runtime/ in any project.
+    if (!(await this.read())) return undefined
     return withLock(this.layout.state, async () => {
       const state = await this.read()
       if (!state || state.stage === "HALTED" || state.stage === "DONE") return state

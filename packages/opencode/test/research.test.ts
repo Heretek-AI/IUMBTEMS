@@ -1,7 +1,7 @@
 // Research stack on the real host: the configured provider is the host's
 // websearch (results cached), research seats fetch and audit cited evidence.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { boot, directiveScript, type Harness } from "@heretek-ai/es-testkit"
@@ -55,9 +55,63 @@ afterAll(async () => {
   await rm(state, { recursive: true, force: true })
 })
 
+const exists = (file: string) =>
+  stat(file).then(
+    () => true,
+    () => false,
+  )
+
+describe("host web caching is for factory seats in a factory project only", () => {
+  let bare: Harness
+  beforeAll(async () => {
+    bare = await boot({
+      git: true,
+      script: directiveScript,
+      plugins: [{ path: pluginDir, options: { stateDir: state, pr: "off" } }],
+      files: { "README.md": "# bare\n" },
+    })
+  }, 60_000)
+  afterAll(() => bare?.close())
+
+  const web = (agent: string) =>
+    bare.run(
+      `${call("websearch", { query: "factory gates" })} ${call("webfetch", { url: `http://127.0.0.1:${server.port}/page`, format: "text" })}`,
+      { agent },
+    )
+
+  test("without .factory/, neither the user's agent nor a seat caches, and no .factory/ appears", async () => {
+    for (const agent of ["build", "factory"]) {
+      const { tools } = await web(agent)
+      expect(tools.map((tool) => `${agent}:${tool.name}:${tool.status}`)).toEqual([
+        `${agent}:websearch:completed`,
+        `${agent}:webfetch:completed`,
+      ])
+      expect(tools[0]?.text).toContain("gates keep agents honest")
+      expect(tools[1]?.text).toContain("Mechanical gates catch regressions")
+      for (const tool of tools) expect(tool.text).not.toContain("sha256:")
+    }
+    expect(await exists(path.join(bare.directory, ".factory"))).toBe(false)
+  }, 60_000)
+
+  test("in a factory project the user's agent is still untouched; a seat's results are cached and citable", async () => {
+    await mkdir(path.join(bare.directory, ".factory"), { recursive: true })
+    const user = await web("build")
+    for (const tool of user.tools) expect(tool.text).not.toContain("sha256:")
+    expect(await exists(path.join(bare.directory, ".factory/research/sources"))).toBe(false)
+
+    const seat = await web("factory")
+    expect(seat.tools[0]?.text).toContain("cached sha256:")
+    expect(seat.tools[0]?.text).toContain("gates keep agents honest")
+    const fetched = /\[cached as sha256:([0-9a-f]{64})/.exec(seat.tools[1]?.text ?? "")?.[1]
+    expect(fetched).toBeDefined()
+    expect(await exists(path.join(bare.directory, `.factory/research/sources/${fetched}.md`))).toBe(true)
+  }, 60_000)
+})
+
 describe("research on the real host", () => {
-  test("the host websearch tool runs through our cached provider", async () => {
-    const { tools } = await h.run(call("websearch", { query: "factory gates" }))
+  test("the host websearch tool runs through our cached provider for a factory seat", async () => {
+    await mkdir(path.join(h.directory, ".factory"), { recursive: true })
+    const { tools } = await h.run(call("websearch", { query: "factory gates" }), { agent: "factory" })
     expect(tools[0]?.status).toBe("completed")
     expect(tools[0]?.text).toContain("cached sha256:")
     expect(tools[0]?.text).toContain("gates keep agents honest")

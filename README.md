@@ -37,7 +37,8 @@
   contrast-gated DTCG token system with a generated style guide.
 - **OpenCode v2 native.** One plugin registers agents, tools, commands, the
   hook bridge, the LSP runtime and four TUI panels — additively, with no files
-  written. Claude Code (1.1), Pi (1.2) and Antigravity (1.3) adapters follow,
+  written. Host web results are cached (citable by hash) only for factory
+  seats in a project that already has `.factory/`. Claude Code (1.1), Pi (1.2) and Antigravity (1.3) adapters follow,
   each publishing capability-matrix rows with smoke tests.
 
 ## Repository layout
