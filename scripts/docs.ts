@@ -6,9 +6,12 @@
 //
 // The capability matrix and config docs join this script in later M6 work;
 // the drift mechanics live here once.
+import { existsSync } from "node:fs"
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import * as z from "zod"
+import { CAPABILITY_MATRIX, enforcedWithoutProof } from "../packages/core/src/capabilities.ts"
+import { HOOK_CAPABILITIES } from "../packages/core/src/hooks/compile.ts"
 import * as schemas from "../packages/core/src/schema/index.ts"
 
 const root = path.resolve(import.meta.dir, "..")
@@ -51,7 +54,80 @@ const docs = [
   "",
 ].join("\n")
 
-const desired = new Map<string, string>([...outputs.map((output) => [output.file, output.content] as const), ["docs/SCHEMAS.md", docs]])
+// ------------------------------------------------- capability matrix doc
+// ENFORCED rows must name a proof that exists in the repo: a missing file is
+// a contract error, not a warning.
+const missingProofs = Object.values(CAPABILITY_MATRIX)
+  .flatMap((rows) => rows.filter((row) => row.support === "enforced" && row.test))
+  .map((row) => row.test!)
+  .filter((test) => !existsSync(path.join(root, test)))
+for (const harness of Object.keys(CAPABILITY_MATRIX) as Array<keyof typeof CAPABILITY_MATRIX>)
+  for (const row of enforcedWithoutProof(harness)) missingProofs.push(`${harness}: ${row.capability} (no proof)`)
+if (missingProofs.length) {
+  console.error(`docs: ENFORCED capability rows without a proof:\n${[...new Set(missingProofs)].map((item) => `  ${item}`).join("\n")}`)
+  process.exit(1)
+}
+
+const capabilitiesDoc = [
+  "# Capability matrix",
+  "",
+  "What each harness actually enforces, declared once in `packages/core/src/capabilities.ts`.",
+  "ENFORCED rows name the test or spike that proves them; ADVISORY rows are best-effort and",
+  "labelled as such in the hook inspector; UNSUPPORTED rows are declared gaps (the Claude, Pi",
+  "and Antigravity adapters ship in 1.1–1.3). Generated: do not edit by hand.",
+  "",
+  ...Object.entries(CAPABILITY_MATRIX).flatMap(([harness, rows]) => [
+    `## ${harness}`,
+    "",
+    "| capability | support | proof | detail |",
+    "| --- | --- | --- | --- |",
+    ...rows.map(
+      (row) =>
+        `| ${row.capability} | ${row.support.toUpperCase()} | ${row.test ? `\`${row.test}\`` : "—"} | ${row.detail.replace(/\|/g, "\\|")} |`,
+    ),
+    "",
+  ]),
+  "## Hook bridge detail",
+  "",
+  "| harness | event | support |",
+  "| --- | --- | --- |",
+  ...Object.entries(HOOK_CAPABILITIES).flatMap(([harness, caps]) =>
+    Object.entries(caps.events).map(([event, support]) => `| ${harness} | ${event} | ${support.toUpperCase()} |`),
+  ),
+  "",
+].join("\n")
+
+// ------------------------------------------------- config doc
+const configSchema = outputs.find((output) => output.file === "schemas/es-config.schema.json")
+if (!configSchema) throw new Error("docs: schemas/es-config.schema.json missing; is EsConfigSchema exported?")
+const configJson = JSON.parse(configSchema.content) as {
+  properties?: Record<string, { type?: string; default?: unknown; description?: string; enum?: unknown[]; anyOf?: unknown[] }>
+}
+const configDoc = [
+  "# Config",
+  "",
+  "The canonical Epistemic Swarm config (`packages/core/src/schema/config.ts`), layered:",
+  "user-global (`~/.config/epistemic-swarm/config.json`) → project (`.factory/config.json`) →",
+  "plugin options in `opencode.json`. Unknown keys are rejected. Generated: do not edit by hand.",
+  "",
+  "| field | type | default | description |",
+  "| --- | --- | --- | --- |",
+  ...Object.entries(configJson.properties ?? {}).map(([name, property]) => {
+    const type = property.type ?? (property.enum ? "enum" : property.anyOf ? "union" : "object")
+    const fallback = property.default === undefined ? "—" : `\`${JSON.stringify(property.default)}\``
+    return `| \`${name}\` | ${type}${property.enum ? ` (${property.enum.join(", ")})` : ""} | ${fallback} | ${(property.description ?? "").replace(/\|/g, "\\|")} |`
+  }),
+  "",
+  "`es config show` and `/config` print the effective config and which files contributed.",
+  "",
+].join("\n")
+
+const desired = new Map<string, string>([
+  ...outputs.map((output) => [output.file, output.content] as const),
+  ["docs/SCHEMAS.md", docs],
+  ["docs/CAPABILITIES.md", capabilitiesDoc],
+  ["docs/CONFIG.md", configDoc],
+])
 
 // Stale files: committed schemas with no counterpart in code.
 const existing = (await readdir(schemaDir).catch(() => [] as string[]))

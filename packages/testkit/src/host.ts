@@ -97,6 +97,8 @@ export async function boot(options: HarnessOptions = {}): Promise<Harness> {
     )
   }
   const llm = startFakeLLM(options.script)
+  const previousConfigHome = process.env.XDG_CONFIG_HOME
+  process.env.XDG_CONFIG_HOME = configDir
   const config = {
     model: "fake/scripted",
     providers: {
@@ -135,6 +137,8 @@ export async function boot(options: HarnessOptions = {}): Promise<Harness> {
     async close() {
       await opencode.close()
       llm.stop()
+      if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
+      else process.env.XDG_CONFIG_HOME = previousConfigHome
       await rm(directory, { recursive: true, force: true })
       await rm(configDir, { recursive: true, force: true })
     },

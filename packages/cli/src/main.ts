@@ -25,6 +25,7 @@ import {
   installServer,
   LENSES,
   LspManager,
+  loadEsConfig,
   loadHooks,
   loadInterview,
   parseSource,
@@ -95,6 +96,7 @@ Other
   design [status]               Design interview progress (resumes from .factory/design)
   design render                 Re-render tokens.css + STYLE_GUIDE.md from tokens.json
   design check                  Fail on render drift, invalid tokens or one-off mints
+  config show                   Show the effective config and its layers
   lsp [status]                  Language servers and how each resolves
   lsp diagnostics <file>        Diagnostics for one file
   lsp install <server>          Pinned, checksummed install   [human, TTY]
@@ -395,6 +397,29 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           return failed ? 1 : 0
         }
         io.print("Usage: es design [status] | render | check")
+        return 2
+      }
+      case "config": {
+        if (sub === "show" || sub === undefined) {
+          try {
+            const loaded = await loadEsConfig(root)
+            io.print(
+              [
+                loaded.sources.length
+                  ? `Layers: ${loaded.sources.join(" → ")}`
+                  : "Layers: defaults only (no config files)",
+                `Global: ${loaded.globalFile}`,
+                `Project: ${loaded.projectFile}`,
+                JSON.stringify(loaded.config, null, 2),
+              ].join("\n"),
+            )
+            return 0
+          } catch (error) {
+            io.print(error instanceof Error ? error.message : String(error))
+            return 1
+          }
+        }
+        io.print("Usage: es config show")
         return 2
       }
       case "lsp": {

@@ -40,6 +40,7 @@ export function factoryLayout(root: string) {
     designProbes: path.join(dir, "design", "probes.json"),
     designGuide: path.join(dir, "design", "STYLE_GUIDE.md"),
     gates: path.join(dir, "gates.json"),
+    config: path.join(dir, "config.json"),
     waivers: path.join(dir, "waivers"),
     approvals: path.join(dir, "approvals"),
     approval: (stage: string) => path.join(dir, "approvals", `${stage}.json`),

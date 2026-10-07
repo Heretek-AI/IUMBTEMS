@@ -22,6 +22,7 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | command-check | `schemas/command-check.schema.json` |
 | design-answers | `schemas/design-answers.schema.json` |
 | design-artifacts | `schemas/design-artifacts.schema.json` |
+| es-config | `schemas/es-config.schema.json` |
 | frontier-node | `schemas/frontier-node.schema.json` |
 | frontier | `schemas/frontier.schema.json` |
 | gate-budgets | `schemas/gate-budgets.schema.json` |

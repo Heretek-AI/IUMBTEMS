@@ -21,7 +21,7 @@ export function registerTools(editor: { add(tool: any): void }, runtime: Runtime
     ...(runtime.options.searchProvider ? { provider: runtime.options.searchProvider } : {}),
   })
   const brainstorm = brainstormTools({ root: runtime.root })
-  const harvest = harvestTools({ root: runtime.root })
+  const harvest = harvestTools({ root: runtime.root, whitelist: runtime.config.licenseWhitelist })
   const design = designTools({ root: runtime.root })
   for (const def of [
     ...esTools({ ...runtime, lsp: runtime.lsp }),

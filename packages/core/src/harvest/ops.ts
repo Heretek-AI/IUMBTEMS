@@ -29,6 +29,8 @@ export interface HarvestOpsContext {
   readonly fetch?: typeof fetch
   readonly env?: NodeJS.ProcessEnv
   readonly clone?: (url: string, dir: string) => Promise<unknown>
+  /** SPDX ids that may be depended on or vendored (config override). */
+  readonly whitelist?: readonly string[]
 }
 
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({

@@ -31,14 +31,14 @@ export default Plugin.define({
   id: PLUGIN_ID,
   async setup(ctx) {
     const options = parseOptions(ctx.options as Record<string, unknown>)
-    const runtime = createRuntime(ctx.location.directory, options)
+    const runtime = await createRuntime(ctx.location.directory, options)
 
     // Agents: canonical registry → v2 agents with wildcard-deny scoping.
     const servers = await ctx.mcp.list().then(
       (page: any) => ((page?.data ?? page ?? []) as Array<{ name: string }>).map((server) => server.name),
       () => [] as string[],
     )
-    const agents = await compileAgents(options, servers)
+    const agents = await compileAgents(runtime.options, servers)
     await ctx.agent.transform((editor) => {
       for (const compiled of agents)
         editor.update(compiled.spec.id, (agent) => {
@@ -242,6 +242,19 @@ export default Plugin.define({
         description: "Show the factory state (Epistemic Swarm)",
         execute: async ({ sessionID }) => {
           await ctx.session.synthetic({ sessionID, text: factorySummary(await runtime.factory.read()) } as any)
+        },
+      })
+      editor.add({
+        name: "config",
+        description: "Show the effective Epistemic Swarm config and where it came from (Epistemic Swarm)",
+        execute: async ({ sessionID }) => {
+          const lines = [
+            runtime.configSources.length
+              ? `Layers: ${runtime.configSources.join(" → ")} → plugin options`
+              : "Layers: defaults only (no config files)",
+            JSON.stringify(runtime.config, null, 2),
+          ]
+          await ctx.session.synthetic({ sessionID, text: lines.join("\n") } as any)
         },
       })
       editor.add({
