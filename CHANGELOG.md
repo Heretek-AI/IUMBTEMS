@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.1 (unreleased)
+## 1.1.1 — 2026-10-07
 
 Security release (#35). The 1.1.0 adversarial audit broke the text-matched
 shell policy six ways, forged VERIFIED claims through the shell, and drove
