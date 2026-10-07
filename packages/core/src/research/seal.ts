@@ -11,6 +11,7 @@ import { constants } from "node:fs"
 import { mkdir, open } from "node:fs/promises"
 import path from "node:path"
 import { stateDir } from "../layout.ts"
+import { withLock } from "../util/fs.ts"
 import { canonicalJson } from "../util/hash.ts"
 
 const ENGINE_KEY_FILE = "engine.key"
@@ -19,30 +20,34 @@ const ENGINE_KEY_FILE = "engine.key"
  * Read the engine key, creating it (0600) when absent. Create-first (no
  * check-then-act): O_EXCL refuses an existing file and O_NOFOLLOW refuses a
  * planted symlink, so a pre-seeded path can neither divert nor capture the
- * new key. The losing creator (or a restart) reads the winner's key back,
- * also without following symlinks.
+ * new key. Creation runs under the key lock: without it a loser could read
+ * the winner's still-empty file between its create and its write and mistake
+ * it for corruption. The losing creator (or a restart) reads the winner's
+ * key back, also without following symlinks.
  */
 export async function ensureEngineKey(dir: string = stateDir()): Promise<Buffer> {
   await mkdir(dir, { recursive: true, mode: 0o700 })
   const file = path.join(dir, ENGINE_KEY_FILE)
-  const key = randomBytes(32)
-  try {
-    const handle = await open(
-      file,
-      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-      0o600,
-    )
-    await handle.writeFile(key)
+  return withLock(file, async () => {
+    const key = randomBytes(32)
+    try {
+      const handle = await open(
+        file,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+        0o600,
+      )
+      await handle.writeFile(key)
+      await handle.close()
+      return key
+    } catch (error: any) {
+      if (error?.code !== "EEXIST" && error?.code !== "ELOOP") throw error
+    }
+    const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
+    const raced = await handle.readFile()
     await handle.close()
-    return key
-  } catch (error: any) {
-    if (error?.code !== "EEXIST" && error?.code !== "ELOOP") throw error
-  }
-  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
-  const raced = await handle.readFile()
-  await handle.close()
-  if (raced.length >= 32) return raced
-  throw new Error(`${ENGINE_KEY_FILE} exists but is shorter than 32 bytes; remove it and retry`)
+    if (raced.length >= 32) return raced
+    throw new Error(`${ENGINE_KEY_FILE} exists but is shorter than 32 bytes; remove it and retry`)
+  })
 }
 
 /** HMAC-SHA256 over the canonical meta (minus any previous seal), hex. */
