@@ -49,7 +49,13 @@ interface SealedKey {
   readonly version: 1
   readonly alg: "ed25519"
   readonly keyId: string
-  readonly kdf: { readonly name: "scrypt"; readonly N: number; readonly r: number; readonly p: number; readonly salt: string }
+  readonly kdf: {
+    readonly name: "scrypt"
+    readonly N: number
+    readonly r: number
+    readonly p: number
+    readonly salt: string
+  }
   readonly cipher: { readonly name: "aes-256-gcm"; readonly iv: string; readonly tag: string }
   readonly data: string
 }

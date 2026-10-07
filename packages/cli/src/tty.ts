@@ -6,7 +6,7 @@
 // passphrase. Signing actions use the unlocked key; the rest use the unlock
 // as proof that the human is at the keyboard.
 import { createInterface } from "node:readline"
-import { type HumanSigner, HumanKeyError, unlockHumanKey } from "@heretek-ai/es-core"
+import { HumanKeyError, type HumanSigner, unlockHumanKey } from "@heretek-ai/es-core"
 
 export interface ConfirmIO {
   readonly interactive: boolean

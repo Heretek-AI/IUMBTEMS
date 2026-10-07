@@ -4,6 +4,15 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import {
+  commandSetHash,
+  HookEngine,
+  type HumanSigner,
+  loadGatesConfig,
+  sealHumanKey,
+  trustProject,
+  unlockHumanKey,
+} from "@heretek-ai/es-core"
 import { allText, boot, directiveScript, type Harness, lastAgentRequest, systemText } from "@heretek-ai/es-testkit"
 import { EsRpc } from "../src/rpc-def.ts"
 
@@ -111,10 +120,13 @@ const extraHooks = {
 
 let state: string
 let h: Harness
+let signer: HumanSigner
 const where = () => ({ location: h.location })
 
 beforeAll(async () => {
   state = await mkdtemp(path.join(tmpdir(), "es-hookbridge-state-"))
+  await sealHumanKey("test-passphrase-1234", state)
+  signer = await unlockHumanKey("test-passphrase-1234", state)
   h = await boot({
     git: true,
     script: (request, index) => {
@@ -147,7 +159,17 @@ describe("hook bridge on the real host", () => {
     const rpc = (h.opencode as any).rpc(EsRpc)
     const preview = await rpc.previewTrust({}, where())
     expect(preview.lines.join("\n")).toContain("hook PreToolUse(Write)")
-    await rpc.trust({ user: "tester", token: preview.token }, where())
+    expect(typeof rpc.trust).not.toBe("function")
+    const { config } = await loadGatesConfig(h.directory)
+    const gates = await commandSetHash(h.directory, config.commands)
+    const hooks = (await HookEngine.create({ root: h.directory, stateDir: state, audit: false })).status()
+    await trustProject(h.directory, gates.hash, gates.lines, { stateDir: state, signer })
+    if (hooks.projectHash)
+      await trustProject(h.directory, hooks.projectHash, hooks.projectLines, {
+        stateDir: state,
+        kind: "hooks",
+        signer,
+      })
     const after = await h.run(call("write", { path: "b.txt", content: "b" }))
     expect(after.tools[0]?.status).toBe("completed")
     expect(await Bun.file(path.join(h.directory, "PRE_RAN")).exists()).toBe(true)

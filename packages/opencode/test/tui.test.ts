@@ -1,5 +1,5 @@
-// The TUI plugin loads through the host's runtime Solid transform and only
-// redeems an approval token after the human confirms the preview dialog.
+// The TUI plugin loads through the host's runtime Solid transform and previews
+// an approval, then points at the terminal (`es approve`) after confirm.
 import { expect, test } from "bun:test"
 import { Plugin, PluginContextProvider, usePlugin } from "@opencode/plugin/tui"
 import { ensureRuntimePluginSupport } from "@opentui/solid/runtime-plugin-support/configure"
@@ -9,6 +9,7 @@ ensureRuntimePluginSupport({ additional: { "@opencode/plugin/tui": { Plugin, Plu
 function fakeContext(confirmAnswer: boolean) {
   const calls: Array<[string, any]> = []
   const toasts: string[] = []
+  const alerts: string[] = []
   const layers: any[] = []
   const slots: any[] = []
   const opened: string[] = []
@@ -29,7 +30,6 @@ function fakeContext(confirmAnswer: boolean) {
               problems: [],
               token: "tok-1",
             }
-          if (method === "approve") return { message: "Approved frontier as tester." }
           if (method === "configState")
             return { config: "{}", sources: [], warnings: ["Ignored unknown plugin option: mode."] }
           return {}
@@ -49,7 +49,9 @@ function fakeContext(confirmAnswer: boolean) {
       toast: { show: (toast: any) => toasts.push(toast.message) },
       dialog: {
         confirm: async () => confirmAnswer,
-        alert: async () => {},
+        alert: async (input: any) => {
+          alerts.push(typeof input === "string" ? input : (input?.message ?? JSON.stringify(input)))
+        },
         select: async () => "frontier",
         prompt: async () => undefined,
       },
@@ -69,10 +71,10 @@ function fakeContext(confirmAnswer: boolean) {
       },
     },
   }
-  return { context, calls, toasts, layers, slots, opened }
+  return { context, calls, toasts, alerts, layers, slots, opened }
 }
 
-test("slash commands register; approval goes preview → confirm → approve(token)", async () => {
+test("slash commands register; approval goes preview → confirm → terminal alert", async () => {
   const plugin = (await import("../src/tui.tsx")).default as any
   const confirmed = fakeContext(true)
   plugin.setup(confirmed.context)
@@ -94,9 +96,8 @@ test("slash commands register; approval goes preview → confirm → approve(tok
     "es-brainstorm",
   ])
   await commands[0].run()
-  expect(confirmed.calls.map(([method]) => method)).toEqual(["status", "previewApproval", "approve"])
-  expect(confirmed.calls[2]![1]).toMatchObject({ stage: "frontier", token: "tok-1" })
-  expect(confirmed.toasts).toContain("Approved frontier as tester.")
+  expect(confirmed.calls.map(([method]) => method)).toEqual(["status", "previewApproval"])
+  expect(confirmed.alerts.join("\n")).toContain("es approve frontier")
 
   const cancelled = fakeContext(false)
   plugin.setup(cancelled.context)
@@ -105,6 +106,7 @@ test("slash commands register; approval goes preview → confirm → approve(tok
     "status",
     "previewApproval",
   ])
+  expect(cancelled.alerts).toHaveLength(0)
 })
 
 test("four panels claim session.panel and their commands open them", async () => {

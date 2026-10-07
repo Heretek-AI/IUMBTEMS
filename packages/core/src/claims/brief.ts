@@ -47,10 +47,7 @@ const membersOf = (brief: Pick<Brief, "claims" | "sources">) =>
     ...Object.keys(brief.sources).map((hash) => `source:${hash}`),
   ].sort()
 
-export async function exportBrief(
-  root: string,
-  options: ExportBriefOptions,
-): Promise<{ file: string; brief: Brief }> {
+export async function exportBrief(root: string, options: ExportBriefOptions): Promise<{ file: string; brief: Brief }> {
   const layout = factoryLayout(root)
   const synthesis = await readFile(layout.researchReport, "utf8").catch(() => {
     throw new Error("No research report yet (.factory/research/REPORT.md).")

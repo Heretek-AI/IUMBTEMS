@@ -2,13 +2,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { exists, Factory, factoryLayout, gateRunner, readApproval } from "@heretek-ai/es-core"
+import { exists, Factory, factoryLayout, gateRunner, readApproval, sealHumanKey } from "@heretek-ai/es-core"
 import { parseArgs, parseExpiry } from "../src/args.ts"
 import { type HarnessDriver, runHeadless } from "../src/headless.ts"
 import { main } from "../src/main.ts"
 import { createMcpServer } from "../src/mcp.ts"
-import { type ConfirmIO, confirmWithCode, NotInteractive } from "../src/tty.ts"
+import { type ConfirmIO, confirmHuman, NotInteractive } from "../src/tty.ts"
 import { VERSION } from "../src/version.ts"
+
+const PASSPHRASE = "test-passphrase-1234"
 
 let root: string
 let state: string
@@ -28,6 +30,7 @@ beforeEach(async () => {
   await writeFile(path.join(root, "README.md"), "# x\n")
   await git("add", "-A")
   await git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+  await sealHumanKey(PASSPHRASE, state)
 })
 afterEach(async () => {
   if (realXdgConfig === undefined) delete process.env.XDG_CONFIG_HOME
@@ -36,17 +39,18 @@ afterEach(async () => {
   await rm(state, { recursive: true, force: true })
 })
 
-/** A human at a terminal who types back whatever code is shown (or `answer`). */
-const human = (answer?: string): ConfirmIO & { output: string[] } => {
+/** A human at a terminal who types the passphrase with echo off (or `answer`). */
+const human = (answer: string = PASSPHRASE): ConfirmIO & { output: string[] } => {
   const output: string[] = []
   return {
     interactive: true,
     output,
     write: (text) => output.push(text),
-    readLine: async () => answer ?? /Type (\S+) to confirm/.exec(output.join(""))?.[1] ?? "",
+    readLine: async () => "",
+    readSecret: async () => answer,
   }
 }
-const pipe: ConfirmIO = { interactive: false, write: () => {}, readLine: async () => "y" }
+const pipe: ConfirmIO = { interactive: false, write: () => {}, readLine: async () => "y", readSecret: async () => "" }
 
 async function run(argv: string[], confirm: ConfirmIO = pipe) {
   const printed: string[] = []
@@ -79,10 +83,11 @@ describe("args", () => {
 })
 
 describe("human-only confirmation", () => {
-  test("needs a TTY and the exact typed code", async () => {
-    await expect(confirmWithCode(pipe, "x", [])).rejects.toBeInstanceOf(NotInteractive)
-    expect(await confirmWithCode(human("y"), "x", [])).toBe(false)
-    expect(await confirmWithCode(human(), "x", [])).toBe(true)
+  test("needs a TTY and the correct passphrase", async () => {
+    await expect(confirmHuman(pipe, "x", [], state)).rejects.toBeInstanceOf(NotInteractive)
+    expect(await confirmHuman(human("wrong-passphrase"), "x", [], state)).toBeUndefined()
+    expect(await confirmHuman(human(""), "x", [], state)).toBeUndefined()
+    expect(await confirmHuman(human(), "x", [], state)).toBeDefined()
   })
 
   test("es approve refuses without a terminal and records nothing", async () => {
@@ -102,8 +107,20 @@ describe("human-only confirmation", () => {
     expect((await factory.read())?.stage).toBe("RESEARCH")
   })
 
-  test("a wrong code cancels the waiver", async () => {
-    const result = await run(["waive", "lint/*", "--reason", "legacy code under migration"], human("nope"))
+  test("a wrong or empty passphrase records nothing (a PTY cannot approve)", async () => {
+    await grilledFrontier()
+    for (const answer of ["", "wrong-passphrase"]) {
+      const result = await run(["approve", "frontier"], human(answer))
+      expect(result.code).toBe(1)
+      expect(await readApproval(root, "frontier")).toBeUndefined()
+    }
+    const granted = await run(["approve", "frontier"], human())
+    expect(granted.code).toBe(0)
+    expect((await readApproval(root, "frontier"))?.channel).toBe("cli")
+  })
+
+  test("a wrong passphrase cancels the waiver", async () => {
+    const result = await run(["waive", "lint/*", "--reason", "legacy code under migration"], human("nope-wrong-pass"))
     expect(result.code).toBe(1)
     const granted = await run(
       ["waive", "lint/*", "--reason", "legacy code under migration", "--expires", "2d"],
@@ -111,6 +128,41 @@ describe("human-only confirmation", () => {
     )
     expect(granted.code).toBe(0)
     expect(granted.out).toContain("granted")
+  })
+})
+
+describe("es key", () => {
+  test("seal asks twice, refuses short or mismatched passphrases, and status shows the fingerprint", async () => {
+    const { humanKeyId } = await import("@heretek-ai/es-core")
+    // beforeEach already sealed `state`; use a fresh dir for seal flows.
+    const fresh = await mkdtemp(path.join(tmpdir(), "es-key-"))
+    try {
+      const runIn = async (argv: string[], confirm: ConfirmIO) => {
+        const printed: string[] = []
+        const code = await main(argv, { print: (text) => printed.push(text), confirm, cwd: root, stateDir: fresh })
+        return { code, out: printed.join("\n") }
+      }
+      const seq = (answers: string[]): ConfirmIO & { output: string[] } => {
+        const output: string[] = []
+        const queue = [...answers]
+        return {
+          interactive: true,
+          output,
+          write: (text) => output.push(text),
+          readLine: async () => "",
+          readSecret: async () => queue.shift() ?? "",
+        }
+      }
+      expect((await runIn(["key", "seal"], seq(["short", "short"]))).code).toBe(1)
+      expect((await runIn(["key", "seal"], seq(["long-enough-pass", "different-pass"]))).code).toBe(1)
+      expect(await humanKeyId(fresh)).toBeUndefined()
+      expect((await runIn(["key", "seal"], seq(["a-long-test-passphrase", "a-long-test-passphrase"]))).code).toBe(0)
+      expect(await humanKeyId(fresh)).toBeDefined()
+      expect((await runIn(["key", "status"], seq([]))).out).toContain("Human key")
+    } finally {
+      await rm(fresh, { recursive: true, force: true })
+    }
+    expect((await run(["key", "status"], human())).out).toContain("Human key")
   })
 })
 
@@ -143,7 +195,9 @@ describe("research brief and retractions", () => {
     await researched()
     expect((await run(["research", "export", "--help"])).code).toBe(0)
     expect(await exists(factoryLayout(root).researchBrief)).toBe(false)
-    const exported = await run(["research", "export"])
+    expect((await run(["research", "export"])).code).toBe(3)
+    expect(await exists(factoryLayout(root).researchBrief)).toBe(false)
+    const exported = await run(["research", "export"], human())
     expect(exported.code).toBe(0)
     expect(exported.out).toContain("Exported .factory/research/brief.pcrb.json")
     const verified = await run(["research", "verify-brief", ".factory/research/brief.pcrb.json"])

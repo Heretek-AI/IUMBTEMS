@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
 import path from "node:path"
+import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import {
   type Constitution,
   type ConstitutionClaim,
@@ -167,8 +168,12 @@ describe("the domain-pack constitution (d66328c:runner/refinement.py)", () => {
 
 describe("the pack gates completeResearch", () => {
   let fx: Fixture
+  const PASSPHRASE = "test-passphrase-1234"
+  let signer: HumanSigner
   beforeEach(async () => {
     fx = await gitRepo()
+    await sealHumanKey(PASSPHRASE, fx.state)
+    signer = await unlockHumanKey(PASSPHRASE, fx.state)
   })
   afterEach(() => fx.cleanup())
 
@@ -183,7 +188,7 @@ describe("the pack gates completeResearch", () => {
     const factory = factoryWith(packId)
     await factory.begin("human:tester")
     await factory.writeFrontier("grill", frontier())
-    await recordApproval(fx.root, { stage: "frontier", channel: "cli", approvedBy: "tester", stateDir: fx.state })
+    await recordApproval(fx.root, { stage: "frontier", channel: "cli", approvedBy: "tester", signer })
     await factory.beginResearch("human:tester")
     return factory
   }
@@ -224,6 +229,8 @@ describe("the pack gates completeResearch", () => {
     // A fresh project without a pack: the same source passes (legacy unchanged).
     await fx.cleanup()
     fx = await gitRepo()
+    await sealHumanKey(PASSPHRASE, fx.state)
+    signer = await unlockHumanKey(PASSPHRASE, fx.state)
     const unpacked = await toResearch()
     await report(
       "https://predatory-journal.example/x",

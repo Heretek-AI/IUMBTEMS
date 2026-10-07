@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, readFile, truncate, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { approvalSubject, recordApproval, verifyApproval } from "../src/approval/index.ts"
+import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import { verifyAuditChain } from "../src/audit/index.ts"
 import { Factory, FactoryError, FactoryHalted, type GateRequest, type GateRunLike } from "../src/factory/index.ts"
 import { factoryLayout } from "../src/layout.ts"
@@ -11,6 +12,8 @@ import { type Fixture, frontier, gitRepo, writeGoal, writeReport, writeSpecs } f
 let fx: Fixture
 let gateCalls: GateRequest[]
 let nextGate: GateRunLike
+const PASSPHRASE = "test-passphrase-1234"
+let signer: HumanSigner
 const prs: string[] = []
 
 const gates = async (request: GateRequest) => {
@@ -33,6 +36,8 @@ const make = (overrides: Partial<ConstructorParameters<typeof Factory>[1]> = {})
 
 beforeEach(async () => {
   fx = await gitRepo()
+  await sealHumanKey(PASSPHRASE, fx.state)
+  signer = await unlockHumanKey(PASSPHRASE, fx.state)
   gateCalls = []
   nextGate = green
   factory = make()
@@ -40,7 +45,7 @@ beforeEach(async () => {
 afterEach(() => fx.cleanup())
 
 const approve = (stage: "frontier" | "spec") =>
-  recordApproval(fx.root, { stage, channel: "cli", approvedBy: "tester", stateDir: fx.state })
+  recordApproval(fx.root, { stage, channel: "cli", approvedBy: "tester", signer })
 
 async function toBuild(phases = ["alpha"]) {
   await factory.begin("human:tester")
@@ -103,9 +108,10 @@ describe("grill → research → spec", () => {
     await factory.writeFrontier("grill", frontier())
     await expect(factory.beginResearch("human:tester")).rejects.toThrow("no frontier approval")
 
-    // A hand-written approval record is not signed by the machine key.
+    // A hand-written approval record is not signed by the human key.
     await mkdir(factoryLayout(fx.root).approvals, { recursive: true })
-    const forged = { ...(await approve("frontier")), mac: "0".repeat(64) }
+    const genuine = await approve("frontier")
+    const forged = { ...genuine, signature: { ...genuine.signature, sig: "0".repeat(64) } }
     await writeFile(factoryLayout(fx.root).approval("frontier"), JSON.stringify(forged))
     expect((await verifyApproval(fx.root, "frontier", { stateDir: fx.state })).ok).toBe(false)
 

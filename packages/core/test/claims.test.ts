@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import {
   applyDegradation,
   auditMarkdown,
@@ -39,9 +40,13 @@ import {
 let root: string
 let state: string
 let cache: SourceCache
+const PASSPHRASE = "test-passphrase-1234"
+let signer: HumanSigner
 beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), "es-claims-"))
   state = await mkdtemp(path.join(tmpdir(), "es-claims-state-"))
+  await sealHumanKey(PASSPHRASE, state)
+  signer = await unlockHumanKey(PASSPHRASE, state)
   cache = new SourceCache(researchSourcesDir(root))
 })
 afterEach(async () => {
@@ -639,7 +644,7 @@ describe("proof-carrying research brief (d66328c:runner/tests/test_pcrb.py)", ()
       buildDossier({ mode: "research", subject: "benchmarks", claims, now: at }),
       { cache, now },
     )
-    const { brief, file } = await exportBrief(root, { stateDir: state, now })
+    const { brief, file } = await exportBrief(root, { signer, now })
     return { brief, file, sources }
   }
 
@@ -756,9 +761,9 @@ describe("proof-carrying research brief (d66328c:runner/tests/test_pcrb.py)", ()
   })
 
   test("export needs a report and a research dossier", async () => {
-    await expect(exportBrief(root, { stateDir: state })).rejects.toThrow(/No research report/)
+    await expect(exportBrief(root, { signer })).rejects.toThrow(/No research report/)
     await mkdir(factoryLayout(root).research, { recursive: true })
     await writeFile(factoryLayout(root).researchReport, "# R\n")
-    await expect(exportBrief(root, { stateDir: state })).rejects.toThrow(/No research dossier/)
+    await expect(exportBrief(root, { signer })).rejects.toThrow(/No research dossier/)
   })
 })

@@ -1,5 +1,5 @@
 // Human-only commands: approve, trust, waive, resume, rebaseline. Each previews exactly
-// what will be signed, then requires the typed confirmation code at a TTY.
+// what will be signed, then requires the human passphrase at a TTY.
 import { userInfo } from "node:os"
 import {
   type ApprovalStage,
@@ -28,7 +28,7 @@ import {
   writeJson,
 } from "@heretek-ai/es-core"
 import { type Args, flag, parseExpiry } from "./args.ts"
-import { type ConfirmIO, confirmWithCode } from "./tty.ts"
+import { type ConfirmIO, confirmHuman } from "./tty.ts"
 
 export interface HumanContext {
   readonly root: string
@@ -52,13 +52,15 @@ export async function approve(context: HumanContext, args: Args): Promise<number
   }
   const subject = await approvalSubject(context.root, stage)
   const lines = [...subject.summary, "", ...subject.subject.map((item) => `${item.sha256.slice(0, 12)}  ${item.path}`)]
-  if (!(await confirmWithCode(context.io, `Approve ${stage} as ${user()}`, lines))) {
+  const signer = await confirmHuman(context.io, `Approve ${stage} as ${user()}`, lines, context.stateDir)
+  if (!signer) {
     context.print("Cancelled; nothing was approved.")
     return 1
   }
   const record = await recordApproval(context.root, {
     stage,
     channel: "cli",
+    signer,
     ...(context.stateDir ? { stateDir: context.stateDir } : {}),
   })
   const pending =
@@ -102,13 +104,17 @@ export async function trust(context: HumanContext, args: Args): Promise<number> 
     context.print("These gate commands and hooks are already trusted.")
     return 0
   }
-  if (
-    !(await confirmWithCode(context.io, "Trust these gate commands and project hooks (they run project code)", lines))
-  ) {
+  const signer = await confirmHuman(
+    context.io,
+    "Trust these gate commands and project hooks (they run project code)",
+    lines,
+    context.stateDir,
+  )
+  if (!signer) {
     context.print("Cancelled.")
     return 1
   }
-  const options = context.stateDir ? { stateDir: context.stateDir } : {}
+  const options = { ...(context.stateDir ? { stateDir: context.stateDir } : {}), signer }
   await trustProject(context.root, gates.hash, gates.lines, options)
   if (hooks.projectHash)
     await trustProject(context.root, hooks.projectHash, hooks.projectLines, { ...options, kind: "hooks" })
@@ -125,7 +131,14 @@ export async function rebaselineControl(context: HumanContext): Promise<number> 
     )
     return 0
   }
-  if (!(await confirmWithCode(context.io, `Accept these control-file changes as ${user()}`, [...check.violations]))) {
+  if (
+    !(await confirmHuman(
+      context.io,
+      `Accept these control-file changes as ${user()}`,
+      [...check.violations],
+      context.stateDir,
+    ))
+  ) {
     context.print("Cancelled; the baseline is unchanged.")
     return 1
   }
@@ -153,7 +166,8 @@ export async function waive(context: HumanContext, args: Args): Promise<number> 
       .replace(/^-|-$/g, "")
       .toLowerCase()}-${Date.now().toString(36)}`.slice(0, 64)
   const lines = [`Rule:    ${rule}`, `Files:   ${files}`, `Reason:  ${reason}`, `Expires: ${expiresAt.toISOString()}`]
-  if (!(await confirmWithCode(context.io, `Grant waiver ${id}`, lines))) {
+  const signer = await confirmHuman(context.io, `Grant waiver ${id}`, lines, context.stateDir)
+  if (!signer) {
     context.print("Cancelled.")
     return 1
   }
@@ -164,6 +178,7 @@ export async function waive(context: HumanContext, args: Args): Promise<number> 
     reason,
     expiresAt,
     channel: "cli",
+    signer,
     ...(context.stateDir ? { stateDir: context.stateDir } : {}),
   })
   context.print(`Waiver ${waiver.id} granted until ${waiver.expiresAt}.`)
@@ -191,7 +206,7 @@ export async function resume(context: HumanContext, args: Args): Promise<number>
     ...(raise ? [`New spend ceiling: $${raise}`] : []),
     ...(args.flags["extend-runtime"] ? ["Runtime cap restarts now."] : []),
   ]
-  if (!(await confirmWithCode(context.io, "Resume the factory", lines))) {
+  if (!(await confirmHuman(context.io, "Resume the factory", lines, context.stateDir))) {
     context.print("Cancelled.")
     return 1
   }
@@ -211,7 +226,7 @@ export async function recordPr(context: HumanContext, args: Args): Promise<numbe
     context.print("Usage: es factory pr <url>")
     return 2
   }
-  if (!(await confirmWithCode(context.io, "Record the release PR", [url]))) return 1
+  if (!(await confirmHuman(context.io, "Record the release PR", [url], context.stateDir))) return 1
   const state = await factoryFor(context).recordPr(user(), url)
   context.print(`Recorded ${url}; factory is ${state.stage}.`)
   return 0
@@ -246,7 +261,7 @@ export async function retract(context: HumanContext, args: Args): Promise<number
     `Claims citing it: ${affected.length} (they become ${to})`,
     ...affected.slice(0, 10).map((claim) => `  - ${claim.statement.slice(0, 90)}`),
   ]
-  if (!(await confirmWithCode(context.io, `Record source ${event.toLowerCase()} as ${user()}`, lines))) {
+  if (!(await confirmHuman(context.io, `Record source ${event.toLowerCase()} as ${user()}`, lines, context.stateDir))) {
     context.print("Cancelled; nothing was recorded.")
     return 1
   }
@@ -294,7 +309,7 @@ export async function configSet(context: HumanContext, args: Args): Promise<numb
       : []),
     ...(layer === "project" ? ["The control baseline is re-recorded for .factory/config.json."] : []),
   ]
-  if (!(await confirmWithCode(context.io, `Set ${key} as ${user()}`, lines))) {
+  if (!(await confirmHuman(context.io, `Set ${key} as ${user()}`, lines, context.stateDir))) {
     context.print("Cancelled; the config is unchanged.")
     return 1
   }

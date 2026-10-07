@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import {
   commandSetHash,
   complexity,
@@ -19,8 +20,12 @@ const BIOME = path.resolve(import.meta.dir, "../../../node_modules/.bin/biome")
 const FAKE_TOKEN = `ghp_${"Ab3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6"}`
 
 let fx: Fixture
+const PASSPHRASE = "test-passphrase-1234"
+let signer: HumanSigner
 beforeEach(async () => {
   fx = await gitRepo("es-gates-")
+  await sealHumanKey(PASSPHRASE, fx.state)
+  signer = await unlockHumanKey(PASSPHRASE, fx.state)
 })
 afterEach(() => fx.cleanup())
 
@@ -39,7 +44,7 @@ const config = (commands: unknown[], extra: Record<string, unknown> = {}) =>
   GatesConfigSchema.parse({ commands, security: { gitleaks: "off", osv: "off" }, ...extra })
 const trust = async (cfg: ReturnType<typeof config>) => {
   const { hash, lines } = await commandSetHash(fx.root, cfg.commands)
-  await trustProject(fx.root, hash, lines, { stateDir: fx.state })
+  await trustProject(fx.root, hash, lines, { stateDir: fx.state, signer })
 }
 
 describe("detection", () => {
@@ -169,7 +174,7 @@ describe("built-in checks", () => {
       reason: "fixture value, not a real token",
       expiresAt: new Date(Date.now() + 86_400_000),
       channel: "cli",
-      stateDir: fx.state,
+      signer,
     })
     const waived = await gates({ touched: ["src/config.ts"], config: config([]) })
     expect(waived.findings.some((finding) => finding.rule === "security/secret-github-token")).toBe(false)

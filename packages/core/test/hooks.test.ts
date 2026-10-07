@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import {
   fromOpenCode,
   HookEngine,
@@ -16,9 +17,13 @@ import {
 
 let root: string
 let state: string
+const PASSPHRASE = "test-passphrase-1234"
+let signer: HumanSigner
 beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), "es-hooks-"))
   state = await mkdtemp(path.join(tmpdir(), "es-hooks-state-"))
+  await sealHumanKey(PASSPHRASE, state)
+  signer = await unlockHumanKey(PASSPHRASE, state)
   await mkdir(path.join(root, ".opencode"), { recursive: true })
   await mkdir(path.join(root, "hooks"), { recursive: true })
 })
@@ -50,7 +55,7 @@ async function engine(
   })
   if (options.trust !== false) {
     const status = created.status()
-    await trustProject(root, status.projectHash, status.projectLines, { stateDir: state, kind: "hooks" })
+    await trustProject(root, status.projectHash, status.projectLines, { stateDir: state, kind: "hooks", signer })
     created = await HookEngine.create({
       root,
       stateDir: state,

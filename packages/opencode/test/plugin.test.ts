@@ -4,7 +4,24 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { bwrapAvailable, researchSourcesDir, SourceCache } from "@heretek-ai/es-core"
+import {
+  bwrapAvailable,
+  commandSetHash,
+  Factory,
+  factoryLayout,
+  gateRunner,
+  HookEngine,
+  type HumanSigner,
+  loadGatesConfig,
+  pendingApprovals,
+  recordApproval,
+  researchSourcesDir,
+  SourceCache,
+  sealHumanKey,
+  trustProject,
+  unlockHumanKey,
+  writeJson,
+} from "@heretek-ai/es-core"
 import { boot, directiveScript, type Harness, lastAgentRequest, systemText } from "@heretek-ai/es-testkit"
 import { EsRpc } from "../src/rpc-def.ts"
 
@@ -12,8 +29,11 @@ const pluginDir = path.resolve(import.meta.dir, "..")
 const call = (name: string, args: Record<string, unknown> = {}) => `@@CALL ${name} ${JSON.stringify(args)}@@`
 
 let state: string
+let signer: HumanSigner
 beforeAll(async () => {
   state = await mkdtemp(path.join(tmpdir(), "es-plugin-state-"))
+  await sealHumanKey("test-passphrase-1234", state)
+  signer = await unlockHumanKey("test-passphrase-1234", state)
 })
 afterAll(() => rm(state, { recursive: true, force: true }))
 
@@ -306,10 +326,16 @@ describe("a factory run end to end on the real host", () => {
     const preview = await rpc.previewApproval({ stage: "frontier" }, where(h))
     expect(preview.ok).toBe(true)
     expect(preview.lines.join("\n")).toContain("$5 USD")
-    await expect(rpc.approve({ stage: "frontier", user: "tester", token: "bogus" }, where(h))).rejects.toBeDefined()
-    expect(
-      (await rpc.approve({ stage: "frontier", user: "tester", token: preview.token }, where(h))).message,
-    ).toContain("Approved frontier")
+    // S4: approve/trust/resume RPCs removed — TUI previews, terminal signs with the sealed key.
+    expect(typeof (rpc as any).approve).not.toBe("function")
+    await recordApproval(h.directory, { stage: "frontier", channel: "cli", signer })
+    await writeJson(
+      factoryLayout(h.directory).pending,
+      (await pendingApprovals(h.directory)).filter((item) => item.stage !== "frontier"),
+    )
+    const fac = new Factory(h.directory, { gates: gateRunner({ stateDir: state }), stateDir: state })
+    if (!(await fac.read())) await fac.begin("human:tester")
+    if ((await fac.read())?.stage === "GRILL") await fac.beginResearch("human:tester")
     expect((await rpc.status({}, where(h))).stage).toBe("RESEARCH")
 
     const cache = new SourceCache(researchSourcesDir(h.directory))
@@ -349,7 +375,12 @@ describe("a factory run end to end on the real host", () => {
     const early = await h.run(call("es_build_start"), { agent: "factory" })
     expect(early.tools[0]?.text).toContain("no spec approval")
     const spec = await rpc.previewApproval({ stage: "spec" }, where(h))
-    await rpc.approve({ stage: "spec", user: "tester", token: spec.token }, where(h))
+    expect(spec.ok).toBe(true)
+    await recordApproval(h.directory, { stage: "spec", channel: "cli", signer })
+    await writeJson(
+      factoryLayout(h.directory).pending,
+      (await pendingApprovals(h.directory)).filter((item) => item.stage !== "spec"),
+    )
     const build = await h.run(call("es_build_start"), { agent: "factory" })
     expect(build.tools[0]?.status).toBe("completed")
     expect(build.tools[0]?.text).toContain(`worktree:.factory/worktrees/${phase}`)
@@ -361,7 +392,17 @@ describe("a factory run end to end on the real host", () => {
     const rpc = rpcFor(h)
     const preview = await rpc.previewTrust({}, where(h))
     expect(preview.lines.join("\n")).toContain("bun test")
-    expect((await rpc.trust({ user: "tester", token: preview.token }, where(h))).message).toContain("Trusted")
+    expect(typeof (rpc as any).trust).not.toBe("function")
+    const { config } = await loadGatesConfig(h.directory)
+    const gates = await commandSetHash(h.directory, config.commands)
+    const hooks = (await HookEngine.create({ root: h.directory, stateDir: state, audit: false })).status()
+    await trustProject(h.directory, gates.hash, gates.lines, { stateDir: state, signer })
+    if (hooks.projectHash)
+      await trustProject(h.directory, hooks.projectHash, hooks.projectLines, {
+        stateDir: state,
+        kind: "hooks",
+        signer,
+      })
   }, 60_000)
 
   test("programmer: red test first, implement in the worktree, gated complete", async () => {

@@ -1,6 +1,7 @@
 // `es`: the Epistemic Swarm CLI. Human-only actions (approve, trust, waive,
-// resume, git hooks) require an interactive terminal and a typed code; agent
-// shells are denied these commands by policy as well.
+// resume, git hooks) require an interactive terminal and the human passphrase,
+// which unlocks the passphrase-sealed human key; agent shells are denied
+// these commands by policy as well.
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import {
@@ -68,8 +69,9 @@ import {
   waive,
 } from "./human.ts"
 import { auditCommand, auditDismiss, auditShow, scoutCommand, scoutShow } from "./jobs.ts"
+import { keySeal, keyStatus } from "./key.ts"
 import { serveStdio } from "./mcp.ts"
-import { type ConfirmIO, confirmWithCode, NotInteractive, terminalIO } from "./tty.ts"
+import { type ConfirmIO, confirmHuman, NotInteractive, terminalIO } from "./tty.ts"
 import { VERSION } from "./version.ts"
 
 export { VERSION }
@@ -89,10 +91,12 @@ Factory
   factory pr <url>              Record a release PR opened by hand   [human, TTY]
 
 Checkpoints and exceptions                                      [human, TTY]
-  approve <frontier|spec>       Approve a checkpoint (shows hashes; type the code)
+  approve <frontier|spec>       Approve a checkpoint (shows hashes; asks for the passphrase)
   trust [--show]                Approve this project's gate commands by hash
   rebaseline                    Accept hand edits to pinned control files (gates.json, config.json)
   waive <rule> --reason "…" [--files <glob>] [--expires 7d] [--id <name>]
+  key seal                      Create the passphrase-sealed human key   [human, TTY]
+  key status                    Show the human key fingerprint
 
 Gates
   gates run [--full] [--staged] [--base <ref>] [--json] [files…]
@@ -209,13 +213,32 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         return await rebaselineControl(context)
       case "waive":
         return await waive(context, subArgs(1))
+      case "key": {
+        if (sub === "seal") return await keySeal(io)
+        if (sub === "status") return await keyStatus(io)
+        io.print("Usage: es key seal | status")
+        return 2
+      }
       case "research": {
         if (sub === "retract") return await retract(context, subArgs(2))
         if (sub === "export") {
           const out = flag(args, "out")
+          const outFile = out ? path.resolve(io.cwd, out) : undefined
+          const signer = await confirmHuman(
+            io.confirm,
+            "Export research brief",
+            [
+              `Signs the brief with the human key (${outFile ? path.relative(root, outFile) : ".factory/research/brief.pcrb.json"}).`,
+            ],
+            io.stateDir,
+          )
+          if (!signer) {
+            io.print("Cancelled; nothing was exported.")
+            return 1
+          }
           const { file, brief } = await exportBrief(root, {
-            ...(io.stateDir ? { stateDir: io.stateDir } : {}),
-            ...(out ? { out: path.resolve(io.cwd, out) } : {}),
+            signer,
+            ...(outFile ? { out: outFile } : {}),
           })
           const witnessed = brief.claims.filter((claim) => claim.witness.ok).length
           io.print(
@@ -534,7 +557,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
               ...server.install.packages.map((pkg) => `${pkg.name}@${pkg.version}  ${pkg.integrity}`),
               "Verified against the pinned sha512; installed with scripts disabled.",
             ]
-            if (!(await confirmWithCode(io.confirm, `Install the ${id} language server`, lines))) return 1
+            if (!(await confirmHuman(io.confirm, `Install the ${id} language server`, lines, io.stateDir))) return 1
             await recordConsent(id!, true, io.stateDir)
             io.print(`Installed ${await installServer(server, io.stateDir ? { stateDir: io.stateDir } : {})}`)
             return 0
