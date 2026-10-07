@@ -285,6 +285,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         const tools = researchTools({
           root,
           ...(config ? researchOptions(config) : {}),
+          stateDir: io.stateDir,
           policy: () => Promise.resolve({ root, ...(io.stateDir ? { stateDir: io.stateDir } : {}) }),
         })
         const tool = (name: string) => tools.find((item) => item.name === name)!

@@ -350,7 +350,7 @@ describe("a factory run end to end on the real host", () => {
     if ((await fac.read())?.stage === "GRILL") await fac.beginResearch("human:tester")
     expect((await rpc.status({}, where(h))).stage).toBe("RESEARCH")
 
-    const cache = new SourceCache(researchSourcesDir(h.directory))
+    const cache = new SourceCache(researchSourcesDir(h.directory), state)
     const source = await cache.put({
       url: "https://example.test/greet",
       text: "A greeting module exports greet(name) and returns a string.",

@@ -92,7 +92,7 @@ const prepend = (result: any, note: string) => {
  * [VERIFIED: sha256:… "quote"]. Other agents' results pass through untouched.
  */
 export function createWebCache(runtime: Runtime, pending: PendingSearches) {
-  const cache = researchCache(runtime.root)
+  const cache = researchCache(runtime.root, runtime.stateDir)
   return async (event: { tool: string; status: string; agent?: string; input: unknown; result?: any }) => {
     if (event.tool === "websearch") {
       const query = (event.input as { query?: string } | undefined)?.query

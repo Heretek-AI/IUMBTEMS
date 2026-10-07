@@ -21,6 +21,7 @@ export function registerTools(editor: { add(tool: any): void }, runtime: Runtime
   const research = researchTools({
     root: runtime.root,
     policy: () => runtime.policy(),
+    stateDir: runtime.stateDir,
     ...researchOptions(runtime.config),
   })
   const brainstorm = brainstormTools({

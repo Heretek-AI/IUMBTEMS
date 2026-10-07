@@ -194,7 +194,7 @@ describe("the pack gates completeResearch", () => {
   }
 
   const report = async (url: string, text: string, quote: string) => {
-    const cache = new SourceCache(researchSourcesDir(fx.root))
+    const cache = new SourceCache(researchSourcesDir(fx.root), fx.state)
     const source = await cache.put({ url, text, provider: "fetch" })
     await writeFile(
       factoryLayout(fx.root).researchReport,

@@ -69,9 +69,9 @@ export async function writeGoal(root: string, id: string, extra = "") {
 }
 
 /** A research report whose single claim cites a cached source verbatim. */
-export async function writeReport(root: string) {
+export async function writeReport(root: string, stateDir?: string) {
   const { SourceCache, researchSourcesDir } = await import("../src/research/index.ts")
-  const cache = new SourceCache(researchSourcesDir(root))
+  const cache = new SourceCache(researchSourcesDir(root), stateDir)
   const source = await cache.put({
     url: "https://example.test/greeting",
     text: "Greeting libraries usually expose a single greet function.",

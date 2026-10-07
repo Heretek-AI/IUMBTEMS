@@ -52,7 +52,7 @@ async function toBuild(phases = ["alpha"]) {
   await factory.writeFrontier("grill", frontier())
   await approve("frontier")
   await factory.beginResearch("human:tester")
-  await writeReport(fx.root)
+  await writeReport(fx.root, fx.state)
   await factory.completeResearch("factory")
   await writeSpecs(fx.root, phases)
   await approve("spec")
@@ -136,7 +136,7 @@ describe("grill → research → spec", () => {
     await expect(factory.completeResearch("factory")).rejects.toThrow("does not pass the epistemic audit")
     const coverage = JSON.parse(await readFile(path.join(fx.root, ".factory/research/coverage.json"), "utf8"))
     expect(coverage).toMatchObject({ claims: 2, ungrounded: 1, untagged: 1, passed: false })
-    await writeReport(fx.root)
+    await writeReport(fx.root, fx.state)
     expect(await Bun.file(factoryLayout(fx.root).researchDossier).exists()).toBe(false)
     expect((await factory.completeResearch("factory")).stage).toBe("SPEC")
     // The audited report's claims become the research dossier, witnessed.
@@ -163,7 +163,7 @@ describe("grill → research → spec", () => {
     await factory.writeFrontier("grill", frontier({ nodes: [...frontier().nodes, db] }))
     await approve("frontier")
     await factory.beginResearch("human:tester")
-    await writeReport(fx.root)
+    await writeReport(fx.root, fx.state)
     await expect(factory.completeResearch("factory")).rejects.toThrow(
       "Missing: db — Which Node versions does the runtime support?",
     )
@@ -184,7 +184,7 @@ describe("grill → research → spec", () => {
     await approve("frontier")
     await factory.beginResearch("human:tester")
     await expect(factory.completeResearch("factory")).rejects.toThrow("REPORT.md")
-    await writeReport(fx.root)
+    await writeReport(fx.root, fx.state)
     await factory.completeResearch("factory")
     await writeSpecs(fx.root, ["alpha"])
     await approve("spec")

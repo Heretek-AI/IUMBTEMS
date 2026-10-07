@@ -2,7 +2,7 @@
 // gates.json is a structured finding rather than a runtime surprise.
 import { readdir, readFile } from "node:fs/promises"
 import path from "node:path"
-import { factoryLayout } from "../layout.ts"
+import { stateDir as defaultStateDir, factoryLayout } from "../layout.ts"
 import { auditMarkdown } from "../research/auditor.ts"
 import { researchCache } from "../research/ops.ts"
 import { FrontierSchema } from "../schema/frontier.ts"
@@ -20,7 +20,7 @@ const issueText = (error: unknown) => {
       : String(error)
 }
 
-export async function validateArtifacts(root: string): Promise<GateFinding[]> {
+export async function validateArtifacts(root: string, stateDir: string = defaultStateDir()): Promise<GateFinding[]> {
   const layout = factoryLayout(root)
   const findings: GateFinding[] = []
   const check = async (file: string, rule: string, validate: (text: string) => unknown) => {
@@ -49,7 +49,7 @@ export async function validateArtifacts(root: string): Promise<GateFinding[]> {
   }
   const report = await readFile(layout.researchReport, "utf8").catch(() => undefined)
   if (report !== undefined) {
-    const audit = await auditMarkdown(report, researchCache(root))
+    const audit = await auditMarkdown(report, researchCache(root, stateDir))
     for (const claim of audit.claims.filter((item) => item.status !== "grounded"))
       findings.push({
         file: ".factory/research/REPORT.md",

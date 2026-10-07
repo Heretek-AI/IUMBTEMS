@@ -157,7 +157,7 @@ describe("grill-fires", () => {
     // A granted frontier approval starts RESEARCH; the fact gates its completion.
     await recordApproval(h.directory, { stage: "frontier", channel: "cli", approvedBy: "tester", signer })
     await factory().beginResearch("human:tester")
-    const cache = new SourceCache(researchSourcesDir(h.directory))
+    const cache = new SourceCache(researchSourcesDir(h.directory), state)
     const source = await cache.put({
       url: "https://example.test/handoff",
       text: "Session handoff writes a file the next agent reads.",
@@ -216,7 +216,7 @@ describe("factory-gate", () => {
     })
     await recordApproval(h.directory, { stage: "frontier", channel: "cli", approvedBy: "tester", signer })
     await factory().beginResearch("human:tester")
-    const cache = new SourceCache(researchSourcesDir(h.directory))
+    const cache = new SourceCache(researchSourcesDir(h.directory), state)
     const source = await cache.put({
       url: "https://example.test/handoff",
       text: "Session handoff writes a file the next agent reads.",

@@ -7,6 +7,7 @@ import path from "node:path"
 import { factoryLayout } from "../layout.ts"
 import { atomicWrite, readJson } from "../util/fs.ts"
 import { sha256 } from "../util/hash.ts"
+import { ensureEngineKey, sealMeta, verifyMetaSeal } from "./seal.ts"
 import { canonicalUrl } from "./url.ts"
 
 export interface SourceMeta {
@@ -18,6 +19,8 @@ export interface SourceMeta {
   readonly provider: string
   readonly query?: string
   readonly bytes: number
+  /** Engine HMAC seal (#52); present when written through a sealed cache. */
+  readonly seal?: string
 }
 
 export interface CachedSource {
@@ -42,7 +45,26 @@ export const normalizeSourceText = (text: string) =>
 const MAX_SOURCE_BYTES = 400_000
 
 export class SourceCache {
-  constructor(readonly dir: string) {}
+  /**
+   * When `stateDir` is set, entries are sealed with the engine key on write
+   * (#52) and unsealed entries are refused on read. Without it the cache keeps
+   * its legacy behaviour (tests and auxiliary readers).
+   */
+  constructor(
+    readonly dir: string,
+    readonly stateDir?: string,
+  ) {}
+
+  private async seal(meta: SourceMeta): Promise<SourceMeta> {
+    if (!this.stateDir) return meta
+    const key = await ensureEngineKey(this.stateDir)
+    return { ...meta, seal: sealMeta(meta as unknown as Record<string, unknown>, key) }
+  }
+
+  private async sealed(meta: SourceMeta): Promise<boolean> {
+    if (!this.stateDir) return true
+    return verifyMetaSeal(meta as unknown as Record<string, unknown>, await ensureEngineKey(this.stateDir))
+  }
 
   async put(input: {
     url: string
@@ -55,7 +77,7 @@ export class SourceCache {
     if (Buffer.byteLength(text) > MAX_SOURCE_BYTES)
       text = `${Buffer.from(text).subarray(0, MAX_SOURCE_BYTES).toString("utf8")}\n\n[truncated by epistemic-swarm at ${MAX_SOURCE_BYTES} bytes]`
     const hash = sha256(text)
-    const meta: SourceMeta = {
+    const meta = await this.seal({
       sha256: hash,
       url: input.url,
       ...(input.title ? { title: input.title } : {}),
@@ -63,7 +85,7 @@ export class SourceCache {
       provider: input.provider,
       ...(input.query ? { query: input.query } : {}),
       bytes: Buffer.byteLength(text),
-    }
+    })
     const file = path.join(this.dir, `${hash}.md`)
     await atomicWrite(file, text)
     await atomicWrite(path.join(this.dir, `${hash}.json`), `${JSON.stringify(meta, null, 2)}\n`)
@@ -87,6 +109,9 @@ export class SourceCache {
     }
     // A source whose bytes no longer hash to its name was tampered with: refuse it.
     if (sha256(text) !== hash) return undefined
+    // Without a valid engine seal the entry was not written by the engine
+    // (planted before the factory dir existed, #52): refuse it.
+    if (!(await this.sealed(meta))) return undefined
     return { meta, text, path: file }
   }
 

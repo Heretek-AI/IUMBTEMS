@@ -5,6 +5,7 @@ import { readdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import {
   describeTarget,
+  ensureEngineKey,
   factoryLayout,
   formatReport,
   git,
@@ -33,6 +34,9 @@ export default Plugin.define({
   async setup(ctx) {
     const options = parseOptions(ctx.options as Record<string, unknown>)
     const runtime = await createRuntime(ctx.location.directory, options)
+    // The engine key seals cached sources (#52); create it at setup so the
+    // masked state dir holds the key before any seat runs.
+    await ensureEngineKey(runtime.stateDir)
 
     // Agents: canonical registry → v2 agents with wildcard-deny scoping.
     const servers = await ctx.mcp.list().then(

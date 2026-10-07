@@ -419,7 +419,7 @@ export async function runGates(options: RunGatesOptions): Promise<GateReport> {
     })
   })
   if (options.scope === "full" || files.some((file) => file.startsWith(".factory/")))
-    await timed("artifacts", () => validateArtifacts(root))
+    await timed("artifacts", () => validateArtifacts(root, options.stateDir))
   if (config.security.osv !== "off" && files.some((file) => DEPENDENCY_FILES.has(path.basename(file))))
     await timed("osv", () =>
       osvFindings(dir, {

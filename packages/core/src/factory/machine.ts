@@ -341,7 +341,7 @@ export class Factory {
       const report = await readFile(this.layout.researchReport, "utf8").catch(() => undefined)
       if (report === undefined)
         throw new FactoryError("Research is not done: .factory/research/REPORT.md does not exist.")
-      const cache = researchCache(this.root)
+      const cache = researchCache(this.root, this.deps.stateDir)
       const audit = await auditMarkdown(report, cache)
       await writeJson(this.layout.researchCoverage, {
         ...audit.coverage,

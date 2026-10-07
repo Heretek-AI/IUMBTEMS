@@ -21,11 +21,13 @@ import {
 
 let dir: string
 let cache: SourceCache
+let state: string
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "es-research-"))
   cache = new SourceCache(path.join(dir, "sources"))
+  state = await mkdtemp(path.join(tmpdir(), "es-research-state-"))
 })
-afterEach(() => rm(dir, { recursive: true, force: true }))
+afterEach(() => Promise.all([rm(dir, { recursive: true, force: true }), rm(state, { recursive: true, force: true })]))
 
 const SOURCE =
   "Bun is a fast all-in-one JavaScript runtime.\nIt ships a test runner, a bundler, and a package manager — all built in."
@@ -78,6 +80,34 @@ describe("source cache", () => {
     expect(page.text).toContain("- One")
     expect(page.text).not.toContain("evil")
     expect(page.text).not.toContain("menu")
+  })
+
+  test("engine seal (#52): sealed entries verify; planted unsealed ones are refused", async () => {
+    const sealed = new SourceCache(path.join(dir, "sealed"), state)
+    const entry = await sealed.put({ url: "https://s.test", text: SOURCE, provider: "fetch" })
+    expect(entry.meta.seal).toMatch(/^[0-9a-f]{64}$/)
+    expect((await sealed.get(entry.meta.sha256))?.text).toBe(SOURCE)
+    expect((await sealed.byUrl("https://s.test"))?.meta.sha256).toBe(entry.meta.sha256)
+    // A forged entry planted before the factory dir existed has no seal.
+    const planted = new SourceCache(path.join(dir, "planted"), state)
+    const forged = await new SourceCache(path.join(dir, "forged")).put({
+      url: "https://evil.test",
+      text: SOURCE,
+      provider: "fetch",
+    })
+    const { atomicWrite } = await import("../src/util/fs.ts")
+    const { sha256 } = await import("../src/util/hash.ts")
+    const { readFile } = await import("node:fs/promises")
+    await atomicWrite(path.join(dir, "planted", `${forged.meta.sha256}.md`), await readFile(forged.path, "utf8"))
+    await atomicWrite(
+      path.join(dir, "planted", `${forged.meta.sha256}.json`),
+      `${JSON.stringify({ ...forged.meta, sha256: forged.meta.sha256 })}\n`,
+    )
+    expect(sha256(SOURCE)).toBe(forged.meta.sha256)
+    expect(await planted.get(forged.meta.sha256)).toBeUndefined()
+    expect(await planted.byUrl("https://evil.test")).toBeUndefined()
+    // Legacy readers without a state dir keep the old behaviour.
+    expect((await new SourceCache(path.join(dir, "forged")).get(forged.meta.sha256))?.text).toBe(SOURCE)
   })
 })
 
@@ -163,6 +193,7 @@ describe("providers", () => {
     const tools = researchTools({
       root: dir,
       env: {},
+      stateDir: state,
       policy: async () => ({ root: dir }),
       fetch: (async () => new Response(html, { headers: { "content-type": "text/html" } })) as unknown as typeof fetch,
     })
@@ -208,6 +239,7 @@ describe("the webcache gate (d66328c:skills/epistemic_search/scripts/webcache.py
     const tools = researchTools({
       root: dir,
       env: {},
+      stateDir: state,
       policy: async () => ({ root: dir }),
       now: () => now,
       fetch: (async () => {

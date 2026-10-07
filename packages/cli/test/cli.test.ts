@@ -171,7 +171,7 @@ describe("research brief and retractions", () => {
     const { buildDossier, normalizeClaim, researchSourcesDir, SourceCache, writeDossier } = await import(
       "@heretek-ai/es-core"
     )
-    const cache = new SourceCache(researchSourcesDir(root))
+    const cache = new SourceCache(researchSourcesDir(root), state)
     const source = await cache.put({
       url: "https://x.test/cli",
       text: "The CLI exports a signed brief that anyone holding the key can verify.",
