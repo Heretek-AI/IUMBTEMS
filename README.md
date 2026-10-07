@@ -73,9 +73,11 @@ rather than silently assumed:
   without the licence text) or concatenated licence files are "unknown" and
   therefore clean-room only. Agents harvest local code only inside the
   project; a human can scan elsewhere with `es harvest scan`.
-- **Evals are opt-in and step-capped.** `bun run evals` needs the opencode CLI
-  and `ES_EVAL_MODEL`; each case is one real turn killed at a step cap, since
-  the CLI's event stream reports no cost.
+- **Evals are opt-in and capped.** `bun run evals` needs the opencode CLI
+  and `ES_EVAL_MODEL`; each case is one real turn killed at its own step cap
+  (bounded by `ES_EVAL_MAX_STEPS`) or once the run's spend, read from the
+  stream's `step_finish` cost, passes `ES_EVAL_MAX_USD`. A model with no
+  configured price reports $0, so for it only the step caps bound spend.
 - **MCP caller identity.** Over the stdio MCP server the calling agent's
   identity is a model-supplied `agent` argument (or `ES_AGENT`), so it is
   ADVISORY: the harness adapter, not the protocol, establishes it. There is no

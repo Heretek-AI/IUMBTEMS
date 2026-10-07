@@ -4,6 +4,8 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import path from "node:path"
 import {
+  caseStepCap,
+  DEFAULT_CASE_STEPS,
   gradeAuditFire,
   gradeHarvestFire,
   gradeOutput,
@@ -49,9 +51,41 @@ describe("transcripts", () => {
     expect(readTranscript(events)).toEqual({
       text: "Lenses: Inversion, SCAMPER.",
       tools: ["es_brainstorm_plan"],
+      completed: ["es_brainstorm_plan"],
       errors: [],
       steps: 2,
+      costUSD: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
     })
+  })
+
+  test("a tool that errored was called but does not count as used", () => {
+    const refused = readTranscript([
+      { type: "step_start", part: {} },
+      { type: "tool_use", part: { tool: "es_scout_complete", state: { status: "error", error: "refused" } } },
+    ])
+    expect(refused.tools).toEqual(["es_scout_complete"])
+    expect(refused.completed).toEqual([])
+    expect(gradeTranscript(refused, { toolsUsed: ["es_scout_complete", "es_scout_plan"] }).failures).toEqual([
+      "called but did not complete: es_scout_complete",
+      "did not call: es_scout_plan",
+    ])
+    // An attempt at a forbidden tool still counts, even when the host refused it.
+    expect(gradeTranscript(refused, { toolsNotUsed: ["es_scout_complete"] }).failures).toEqual([
+      "must not call: es_scout_complete",
+    ])
+  })
+
+  test("spend and tokens are summed from step_finish", () => {
+    const finish = (cost: number, input: number, output: number) => ({
+      type: "step_finish",
+      part: { cost, tokens: { input, output, reasoning: 1, cache: { read: 2, write: 3 } } },
+    })
+    const transcript = readTranscript([finish(0.25, 100, 10), { type: "step_start", part: {} }, finish(0.5, 50, 5)])
+    expect(transcript.costUSD).toBe(0.75)
+    expect(transcript.tokens).toEqual({ input: 150, output: 15, reasoning: 2, cacheRead: 4, cacheWrite: 6 })
+    // Missing or non-numeric fields count as zero rather than poisoning the sum.
+    expect(readTranscript([{ type: "step_finish", part: { cost: "n/a" } }]).costUSD).toBe(0)
   })
 
   test("tool checks and error events grade the run", () => {
@@ -62,6 +96,15 @@ describe("transcripts", () => {
     ])
     const failed = readTranscript([...events, { type: "error", error: { message: "Agent not found" } }])
     expect(gradeTranscript(failed, {}).failures).toEqual(["error event: Agent not found"])
+  })
+})
+
+describe("step caps", () => {
+  test("a case's own maxSteps wins; the env value is only a ceiling", () => {
+    expect(caseStepCap(14, 16)).toBe(14)
+    expect(caseStepCap(8, 6)).toBe(6)
+    expect(caseStepCap(undefined, 16)).toBe(DEFAULT_CASE_STEPS)
+    expect(caseStepCap(undefined, 3)).toBe(3)
   })
 })
 
@@ -181,6 +224,8 @@ describe("eval cases (evals/cases)", () => {
             true,
           ])
       if (body.fire) expect([file, ["audit", "scout", "harvest"].includes(body.fire.kind)]).toEqual([file, true])
+      // Each case sizes its own cap for a one-call-per-step model, within the default ceiling.
+      expect([file, Number.isInteger(body.maxSteps) && body.maxSteps >= 2 && body.maxSteps <= 16]).toEqual([file, true])
     }
   })
 

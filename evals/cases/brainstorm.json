@@ -3,6 +3,6 @@
   "description": "The brainstormer freezes a lens plan with es_brainstorm_plan before any fan-out.",
   "agent": "brainstormer",
   "prompt": "Brainstorm: cut our CI cost in half. For now only plan it with es_brainstorm_plan and tell me which lenses it chose; do not launch the lenses yet.",
-  "maxSteps": 4,
+  "maxSteps": 6,
   "checks": { "toolsUsed": ["es_brainstorm_plan"], "contains": ["inversion"] }
 }

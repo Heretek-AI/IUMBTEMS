@@ -17,17 +17,25 @@ interface EvalRow {
   exitCode?: number | null
   capped?: boolean
   timedOut?: boolean
+  overBudget?: boolean
+  maxSteps?: number
   steps?: number
   tools?: readonly string[]
+  completed?: readonly string[]
+  costUSD?: number
   errors?: readonly string[]
   textExcerpt?: string
   failures?: readonly string[]
+  /** Where the failed case's workspace, events and stderr were kept. */
+  kept?: string
 }
 
 interface EvalFile {
   at?: string
   model?: string
-  maxSteps?: number
+  stepCeiling?: number
+  budgetUSD?: number
+  spentUSD?: number
   results?: EvalRow[]
 }
 
@@ -106,15 +114,18 @@ lines.push(`- At: ${data.at ?? "unknown"} (source: \`${path.relative(root, resul
 lines.push(`- Model: \`${model}\``)
 lines.push(`- opencode: \`${opencodeVersion}\` (plugin \`@heretek-ai/epistemic-swarm@${pluginPkg}\`, core \`@${corePkg}\`)`)
 lines.push(`- Git: \`${gitSha}\``)
-lines.push(`- Step cap: ${data.maxSteps ?? "unknown"} per case`)
+lines.push(`- Step caps: per case (ceiling ${data.stepCeiling ?? "unknown"})`)
+lines.push(
+  `- Spend: $${(data.spentUSD ?? 0).toFixed(4)}${data.budgetUSD === undefined ? " (no budget set)" : ` of $${data.budgetUSD}`}`,
+)
 lines.push(`- Result: **${passed}/${rows.length} passed**${passed === rows.length ? " ✅" : " ❌"}`)
 lines.push(``)
-lines.push(`| case | agent | steps | tools | verdict | failures |`)
-lines.push(`| ---- | ----- | ----- | ----- | ------- | -------- |`)
+lines.push(`| case | agent | steps | cost | tools | verdict | failures |`)
+lines.push(`| ---- | ----- | ----- | ---- | ----- | ------- | -------- |`)
 for (const row of rows) {
   const failures = (row.failures ?? []).join("; ").slice(0, 160).replaceAll("|", "\\|")
   lines.push(
-    `| \`${row.id}\` | ${row.agent ?? "?"} | ${row.steps ?? "?"} | ${(row.tools ?? []).join(", ") || "—"} | ${row.pass ? "PASS" : "FAIL"} | ${failures || "—"} |`,
+    `| \`${row.id}\` | ${row.agent ?? "?"} | ${row.steps ?? "?"}/${row.maxSteps ?? "?"} | $${(row.costUSD ?? 0).toFixed(4)} | ${(row.tools ?? []).join(", ") || "—"} | ${row.pass ? "PASS" : "FAIL"} | ${failures || "—"} |`,
   )
 }
 lines.push(``)
@@ -124,8 +135,11 @@ for (const row of rows) {
   if (row.description) lines.push(`${row.description}`)
   lines.push(``)
   lines.push(
-    `- Agent: \`${row.agent ?? "?"}\`, exit: ${row.exitCode ?? "?"}, capped: ${row.capped ?? "?"}, timed out: ${row.timedOut ?? "?"}`,
+    `- Agent: \`${row.agent ?? "?"}\`, exit: ${row.exitCode ?? "?"}, capped: ${row.capped ?? "?"}, timed out: ${row.timedOut ?? "?"}, over budget: ${row.overBudget ?? "?"}`,
   )
+  const refused = (row.tools ?? []).filter((tool, index, all) => all.indexOf(tool) === index && !(row.completed ?? []).includes(tool))
+  if (row.completed && refused.length > 0) lines.push(`- Called but never completed: ${refused.join(", ")}`)
+  if (row.kept) lines.push(`- Evidence kept at \`${row.kept}/\` (project with \`.factory/\`, \`events.jsonl\`, \`stderr.txt\`)`)
   if ((row.errors ?? []).length > 0) {
     lines.push(`- Error events:`)
     for (const error of row.errors!) lines.push(`  - ${error.slice(0, 300)}`)
@@ -148,6 +162,7 @@ lines.push(``)
 lines.push(`\`\`\`bash`)
 lines.push(`export ES_EVAL_MODEL="${model}"`)
 lines.push(`export OPENCODE_API_KEY="<key for the model's provider>"  # or \$ES_EVAL_KEY_VAR equivalent`)
+lines.push(`export ES_EVAL_MAX_USD=15  # optional spend budget for the whole run`)
 lines.push(`npm install --global --ignore-scripts @opencode/cli-linux-x64@2.0.24`)
 lines.push(`bun run evals`)
 lines.push(`bun scripts/e2e-report.ts  # regenerates this file from the newest evals/results/*.json`)
@@ -156,8 +171,9 @@ lines.push(``)
 lines.push(`## What to look at when a case fails`)
 lines.push(``)
 lines.push(`1. \`exit != 0\` with no error events → CLI/host crash; rerun that case's prompt by hand (see \`evals/cases/<id>.json\`).`)
-lines.push(`2. \`capped: true\` → the agent looped past the step cap; check \`tools\` for a repeated call cycle.`)
+lines.push(`2. \`capped: true\` → the agent ran past its case's step cap; check \`tools\` for a repeated call cycle, then the kept \`events.jsonl\`.`)
 lines.push(`3. \`must not call\` / \`did not call\` → seat scoping or prompt regression in \`packages/core/assets\` or the registry.`)
+lines.push(`   \`called but did not complete\` → the tool refused; its reason is in the kept \`events.jsonl\` (tool_use with status error).`)
 lines.push(`4. \`missing: <text>\` → behaviour drift in the seat's first-turn answer; compare against the case description.`)
 
 const reportPath = resultsPath.replace(/\.json$/, ".md")

@@ -6,8 +6,10 @@ name: E2E feedback (opencode + plugin)
 #
 # - `scripts/pack-smoke.sh` proves the packed tarballs install and load.
 # - `bun run evals` runs one real, step-capped turn per `evals/cases/*.json`
-#   in an isolated workspace loading this repo's plugin.
-# - `bun scripts/e2e-report.ts` renders the deterministic `feedback-report.md`.
+#   in an isolated workspace loading this repo's plugin; a failed case keeps
+#   its workspace, event stream and stderr under evals/results/<stamp>/.
+# - `bun scripts/e2e-report.ts` renders the deterministic report, and
+#   evals/results/ is uploaded as the `e2e-feedback` artifact.
 # - The `agent-feedback` step asks the model to diagnose that report (one
 #   `timeout`-bounded turn; best-effort, never masks the eval verdict).
 #
@@ -26,9 +28,13 @@ on:
         required: false
         default: ""
       max_steps:
-        description: "Per-case step cap (bounds spend: cost <= steps x context x price)"
+        description: "Step ceiling: each case runs under its own maxSteps, never above this"
         required: false
-        default: "6"
+        default: "16"
+      max_usd:
+        description: "Spend budget for the whole run in USD, from step_finish cost (empty = none)"
+        required: false
+        default: ""
 
 # Least privilege: the workflow only reads the checkout.
 permissions:
@@ -41,7 +47,8 @@ jobs:
     env:
       ES_EVAL_MODEL: ${{ inputs.model || vars.ES_EVAL_MODEL }}
       ES_EVAL_KEY_VAR: ${{ vars.ES_EVAL_KEY_VAR || 'ANTHROPIC_API_KEY' }}
-      ES_EVAL_MAX_STEPS: ${{ inputs.max_steps || '6' }}
+      ES_EVAL_MAX_STEPS: ${{ inputs.max_steps || '16' }}
+      ES_EVAL_MAX_USD: ${{ inputs.max_usd }}
       ES_EVAL_TIMEOUT_MS: "300000"
     steps:
       # Third-party actions are pinned to commit SHAs (bump deliberately).
@@ -97,10 +104,9 @@ jobs:
             cat "${newest%.json}.md"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # One best-effort agent turn over the deterministic report. Bounded by
-      # `timeout` (no cost events exist in the CLI stream, so wall-clock plus
-      # the eval step caps bound the spend). Never fails the job: the eval
-      # verdict above is what gates.
+      # One best-effort agent turn over the deterministic report, bounded by
+      # `timeout`. Never fails the job: the eval verdict above is what
+      # reports.
       - name: Agent feedback on the report
         if: always() && steps.evals.outputs.skipped != 'true'
         continue-on-error: true
@@ -122,8 +128,23 @@ jobs:
           }
           EOF
           prompt="You are a debug analyst. Read the E2E feedback report below and reply with: (1) the most likely root cause per FAIL case, citing the failing check or tool line; (2) the smallest repo change that would fix or further isolate it; (3) anything in the report that looks like harness flakiness rather than a product bug. Keep it under 30 lines. Report: $(head -c 4000 "$report")"
-          HOME="$home" timeout 150 opencode run --standalone --agent build "$prompt" > "$work/feedback.txt" 2>"$work/feedback.err" \
+          # opencode resolves its project from PWD (not the spawn cwd), so run
+          # inside $work with PWD, HOME and XDG pointed there; otherwise the
+          # repo is the project and the host's default model answers.
+          (cd "$work" && PWD="$work" HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
+            XDG_STATE_HOME="$home/.local/state" XDG_CACHE_HOME="$home/.cache" \
+            timeout 150 opencode run --standalone --agent build "$prompt") > "$work/feedback.txt" 2>"$work/feedback.err" \
             || { echo "agent-feedback: model turn failed; last of stderr:"; tail -c 800 "$work/feedback.err"; echo; echo "keeping the deterministic report only."; exit 0; }
           cp "$work/feedback.txt" "${newest%.json}.agent-feedback.md"
           { echo "## Agent feedback"; echo; cat "$work/feedback.txt"; } >> "$GITHUB_STEP_SUMMARY"
           echo "agent-feedback: wrote $(basename "${newest%.json}.agent-feedback.md")"
+
+      # The results JSON, the report and every failed case's kept workspace.
+      - name: Upload eval evidence
+        if: always() && steps.evals.outputs.skipped != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-feedback
+          path: evals/results/
+          if-no-files-found: ignore
+          retention-days: 14
