@@ -24,7 +24,11 @@ export function registerTools(editor: { add(tool: any): void }, runtime: Runtime
     root: runtime.root,
     ...(runtime.config.embeddings ? { embeddings: runtime.config.embeddings } : {}),
   })
-  const harvest = harvestTools({ root: runtime.root, whitelist: runtime.config.licenseWhitelist })
+  const harvest = harvestTools({
+    root: runtime.root,
+    whitelist: runtime.config.licenseWhitelist,
+    stateDir: runtime.stateDir,
+  })
   const design = designTools({ root: runtime.root })
   for (const def of [
     ...esTools({ ...runtime, lsp: runtime.lsp }),

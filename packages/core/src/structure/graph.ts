@@ -3,7 +3,7 @@
 // (".js" → ".ts", index files), workspace packages (package.json exports),
 // Python relative and absolute modules, and Go module-path imports
 // (package directories). Unresolved specifiers are external.
-import { open, readdir, readFile } from "node:fs/promises"
+import { lstat, open, readdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import { isTestFile } from "../gates/budgets.ts"
 import { git } from "../worktree/git.ts"
@@ -27,6 +27,12 @@ export interface GraphOptions extends GrammarOptions {
   readonly files?: readonly string[]
   readonly maxFiles?: number
   readonly regexOnly?: boolean
+  /**
+   * Harvested (untrusted) content: list files by walking instead of running
+   * git (a repository's own config could execute code), and never read
+   * through a symlink.
+   */
+  readonly untrusted?: boolean
 }
 
 const SKIP_DIRS = new Set([
@@ -44,11 +50,18 @@ const SKIP_DIRS = new Set([
   "coverage",
 ])
 
-/** Source files with a grammar: git's view when available, else a bounded walk. */
-export async function listSourceFiles(dir: string, maxFiles = 20_000): Promise<string[]> {
-  const listed = await git(dir, ["ls-files", "-co", "--exclude-standard", "-z"], { allowFail: true }).catch(
-    () => undefined,
-  )
+/**
+ * Source files with a grammar: git's view when available, else a bounded walk
+ * (always the walk for untrusted content). The walk never follows symlinks.
+ */
+export async function listSourceFiles(
+  dir: string,
+  maxFiles = 20_000,
+  options: { untrusted?: boolean } = {},
+): Promise<string[]> {
+  const listed = options.untrusted
+    ? undefined
+    : await git(dir, ["ls-files", "-co", "--exclude-standard", "-z"], { allowFail: true }).catch(() => undefined)
   let files: string[]
   if (listed && listed.code === 0) files = listed.stdout.split("\0").filter(Boolean)
   else {
@@ -72,6 +85,7 @@ export async function listSourceFiles(dir: string, maxFiles = 20_000): Promise<s
 const fileCache = new Map<string, { mtimeMs: number; size: number; regexOnly: boolean; structure: FileStructure }>()
 
 async function structureOf(absolute: string, rel: string, options: GraphOptions) {
+  if (options.untrusted && !(await lstat(absolute).catch(() => undefined))?.isFile()) return undefined
   // Open once and stat the descriptor, so the size/mtime check and the read
   // cannot race with a concurrent replacement of the path.
   const handle = await open(absolute, "r").catch(() => undefined)
@@ -241,7 +255,17 @@ class Resolver {
   }
 }
 
-async function workspacePackages(dir: string, files: readonly string[]): Promise<WorkspacePackage[]> {
+/** Read a manifest; for untrusted content only a regular file (never a symlink). */
+async function readManifest(file: string, untrusted: boolean): Promise<string | undefined> {
+  if (untrusted && !(await lstat(file).catch(() => undefined))?.isFile()) return undefined
+  return readFile(file, "utf8").catch(() => undefined)
+}
+
+async function workspacePackages(
+  dir: string,
+  files: readonly string[],
+  untrusted: boolean,
+): Promise<WorkspacePackage[]> {
   const manifests = new Set(["package.json"])
   for (const file of files) {
     const parts = file.split("/")
@@ -249,7 +273,7 @@ async function workspacePackages(dir: string, files: readonly string[]): Promise
   }
   const out: WorkspacePackage[] = []
   for (const manifest of manifests) {
-    const text = await readFile(path.join(dir, manifest), "utf8").catch(() => undefined)
+    const text = await readManifest(path.join(dir, manifest), untrusted)
     if (!text) continue
     try {
       const pkg = JSON.parse(text) as { name?: string; exports?: unknown; main?: string }
@@ -266,7 +290,7 @@ async function workspacePackages(dir: string, files: readonly string[]): Promise
   return out
 }
 
-async function goModules(dir: string, files: readonly string[]) {
+async function goModules(dir: string, files: readonly string[], untrusted: boolean) {
   // A go.mod sits at a module root, not necessarily beside each file: walk up
   // from every .go file and collect the manifests found along the way.
   const candidates = new Set<string>()
@@ -281,7 +305,7 @@ async function goModules(dir: string, files: readonly string[]) {
   }
   const out: Array<{ module: string; dir: string }> = []
   for (const candidate of candidates) {
-    const text = await readFile(path.join(dir, candidate, "go.mod"), "utf8").catch(() => undefined)
+    const text = await readManifest(path.join(dir, candidate, "go.mod"), untrusted)
     const module = text ? /^module\s+(\S+)/m.exec(text)?.[1] : undefined
     if (module) out.push({ module, dir: candidate === "." ? "" : candidate })
   }
@@ -292,7 +316,8 @@ async function goModules(dir: string, files: readonly string[]) {
 
 export async function buildImportGraph(dir: string, options: GraphOptions = {}): Promise<ImportGraph | undefined> {
   const maxFiles = options.maxFiles ?? 10_000
-  const list = options.files ? [...options.files] : await listSourceFiles(dir, maxFiles + 1)
+  const untrusted = options.untrusted === true
+  const list = options.files ? [...options.files] : await listSourceFiles(dir, maxFiles + 1, { untrusted })
   if (list.length > maxFiles) return undefined
   const files = new Map<string, FileStructure>()
   let treeSitter = 0
@@ -305,7 +330,11 @@ export async function buildImportGraph(dir: string, options: GraphOptions = {}):
     else regex++
   }
   const names = new Set(files.keys())
-  const resolver = new Resolver(names, await workspacePackages(dir, list), await goModules(dir, list))
+  const resolver = new Resolver(
+    names,
+    await workspacePackages(dir, list, untrusted),
+    await goModules(dir, list, untrusted),
+  )
   const edges = new Map<string, Set<string>>()
   const reverse = new Map<string, Set<string>>()
   const external = new Map<string, string[]>()

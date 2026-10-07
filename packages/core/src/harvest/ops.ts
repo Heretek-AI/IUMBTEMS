@@ -11,7 +11,7 @@ import type { EsToolDef } from "../ops/tools.ts"
 import { ToolRefusal } from "../ops/tools.ts"
 import { DEFAULT_LICENSE_WHITELIST, type HarvestProfile, type HarvestRow, HarvestRowSchema } from "../schema/harvest.ts"
 import { buildMatrix, checkVerdict, renderHarvest } from "./matrix.ts"
-import { candidateId, type HarvestSource, parseSource, readCandidate, scanSource } from "./scan.ts"
+import { assertSourceAllowed, candidateId, type HarvestSource, parseSource, readCandidate, scanSource } from "./scan.ts"
 import { githubApi, gitlabApi, type RemoteRepo } from "./sources.ts"
 import {
   readHarvestPlan,
@@ -31,6 +31,8 @@ export interface HarvestOpsContext {
   readonly clone?: (url: string, dir: string) => Promise<unknown>
   /** SPDX ids that may be depended on or vendored (config override). */
   readonly whitelist?: readonly string[]
+  /** The user-global state dir agents may never harvest (default: stateDir()). */
+  readonly stateDir?: string
 }
 
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({
@@ -45,6 +47,8 @@ const repoLine = (repo: RemoteRepo) =>
 
 export function harvestTools(context: HarvestOpsContext): EsToolDef[] {
   const { root } = context
+  // Agents never scan outside the project or into the private state dir.
+  const sourcePolicy = { ...(context.stateDir ? { stateDir: context.stateDir } : {}) }
   const api = () => ({
     ...(context.fetch ? { fetch: context.fetch } : {}),
     ...(context.env ? { env: context.env } : {}),
@@ -96,7 +100,7 @@ export function harvestTools(context: HarvestOpsContext): EsToolDef[] {
           const spec = String(raw?.source ?? "").trim()
           if (!name || !spec) throw new ToolRefusal("Every candidate needs a name and a source.")
           try {
-            parseSource(spec)
+            assertSourceAllowed(root, parseSource(spec), sourcePolicy)
           } catch (error) {
             throw new ToolRefusal(error instanceof Error ? error.message : String(error))
           }
@@ -202,6 +206,7 @@ export function harvestTools(context: HarvestOpsContext): EsToolDef[] {
         try {
           profile = await scanSource(root, id, source, {
             ...api(),
+            ...sourcePolicy,
             ...(context.clone ? { clone: context.clone } : {}),
             ...(toolContext.signal ? { signal: toolContext.signal } : {}),
           })

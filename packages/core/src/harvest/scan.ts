@@ -4,14 +4,19 @@
 // per-field provenance and explicit warnings. Reads of candidate content are
 // bounded by a per-candidate token budget (readCandidate), so the harvester
 // pays for what it reads.
-import { open, readFile, stat } from "node:fs/promises"
+//
+// Harvested content is untrusted: agents may only harvest local code inside
+// the project (humans may scan elsewhere through the CLI), the private state
+// dir is never readable, symlinks are never followed, and no git command runs
+// inside a harvested directory (a repo's own config could execute code).
+import { lstat, stat } from "node:fs/promises"
 import path from "node:path"
-import { factoryLayout } from "../layout.ts"
+import { fileURLToPath } from "node:url"
+import { stateDir as defaultStateDir, factoryLayout } from "../layout.ts"
 import type { HarvestProfile, LicenseFinding, Provenance } from "../schema/harvest.ts"
 import { buildImportGraph } from "../structure/index.ts"
-import { relativeTo } from "../trust/paths.ts"
-import { readJson, writeJson } from "../util/fs.ts"
-import { git } from "../worktree/git.ts"
+import { canonicalPath, isInside, relativeTo } from "../trust/paths.ts"
+import { readJson, readRegularFile, writeJson } from "../util/fs.ts"
 import { type ApiOptions, type RegistryId, registryMetadata, shallowClone } from "./sources.ts"
 import { detectLicense, familyOf, normalizeLicenseId } from "./spdx.ts"
 
@@ -63,24 +68,76 @@ export const candidateId = (name: string) => {
   return slug.slice(start, end).slice(0, 64) || "candidate"
 }
 
-/** Read a file through one descriptor so the size cap and the read cannot race. */
-async function readCapped(absolute: string, file: string): Promise<string> {
-  const handle = await open(absolute, "r").catch(() => undefined)
-  if (!handle) throw new Error(`no such file: ${file}`)
-  try {
-    const info = await handle.stat()
-    if (!info.isFile()) throw new Error(`no such file: ${file}`)
-    if (info.size > 2_000_000) throw new Error(`"${file}" is larger than 2 MB; read a slice by an editor instead`)
-    return await handle.readFile("utf8")
-  } finally {
-    await handle.close()
+export interface SourcePolicy {
+  /** Human callers (the `es` CLI) may scan outside the project; agents may not. */
+  readonly allowOutside?: boolean
+  /** The user-global state dir to refuse (default: stateDir()). */
+  readonly stateDir?: string
+}
+
+const REMOTE_GIT = /^(https?:\/\/|ssh:\/\/|git@[\w.-]+:)/
+const REPO_SLUG = /^[\w.-]+(\/[\w.-]+)+$/
+const PACKAGE_NAME = /^(@[\w.-]+\/)?[\w.-]+$/
+
+/** Where a harvest source may come from. Throws with the reason when it may not. */
+export function assertSourceAllowed(root: string, source: HarvestSource, policy: SourcePolicy = {}): void {
+  const project = canonicalPath(root)
+  const state = canonicalPath(policy.stateDir ?? defaultStateDir())
+  const local = (target: string) => {
+    const absolute = canonicalPath(target, project)
+    if (isInside(state, absolute))
+      throw new Error(
+        `"${target}" is Epistemic Swarm's private state (signing key, trust store); it cannot be harvested`,
+      )
+    if (!policy.allowOutside && relativeTo(project, absolute) === undefined)
+      throw new Error(
+        `"${target}" is outside the project; agents may harvest local code only inside it (a human can run \`es harvest scan\`)`,
+      )
   }
+  switch (source.kind) {
+    case "local":
+      local(source.path)
+      return
+    case "git":
+      if (REMOTE_GIT.test(source.url)) return
+      if (source.url.startsWith("file://")) local(fileURLToPath(source.url))
+      else if (/^[a-z][a-z0-9+.-]*(::|:\/\/)/i.test(source.url))
+        throw new Error(`unsupported git transport in "${source.url}" (use https:// or ssh)`)
+      else local(source.url)
+      return
+    case "github":
+    case "gitlab":
+      if (!REPO_SLUG.test(source.repo)) throw new Error(`"${source.repo}" is not an owner/repo path`)
+      return
+    case "registry":
+      if (!PACKAGE_NAME.test(source.name)) throw new Error(`"${source.name}" is not a package name`)
+      return
+  }
+}
+
+/** The checked-out commit, read from `.git` as files (no git process, so no repo config runs). */
+export async function headCommitFromFiles(dir: string): Promise<string | undefined> {
+  const gitDir = path.join(dir, ".git")
+  if (!(await lstat(gitDir).catch(() => undefined))?.isDirectory()) return undefined
+  const sha = (text: string | undefined) => (text && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(text) ? text : undefined)
+  const head = (await readRegularFile(path.join(gitDir, "HEAD")))?.trim()
+  if (!head) return undefined
+  if (sha(head)) return head
+  const ref = /^ref: (refs\/[\w./-]+)$/.exec(head)?.[1]
+  if (!ref || ref.split("/").includes("..")) return undefined
+  const loose = sha((await readRegularFile(path.join(gitDir, ref)))?.trim())
+  if (loose) return loose
+  for (const line of ((await readRegularFile(path.join(gitDir, "packed-refs"))) ?? "").split("\n")) {
+    const [value, name] = line.trim().split(" ")
+    if (name === ref && sha(value)) return value
+  }
+  return undefined
 }
 
 export const harvestRuntimeDir = (root: string, id: string) => path.join(factoryLayout(root).runtime, "harvest", id)
 export const harvestRepoDir = (root: string, id: string) => path.join(harvestRuntimeDir(root, id), "repo")
 
-export interface ScanOptions extends ApiOptions {
+export interface ScanOptions extends ApiOptions, SourcePolicy {
   /** Override the clone step (tests). */
   readonly clone?: (url: string, dir: string) => Promise<unknown>
   readonly maxFiles?: number
@@ -91,7 +148,7 @@ export interface ScanOptions extends ApiOptions {
 
 const MANIFESTS = {
   async npm(dir: string): Promise<{ runtime: string[]; dev: string[] } | undefined> {
-    const text = await readFile(path.join(dir, "package.json"), "utf8").catch(() => undefined)
+    const text = await readRegularFile(path.join(dir, "package.json"))
     if (!text) return undefined
     try {
       const pkg = JSON.parse(text) as {
@@ -104,7 +161,7 @@ const MANIFESTS = {
     }
   },
   async python(dir: string): Promise<{ runtime: string[]; dev: string[] } | undefined> {
-    const requirements = await readFile(path.join(dir, "requirements.txt"), "utf8").catch(() => undefined)
+    const requirements = await readRegularFile(path.join(dir, "requirements.txt"))
     if (requirements !== undefined)
       return {
         runtime: requirements
@@ -116,7 +173,7 @@ const MANIFESTS = {
     return undefined
   },
   async cargo(dir: string): Promise<{ runtime: string[]; dev: string[] } | undefined> {
-    const text = await readFile(path.join(dir, "Cargo.toml"), "utf8").catch(() => undefined)
+    const text = await readRegularFile(path.join(dir, "Cargo.toml"))
     if (text === undefined) return undefined
     const names: string[] = []
     let inDeps = false
@@ -154,6 +211,7 @@ export async function scanSource(
   source: HarvestSource,
   options: ScanOptions = {},
 ): Promise<HarvestProfile> {
+  assertSourceAllowed(root, source, options)
   const scannedAt = new Date().toISOString()
   const warnings: string[] = []
 
@@ -195,7 +253,7 @@ export async function scanSource(
   let dir: string
   let provenanceKind: Provenance["kind"]
   if (source.kind === "local") {
-    dir = path.resolve(root, source.path)
+    dir = canonicalPath(source.path, canonicalPath(root))
     provenanceKind = "local"
     const info = await stat(dir).catch(() => undefined)
     if (!info?.isDirectory()) throw new Error(`not a directory: ${dir}`)
@@ -208,7 +266,12 @@ export async function scanSource(
           : `https://gitlab.com/${source.repo}.git`
     dir = harvestRepoDir(root, id)
     provenanceKind = "clone"
-    await (options.clone ?? ((remote: string, target: string) => shallowClone(remote, target, options)))(url, dir)
+    const allowFile = !REMOTE_GIT.test(url)
+    await (
+      options.clone ??
+      ((remote: string, target: string) =>
+        shallowClone(remote, target, { ...options, allowFile }).then(() => undefined))
+    )(url, dir)
   }
   await writeJson(path.join(harvestRuntimeDir(root, id), "source.json"), { source, dir })
 
@@ -221,6 +284,7 @@ export async function scanSource(
   const maxFiles = options.maxFiles ?? 5_000
   const graph = await buildImportGraph(dir, {
     maxFiles,
+    untrusted: true,
     ...(options.regexOnly ? { regexOnly: true } : {}),
     ...(options.cacheDir ? { cacheDir: options.cacheDir } : {}),
     ...(options.offline !== undefined ? { offline: options.offline } : {}),
@@ -240,14 +304,14 @@ export async function scanSource(
   const internalEdges = graph ? [...graph.edges.values()].reduce((total, set) => total + set.size, 0) : 0
   const external = graph ? [...graph.external.values()].reduce((total, list) => total + list.length, 0) : 0
   const dependencies = await dependenciesOf(dir)
-  const pkgJson = await readFile(path.join(dir, "package.json"), "utf8").catch(() => undefined)
+  const pkgJson = await readRegularFile(path.join(dir, "package.json"))
   let name = path.basename(dir)
   if (pkgJson) {
     try {
       name = (JSON.parse(pkgJson) as { name?: string }).name ?? name
     } catch {}
   }
-  const commit = (await git(dir, ["rev-parse", "HEAD"], { allowFail: true })).stdout.trim()
+  const commit = await headCommitFromFiles(dir)
   const verified = provenanceKind === "local" || provenanceKind === "clone"
   const licenseKind: Provenance["kind"] =
     license.source === "license-file" || license.source === "spdx-header" ? provenanceKind : "inferred"
@@ -317,15 +381,21 @@ export async function readCandidate(
 ): Promise<HarvestRead> {
   const record = await readJson<{ dir: string }>(path.join(harvestRuntimeDir(root, id), "source.json"))
   if (!record?.dir) throw new Error(`candidate "${id}" has not been scanned`)
-  const absolute = path.resolve(record.dir, file)
-  if (relativeTo(record.dir, absolute) === undefined) throw new Error(`"${file}" is outside the candidate directory`)
+  const base = canonicalPath(record.dir)
+  // Resolve symlinks before the containment check: a link inside the
+  // candidate must not reach anything outside it.
+  const absolute = canonicalPath(file, base)
+  if (relativeTo(base, absolute) === undefined)
+    throw new Error(`"${file}" is outside the candidate directory (or a symlink leading out of it)`)
   const state = (await readJson<ReadsState>(readsFile(root, id))) ?? { entries: [] }
   const spent = state.entries.reduce((total, entry) => total + entry.tokens, 0)
   if (spent >= options.budgetTokens)
     throw new Error(
       `the read budget for "${id}" is exhausted (${spent}/${options.budgetTokens} tokens); use what you have or raise the budget`,
     )
-  const content = await readCapped(absolute, file)
+  const content = await readRegularFile(absolute)
+  if (content === undefined)
+    throw new Error(`"${file}" is not a regular file under 2 MB in the candidate (symlinks are not followed)`)
   const offset = Math.max(0, options.offset ?? 0)
   const remainingChars = Math.max(0, (options.budgetTokens - spent) * 4)
   const maxChars = Math.min(options.maxChars ?? 8_000, remainingChars)

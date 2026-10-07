@@ -5,9 +5,10 @@
 // claims (verified: false) and alone can never authorize depend/vendor.
 // Unknown or non-whitelisted licenses fail closed to clean-room.
 import { createHash } from "node:crypto"
-import { readdir, readFile } from "node:fs/promises"
+import { readdir } from "node:fs/promises"
 import path from "node:path"
 import type { LicenseFinding } from "../schema/harvest.ts"
+import { readRegularFile } from "../util/fs.ts"
 
 interface Signature {
   readonly spdx: string
@@ -149,8 +150,22 @@ export async function detectLicense(
   dir: string,
   options: { maxHeaderFiles?: number; io?: LicenseScanIO } = {},
 ): Promise<LicenseFinding> {
-  const readdirImpl = options.io?.readdir ?? (async (target: string) => readdir(target))
-  const readFileImpl = options.io?.readFile ?? (async (file: string) => readFile(file, "utf8"))
+  // Harvested content is untrusted: list only regular files and real
+  // directories, and read only regular files (a symlinked LICENSE could point
+  // anywhere on the machine).
+  const readdirImpl =
+    options.io?.readdir ??
+    (async (target: string) =>
+      (await readdir(target, { withFileTypes: true }))
+        .filter((entry) => entry.isFile() || entry.isDirectory())
+        .map((entry) => entry.name))
+  const readFileImpl =
+    options.io?.readFile ??
+    (async (file: string) => {
+      const text = await readRegularFile(file)
+      if (text === undefined) throw new Error(`not a regular file: ${file}`)
+      return text
+    })
 
   // 1. LICENSE / COPYING files (the strongest evidence).
   const entries = await readdirImpl(dir).catch(() => [] as string[])

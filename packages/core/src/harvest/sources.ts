@@ -93,19 +93,29 @@ export function gitlabApi(options: ApiOptions = {}) {
   }
 }
 
-/** Shallow, quiet clone into `dir` (removed first). Throws with the git error. */
+/**
+ * Shallow, quiet clone into `dir` (removed first). Throws with the git error.
+ * Only network transports are allowed (local paths with `allowFile`), never
+ * `ext::` or other helpers; LFS smudging and submodules stay off, so cloning
+ * fetches bytes and runs nothing from the repository.
+ */
 export async function shallowClone(
   url: string,
   dir: string,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: { signal?: AbortSignal; timeoutMs?: number; allowFile?: boolean } = {},
 ): Promise<string> {
   await rm(dir, { recursive: true, force: true })
   await mkdir(path.dirname(dir), { recursive: true })
-  const result = await run(["git", "clone", "--depth", "1", "--quiet", url, dir], {
+  const result = await run(["git", "clone", "--depth", "1", "--quiet", "--no-recurse-submodules", "--", url, dir], {
     cwd: path.dirname(dir),
     timeoutMs: options.timeoutMs ?? 300_000,
     ...(options.signal ? { signal: options.signal } : {}),
-    passEnv: ["GIT_TERMINAL_PROMPT", "HOME", "GIT_SSH_COMMAND"],
+    passEnv: ["HOME", "GIT_SSH_COMMAND"],
+    env: {
+      GIT_ALLOW_PROTOCOL: options.allowFile ? "https:http:ssh:git:file" : "https:http:ssh:git",
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_LFS_SKIP_SMUDGE: "1",
+    },
   })
   if (result.code !== 0)
     throw new Error(`git clone ${url} failed: ${(result.stderr || result.stdout).trim().slice(0, 300)}`)

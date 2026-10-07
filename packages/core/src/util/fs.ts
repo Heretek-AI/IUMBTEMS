@@ -1,7 +1,7 @@
 // Filesystem primitives: atomic writes, JSON helpers, and an advisory
 // directory lock that survives crashed holders (Linux only, per the 1.0 scope).
 import { randomBytes } from "node:crypto"
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
+import { lstat, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { hostname } from "node:os"
 import path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -53,6 +53,25 @@ export async function readText(file: string): Promise<string | undefined> {
   } catch (error: any) {
     if (error?.code === "ENOENT") return undefined
     throw error
+  }
+}
+
+/**
+ * Read an untrusted regular file: never through a symlink (lstat first, then
+ * the opened descriptor must be the same inode) and under `maxBytes`.
+ * Undefined when missing, not regular, or too large.
+ */
+export async function readRegularFile(file: string, maxBytes = 2_000_000): Promise<string | undefined> {
+  const link = await lstat(file).catch(() => undefined)
+  if (!link?.isFile()) return undefined
+  const handle = await open(file, "r").catch(() => undefined)
+  if (!handle) return undefined
+  try {
+    const info = await handle.stat()
+    if (!info.isFile() || info.size > maxBytes || info.ino !== link.ino) return undefined
+    return await handle.readFile("utf8")
+  } finally {
+    await handle.close()
   }
 }
 

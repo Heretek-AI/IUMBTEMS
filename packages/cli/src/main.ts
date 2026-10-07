@@ -287,7 +287,8 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
                     .replace(/\.git$/, "")
           const id = candidateId(name)
           try {
-            const profile = await scanSource(root, id, source, {})
+            // A human at the CLI may scan outside the project (never the state dir).
+            const profile = await scanSource(root, id, source, { allowOutside: true })
             await writeProfile(root, profile)
             io.print(
               [

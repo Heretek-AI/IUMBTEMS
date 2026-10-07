@@ -3,7 +3,7 @@
 // policy and the tool loop that writes the report, vendor plan and clean-room
 // specs.
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import type { HarvestProfile, LicenseFinding } from "../src/index.ts"
@@ -181,7 +181,7 @@ describe("scanning and provenance", () => {
     await write(fx.root, "package.json", JSON.stringify({ name: "widget", dependencies: { zod: "4" } }))
     await write(fx.root, "src/a.ts", 'import { b } from "./b"\nexport const a = b\n')
     await write(fx.root, "src/b.ts", "export const b = 1\n")
-    const profile = await scanSource(fx.root, "widget", { kind: "local", path: fx.root }, { regexOnly: true })
+    const profile = await scanSource(fx.root, "widget", { kind: "local", path: "." }, { regexOnly: true })
     expect(profile.license).toMatchObject({ spdx: "MIT", verified: true, source: "license-file" })
     expect(profile.name).toBe("widget")
     expect(profile.dependencies.runtime).toEqual(["zod"])
@@ -200,7 +200,12 @@ describe("scanning and provenance", () => {
     await write(source.root, "src/x.py", "def x():\n    return 1\n")
     await commitAll(source.root)
     const root = await tmp("es-harvest-work-")
-    const profile = await scanSource(root, "origin", { kind: "git", url: source.root }, { regexOnly: true })
+    const profile = await scanSource(
+      root,
+      "origin",
+      { kind: "git", url: source.root },
+      { regexOnly: true, allowOutside: true },
+    )
     expect(profile.license.spdx).toBe("ISC")
     expect(profile.size.files).toBe(1)
     await source.cleanup()
@@ -393,6 +398,75 @@ describe("the tool loop", () => {
     )
     await expect(call(root, "es_harvest_complete", {}, "harvester")).rejects.toThrow(/not scanned/)
     await expect(call(root, "es_harvest_complete", { allowPartial: true }, "harvester")).rejects.toThrow(/No matrix/)
+  })
+})
+
+describe("agent confinement", () => {
+  const call = (root: string, name: string, input: Record<string, unknown>, stateDir?: string) =>
+    harvestTools({ root, ...(stateDir ? { stateDir } : {}) })
+      .find((tool) => tool.name === name)!
+      .execute(input, { agent: "harvester" })
+  const plan = (root: string, source: string, stateDir?: string) =>
+    call(root, "es_harvest_plan", { objective: "x", candidates: [{ name: "c", source }], force: true }, stateDir)
+
+  test("local and file-path sources must stay inside the project; the state dir never", async () => {
+    const root = await tmp("es-harvest-root-")
+    const outside = await tmp("es-harvest-outside-")
+    await writeFile(path.join(outside, "key"), "SIGNING-KEY")
+    await expect(plan(root, `local:${outside}`)).rejects.toThrow(/outside the project/)
+    await expect(plan(root, `git:${outside}`)).rejects.toThrow(/outside the project/)
+    await expect(plan(root, `git:file://${outside}`)).rejects.toThrow(/outside the project/)
+    await expect(plan(root, "git:ext::sh -c touch% /tmp/pwned")).rejects.toThrow(/transport/)
+    await write(root, "state/key", "SIGNING-KEY")
+    await expect(plan(root, "local:state", path.join(root, "state"))).rejects.toThrow(/private state/)
+    // Even a plan written before the check cannot scan outside the project.
+    await expect(scanSource(root, "c", { kind: "local", path: outside }, { regexOnly: true })).rejects.toThrow(
+      /outside the project/,
+    )
+    // Humans (the es CLI) may scan elsewhere, but still never the state dir.
+    const human = await scanSource(root, "c", { kind: "local", path: outside }, { regexOnly: true, allowOutside: true })
+    expect(human.license.spdx).toBe("unknown")
+    await expect(
+      scanSource(root, "s", { kind: "local", path: outside }, { allowOutside: true, stateDir: outside }),
+    ).rejects.toThrow(/private state/)
+  })
+
+  test("symlinks in harvested content are never followed", async () => {
+    const root = await tmp("es-harvest-link-")
+    const outside = await tmp("es-harvest-secret-")
+    await writeFile(path.join(outside, "secret.txt"), "TOP-SECRET")
+    await writeFile(path.join(outside, "LICENSE"), MIT)
+    await write(root, "cand/src/a.ts", "export const a = 1\n")
+    await symlink(path.join(outside, "secret.txt"), path.join(root, "cand/leak.txt"))
+    await symlink(path.join(outside, "LICENSE"), path.join(root, "cand/LICENSE"))
+    await symlink(outside, path.join(root, "cand/linked-dir"))
+    await plan(root, "local:cand")
+    const scanned = await call(root, "es_harvest_scan", { candidate: "c" })
+    expect(scanned).toContain("License: unknown")
+    await expect(call(root, "es_harvest_read", { candidate: "c", file: "leak.txt" })).rejects.toThrow(/outside|symlink/)
+    await expect(call(root, "es_harvest_read", { candidate: "c", file: "linked-dir/secret.txt" })).rejects.toThrow(
+      /outside|symlink/,
+    )
+    expect(await call(root, "es_harvest_read", { candidate: "c", file: "src/a.ts" })).toContain("export const a")
+  })
+
+  test("scanning never runs git inside harvested content (no repo config executes)", async () => {
+    const root = await tmp("es-harvest-fsmon-")
+    const fx = await gitRepo("es-harvest-fsmon-repo-")
+    dirs.push(fx.root)
+    const sentinel = path.join(root, "FSMONITOR_RAN")
+    await write(fx.root, "src/a.ts", "export const a = 1\n")
+    await commitAll(fx.root)
+    const { run } = await import("../src/util/proc.ts")
+    await run(["git", "config", "core.fsmonitor", `touch ${sentinel}; false`], { cwd: fx.root })
+    // Move the repo inside the project so an agent may scan it.
+    await rename(fx.root, path.join(root, "cand"))
+    await plan(root, "local:cand")
+    await call(root, "es_harvest_scan", { candidate: "c" })
+    expect(await Bun.file(sentinel).exists()).toBe(false)
+    const profile = await readProfile(root, "c")
+    expect(profile?.commit).toMatch(/^[0-9a-f]{40}$/)
+    expect(profile?.size.files).toBe(1)
   })
 })
 
