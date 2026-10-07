@@ -68,8 +68,16 @@ export function gradeScoutFire(
   const failures: string[] = []
   const matches = (verdict: ScoutResult["verdicts"][number], name: string) =>
     verdict.name === name || verdict.candidate === name
+  // One row satisfies at most one expected candidate: a row whose name matches
+  // one expectation and whose candidate matches another must not cover both.
+  const claimed = new Map<number, string>()
+  result.verdicts.forEach((verdict, index) => {
+    const wants = expected.filter((want) => matches(verdict, want.name)).map((want) => want.name)
+    if (wants.length > 1) failures.push(`one verdict row matches several expected candidates: ${wants.join(", ")}`)
+    else if (wants.length === 1) claimed.set(index, wants[0]!)
+  })
   for (const want of expected) {
-    const rows = result.verdicts.filter((verdict) => matches(verdict, want.name))
+    const rows = result.verdicts.filter((_, index) => claimed.get(index) === want.name)
     const got = rows[0]
     if (rows.length > 1) failures.push(`${rows.length} verdicts for ${want.name}`)
     else if (!got) failures.push(`no verdict for ${want.name}`)

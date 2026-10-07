@@ -32,7 +32,11 @@ const model = process.env.ES_EVAL_MODEL
 const stepCeiling = Number(process.env.ES_EVAL_MAX_STEPS || 16)
 const timeoutMs = Number(process.env.ES_EVAL_TIMEOUT_MS || 300_000)
 const budgetUSD = process.env.ES_EVAL_MAX_USD ? Number(process.env.ES_EVAL_MAX_USD) : undefined
-if (budgetUSD !== undefined && !(budgetUSD > 0)) {
+if (!Number.isInteger(stepCeiling) || stepCeiling <= 0) {
+  console.error(`evals: ES_EVAL_MAX_STEPS must be a positive integer (got ${process.env.ES_EVAL_MAX_STEPS}).`)
+  process.exit(2)
+}
+if (budgetUSD !== undefined && !(Number.isFinite(budgetUSD) && budgetUSD > 0)) {
   console.error(`evals: ES_EVAL_MAX_USD must be a positive number (got ${process.env.ES_EVAL_MAX_USD}).`)
   process.exit(2)
 }

@@ -181,6 +181,13 @@ describe("fire graders", () => {
     expect(gradeScoutFire(result([...both, verdict("gpl", "adopt", "adopt")]), want).failures).toEqual([
       "2 verdicts for gpl",
     ])
+    // One row cannot cover two expected candidates (name matches one, candidate another).
+    const double = { ...verdict("mit", "adopt", "adopt"), candidate: "gpl" }
+    expect(gradeScoutFire(result([double]), want).failures).toEqual([
+      "one verdict row matches several expected candidates: mit, gpl",
+      "no verdict for mit",
+      "no verdict for gpl",
+    ])
   })
 
   test("a harvest fire wants the licence line kept: permissive depend, copyleft clean-room", () => {

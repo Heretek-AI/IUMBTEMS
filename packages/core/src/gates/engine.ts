@@ -235,7 +235,10 @@ async function runCommandCheck(
   // Resolve the tool first: inside bwrap a missing binary would look like a failing command.
   const toolMissing = !argv[0]!.includes("/") && !findExecutable(argv[0]!)
   const sandboxed = !toolMissing && bwrapAvailable()
-  if (!sandboxed && context.sandbox === "required") {
+  // A missing tool is reported as missing, not as a sandbox problem: without
+  // bubblewrap there is nothing to sandbox, and with it the binary still
+  // would not resolve inside.
+  if (!sandboxed && context.sandbox === "required" && !toolMissing) {
     await writeFile(log, `$ ${argv.join(" ")}\n${SANDBOX_MISSING}\n`)
     return {
       report: { id: check.id, status: "error", durationMs: 0, findings: 1, log, note: SANDBOX_MISSING },

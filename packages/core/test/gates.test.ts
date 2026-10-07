@@ -112,6 +112,14 @@ describe("the gate sandbox (#51)", () => {
       resetBwrapProbe()
     }
   })
+
+  test("a missing tool is reported as missing, not as a sandbox problem", async () => {
+    const cfg = config([{ id: "probe", kind: "test", command: "definitely-not-installed-xyz" }])
+    await trust(cfg)
+    const report = await gates({ scope: "full", config: cfg, sandbox: "required" })
+    expect(report.findings.map((finding) => finding.rule)).toContain("gates/tool-missing")
+    expect(report.findings.map((finding) => finding.rule)).not.toContain("gates/sandbox-missing")
+  })
 })
 
 describe("trust", () => {

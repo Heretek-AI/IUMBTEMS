@@ -87,11 +87,20 @@ export default Plugin.define({
       const preview: Preview = await call("previewResume")
       const token = await confirm(preview, "Resume")
       if (!token) return
+      const lines = preview.lines.join("\n")
       const drift = preview.lines.some((line) => line.startsWith("Control-file drift"))
-      const flags = [...(drift ? ["--accept-drift"] : [])].join(" ")
+      // The halt reason names the remedy: a ceiling halt takes a new ceiling,
+      // a runtime halt restarts the cap. The values still come from the human.
+      let raise = ""
+      if (/spend ceiling/i.test(preview.lines[0] ?? "")) {
+        const raised = await context.ui.dialog.prompt({ title: "New spend ceiling (USD)", placeholder: "e.g. 50" })
+        if (raised) raise = ` --raise-ceiling ${raised}`
+      }
+      const extend = /runtime cap/i.test(lines) ? " --extend-runtime" : ""
+      const flags = `${drift ? " --accept-drift" : ""}${raise}${extend}`
       await context.ui.dialog.alert({
         title: preview.title,
-        message: `${preview.lines.join("\n")}\n\nRun \`es factory resume${flags ? ` ${flags}` : ""}\` at a terminal with your passphrase.`,
+        message: `${preview.lines.join("\n")}\n\nRun \`es factory resume${flags}\` at a terminal with your passphrase.`,
       })
     })
 

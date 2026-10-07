@@ -6,7 +6,7 @@
 // sealed readers refuse entries without a valid seal. The key is created at
 // plugin setup and lazily everywhere else; agents can neither read the state
 // dir (sandbox mask) nor forge the seal.
-import { createHmac, randomBytes } from "node:crypto"
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 import { mkdir, open, readFile } from "node:fs/promises"
 import path from "node:path"
 import { stateDir } from "../layout.ts"
@@ -43,6 +43,13 @@ export function sealMeta(meta: Record<string, unknown>, key: Buffer): string {
 
 /** Whether `meta.seal` is a valid seal by `key` over the rest of `meta`. */
 export function verifyMetaSeal(meta: Record<string, unknown>, key: Buffer): boolean {
-  if (typeof meta.seal !== "string" || meta.seal.length !== 64) return false
-  return sealMeta(meta, key) === meta.seal
+  if (typeof meta.seal !== "string") return false
+  let presented: Buffer
+  try {
+    presented = Buffer.from(meta.seal, "hex")
+  } catch {
+    return false
+  }
+  const expected = Buffer.from(sealMeta(meta, key), "hex")
+  return presented.length === expected.length && timingSafeEqual(presented, expected)
 }
