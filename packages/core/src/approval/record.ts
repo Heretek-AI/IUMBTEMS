@@ -46,14 +46,24 @@ function zodMessage(error: unknown): string {
 export async function approvalSubject(root: string, stage: ApprovalStage): Promise<ApprovalSubject> {
   const layout = factoryLayout(root)
   if (stage === "frontier") {
-    const text = await readArtifact(root, layout.frontier)
+    let text: string
+    try {
+      text = await readArtifact(root, layout.frontier)
+    } catch {
+      throw new ApprovalError(
+        `missing artifact ${rel(root, layout.frontier)} — run /grill and save the design tree with es_frontier_write (grill seat only), then request approval again`,
+      )
+    }
     let frontier: Frontier
     try {
       frontier = FrontierSchema.parse(JSON.parse(text))
     } catch (error) {
       throw new ApprovalError(`frontier.json is invalid: ${zodMessage(error)}`)
     }
-    if (!frontier.settled) throw new ApprovalError("the frontier is not settled yet; finish the grill first")
+    if (!frontier.settled)
+      throw new ApprovalError(
+        "the frontier is not settled yet; finish the grill first (/grill), then request approval again",
+      )
     const open = frontier.nodes.filter((node) => node.status !== "settled").length
     return {
       subject: [{ path: rel(root, layout.frontier), sha256: sha256(text) }],

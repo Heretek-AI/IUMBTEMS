@@ -134,6 +134,12 @@ const BOOLEAN_FLAGS = [
 export async function main(argv: readonly string[], io: MainIO): Promise<number> {
   const args = parseArgs(argv, BOOLEAN_FLAGS)
   const [command, sub, ...rest] = args.positionals
+  // `--help` is side-effect free on every subcommand: print usage without
+  // minting runs, writing files, or touching the factory state.
+  if (args.flags.help === true) {
+    io.print(HELP)
+    return 0
+  }
   const root = await projectRoot(path.resolve(io.cwd, flag(args, "cwd") ?? "."))
   const context: HumanContext = {
     root,

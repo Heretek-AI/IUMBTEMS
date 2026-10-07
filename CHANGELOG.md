@@ -1,6 +1,23 @@
 # Changelog
 
-## 1.0.0 (unreleased)
+## 1.0.5 — 2026-10-07
+
+Run-lifecycle gaps from dogfooding 1.0.4 (#19):
+
+- `es … --help` is now side-effect free on every subcommand: it prints usage
+  and exits 0 without minting runs or writing files. Previously
+  `es factory begin --help` minted a phantom `run-…` GRILL state.
+- `/factory` with no run no longer dead-ends the agent: the command itself
+  replies "No factory run here yet — run /grill first."
+- A missing or unsettled frontier now points at the recording step instead of
+  a bare "missing artifact" error: `approvalSubject` and
+  `es_request_approval` direct the human to `/grill`
+  (or `es factory begin` + grill flow). No new write path: agents stay
+  deny-write on `frontier.json`, approvals stay human-only.
+- `factory` prompt v2 → v3: stop and route to `/grill` when `<factory-state>`
+  reports no run.
+
+## 1.0.4 — 2026-10-07
 
 The 1.0 cutover replaces the Python research harness with the TypeScript
 **Epistemic Swarm** monorepo (`@heretek-ai/es-core`, `@heretek-ai/es-cli`,

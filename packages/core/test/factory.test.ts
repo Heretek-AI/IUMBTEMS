@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, readFile, truncate, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { recordApproval, verifyApproval } from "../src/approval/index.ts"
+import { approvalSubject, recordApproval, verifyApproval } from "../src/approval/index.ts"
 import { verifyAuditChain } from "../src/audit/index.ts"
 import { Factory, FactoryError, FactoryHalted, type GateRequest, type GateRunLike } from "../src/factory/index.ts"
 import { factoryLayout } from "../src/layout.ts"
@@ -81,6 +81,21 @@ describe("grill → research → spec", () => {
     await expect(factory.writeFrontier("es-programmer", frontier())).rejects.toThrow("Only the grill or factory seat")
     await factory.writeFrontier("grill", frontier())
     expect(JSON.parse(await readFile(factoryLayout(fx.root).frontier, "utf8")).idea).toBe("A greeting library")
+  })
+
+  test("a missing or unsettled frontier points at the grill recording step", async () => {
+    await expect(approvalSubject(fx.root, "frontier")).rejects.toThrow("/grill")
+    await factory.begin("human:tester")
+    await factory.writeFrontier("grill", frontier({ settled: false }))
+    await expect(approvalSubject(fx.root, "frontier")).rejects.toThrow("/grill")
+  })
+
+  test("es_request_approval refusal routes a missing frontier to the grill flow", async () => {
+    const { esTools } = await import("../src/ops/tools.ts")
+    const request = esTools({ root: fx.root, factory, stateDir: fx.state }).find(
+      (def) => def.name === "es_request_approval",
+    )!
+    await expect(request.execute({ stage: "frontier" }, { agent: "grill" })).rejects.toThrow("/grill")
   })
 
   test("research needs a genuine, unchanged frontier approval and takes the ceiling from it", async () => {

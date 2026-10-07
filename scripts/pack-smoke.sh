@@ -12,9 +12,16 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 out="${1:-$(mktemp -d)}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
+# Drop tarballs from previous runs: a stale same-name version would shadow the
+# fresh pack when npm resolves the workspace dependencies between tarballs.
+rm -f "$out"/heretek-ai-es-core-*.tgz "$out"/heretek-ai-es-cli-*.tgz "$out"/heretek-ai-epistemic-swarm-*.tgz
 
 (cd "$root/packages/core" && rm -rf dist tsconfig.tsbuildinfo && bunx tsc -b)
 (cd "$root/packages/cli" && rm -rf dist && bun run build >/dev/null)
+# The TUI entry ships pre-compiled: the host Solid transform skips
+# node_modules, where npm-installed plugins live, so raw .tsx would fall back
+# to react-jsx and fail on 'react' at load.
+(cd "$root/packages/opencode" && rm -rf dist && bun run build >/dev/null)
 for pkg in core cli opencode; do
   (cd "$root/packages/$pkg" && bun pm pack --destination "$out" >/dev/null)
 done
