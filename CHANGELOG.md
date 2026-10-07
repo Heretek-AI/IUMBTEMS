@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.2 (unreleased)
+## 1.1.2 — 2026-10-07
 
 Proof-of-work follow-up to the 1.1.1 security release (#54).
 
