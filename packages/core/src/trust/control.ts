@@ -124,14 +124,20 @@ export async function snapshotControl(root: string): Promise<Record<string, stri
 
 /** Record the current control-file hashes. Call only from code acting for a human or the system. */
 export async function rebaseline(root: string, updatedBy: string): Promise<ControlBaseline> {
-  const baseline: ControlBaseline = {
-    version: 1,
-    files: await snapshotControl(root),
-    updatedAt: new Date().toISOString(),
-    updatedBy,
-  }
-  await writeJson(factoryLayout(root).control, baseline)
-  return baseline
+  // Held under the control lock (like repinControl): an interleaved re-pin
+  // must not overwrite a fresh baseline with a stale snapshot (#32, CI-only
+  // es_build_start refusal with a just-recorded approval missing).
+  const file = factoryLayout(root).control
+  return withLock(file, async () => {
+    const baseline: ControlBaseline = {
+      version: 1,
+      files: await snapshotControl(root),
+      updatedAt: new Date().toISOString(),
+      updatedBy,
+    }
+    await writeJson(file, baseline)
+    return baseline
+  })
 }
 
 /**
