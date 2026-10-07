@@ -63,6 +63,7 @@ import {
   type HumanContext,
   rebaselineControl,
   recordPr,
+  reseal,
   resume,
   retract,
   trust,
@@ -94,6 +95,7 @@ Checkpoints and exceptions                                      [human, TTY]
   approve <frontier|spec>       Approve a checkpoint (shows hashes; asks for the passphrase)
   trust [--show]                Approve this project's gate commands by hash
   rebaseline                    Accept hand edits to pinned control files (gates.json, config.json)
+  reseal [--sign]               Verify engine sidecars (re-sign reviewed files)   [human, TTY]
   waive <rule> --reason "…" [--files <glob>] [--expires 7d] [--id <name>]
   key seal                      Create the passphrase-sealed human key   [human, TTY]
   key status                    Show the human key fingerprint
@@ -162,6 +164,7 @@ const BOOLEAN_FLAGS = [
   "allow-unverifiable",
   "global",
   "open-only",
+  "sign",
 ]
 
 export async function main(argv: readonly string[], io: MainIO): Promise<number> {
@@ -216,6 +219,8 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         return await trust(context, subArgs(1))
       case "rebaseline":
         return await rebaselineControl(context)
+      case "reseal":
+        return await reseal(context, args.flags.sign === true)
       case "waive":
         return await waive(context, subArgs(1))
       case "key": {

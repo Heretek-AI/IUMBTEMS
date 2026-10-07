@@ -116,6 +116,11 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
    asset drift checker with its canary).
 7. **The factory never pushes the base branch**; release opens a draft PR a
    human merges, and publish runs through OIDC trusted publishing.
+8. **Engine-owned run state is sealed.** `.factory/runtime/state.json` carries
+   a signed sidecar (HMAC under the masked engine key); reads refuse a
+   missing or forged seal, and only a human re-signs reviewed files
+   (`es reseal --sign`, terminal passphrase confirm; agents have no reseal
+   path — no tool, shell verb denied).
 
 ## 5. Evaluations
 

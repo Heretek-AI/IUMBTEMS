@@ -16,6 +16,7 @@ import path from "node:path"
 import { gradeFireCase } from "../packages/core/src/evals/fires.ts"
 import { caseStepCap, type EvalCase, evalWorkspace, runEvalCase } from "../packages/core/src/evals/run.ts"
 import { renderEvalPrompt, startServeFixtures } from "../packages/core/src/evals/serve.ts"
+import { engineSignedFiles, signEngineFile } from "../packages/core/src/trust/sidecar.ts"
 
 const root = path.resolve(import.meta.dir, "..")
 const casesDir = path.join(root, "evals/cases")
@@ -83,6 +84,14 @@ for (const file of files) {
     model,
     files: await seedFiles(testCase.files as Record<string, string> | undefined),
   })
+  // Seeded engine-owned files (reviewed fixtures, e.g. the audit-fires run)
+  // are adopted the way `es reseal --sign` adopts them: signed under this
+  // workspace's engine key before the model runs, so the seal check cannot
+  // tell reviewed fixtures from forged ones — review them like code.
+  for (const file of engineSignedFiles(workspace.dir)) {
+    const seeded = (testCase.files as Record<string, string> | undefined)?.[path.relative(workspace.dir, file)]
+    if (seeded !== undefined) await signEngineFile(file, workspace.stateDir)
+  }
   try {
     const ran = await runEvalCase(testCase, workspace, { binary, maxSteps, timeoutMs, budgetUSD: remaining })
     spentUSD += ran.transcript.costUSD

@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.1.2 (unreleased)
+
+Proof-of-work follow-up to the 1.1.1 security release (#54).
+
+- **`audit.phase: optional|required` (#33).** Default `optional` keeps 1.1.x
+  behaviour; `es config set audit.phase required` refuses merges of QA-passed
+  phases without a passed or human-dismissed audit. The factory prompt (v6)
+  opens the phase audit as the phase enters QA when required.
+- **`@@CHILD` testkit directive (#34).** Delegated child sessions receive
+  scripted tool calls through the parent's subagent prompt; the parent's
+  `@@CALL` script no longer consumes them.
+- **Pipeline A.** Deterministic real-host factory loop (grill → research with
+  a deferred fact → spec → two phases with build/QA/audit, a QA fail and a
+  STOP/resume → release → DONE), with required audits reached through
+  delegation; merge-blocking in CI.
+- **B eval cases.** research, thesis auditor, programmer, adversarial QA and
+  designer cases with staged fixtures and a localhost fixture server
+  (`{{SERVE_URL}}`); validated locally, scored nightly.
+- **Signed sidecars.** `.factory/runtime/state.json` carries an HMAC sidecar
+  under the masked engine key; reads refuse pre-seeded or tampered state and
+  only a human re-signs reviewed files (`es reseal --sign`).
+
 ## 1.1.1 — 2026-10-07
 
 Security release (#35). The 1.1.0 adversarial audit broke the text-matched

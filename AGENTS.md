@@ -48,6 +48,7 @@ spike as proof).
 | Scout verdicts are computed by core: `adopt` survives only for a verified, whitelisted, permissive license | `scout/verdict.ts` |
 | Gate command sets are trust-pinned by hash; untrusted commands never run | `trust/store.ts` |
 | `.factory/STOP` halts seats and `es_*` tools; the run's spend ceiling is mandatory | `factory/machine.ts` |
+| Engine-owned run state is sidecar-signed (HMAC under the masked engine key): reads refuse a missing/forged seal; only a human re-signs reviewed files (`es reseal --sign`, terminal passphrase; no agent path) | `trust/sidecar.ts`, `factory/machine.ts` |
 | The factory never pushes to the base branch; release opens a draft PR a human merges | `factory/machine.ts`, `pr.ts` |
 | Every write to `.factory/` runtime state is atomic + lock-protected | `util/fs.ts` |
 | Generated docs/schemas must match the source of truth (CI drift check) | `scripts/docs.ts` |

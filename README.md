@@ -75,10 +75,12 @@ rather than silently assumed:
 - **Control-file baseline.** `verifyControl` hashes the files a human
   authorises — `gates.json`, `config.json`, `frontier.json`, `approvals/**`,
   `waivers/**`; a hand edit is drift until a human accepts it (`es rebaseline`).
-  Everything else that is a control file (engine-owned brainstorm, harvest and
-  design state, `runtime/**`, `.git/config`) is deny-write for agents but is
-  not individually hashed on every run. Signed sidecars for other artifacts
-  move to 1.1.2.
+  The run state (`.factory/runtime/state.json`) carries a signed sidecar
+  (HMAC under the masked engine key): reads refuse a missing or forged seal,
+  and only a human re-signs reviewed files (`es reseal --sign`). Everything
+  else that is a control file (engine-owned brainstorm, harvest and design
+  state, the research evidence, `.git/config`) is deny-write for agents but
+  is not individually sealed on every run.
 - **Licence detection is strict.** A permissive verdict needs the whole licence
   file to match an SPDX template; mixed, notice-only (e.g. an Apache header
   without the licence text) or concatenated licence files are "unknown" and

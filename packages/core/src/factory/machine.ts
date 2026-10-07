@@ -34,6 +34,7 @@ import { type Frontier, FrontierSchema } from "../schema/frontier.ts"
 import { type AcceptanceCriterion, parseGoalMarkdown } from "../schema/goal.ts"
 import { RoadmapSchema } from "../schema/roadmap.ts"
 import { rebaseline, repinControl, verifyControl } from "../trust/control.ts"
+import { signEngineFile, verifyEngineFile } from "../trust/sidecar.ts"
 import { checkStopFile } from "../trust/stop.ts"
 import { appendLine, exists, readJson, relativeInside, withLock, writeJson } from "../util/fs.ts"
 import { sha256 } from "../util/hash.ts"
@@ -169,6 +170,15 @@ export class Factory {
       throw new FactoryError(
         `.factory/runtime/state.json is a version ${String(raw.version)} run; 1.1 needs a fresh run (state version ${FACTORY_STATE_VERSION}). A human removes .factory/runtime/state.json (and an old frontier) and starts again with /grill.`,
       )
+    // The run state is engine-owned: a missing or forged sidecar means the
+    // file was pre-seeded or tampered with outside the engine. Only a human
+    // re-signs it (`es reseal --sign`) after reviewing what changed.
+    const problem = await verifyEngineFile(this.layout.state, this.deps.stateDir)
+    if (problem)
+      throw new FactoryError(
+        `.factory/runtime/state.json has a ${problem}: it was not written by this engine. ` +
+          `Review it (es_status will not run), then a human re-signs it with \`es reseal --sign\`.`,
+      )
     return FactoryStateSchema.parse(raw)
   }
 
@@ -189,6 +199,7 @@ export class Factory {
   private async save(state: FactoryState) {
     state.updatedAt = this.now().toISOString()
     await writeJson(this.layout.state, FactoryStateSchema.parse(state))
+    await signEngineFile(this.layout.state, this.deps.stateDir)
   }
 
   private audit(actor: string, action: string, payload: Record<string, unknown> = {}) {
