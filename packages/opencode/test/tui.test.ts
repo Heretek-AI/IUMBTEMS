@@ -10,6 +10,8 @@ function fakeContext(confirmAnswer: boolean) {
   const calls: Array<[string, any]> = []
   const toasts: string[] = []
   const layers: any[] = []
+  const slots: any[] = []
+  const opened: string[] = []
   const rpc = new Proxy(
     { events: { on: () => () => {} } },
     {
@@ -37,6 +39,10 @@ function fakeContext(confirmAnswer: boolean) {
     location: { directory: "/tmp/x" },
     data: { location: { default: () => ({ directory: "/tmp/x" }) } },
     client: { rpc: () => rpc },
+    slot: (claim: any) => {
+      slots.push(claim)
+      return () => {}
+    },
     ui: {
       toast: { show: (toast: any) => toasts.push(toast.message) },
       dialog: {
@@ -44,6 +50,14 @@ function fakeContext(confirmAnswer: boolean) {
         alert: async () => {},
         select: async () => "frontier",
         prompt: async () => undefined,
+      },
+      panel: {
+        open: (name: string) => {
+          opened.push(name)
+          return true
+        },
+        close: () => {},
+        current: () => undefined,
       },
     },
     keymap: {
@@ -53,7 +67,7 @@ function fakeContext(confirmAnswer: boolean) {
       },
     },
   }
-  return { context, calls, toasts, layers }
+  return { context, calls, toasts, layers, slots, opened }
 }
 
 test("slash commands register; approval goes preview → confirm → approve(token)", async () => {
@@ -67,6 +81,10 @@ test("slash commands register; approval goes preview → confirm → approve(tok
     "es-resume",
     "es-status",
     "es-lsp-install",
+    "es-factory",
+    "es-lsp-panel",
+    "es-hooks",
+    "es-brainstorm",
   ])
   await commands[0].run()
   expect(confirmed.calls.map(([method]) => method)).toEqual(["status", "previewApproval", "approve"])
@@ -77,4 +95,23 @@ test("slash commands register; approval goes preview → confirm → approve(tok
   plugin.setup(cancelled.context)
   await cancelled.layers[0].commands[0].run()
   expect(cancelled.calls.map(([method]) => method)).toEqual(["status", "previewApproval"])
+})
+
+test("four panels claim session.panel and their commands open them", async () => {
+  const plugin = (await import("../src/tui.tsx")).default as any
+  const fx = fakeContext(true)
+  plugin.setup(fx.context)
+
+  expect(fx.slots).toHaveLength(4)
+  for (const claim of fx.slots) {
+    expect(claim.append).toBe("session.panel")
+    // Each claim renders only for its own panel name (other names are null).
+    expect(claim.render({ name: "other" })).toBeNull()
+  }
+
+  const commands = new Map(fx.layers[0].commands.map((command: any) => [command.id, command]))
+  for (const name of ["factory", "lsp", "hooks", "brainstorm"]) {
+    await commands.get(`es.panel.${name}`).run()
+  }
+  expect(fx.opened).toEqual(["factory", "lsp", "hooks", "brainstorm"])
 })

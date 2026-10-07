@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto"
 import {
   type ApprovalStage,
   approvalSubject,
+  capabilityLoss,
   commandSetHash,
   factoryLayout,
   factorySummary,
@@ -14,6 +15,10 @@ import {
   installServer,
   isTrusted,
   loadGatesConfig,
+  readIdeas,
+  readPlan,
+  readResult,
+  readScores,
   recordApproval,
   recordConsent,
   trustProject,
@@ -73,6 +78,91 @@ export function createRpcHandlers(runtime: Runtime, notify: () => Promise<void>,
         summary: factorySummary(state),
         stage: state?.stage ?? "NONE",
         pending: (await pendingApprovals(runtime.root)).map((item) => item.stage),
+      }
+    },
+    factoryState: async () => {
+      const state = await runtime.factory.read()
+      return {
+        stage: state?.stage ?? "NONE",
+        ...(state?.runId ? { runId: state.runId } : {}),
+        ...(state?.halt ? { halt: state.halt.reason } : {}),
+        ...(state?.release?.prUrl ? { release: state.release.prUrl } : {}),
+        ...(state?.activePhase ? { activePhase: state.activePhase } : {}),
+        spend: {
+          usd: state?.spend.usd ?? 0,
+          estimated: state?.spend.estimated ?? false,
+          ...(state?.spendCeilingUSD ? { ceilingUSD: state.spendCeilingUSD } : {}),
+        },
+        phases: (state?.phases ?? []).map((phase) => ({
+          id: phase.id,
+          title: phase.title,
+          status: phase.status,
+          failures: phase.failures,
+          qa: Object.fromEntries(Object.entries(phase.qa).filter(([, verdict]) => verdict !== undefined)),
+        })),
+        pending: (await pendingApprovals(runtime.root)).map((item) => item.stage),
+      }
+    },
+    lspState: async () => {
+      const status = await runtime.lsp.status()
+      const settings = await runtime.lsp.settings()
+      const servers = []
+      for (const server of settings.servers) {
+        const command = await runtime.lsp.command(server, runtime.root)
+        servers.push({
+          id: server.id,
+          extensions: server.extensions,
+          available: Array.isArray(command),
+          command: Array.isArray(command) ? command.join(" ") : String((command as any)?.unavailable ?? "unavailable"),
+          running: status.running.filter((item) => item.id === server.id).length,
+        })
+      }
+      return { enabled: status.enabled, servers, diagnostics: status.diagnostics }
+    },
+    hooksState: async () => {
+      await hooks?.reload()
+      const status = hooks?.status()
+      return {
+        handlers: status?.handlers ?? 0,
+        projectHandlers: status?.projectHandlers ?? 0,
+        trusted: status?.trusted ?? true,
+        projectLines: status?.projectLines ?? [],
+        diagnostics: status?.diagnostics ?? [],
+        recent: hooks?.recent.slice(-10) ?? [],
+        loss: capabilityLoss(hooks?.list() ?? [], "opencode").map((item) => ({
+          source: item.source,
+          event: item.event,
+          handler: item.handler,
+          support: item.support,
+          reason: item.reason,
+        })),
+      }
+    },
+    brainstormState: async () => {
+      const plan = await readPlan(runtime.root).catch(() => undefined)
+      if (!plan) return { active: false }
+      const ideas = await readIdeas(runtime.root).catch(() => [])
+      const scores = await readScores(runtime.root).catch(() => [])
+      const result = await readResult(runtime.root).catch(() => undefined)
+      const survivors = ideas.filter((idea) => !idea.duplicateOf)
+      return {
+        active: true,
+        brief: plan.brief.idea,
+        lenses: plan.lenses,
+        ideas: survivors.length,
+        duplicates: ideas.length - survivors.length,
+        scored: scores.length,
+        coverage: Object.fromEntries(
+          plan.lenses.map((lens) => [lens, survivors.filter((idea) => idea.lens === lens).length]),
+        ),
+        shortlist: (result?.shortlist ?? []).map((entry) => ({
+          id: entry.id,
+          total: entry.total,
+          outlier: entry.outlier,
+          title: result?.ideas.find((idea) => idea.id === entry.id)?.title ?? entry.id,
+        })),
+        gaps: result?.gaps ?? [],
+        complete: Boolean(result),
       }
     },
     previewApproval: async (input: unknown) => {

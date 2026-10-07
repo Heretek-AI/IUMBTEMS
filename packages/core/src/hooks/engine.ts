@@ -159,6 +159,11 @@ export class HookEngine {
     return this.loaded.handlers.some((item) => item.event === event)
   }
 
+  /** Every loaded handler (the hook inspector and capability loss read this). */
+  list(): readonly SourcedHandler[] {
+    return this.loaded.handlers
+  }
+
   private select(event: string, matchValues: readonly string[], tool?: CanonicalTool): SourcedHandler[] {
     return this.loaded.handlers.filter((item) => {
       if (item.event !== event) return false

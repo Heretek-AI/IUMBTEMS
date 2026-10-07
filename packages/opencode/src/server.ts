@@ -1,7 +1,18 @@
 // Epistemic Swarm for OpenCode v2 (server plugin). Additive: registers our
 // agents, tools, skills, commands, hooks and RPC through runtime transforms;
 // writes no config files and never touches built-in agents or defaults.
-import { factorySummary, formatReport, git, loadSkills, runGates } from "@heretek-ai/es-core"
+import { readdir, readFile } from "node:fs/promises"
+import path from "node:path"
+import {
+  factoryLayout,
+  factorySummary,
+  formatReport,
+  git,
+  loadSkills,
+  readJson,
+  researchSourcesDir,
+  runGates,
+} from "@heretek-ai/es-core"
 import { Plugin } from "@opencode/plugin"
 import { compileAgents } from "./agents.ts"
 import { createFactoryContinuation } from "./continue.ts"
@@ -231,6 +242,36 @@ export default Plugin.define({
         description: "Show the factory state (Epistemic Swarm)",
         execute: async ({ sessionID }) => {
           await ctx.session.synthetic({ sessionID, text: factorySummary(await runtime.factory.read()) } as any)
+        },
+      })
+      editor.add({
+        name: "research",
+        description: "Research stage: report, audit coverage and cached sources (Epistemic Swarm)",
+        execute: async ({ sessionID }) => {
+          const layout = factoryLayout(runtime.root)
+          const report = await readFile(layout.researchReport, "utf8").catch(() => undefined)
+          const coverage = await readJson<{
+            claims?: number
+            grounded?: number
+            untagged?: number
+            ungrounded?: number
+            malformed?: number
+            sources?: number
+            passed?: boolean
+          }>(path.join(layout.research, "coverage.json")).catch(() => undefined)
+          const sources = (await readdir(researchSourcesDir(runtime.root)).catch(() => [])).filter((file) =>
+            file.endsWith(".md"),
+          )
+          const lines = [
+            report === undefined
+              ? "No research report yet (.factory/research/REPORT.md)."
+              : `Report: ${report.length} characters in .factory/research/REPORT.md.`,
+            coverage
+              ? `Audit: ${coverage.grounded ?? 0}/${coverage.claims ?? 0} claims grounded (untagged ${coverage.untagged ?? 0}, ungrounded ${coverage.ungrounded ?? 0}, malformed ${coverage.malformed ?? 0}); cited sources ${coverage.sources ?? 0}; passed ${coverage.passed ? "yes" : "no"}.`
+              : "No coverage.json yet (es_research_complete writes it).",
+            `Cached sources: ${sources.length}.`,
+          ]
+          await ctx.session.synthetic({ sessionID, text: lines.join("\n") } as any)
         },
       })
     })

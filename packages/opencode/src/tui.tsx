@@ -4,6 +4,7 @@
 // token, so what the human saw is exactly what gets signed.
 import { userInfo } from "node:os"
 import { Plugin } from "@opencode/plugin/tui"
+import { registerPanels } from "./panels.tsx"
 import { EsRpc } from "./rpc-def.ts"
 
 type Preview = { ok: boolean; title: string; lines: string[]; problems: string[]; token?: string }
@@ -14,6 +15,7 @@ export default Plugin.define({
     const rpc = context.client.rpc(EsRpc) as any
     const location = () => context.location ?? context.data.location.default()
     const call = (method: string, input: unknown = {}) => rpc[method](input, { location: location() })
+    const stopPanels = registerPanels(context, call)
     const user = userInfo().username
     const toast = (message: string, variant: "success" | "error" | "info" = "info") =>
       context.ui.toast.show({ title: "Epistemic Swarm", message, variant })
@@ -152,10 +154,53 @@ export default Plugin.define({
           slash: { name: "es-lsp-install", arguments: true },
           run: lspInstall,
         },
+        {
+          id: "es.panel.factory",
+          title: "Epistemic Swarm: factory dashboard",
+          group: "Epistemic Swarm",
+          palette: true,
+          slash: { name: "es-factory" },
+          run: () => {
+            context.ui.panel.open("factory", { presentation: "fullscreen" })
+          },
+        },
+        {
+          id: "es.panel.lsp",
+          title: "Epistemic Swarm: language server panel",
+          group: "Epistemic Swarm",
+          palette: true,
+          slash: { name: "es-lsp-panel" },
+          run: () => {
+            context.ui.panel.open("lsp", { presentation: "fullscreen" })
+          },
+        },
+        {
+          id: "es.panel.hooks",
+          title: "Epistemic Swarm: hook inspector",
+          group: "Epistemic Swarm",
+          palette: true,
+          slash: { name: "es-hooks" },
+          run: () => {
+            context.ui.panel.open("hooks", { presentation: "fullscreen" })
+          },
+        },
+        {
+          id: "es.panel.brainstorm",
+          title: "Epistemic Swarm: brainstorm board",
+          group: "Epistemic Swarm",
+          palette: true,
+          slash: { name: "es-brainstorm" },
+          run: () => {
+            context.ui.panel.open("brainstorm", { presentation: "fullscreen" })
+          },
+        },
       ],
     }))
 
     const stop = rpc.events.on("changed", (event: any) => toast(`Factory → ${event.data.stage}`))
-    return () => stop()
+    return () => {
+      stopPanels()
+      stop()
+    }
   },
 })

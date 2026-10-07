@@ -61,6 +61,28 @@ describe("integrity on the real host", () => {
     expect(await exists(path.join(h.directory, ".factory/waivers/w.json"))).toBe(false)
   })
 
+  test("panel RPCs return structured state for the four dashboards", async () => {
+    const rpc = rpcFor(h)
+    const factory = await rpc.factoryState({}, where(h))
+    expect(factory.stage).toBe("NONE")
+    expect(factory.spend).toMatchObject({ usd: 0, estimated: false })
+    expect(Array.isArray(factory.phases)).toBe(true)
+    expect(Array.isArray(factory.pending)).toBe(true)
+
+    const lsp = await rpc.lspState({}, where(h))
+    expect(typeof lsp.enabled).toBe("boolean")
+    expect(Array.isArray(lsp.servers)).toBe(true)
+    expect(lsp.servers.length).toBeGreaterThan(0)
+
+    const hooks = await rpc.hooksState({}, where(h))
+    expect(typeof hooks.handlers).toBe("number")
+    expect(typeof hooks.trusted).toBe("boolean")
+    expect(Array.isArray(hooks.loss)).toBe(true)
+
+    const brainstorm = await rpc.brainstormState({}, where(h))
+    expect(brainstorm).toEqual({ active: false })
+  })
+
   test("the user's build agent sees only the read-only es tools; factory agents get the state block", async () => {
     await h.run("hello")
     const build = lastAgentRequest(h.llm.requests)

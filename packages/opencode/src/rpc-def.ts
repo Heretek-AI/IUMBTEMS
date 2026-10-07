@@ -66,6 +66,69 @@ export const EsRpc = Rpc.define({
       output: obj({ message: str }, ["message"]),
       errors: { refused: obj({ reason: str }, ["reason"]) },
     },
+    factoryState: {
+      input: obj({}),
+      output: obj(
+        {
+          stage: str,
+          runId: str,
+          halt: str,
+          release: str,
+          activePhase: str,
+          spend: obj({ usd: { type: "number" }, estimated: { type: "boolean" }, ceilingUSD: { type: "number" } }, [
+            "usd",
+            "estimated",
+          ]),
+          phases: { type: "array" },
+          pending: strArray,
+        },
+        ["stage", "spend", "phases", "pending"],
+      ),
+    },
+    lspState: {
+      input: obj({}),
+      output: obj(
+        {
+          enabled: { type: "boolean" },
+          servers: { type: "array" },
+          diagnostics: strArray,
+        },
+        ["enabled", "servers", "diagnostics"],
+      ),
+    },
+    hooksState: {
+      input: obj({}),
+      output: obj(
+        {
+          handlers: { type: "number" },
+          projectHandlers: { type: "number" },
+          trusted: { type: "boolean" },
+          projectLines: strArray,
+          diagnostics: strArray,
+          recent: strArray,
+          loss: { type: "array" },
+        },
+        ["handlers", "projectHandlers", "trusted", "projectLines", "diagnostics", "recent", "loss"],
+      ),
+    },
+    brainstormState: {
+      input: obj({}),
+      output: obj(
+        {
+          active: { type: "boolean" },
+          brief: str,
+          lenses: strArray,
+          ideas: { type: "number" },
+          duplicates: { type: "number" },
+          scored: { type: "number" },
+          coverage: { type: "object" },
+          shortlist: { type: "array" },
+          gaps: strArray,
+          complete: { type: "boolean" },
+        },
+        ["active"],
+      ),
+    },
   },
   events: {
     changed: { schema: obj({ stage: str, summary: str }, ["stage", "summary"]) },
