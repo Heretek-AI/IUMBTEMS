@@ -1,11 +1,13 @@
 // `es`: the Epistemic Swarm CLI. Human-only actions (approve, trust, waive,
 // resume, git hooks) require an interactive terminal and a typed code; agent
 // shells are denied these commands by policy as well.
+import { readFile } from "node:fs/promises"
 import path from "node:path"
 import {
   atomicWrite,
   brainstormPaths,
   buildPlan,
+  candidateId,
   capabilityLoss,
   Factory,
   factoryLayout,
@@ -14,19 +16,26 @@ import {
   gateRunner,
   git,
   HookEngine,
+  harvestPaths,
   installServer,
   LENSES,
   LspManager,
   loadHooks,
+  parseSource,
   readIdeas as readBrainstormIdeas,
   readPlan as readBrainstormPlan,
   readResult as readBrainstormResult,
   readScores as readBrainstormScores,
+  readHarvestPlan,
+  readProfiles as readHarvestProfiles,
+  readHarvestResult,
   recordConsent,
   renderBrainstorm,
   researchTools,
+  scanSource,
   startRun as startBrainstorm,
   verifyAuditChain,
+  writeProfile,
 } from "@heretek-ai/es-core"
 import { type Args, flag, parseArgs } from "./args.ts"
 import { gatesRun, installGitHooks } from "./gates.ts"
@@ -69,6 +78,8 @@ Other
         [--lenses a,b] [--ideas N] [--shortlist N] [--force]
   brainstorm show [--json]      Show the plan/progress or the finished shortlist
   brainstorm lenses             List the built-in divergent lenses
+  harvest show [--json]         Show the teardown plan/progress or the report
+  harvest scan <source>         Scan one source (local path, git URL, github:owner/repo, npm:name)
   lsp [status]                  Language servers and how each resolves
   lsp diagnostics <file>        Diagnostics for one file
   lsp install <server>          Pinned, checksummed install   [human, TTY]
@@ -240,6 +251,70 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           return 1
         }
         io.print('Usage: es brainstorm plan "<idea>" | show [--json] | lenses')
+        return 2
+      }
+      case "harvest": {
+        const paths = harvestPaths(root)
+        if (sub === "scan" && rest.length) {
+          const spec = rest.join(" ")
+          const source = parseSource(spec)
+          const name =
+            source.kind === "local"
+              ? path.basename(path.resolve(root, source.path))
+              : source.kind === "registry"
+                ? source.name
+                : (source.kind === "git" ? source.url : source.repo)
+                    .split("/")
+                    .filter(Boolean)
+                    .pop()!
+                    .replace(/\.git$/, "")
+          const id = candidateId(name)
+          try {
+            const profile = await scanSource(root, id, source, {})
+            await writeProfile(root, profile)
+            io.print(
+              [
+                `Scanned ${id}: ${profile.name}`,
+                `License: ${profile.license.spdx} (${profile.license.family}, ${profile.license.source}, ${profile.license.verified ? "verified" : "UNVERIFIED"})`,
+                `Size: ${profile.size.files} files, ~${profile.size.tokens} tokens`,
+                ...profile.warnings.map((warning) => `⚠ ${warning}`),
+                `Written: ${paths.profile(id)}`,
+              ].join("\n"),
+            )
+            return 0
+          } catch (error) {
+            io.print(error instanceof Error ? error.message : String(error))
+            return 1
+          }
+        }
+        if (sub === "show" || sub === undefined) {
+          const result = await readHarvestResult(root).catch(() => undefined)
+          if (result) {
+            const report = await readFile(paths.report, "utf8").catch(() => undefined)
+            io.print(
+              args.flags.json === true ? JSON.stringify(result, null, 2) : (report ?? `${paths.report} is missing`),
+            )
+            return 0
+          }
+          const plan = await readHarvestPlan(root).catch(() => undefined)
+          if (plan) {
+            const profiles = await readHarvestProfiles(root).catch(() => [])
+            const scanned = new Set(profiles.map((profile) => profile.id))
+            io.print(
+              [
+                `Darkharvest in progress: ${plan.objective}`,
+                `Candidates: ${plan.candidates.map((candidate) => `${candidate.id}${scanned.has(candidate.id) ? " ✓" : ""}`).join(", ")}`,
+                `Scanned ${profiles.length}/${plan.candidates.length} · read budget ${plan.readTokensPerCandidate} tokens per candidate`,
+              ].join("\n"),
+            )
+            return 0
+          }
+          io.print(
+            `No darkharvest in ${paths.dir}. Start one with /harvest in OpenCode or \`es harvest scan <source>\`.`,
+          )
+          return 1
+        }
+        io.print("Usage: es harvest show [--json] | scan <source>")
         return 2
       }
       case "lsp": {

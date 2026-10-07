@@ -17,9 +17,10 @@ export type Seat =
   | "brainstormer"
   | "brainstorm-lens"
   | "brainstorm-critic"
+  | "harvester"
 
 /** Where a seat may write with the host's edit tools. */
-export type WriteScope = "factory-docs" | "research" | "brainstorm" | "worktree"
+export type WriteScope = "factory-docs" | "research" | "brainstorm" | "harvest" | "worktree"
 
 export type ModelTier = "fast" | "balanced" | "deep"
 
@@ -130,6 +131,31 @@ export const AGENTS: readonly AgentSpec[] = [
     writes: ["brainstorm"],
     readonlyShell: true,
     skills: ["brainstorm"],
+    mcp: [],
+    lsp: "none",
+  },
+  {
+    id: "harvester",
+    seat: "harvester",
+    mode: "primary",
+    hidden: false,
+    tier: "deep",
+    description: "Tears down competitor projects: profiles, licenses, a feature matrix and clean-room specs.",
+    prompt: "harvester",
+    tools: [
+      "es_status",
+      "es_harvest_plan",
+      "es_harvest_discover",
+      "es_harvest_scan",
+      "es_harvest_read",
+      "es_harvest_matrix",
+      "es_harvest_complete",
+      "es_harvest_prior_art",
+    ],
+    spawns: [],
+    writes: ["harvest"],
+    readonlyShell: true,
+    skills: ["harvest"],
     mcp: [],
     lsp: "none",
   },

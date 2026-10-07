@@ -126,6 +126,21 @@ export default Plugin.define({
         },
       })
       editor.add({
+        name: "harvest",
+        description: "Tear down competitor projects: licences, feature matrix, clean-room specs (Epistemic Swarm)",
+        execute: async ({ sessionID, prompt, delivery }) => {
+          await ctx.session.switchAgent({ sessionID, agent: "harvester" } as any)
+          await ctx.session.prompt({
+            ...prompt,
+            sessionID,
+            text: prompt.text?.trim()
+              ? `Darkharvest: ${prompt.text}`
+              : "Ask me for the teardown objective and the candidate projects, then run the harvest.",
+            delivery,
+          } as any)
+        },
+      })
+      editor.add({
         name: "factory",
         description: "Drive the build factory from its current stage (Epistemic Swarm)",
         execute: async ({ sessionID, prompt, delivery }) => {

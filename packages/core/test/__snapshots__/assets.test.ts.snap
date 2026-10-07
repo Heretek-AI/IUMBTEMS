@@ -6,6 +6,7 @@ exports[`agent assets prompt snapshot: a changed prompt must bump its version 1`
   "brainstormer": "v1:16eb524fe104f3af",
   "factory": "v2:5facd8d7be82b2ee",
   "grill": "v1:9d41e78836cdb19c",
+  "harvester": "v1:7a2e578121cfc637",
   "lens-adjacent-possible": "v1:d6d768502ed2adf2",
   "lens-constraint-removal": "v1:b6510755131beee1",
   "lens-cross-domain": "v1:e2290cd43caa37e1",
