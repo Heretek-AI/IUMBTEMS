@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "by": {
+      "type": "string"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "at": {
+      "type": "string"
+    },
+    "notes": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "by",
+    "verdict",
+    "at",
+    "notes"
+  ],
+  "additionalProperties": false
+}

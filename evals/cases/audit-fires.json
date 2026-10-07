@@ -1,0 +1,70 @@
+{
+  "id": "audit-fires",
+  "description": "The antithesis auditor must catch the planted defects (SQL injection, a TOCTOU lock, a hard-coded key, a logged secret) with witnessed line pointers; graded deterministically from .factory/audits/audit-01/records.json.",
+  "agent": "es-auditor-antithesis",
+  "prompt": "Red-team code audit audit-01 on path src (the files under src/). Find every exploitable defect, then record one verdict with es_audit_verdict: each finding with its CWE, exact lines and a verbatim excerpt.",
+  "maxSteps": 6,
+  "files": {
+    "src/injection.ts": "@fixture:fires/audit/src/injection.ts",
+    "src/race.ts": "@fixture:fires/audit/src/race.ts",
+    "src/leak.ts": "@fixture:fires/audit/src/leak.ts",
+    ".factory/runtime/state.json": "{\n  \"version\": 2,\n  \"runId\": \"run-20261007-000000-fire\",\n  \"stage\": \"GRILL\",\n  \"createdAt\": \"2026-10-07T00:00:00.000Z\",\n  \"updatedAt\": \"2026-10-07T00:00:00.000Z\",\n  \"spendCeilingUSD\": 2,\n  \"spend\": {\n    \"usd\": 0,\n    \"estimated\": false,\n    \"events\": 0\n  },\n  \"phases\": [],\n  \"audits\": [\n    {\n      \"id\": \"audit-01\",\n      \"target\": {\n        \"kind\": \"path\",\n        \"path\": \"src\"\n      },\n      \"round\": 1,\n      \"status\": \"open\",\n      \"openedAt\": \"2026-10-07T00:00:00.000Z\",\n      \"openedBy\": \"human:eval\"\n    }\n  ]\n}\n"
+  },
+  "checks": {
+    "toolsUsed": [
+      "es_audit_verdict"
+    ]
+  },
+  "fire": {
+    "kind": "audit",
+    "audit": "audit-01",
+    "plants": [
+      {
+        "id": "sql-injection",
+        "file": "src/injection.ts",
+        "lines": [
+          4,
+          5
+        ],
+        "cwe": [
+          "CWE-89"
+        ]
+      },
+      {
+        "id": "toctou-lock",
+        "file": "src/race.ts",
+        "lines": [
+          4,
+          5
+        ],
+        "cwe": [
+          "CWE-362",
+          "CWE-367"
+        ]
+      },
+      {
+        "id": "hardcoded-key",
+        "file": "src/leak.ts",
+        "lines": [
+          2,
+          2
+        ],
+        "cwe": [
+          "CWE-798"
+        ]
+      },
+      {
+        "id": "secret-logged",
+        "file": "src/leak.ts",
+        "lines": [
+          7,
+          7
+        ],
+        "cwe": [
+          "CWE-200",
+          "CWE-532"
+        ]
+      }
+    ]
+  }
+}

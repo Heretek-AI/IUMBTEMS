@@ -109,6 +109,47 @@
       ],
       "description": "Web search provider; the default is the first one with credentials."
     },
+    "research": {
+      "default": {
+        "depth": 2
+      },
+      "type": "object",
+      "properties": {
+        "depth": {
+          "default": 2,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4,
+          "description": "Research depth (advisory, shown in <factory-state> during RESEARCH): 1 brief, 2 thesis + antithesis, 3 plus a verification pass, 4 exhaustive."
+        },
+        "cacheTtlDays": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Days es_research_fetch serves a cached page without refetching; unset: 7, or 30 for documentation hosts."
+        },
+        "searchTimeoutS": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Timeout for one search-provider request, in seconds."
+        },
+        "searxngUrl": {
+          "type": "string",
+          "pattern": "^https?:\\/\\/[^\\s/]+\\S*$",
+          "description": "SearXNG instance (else SEARXNG_URL). Global config or plugin options only."
+        }
+      },
+      "required": [
+        "depth"
+      ],
+      "additionalProperties": false,
+      "description": "Research-stage tunables (ported from the 0.7 configure tool)."
+    },
+    "domainPack": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Active domain-pack constitution for RESEARCH (quant, biopharma or legal); unset keeps the legacy flat behaviour."
+    },
     "licenseWhitelist": {
       "default": [
         "MIT",
@@ -131,6 +172,7 @@
     "afterEdit",
     "pr",
     "lspAfterEdit",
+    "research",
     "licenseWhitelist"
   ],
   "additionalProperties": false

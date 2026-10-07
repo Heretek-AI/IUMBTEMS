@@ -1,0 +1,19 @@
+{
+  "packId": "quant",
+  "description": "Quantitative finance constitution: backtest claims must be reproducible; vendor marketing downweighted; live-trading failure postmortems valued as negative knowledge.",
+  "tierWeights": {
+    "__default__": 1.0,
+    "PEER_REVIEWED": 0.9,
+    "TECHNICAL_DOCUMENTATION": 1.0,
+    "PRIMARY_PRESS": 0.6,
+    "PREPRINT": 0.5,
+    "SECONDARY_MEDIA": 0.2
+  },
+  "negBonus": 0.75,
+  "rejectPenalty": 3.0,
+  "acceptThreshold": 0.7,
+  "bannedDomains": ["vendor-whitepaper-mirror.example"],
+  "mandatoryTags": ["VERIFIED", "INFERRED", "HYPOTHESIS", "NEGATIVE_KNOWLEDGE"],
+  "retractionPolicy": "standard",
+  "exportTemplate": "regulatory"
+}

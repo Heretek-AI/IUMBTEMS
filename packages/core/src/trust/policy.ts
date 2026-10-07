@@ -36,6 +36,7 @@ const SCOPE_GLOBS: Record<Exclude<WriteScope, "worktree">, readonly string[]> = 
   brainstorm: [".factory/brainstorm/notes/**"],
   harvest: [".factory/harvest/notes/**"],
   design: [".factory/design/notes/**"],
+  scout: [".factory/scout/notes/**"],
 }
 
 function guardStateDir(context: PolicyContext, absolute: string): Decision | undefined {
@@ -104,9 +105,11 @@ export type ShellDecision =
   | { readonly effect: "deny"; readonly reason: string }
 
 const HUMAN_ONLY_CLI =
-  /(^|[\s;&|(`'"/])(es|epistemic-swarm)\s+(approve|trust|waive|resume|rebaseline|factory\s+(resume|pr)|gates\s+install-git|lsp\s+install)\b/
+  /(^|[\s;&|(`'"/])(es|epistemic-swarm)\s+(approve|trust|waive|resume|rebaseline|factory\s+(resume|pr)|gates\s+install-git|lsp\s+install|config\s+set|research\s+retract)\b/
+/** Human-launched jobs that drive a harness CLI: an agent must not start nested headless runs. */
+const HUMAN_ONLY_JOBS = /(^|[\s;&|(`'"/])(es|epistemic-swarm)\s+(audit\s+(?!(verify|show)\b)\S|scout\s+(?!show\b)\S)/
 const CONTROL_MENTION =
-  /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|(brainstorm|harvest|design)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/
+  /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|audits\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design|scout)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/
 const MUTATING =
   /(>|\btee\b|\brm\b|\bmv\b|\bcp\b|\bln\b|\btruncate\b|\bchmod\b|\bchown\b|\btouch\b|\bsed\s+(-[a-zA-Z]*i|--in-place)|\bdd\b|\binstall\b|\bgit\s+(checkout|restore|rm|mv|reset|clean|apply|am|stash))/
 const SEAT_FORBIDDEN_GIT =
@@ -128,6 +131,16 @@ function segments(command: string): string[] {
     .filter(Boolean)
 }
 
+/**
+ * A command that cannot write: no redirection, here-doc or command
+ * substitution, and every segment on the read-only allowlist. Interpreter
+ * one-liners (`python3 -c`, `node -e`, `bun -e`, …) are not on it, so a
+ * control-file mention inside one is refused for every agent.
+ */
+const isProvablyReadOnly = (command: string): boolean =>
+  !/[<>`]|\$\(/.test(command) &&
+  segments(command).every((segment) => READONLY_ALLOW.some((pattern) => pattern.test(segment)))
+
 export function evaluateShell(
   context: PolicyContext,
   agentId: string | undefined,
@@ -135,17 +148,21 @@ export function evaluateShell(
   options: { readonly sandboxAvailable: boolean },
 ): ShellDecision {
   const spec = agentSpec(agentId)
-  if (HUMAN_ONLY_CLI.test(command))
-    return { effect: "deny", reason: "Approvals, trust, waivers and resume are human-only; agents cannot run them." }
+  if (HUMAN_ONLY_CLI.test(command) || HUMAN_ONLY_JOBS.test(command))
+    return {
+      effect: "deny",
+      reason:
+        "That command is human-only (approvals, trust, waivers, resume, rebaseline, config set, retractions, audit and scout runs); agents cannot run it.",
+    }
   const privateDir = canonicalPath(context.stateDir ?? stateDir())
   if (command.includes(privateDir) || /epistemic-swarm\/(key|trust)/.test(command))
     return { effect: "deny", reason: "Agents may not access Epistemic Swarm's private state dir." }
-  if (CONTROL_MENTION.test(command) && (spec || MUTATING.test(command)))
+  if (CONTROL_MENTION.test(command) && (spec || MUTATING.test(command) || !isProvablyReadOnly(command)))
     return {
       effect: "deny",
       reason: spec
         ? "Factory seats may not reference control files from the shell; use the read tool to inspect them."
-        : "Modifying factory control files from the shell is not allowed.",
+        : "A control file may only be mentioned in a provably read-only shell command (no interpreters, redirection or substitution); use the read tool otherwise.",
     }
   if (!spec) return { effect: "allow", mode: "normal" }
   if (SEAT_FORBIDDEN_GIT.test(command))

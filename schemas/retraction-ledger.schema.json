@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "retractions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "event": {
+            "type": "string",
+            "enum": [
+              "RETRACTED",
+              "REVISED"
+            ]
+          },
+          "at": {
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "supersedes": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "source",
+          "event",
+          "at",
+          "note",
+          "by"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "version",
+    "retractions"
+  ],
+  "additionalProperties": false
+}

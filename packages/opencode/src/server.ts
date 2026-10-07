@@ -4,11 +4,12 @@
 import { readdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import {
+  describeTarget,
   factoryLayout,
-  factorySummary,
   formatReport,
   git,
   loadSkills,
+  parseAuditTarget,
   readJson,
   researchSourcesDir,
   runGates,
@@ -102,7 +103,7 @@ export default Plugin.define({
     const notify = async () => {
       const state = await runtime.factory.read()
       await registration?.events
-        .emit("changed", { stage: state?.stage ?? "NONE", summary: factorySummary(state) })
+        .emit("changed", { stage: state?.stage ?? "NONE", summary: await runtime.factory.summary(state) })
         .catch(() => undefined)
     }
     registration = await ctx.rpc.register(EsRpc, createRpcHandlers(runtime, notify, bridge.engine) as any)
@@ -167,6 +168,58 @@ export default Plugin.define({
         },
       })
       editor.add({
+        name: "scout",
+        description: "Find and vet open-source candidates for a feature: licenses, maintenance, CVEs (Epistemic Swarm)",
+        execute: async ({ sessionID, prompt, delivery }) => {
+          await ctx.session.switchAgent({ sessionID, agent: "scout" } as any)
+          await ctx.session.prompt({
+            ...prompt,
+            sessionID,
+            text: prompt.text?.trim()
+              ? `Scout: ${prompt.text}`
+              : "Ask me for the feature to scout and our license posture, then plan the candidates.",
+            delivery,
+          } as any)
+        },
+      })
+      editor.add({
+        name: "audit",
+        description: "Open a code audit of the active phase or a path and run the auditor pair (Epistemic Swarm)",
+        execute: async ({ sessionID, prompt, delivery }) => {
+          const target = prompt.text?.trim()
+          const say = async (text: string) => {
+            await ctx.session.synthetic({ sessionID, text } as any)
+          }
+          if (!target) return say("Usage: /audit <active phase id | path in the project>")
+          const state = await runtime.factory.read().catch(() => undefined)
+          if (state?.spendCeilingUSD === undefined)
+            return say(
+              "Audits run inside a factory run with a spend ceiling. Start one at a terminal with `es audit <target> --max-usd N`, or run /grill first.",
+            )
+          let opened: Awaited<ReturnType<typeof runtime.factory.openAudit>>
+          try {
+            // The human typed /audit: opening it is their action.
+            opened = await runtime.factory.openAudit(
+              "human:tui",
+              parseAuditTarget(
+                target,
+                state.phases.map((phase) => phase.id),
+              ),
+            )
+          } catch (error) {
+            return say(`Could not open the audit: ${error instanceof Error ? error.message : String(error)}`)
+          }
+          const { audit } = opened
+          await ctx.session.switchAgent({ sessionID, agent: "factory" } as any)
+          await ctx.session.prompt({
+            ...prompt,
+            sessionID,
+            text: `${await runtime.factory.summary()}\nThe human opened code audit ${audit.id} (round ${audit.round}) on ${describeTarget(audit.target)}. Launch es-auditor-thesis and es-auditor-antithesis in parallel with the audit id and target; if they split, have es-manager break the tie (es_tiebreak with audit). Report the verdicts and the report path when the audit settles.`,
+            delivery,
+          } as any)
+        },
+      })
+      editor.add({
         name: "factory",
         description: "Drive the build factory from its current stage (Epistemic Swarm)",
         execute: async ({ sessionID, prompt, delivery }) => {
@@ -182,7 +235,7 @@ export default Plugin.define({
           await ctx.session.prompt({
             ...prompt,
             sessionID,
-            text: `${factorySummary(state)}\nContinue the factory run from its current stage.${prompt.text?.trim() ? `\nHuman note: ${prompt.text}` : ""}`,
+            text: `${await runtime.factory.summary(state)}\nContinue the factory run from its current stage.${prompt.text?.trim() ? `\nHuman note: ${prompt.text}` : ""}`,
             delivery,
           } as any)
         },
@@ -248,7 +301,7 @@ export default Plugin.define({
         name: "status",
         description: "Show the factory state (Epistemic Swarm)",
         execute: async ({ sessionID }) => {
-          await ctx.session.synthetic({ sessionID, text: factorySummary(await runtime.factory.read()) } as any)
+          await ctx.session.synthetic({ sessionID, text: await runtime.factory.summary() } as any)
         },
       })
       editor.add({

@@ -12,6 +12,9 @@ export interface CompiledAgent {
   readonly model?: { providerID: string; id: string }
 }
 
+/** The host's own web tools, denied to seats whose web access is "cached". */
+export const HOST_WEB_TOOLS = ["websearch", "webfetch"] as const
+
 export function permissionRules(spec: AgentSpec, mcpServers: readonly string[]): CompiledAgent["permissions"] {
   const rules: CompiledAgent["permissions"] = [
     { action: "es_*", resource: "*", effect: "deny" },
@@ -32,6 +35,9 @@ export function permissionRules(spec: AgentSpec, mcpServers: readonly string[]):
     // this only grants autonomous seats access to a scratch directory.
     rules.push({ action: "external_directory", resource: "/tmp/*", effect: "allow" }) // NOSONAR
   }
+  if (spec.web === "cached")
+    // Search as policy: web facts only through the cached, citable es_research_* tools.
+    for (const action of HOST_WEB_TOOLS) rules.push({ action, resource: "*", effect: "deny" })
   if (spec.writes.length === 0) rules.push({ action: "edit", resource: "*", effect: "deny" })
   if (spec.lsp === "none") rules.push({ action: "lsp", resource: "*", effect: "deny" })
   if (spec.lsp !== "full") rules.push({ action: "lsp_rename", resource: "*", effect: "deny" })

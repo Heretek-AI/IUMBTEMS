@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "invariant",
+        "vulnerability",
+        "debt"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 3
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ]
+    },
+    "cwe": {
+      "type": "string",
+      "pattern": "^CWE-\\d+$"
+    },
+    "file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "lines": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "excerpt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "detail": {
+      "type": "string",
+      "minLength": 8
+    },
+    "remediation": {
+      "type": "string"
+    },
+    "holds": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "kind",
+    "title",
+    "severity",
+    "file",
+    "lines",
+    "excerpt",
+    "detail"
+  ],
+  "additionalProperties": false
+}

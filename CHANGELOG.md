@@ -1,5 +1,164 @@
 # Changelog
 
+## 1.1.0 — unreleased
+
+"Dialectic Restoration" (#20) brings back the best of the 0.7 research
+harness, ported to TypeScript inside the 1.x trust model. Milestones: M1
+foundation (#21), M2 seats (#22), M3 rigor (#23).
+
+**Breaking, no migration.** The frontier schema moves from 1.0 to 1.1. 1.0.x
+frontiers are **not** migrated: a 1.0 `.factory/frontier.json` is refused with
+the fresh-run instruction, so 1.1 needs fresh runs.
+
+### M1: foundation (#21)
+- **Security: cached evidence is tool-only.** Before this release, a research
+  or factory seat could write `.factory/research/sources/<sha256>.md` with made-up
+  text. The cache's only tamper check is "content hashes to the file name",
+  which a forgery passes by construction, so the seat could then cite its own
+  text as VERIFIED. The source cache, `coverage.json`, the research dossier,
+  the signed brief and `.factory/claims/` are now control files: no agent may
+  write them, and seats may not mention them from the shell.
+- **Claim stack** (`packages/core/src/claims/`):
+  - Claims have content-hash ids and both an epistemic tag and a lifecycle
+    status.
+  - The witness re-checks every VERIFIED quote against the cache, and every
+    code location (file, line range and verbatim excerpt) against the file on
+    disk.
+  - Dossiers refuse any claim whose witness fails.
+    `es_research_complete` now writes `.factory/research/dossier.json`.
+  - Retracted sources make their claims STALE, and revised ones SUSPECT
+    (`es research retract`, human-only).
+  - `ClaimStore` indexes the dossiers.
+  - A deterministic, lexicographic ranker orders rival claims and dossiers.
+- **Proof-carrying research brief.** `es research export` writes a signed
+  `.factory/research/brief.pcrb.json`, and `es research verify-brief` checks
+  source identity, the manifest (it notices deleted members), the signature
+  and the quotes.
+- **Design tree (frontier 1.1).** Nodes gain `kind` (decision or fact),
+  `recommended` and `round`. `es_frontier_write` checks each save against the
+  previous one:
+  - no deleted nodes;
+  - no silent edits to settled answers (reopen first);
+  - no going back a round.
+
+  It also returns the next round's questions. `<factory-state>` gains a tree
+  progress line, and the factory panel shows it too.
+- **Facts versus decisions.** The grill settles repo facts itself and defers
+  web facts as `kind: "fact"` nodes. `es_research_complete` refuses until
+  every deferred fact is answered on a grounded claim line marked
+  `(fact:<id>)`.
+- **Prompts.** `grill` goes from v1 to v2: frontier rounds, round-1 premise
+  inversion, the freeze procedure. `factory` goes from v3 to v4: deferred
+  facts and research depth. The 1.0.5 no-run routing is kept.
+- **Search as policy.** Research seats no longer get the host `websearch`
+  or `webfetch` tools; every web fact goes through `es_research_search` and
+  `es_research_fetch`. Fetches are keyed by canonical URL (ported exactly from
+  the 0.7 webcache), and a fresh full-page snapshot is served from the cache.
+  The freshness window is 7 days, or 30 for documentation hosts;
+  `refresh: true` refetches.
+- **Configure.**
+  - New `research.depth` (1–4, advisory), `research.cacheTtlDays`,
+    `research.searchTimeoutS` and `research.searxngUrl` (global only).
+  - `es config set <key> <value> [--global]` is human-only, validated against
+    the schema and confirmed with a typed code. It refuses to accept drift in
+    other control files, and it re-pins the project config.
+- The research auditor's `ClaimStatus` type is renamed `ClaimAuditStatus`.
+
+### M2: seats (#22)
+- **Breaking:** the factory state goes from version 1 to version 2. 1.0.x run
+  states are refused with the fresh-run instruction; there is no migration.
+- **Code-audit pair.** The hidden `es-auditor-thesis` seat maps invariants and
+  the hidden `es-auditor-antithesis` seat red-teams them with CWE ids.
+  - **The line-pointer law:** `es_audit_verdict` checks every finding against
+    the file on disk (it must exist inside the target, the lines must be in
+    range, the excerpt must be verbatim). A hallucinated reference refuses the
+    whole verdict.
+  - **Audits block.** A phase audit holds the merge until it passes, and a
+    failed one sends the phase back to the programmer. An open or failed path
+    audit refuses the next stage transition.
+  - Splits go to the manager: `es_tiebreak` gains `audit`. Only a human can
+    dismiss an audit (`es audit dismiss`).
+  - Each round writes `.factory/audits/<id>/{records,dossier}.json` and a
+    deterministic `REPORT.md`.
+- **OSS scout (`/scout`).** The scout plans, discovers (sharing darkharvest's
+  search), scans (darkharvest's fail-closed license detection), checks OSV
+  advisories (the responses are cached and cited) and records witnessed
+  assessments. Core recomputes every verdict, keeping `adopt` only for a
+  verified, whitelisted, permissive license, flags severe advisories, ranks the
+  candidates and writes `.factory/scout/REPORT.md`. Adoption stays a human
+  decision.
+- **CLI:** `es audit <target>` (plus `show` and `dismiss`), and
+  `es scout "<feature>"` (plus `show`). Both are headless, honour STOP and the
+  spend ceiling, and, with no run, start one at a terminal with `--max-usd N`.
+  Agents cannot launch them from a shell.
+- **A halted run now stops every seat tool except `es_status`.** Previously a
+  seat's own `es_*` tools kept running after a halt.
+- **Fires.** The deterministic `audit-fires` and `scout-fires` suites run on
+  the real host in CI. The same graders score the nightly model runs
+  (`evals/cases/*-fires.json`; cases can now seed files).
+- New ENFORCED capability rows: `claims`, `audit`, `scout`. Prompts:
+  `auditor-thesis` and `auditor-antithesis` v1, `scout` v1, `factory` v4 → v5,
+  `manager` v1 → v2.
+- When research completes, pruning the cache keeps every source that any
+  dossier cites.
+
+### M3: rigor (#23)
+- **Domain packs, the full legacy port.** `quant`, `biopharma` and `legal`
+  constitutions (tier weights incl. `__default__`, negative-knowledge bonus,
+  reject penalty, accept threshold, banned domains, mandatory tags, standard
+  or zero-tolerance retraction), selected with `config.domainPack` (for
+  example `es config set domainPack biopharma`). With a pack active,
+  `es_research_complete` rejects claims that break the constitution — a
+  banned source domain, a missing tag, a retracted source — and refuses a
+  score below the pack's accept threshold; unknown packs fail closed. Without
+  a pack nothing changes. Claims now carry their source URL, and the summary
+  shows the active pack during RESEARCH.
+- **All five fire suites are merge-blocking.** `grill-fires` (no deleted
+  nodes, no silent settled edits, no round regress; deferred facts gate
+  research), `factory-gate` (the build starts only through the approvals;
+  STOP and the spend ceiling halt, `es_status` stays reportable when halted)
+  and `darkharvest-fires` (core keeps `depend` only for verified permissive
+  licences, whatever the harvester proposes) join `audit-fires` and
+  `scout-fires` on the real host. The same graders score the nightly
+  model-backed runs.
+- **Drift CI with a canary.** `docs:check` also fails on prompt, skill and
+  registry drift: a prompt whose frontmatter id or seat disagrees with the
+  registry, an orphaned prompt file or skill directory, a skill without its
+  `SKILL.md`, a spawn naming no agent, an unknown `es_*` tool, or a duplicate
+  agent id. The canary proves every class is caught.
+- **Queereye phases 02 and 03.** The designer seat now renders the full
+  design surface under `.factory/design/` (paths adapted from the legacy
+  `.queereye/`):
+  - `es_design_specs` (phase 02): behaviour-first component specs for
+    `button`, `dialog`, `form-input`, `table`, `nav` and `toast`, the pinned
+    MIT `webref.json` snapshot, the headless `csf.json` play harness and
+    deterministic `tui-notes.md`, with drift, coverage, freshness and
+    play-suite gates (`check:true` re-checks only).
+  - `es_design_harvest` (phase 03): the full skill-harvest ledger
+    (`harvest.json`: rows, SPDX blocks, transitive closure, negative
+    knowledge) with the fail-closed MIT/Apache-2.0/BSD-3-Clause/ISC
+    whitelist, the skill bundle and the factory cite-gate receipt, which is
+    verified against the live tokens and ledger. The bundle check script is
+    TypeScript against `es-core`; no Python is vendored.
+- **Post-audit hardening (shell control files).** An adversarial audit found
+  that a non-seat agent could still write control files through interpreter
+  one-liners (`python3 -c`, `node -e`, …), which the shell rule never
+  matched. A control-file mention is now allowed in an agent's shell command
+  only when the command is provably read-only (allowlisted segments; no
+  redirection, here-doc or substitution); seats keep the stricter
+  no-mention rule, and the forge test now covers the shell path.
+- **Post-audit parity hardening.** A parity audit against 0.7.25 found two
+  port drifts, both fixed: `NEGATIVE_KNOWLEDGE` claims keep a full-key hash
+  (`nkKey`, sha256 of the cleaned pre-truncate query/finding pair) so
+  distinct past-2k rows stay distinct in ids and scoring while the stored
+  fields stay capped (legacy R11); and the pack constitution carries the
+  legacy structural rules again (VERIFIED needs its hash + quote or a code
+  location; INFERRED its reasoning; HYPOTHESIS its falsification; NK query
+  and finding). The legacy INFERRED "parents non-empty" rule is documented
+  as not applicable to 1.x REPORT.md claims.
+- **System architecture doc.** `SYSTEM_ARCHITECTURE.md` now describes the
+  pipeline, the seats, the claim flow and the trust invariants in one place.
+
 ## 1.0.5 — 2026-10-07
 
 Run-lifecycle gaps from dogfooding 1.0.4 (#19):

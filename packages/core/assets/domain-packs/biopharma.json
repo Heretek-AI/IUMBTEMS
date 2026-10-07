@@ -1,0 +1,19 @@
+{
+  "packId": "biopharma",
+  "description": "Biopharma regulatory research constitution: preprints heavily downweighted, retracted findings zero-tolerance, predatory/mirror domains banned. For FDA-facing dossiers and clinical evidence reviews.",
+  "tierWeights": {
+    "__default__": 1.0,
+    "PEER_REVIEWED": 1.0,
+    "TECHNICAL_DOCUMENTATION": 0.8,
+    "PRIMARY_PRESS": 0.7,
+    "PREPRINT": 0.3,
+    "SECONDARY_MEDIA": 0.2
+  },
+  "negBonus": 0.5,
+  "rejectPenalty": 2.5,
+  "acceptThreshold": 0.7,
+  "bannedDomains": ["predatory-journal.example", "retracted-mirror.example", "banned-preprint-mirror.example"],
+  "mandatoryTags": ["VERIFIED", "INFERRED", "HYPOTHESIS", "NEGATIVE_KNOWLEDGE"],
+  "retractionPolicy": "zero_tolerance",
+  "exportTemplate": "regulatory"
+}

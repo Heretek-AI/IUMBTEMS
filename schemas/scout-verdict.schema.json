@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "candidate": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "license": {
+      "type": "object",
+      "properties": {
+        "spdx": {
+          "type": "string"
+        },
+        "family": {
+          "type": "string",
+          "enum": [
+            "permissive",
+            "public-domain",
+            "weak-copyleft",
+            "copyleft",
+            "unknown"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "license-file",
+            "spdx-header",
+            "manifest",
+            "registry",
+            "api"
+          ]
+        },
+        "file": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "spdx",
+        "family",
+        "source",
+        "confidence",
+        "verified"
+      ],
+      "additionalProperties": false
+    },
+    "proposal": {
+      "type": "string",
+      "enum": [
+        "adopt",
+        "clean-room",
+        "reject"
+      ]
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "adopt",
+        "clean-room",
+        "reject"
+      ]
+    },
+    "downgraded": {
+      "type": "string"
+    },
+    "attribution": {
+      "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rank": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "candidate",
+    "name",
+    "license",
+    "proposal",
+    "verdict",
+    "warnings",
+    "rank"
+  ],
+  "additionalProperties": false
+}

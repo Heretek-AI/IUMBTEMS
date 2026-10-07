@@ -3,12 +3,15 @@
 // action so per-agent rules can hide it. Refusals become model-facing tool errors.
 import {
   brainstormTools,
+  codeAuditTools,
   designTools,
   esTools,
   harvestTools,
   lspTools,
   pendingApprovals,
+  researchOptions,
   researchTools,
+  scoutTools,
 } from "@heretek-ai/es-core"
 import { Error as ToolError } from "@opencode/plugin/promise/tool"
 import type { Runtime } from "./runtime.ts"
@@ -18,7 +21,7 @@ export function registerTools(editor: { add(tool: any): void }, runtime: Runtime
   const research = researchTools({
     root: runtime.root,
     policy: () => runtime.policy(),
-    ...(runtime.options.searchProvider ? { provider: runtime.options.searchProvider } : {}),
+    ...researchOptions(runtime.config),
   })
   const brainstorm = brainstormTools({
     root: runtime.root,
@@ -30,8 +33,19 @@ export function registerTools(editor: { add(tool: any): void }, runtime: Runtime
     stateDir: runtime.stateDir,
   })
   const design = designTools({ root: runtime.root })
+  const scout = scoutTools({
+    root: runtime.root,
+    whitelist: runtime.config.licenseWhitelist,
+    stateDir: runtime.stateDir,
+    halted: async () => {
+      const state = await runtime.factory.read().catch(() => undefined)
+      return state?.stage === "HALTED" ? (state.halt?.reason ?? "halted") : undefined
+    },
+  })
   for (const def of [
     ...esTools({ ...runtime, lsp: runtime.lsp }),
+    ...codeAuditTools({ ...runtime, lsp: runtime.lsp }),
+    ...scout,
     ...lsp,
     ...research,
     ...brainstorm,

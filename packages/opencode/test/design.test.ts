@@ -1,6 +1,8 @@
 // Queereye on the real host: the designer seat runs the interview through its
 // tools, the loop persists incrementally, completion writes the artifacts and
-// the drift check re-renders byte-identically.
+// the drift check re-renders byte-identically. Phase 02 (specs, webref, csf,
+// tui-notes) and phase 03 (the ledger bundle + cite-gate receipt) run through
+// the same seat tools; this file is the `design` capability proof.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -52,6 +54,10 @@ describe("design on the real host", () => {
     expect(tools).toContain("es_design_answer")
     expect(tools).toContain("es_design_complete")
     expect(tools).toContain("es_design_check")
+    expect(tools).toContain("es_design_specs")
+    expect(tools).toContain("es_design_harvest")
+    expect(plain).not.toContain("es_design_specs")
+    expect(plain).not.toContain("es_design_harvest")
   })
 
   test("skip-all → complete → check, with artifacts on disk", async () => {
@@ -71,6 +77,26 @@ describe("design on the real host", () => {
     const checked = await h.run(call("es_design_check"), { agent: "designer" })
     expect(checked.tools[0]?.text).toContain("byte-match")
     expect(checked.tools[0]?.text).toContain("One-off mints: 0")
+  })
+
+  test("phase 02 and phase 03 render through the seat tools and check clean", async () => {
+    const specs = await h.run(call("es_design_specs"), { agent: "designer" })
+    expect(specs.tools[0]?.status).toBe("completed")
+    expect(specs.tools[0]?.text).toContain("Phase-02 written")
+    expect(specs.tools[0]?.text).toContain("pass rate 1.00")
+    expect(await Bun.file(path.join(h.directory, ".factory/design/components/button.md")).exists()).toBe(true)
+    const specsAgain = await h.run(call("es_design_specs", { check: true }), { agent: "designer" })
+    expect(specsAgain.tools[0]?.text).toContain("byte-match")
+
+    const harvest = await h.run(call("es_design_harvest"), { agent: "designer" })
+    expect(harvest.tools[0]?.status).toBe("completed")
+    expect(harvest.tools[0]?.text).toContain("Phase-03 written")
+    expect(harvest.tools[0]?.text).toContain("cite-gate receipt verifies")
+    expect(await Bun.file(path.join(h.directory, ".factory/design/harvest.json")).exists()).toBe(true)
+    expect(await Bun.file(path.join(h.directory, ".factory/design/skill/SKILL.md")).exists()).toBe(true)
+    const harvestAgain = await h.run(call("es_design_harvest", { check: true }), { agent: "designer" })
+    expect(harvestAgain.tools[0]?.status).toBe("completed")
+    expect(harvestAgain.tools[0]?.text).toContain("byte-match")
   })
 
   test("other seats cannot run the interview", async () => {

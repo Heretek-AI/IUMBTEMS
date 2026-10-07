@@ -12,18 +12,21 @@ and Antigravity adapters ship in 1.1–1.3). Generated: do not edit by hand.
 | agents | ENFORCED | `packages/opencode/test/plugin.test.ts` | Registered by agent.transform with wildcard-deny scoping; never touches built-ins or defaults. |
 | skills | ENFORCED | `packages/opencode/test/plugin.test.ts` | One shared SKILL.md tree registered at runtime; per-agent visibility via skill deny rules. |
 | tools | ENFORCED | `packages/opencode/test/plugin.test.ts` | es_* tools registered direct (codemode:false) with a permission action per tool; seat-scoped. |
-| permissions | ENFORCED | `packages/opencode/test/plugin.test.ts` | permission.evaluate + tool.execute.before enforce the write/read/shell policy; control files denied. |
+| permissions | ENFORCED | `packages/opencode/test/plugin.test.ts` | permission.evaluate + tool.execute.before enforce the write/read/shell policy; control files (incl. the evidence cache) denied; research seats get no host websearch/webfetch. |
 | hooks | ENFORCED | `packages/opencode/test/hooks.test.ts` | Claude hook schema bridged in-process; Stop is emulated after the turn (advisory for plain chat). |
 | question | ENFORCED | `packages/opencode/test/plugin.test.ts` | Session forms only humans can answer; primaries may ask, autonomous subagent seats may not. |
 | subagents | ENFORCED | `packages/opencode/test/plugin.test.ts` | Depth 1; hidden seats are unlisted but invocable by ID, and only from the seats allowed to spawn them. |
 | compaction | ENFORCED | `packages/opencode/test/plugin.test.ts` | Session compaction injects the compact factory-state block for factory seats. |
-| websearch | ENFORCED | `packages/opencode/test/research.test.ts` | The configured provider registers as the host websearch; results are cached and citable. |
+| websearch | ENFORCED | `packages/opencode/test/research.test.ts` | The configured provider registers as the host websearch; results are cached and citable. Research seats are cached-only: es_research_search/fetch (fresh hits served from the cache). |
 | lsp | ENFORCED | `packages/opencode/test/lsp.test.ts` | The lsp config key is read and served by our own manager (v2 accepts but does not run it). |
 | panels | ENFORCED | `packages/opencode/test/panels.test.ts` | Four session.panel dashboards (factory, LSP, hooks, brainstorm), rendered by OpenTUI and refreshed on server changes. |
 | research | ENFORCED | `packages/opencode/test/research.test.ts` | Cache, quote verifier, auditor, providers and the websearch bridge. |
 | brainstorm | ENFORCED | `packages/opencode/test/brainstorm.test.ts` | Lens fan-out, record/score/complete tools, dedupe, rubric, shortlist with a forced outlier. |
 | harvest | ENFORCED | `packages/opencode/test/harvest.test.ts` | Fail-closed SPDX detection, provenance profiles, policy-enforced matrix, clean-room specs. |
-| design | ENFORCED | `packages/opencode/test/design.test.ts` | Queereye interview, DTCG tokens, contrast gate, generated guide and drift check. |
+| design | ENFORCED | `packages/opencode/test/design.test.ts` | Queereye interview, DTCG tokens, contrast gate, generated guide and drift check; phase-02 specs/webref/csf/tui renders and the phase-03 ledger bundle with its cite-gate receipt. |
+| claims | ENFORCED | `packages/opencode/test/plugin.test.ts` | Witnessed claims and dossiers: the evidence cache, dossiers and the claim ledger are tool-only; a forged source is denied on the host. |
+| audit | ENFORCED | `packages/opencode/test/fires.test.ts` | Code-audit pair: only auditor seats record verdicts; every finding is witnessed on disk (a hallucinated line is refused); verdicts block. |
+| scout | ENFORCED | `packages/opencode/test/fires.test.ts` | OSS scout: cached-only web, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited. |
 
 ## claude
 
@@ -44,6 +47,9 @@ and Antigravity adapters ship in 1.1–1.3). Generated: do not edit by hand.
 | brainstorm | UNSUPPORTED | — | The native Claude Code adapter (marketplace plugin, subagent frontmatter, hooks.json) ships in 1.1. |
 | harvest | UNSUPPORTED | — | The native Claude Code adapter (marketplace plugin, subagent frontmatter, hooks.json) ships in 1.1. |
 | design | UNSUPPORTED | — | The native Claude Code adapter (marketplace plugin, subagent frontmatter, hooks.json) ships in 1.1. |
+| claims | UNSUPPORTED | — | The native Claude Code adapter (marketplace plugin, subagent frontmatter, hooks.json) ships in 1.1. |
+| audit | UNSUPPORTED | — | The native Claude Code adapter (marketplace plugin, subagent frontmatter, hooks.json) ships in 1.1. |
+| scout | UNSUPPORTED | — | The native Claude Code adapter (marketplace plugin, subagent frontmatter, hooks.json) ships in 1.1. |
 
 ## pi
 
@@ -64,6 +70,9 @@ and Antigravity adapters ship in 1.1–1.3). Generated: do not edit by hand.
 | brainstorm | UNSUPPORTED | — | The Pi extension (in-process tool_call blocking, sequential pi -p roles) ships in 1.2. |
 | harvest | UNSUPPORTED | — | The Pi extension (in-process tool_call blocking, sequential pi -p roles) ships in 1.2. |
 | design | UNSUPPORTED | — | The Pi extension (in-process tool_call blocking, sequential pi -p roles) ships in 1.2. |
+| claims | UNSUPPORTED | — | The Pi extension (in-process tool_call blocking, sequential pi -p roles) ships in 1.2. |
+| audit | UNSUPPORTED | — | The Pi extension (in-process tool_call blocking, sequential pi -p roles) ships in 1.2. |
+| scout | UNSUPPORTED | — | The Pi extension (in-process tool_call blocking, sequential pi -p roles) ships in 1.2. |
 
 ## antigravity
 
@@ -84,6 +93,9 @@ and Antigravity adapters ship in 1.1–1.3). Generated: do not edit by hand.
 | brainstorm | UNSUPPORTED | — | The Antigravity adapter is rebuilt to the documented hook format and validated in CI in 1.3. |
 | harvest | UNSUPPORTED | — | The Antigravity adapter is rebuilt to the documented hook format and validated in CI in 1.3. |
 | design | UNSUPPORTED | — | The Antigravity adapter is rebuilt to the documented hook format and validated in CI in 1.3. |
+| claims | UNSUPPORTED | — | The Antigravity adapter is rebuilt to the documented hook format and validated in CI in 1.3. |
+| audit | UNSUPPORTED | — | The Antigravity adapter is rebuilt to the documented hook format and validated in CI in 1.3. |
+| scout | UNSUPPORTED | — | The Antigravity adapter is rebuilt to the documented hook format and validated in CI in 1.3. |
 
 ## Hook bridge detail
 

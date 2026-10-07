@@ -19,9 +19,12 @@ export type Seat =
   | "brainstorm-critic"
   | "harvester"
   | "designer"
+  | "auditor-thesis"
+  | "auditor-antithesis"
+  | "scout"
 
 /** Where a seat may write with the host's edit tools. */
-export type WriteScope = "factory-docs" | "research" | "brainstorm" | "harvest" | "design" | "worktree"
+export type WriteScope = "factory-docs" | "research" | "brainstorm" | "harvest" | "design" | "scout" | "worktree"
 
 export type ModelTier = "fast" | "balanced" | "deep"
 
@@ -45,6 +48,12 @@ export interface AgentSpec {
   readonly mcp: readonly string[]
   /** Language-server tools: "full" includes applying renames, "read" is navigation and diagnostics only. */
   readonly lsp: "full" | "read" | "none"
+  /**
+   * Web access. "cached": the host's websearch and webfetch are denied, so every
+   * web fact comes through es_research_search / es_research_fetch (cached,
+   * content-addressed, citable). "host": the host's own tools, unchanged.
+   */
+  readonly web: "host" | "cached"
 }
 
 const SEATS_SPAWNED_BY_FACTORY = [
@@ -54,6 +63,8 @@ const SEATS_SPAWNED_BY_FACTORY = [
   "es-qa-adversarial",
   "es-research-alpha",
   "es-research-beta",
+  "es-auditor-thesis",
+  "es-auditor-antithesis",
 ]
 
 /** One fast-tier subagent per built-in lens, addressed as es-lens-<lens>. */
@@ -75,6 +86,7 @@ const LENS_SPECS: AgentSpec[] = LENSES.map((lens) => ({
   skills: [],
   mcp: [],
   lsp: "none",
+  web: "host",
 }))
 
 export const AGENTS: readonly AgentSpec[] = [
@@ -95,6 +107,7 @@ export const AGENTS: readonly AgentSpec[] = [
       "es_spec_validate",
       "es_build_start",
       "es_release",
+      "es_audit_open",
     ],
     spawns: SEATS_SPAWNED_BY_FACTORY,
     writes: ["factory-docs"],
@@ -102,6 +115,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: ["factory"],
     mcp: [],
     lsp: "read",
+    web: "host",
   },
   {
     id: "grill",
@@ -118,6 +132,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: ["grill"],
     mcp: [],
     lsp: "none",
+    web: "host",
   },
   {
     id: "brainstormer",
@@ -134,6 +149,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: ["brainstorm"],
     mcp: [],
     lsp: "none",
+    web: "host",
   },
   {
     id: "harvester",
@@ -159,6 +175,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: ["harvest"],
     mcp: [],
     lsp: "none",
+    web: "host",
   },
   {
     id: "designer",
@@ -175,6 +192,8 @@ export const AGENTS: readonly AgentSpec[] = [
       "es_design_skip",
       "es_design_complete",
       "es_design_check",
+      "es_design_specs",
+      "es_design_harvest",
     ],
     spawns: [],
     writes: ["design"],
@@ -182,6 +201,35 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: ["queereye"],
     mcp: [],
     lsp: "none",
+    web: "host",
+  },
+  {
+    id: "scout",
+    seat: "scout",
+    mode: "primary",
+    hidden: false,
+    tier: "deep",
+    description:
+      "Finds and vets open-source candidates for a feature: licenses, maintenance, CVEs, clean-room blueprints.",
+    prompt: "scout",
+    tools: [
+      "es_status",
+      "es_scout_plan",
+      "es_scout_discover",
+      "es_scout_scan",
+      "es_scout_advisories",
+      "es_scout_record",
+      "es_scout_complete",
+      "es_research_search",
+      "es_research_fetch",
+    ],
+    spawns: [],
+    writes: ["scout"],
+    readonlyShell: true,
+    skills: ["scout"],
+    mcp: [],
+    lsp: "none",
+    web: "cached",
   },
   {
     id: "es-manager",
@@ -198,6 +246,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: ["factory"],
     mcp: [],
     lsp: "read",
+    web: "host",
   },
   {
     id: "es-programmer",
@@ -214,6 +263,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: [],
     mcp: [],
     lsp: "full",
+    web: "host",
   },
   {
     id: "es-qa-functional",
@@ -230,6 +280,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: [],
     mcp: [],
     lsp: "read",
+    web: "host",
   },
   {
     id: "es-qa-adversarial",
@@ -246,6 +297,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: [],
     mcp: [],
     lsp: "read",
+    web: "host",
   },
   {
     id: "es-research-alpha",
@@ -262,6 +314,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: [],
     mcp: [],
     lsp: "none",
+    web: "cached",
   },
   {
     id: "es-research-beta",
@@ -278,6 +331,41 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: [],
     mcp: [],
     lsp: "none",
+    web: "cached",
+  },
+  {
+    id: "es-auditor-thesis",
+    seat: "auditor-thesis",
+    mode: "subagent",
+    hidden: true,
+    tier: "deep",
+    description: "Code-audit thesis: maps the target's invariants, every finding pinned to verbatim lines.",
+    prompt: "auditor-thesis",
+    tools: ["es_status", "es_gates_run", "es_audit_verdict"],
+    spawns: [],
+    writes: [],
+    readonlyShell: true,
+    skills: ["code-audit"],
+    mcp: [],
+    lsp: "read",
+    web: "cached",
+  },
+  {
+    id: "es-auditor-antithesis",
+    seat: "auditor-antithesis",
+    mode: "subagent",
+    hidden: true,
+    tier: "deep",
+    description: "Code-audit antithesis: red-teams the target with CWE-mapped, line-pointed exploits.",
+    prompt: "auditor-antithesis",
+    tools: ["es_status", "es_gates_run", "es_audit_verdict"],
+    spawns: [],
+    writes: [],
+    readonlyShell: true,
+    skills: ["code-audit"],
+    mcp: [],
+    lsp: "read",
+    web: "cached",
   },
   {
     id: "es-brainstorm-critic",
@@ -294,6 +382,7 @@ export const AGENTS: readonly AgentSpec[] = [
     skills: [],
     mcp: [],
     lsp: "none",
+    web: "host",
   },
   ...LENS_SPECS,
 ]

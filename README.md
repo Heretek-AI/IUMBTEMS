@@ -96,6 +96,7 @@ Platform: Linux, Node ≥ 22 or Bun. No Python.
 
 ## Documentation
 
+- `SYSTEM_ARCHITECTURE.md` — the factory, the seats and the claim flow.
 - `docs/CAPABILITIES.md` — what each harness enforces, with proof references.
 - `docs/CONFIG.md` — the layered config (global → project → plugin options).
 - `docs/SCHEMAS.md` — every Zod contract as JSON Schema.

@@ -21,7 +21,7 @@ import {
   scanSource,
   withCurrentLicenses,
 } from "./scan.ts"
-import { githubApi, gitlabApi, type RemoteRepo } from "./sources.ts"
+import { discoverRepos, githubApi, repoLine } from "./sources.ts"
 import {
   readHarvestPlan,
   readMatrix,
@@ -50,9 +50,6 @@ const object = (properties: Record<string, unknown>, required: string[] = []) =>
   required,
   additionalProperties: false,
 })
-
-const repoLine = (repo: RemoteRepo) =>
-  `- ${repo.fullName ?? repo.name} — ★${repo.stars ?? "?"}${repo.updatedAt ? `, updated ${repo.updatedAt.slice(0, 10)}` : ""}${repo.license ? `, license ${repo.license} (API, unverified)` : ""}\n  ${repo.url}${repo.description ? `\n  ${repo.description.slice(0, 200)}` : ""}`
 
 export function harvestTools(context: HarvestOpsContext): EsToolDef[] {
   const { root } = context
@@ -164,36 +161,14 @@ export function harvestTools(context: HarvestOpsContext): EsToolDef[] {
       execute: async (input, toolContext) => {
         if (seatOf(toolContext.agent) !== "harvester")
           throw new ToolRefusal("Only the harvester seat may discover candidates.")
-        const queries: string[] = [
-          ...(Array.isArray(input.queries) ? input.queries.map(String) : []),
-          ...(Array.isArray(input.topics) ? input.topics.map((topic: string) => `topic:${topic}`) : []),
-          ...(Array.isArray(input.dependencies) ? input.dependencies.map((dep: string) => `"${dep}" in:readme`) : []),
-        ].filter((query) => query.trim().length > 0)
-        if (!queries.length) throw new ToolRefusal("Give at least one query, topic or dependency.")
-        const limit = Math.min(Number(input.limit ?? 5) || 5, 20)
-        const warnings: string[] = []
-        const found = new Map<string, RemoteRepo>()
-        const runSearch = async (search: (query: string, limit: number) => Promise<RemoteRepo[]>, provider: string) => {
-          for (const query of queries) {
-            try {
-              for (const repo of await search(query, limit)) found.set(repo.fullName ?? repo.url, repo)
-            } catch (error) {
-              warnings.push(
-                `${provider} search failed for "${query}": ${error instanceof Error ? error.message : String(error)} (UNVERIFIED)`,
-              )
-            }
-          }
-        }
-        await runSearch(githubApi(api()).search, "GitHub")
-        if (input.gitlab === true) await runSearch(gitlabApi(api()).search, "GitLab")
-        const lines = [...found.values()]
-          .sort((a, b) => (b.stars ?? 0) - (a.stars ?? 0))
-          .slice(0, limit * Math.max(queries.length, 1))
-          .map(repoLine)
+        const found = await discoverRepos(input, api()).catch((error: Error) => {
+          throw new ToolRefusal(error.message)
+        })
+        const lines = found.repos.map(repoLine)
         return [
-          `Discovery (${found.size} candidate(s); license fields are API claims, not verified):`,
+          `Discovery (${found.total} candidate(s); license fields are API claims, not verified):`,
           lines.length ? lines.join("\n") : "No results.",
-          ...warnings,
+          ...found.warnings,
           "Pick the list with the human, then es_harvest_plan with the chosen sources.",
         ].join("\n")
       },

@@ -22,13 +22,13 @@ export interface Tag {
   readonly quote?: string
 }
 
-export type ClaimStatus = "grounded" | "ungrounded" | "untagged" | "malformed"
+export type ClaimAuditStatus = "grounded" | "ungrounded" | "untagged" | "malformed"
 
 export interface ClaimAudit {
   readonly line: number
   readonly text: string
   readonly tags: readonly Tag[]
-  readonly status: ClaimStatus
+  readonly status: ClaimAuditStatus
   readonly reason?: string
 }
 
@@ -124,7 +124,7 @@ export async function auditMarkdown(markdown: string, cache: SourceCache): Promi
       claims.push({ line, text, tags, status: "untagged", reason: "no epistemic tag" })
       continue
     }
-    let status: ClaimStatus = "grounded"
+    let status: ClaimAuditStatus = "grounded"
     let reason: string | undefined
     for (const tag of tags) {
       byTag[tag.kind]++
@@ -156,7 +156,7 @@ export async function auditMarkdown(markdown: string, cache: SourceCache): Promi
     }
     claims.push({ line, text, tags, status, ...(reason ? { reason } : {}) })
   }
-  const count = (wanted: ClaimStatus) => claims.filter((claim) => claim.status === wanted).length
+  const count = (wanted: ClaimAuditStatus) => claims.filter((claim) => claim.status === wanted).length
   const coverage: Coverage = {
     claims: claims.length,
     grounded: count("grounded"),

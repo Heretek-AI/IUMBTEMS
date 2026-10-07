@@ -192,3 +192,53 @@ export async function registryMetadata(
     ...(crate.homepage ? { homepage: String(crate.homepage) } : {}),
   }
 }
+
+/** One discovery result line: name, stars, freshness, API license (unverified), URL, description. */
+export const repoLine = (repo: RemoteRepo) =>
+  `- ${repo.fullName ?? repo.name} — ★${repo.stars ?? "?"}${repo.updatedAt ? `, updated ${repo.updatedAt.slice(0, 10)}` : ""}${repo.license ? `, license ${repo.license} (API, unverified)` : ""}\n  ${repo.url}${repo.description ? `\n  ${repo.description.slice(0, 200)}` : ""}`
+
+export interface DiscoverInput {
+  readonly queries?: unknown
+  readonly topics?: unknown
+  readonly dependencies?: unknown
+  readonly limit?: unknown
+  readonly gitlab?: unknown
+}
+
+/**
+ * Search GitHub (and GitLab) for candidate projects by query, topic or
+ * dependency overlap, shared by darkharvest and the scout. Failures are
+ * warnings (search results are claims to rerank, not evidence).
+ */
+export async function discoverRepos(
+  input: DiscoverInput,
+  options: ApiOptions = {},
+): Promise<{ repos: RemoteRepo[]; total: number; warnings: string[] }> {
+  const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : [])
+  const queries = [
+    ...list(input.queries),
+    ...list(input.topics).map((topic) => `topic:${topic}`),
+    ...list(input.dependencies).map((dep) => `"${dep}" in:readme`),
+  ].filter((query) => query.trim().length > 0)
+  if (!queries.length) throw new Error("Give at least one query, topic or dependency.")
+  const limit = Math.min(Number(input.limit ?? 5) || 5, 20)
+  const warnings: string[] = []
+  const found = new Map<string, RemoteRepo>()
+  const runSearch = async (search: (query: string, limit: number) => Promise<RemoteRepo[]>, provider: string) => {
+    for (const query of queries) {
+      try {
+        for (const repo of await search(query, limit)) found.set(repo.fullName ?? repo.url, repo)
+      } catch (error) {
+        warnings.push(
+          `${provider} search failed for "${query}": ${error instanceof Error ? error.message : String(error)} (UNVERIFIED)`,
+        )
+      }
+    }
+  }
+  await runSearch(githubApi(options).search, "GitHub")
+  if (input.gitlab === true) await runSearch(gitlabApi(options).search, "GitLab")
+  const repos = [...found.values()]
+    .sort((a, b) => (b.stars ?? 0) - (a.stars ?? 0))
+    .slice(0, limit * Math.max(queries.length, 1))
+  return { repos, total: found.size, warnings }
+}

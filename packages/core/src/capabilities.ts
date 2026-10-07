@@ -25,6 +25,9 @@ export const CAPABILITIES = [
   "brainstorm",
   "harvest",
   "design",
+  "claims",
+  "audit",
+  "scout",
 ] as const
 export type Capability = (typeof CAPABILITIES)[number]
 
@@ -60,7 +63,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     permissions: {
       support: "enforced",
-      detail: "permission.evaluate + tool.execute.before enforce the write/read/shell policy; control files denied.",
+      detail:
+        "permission.evaluate + tool.execute.before enforce the write/read/shell policy; control files (incl. the evidence cache) denied; research seats get no host websearch/webfetch.",
       test: PLUGIN,
     },
     hooks: {
@@ -85,7 +89,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     websearch: {
       support: "enforced",
-      detail: "The configured provider registers as the host websearch; results are cached and citable.",
+      detail:
+        "The configured provider registers as the host websearch; results are cached and citable. Research seats are cached-only: es_research_search/fetch (fresh hits served from the cache).",
       test: "packages/opencode/test/research.test.ts",
     },
     lsp: {
@@ -116,8 +121,27 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     design: {
       support: "enforced",
-      detail: "Queereye interview, DTCG tokens, contrast gate, generated guide and drift check.",
+      detail:
+        "Queereye interview, DTCG tokens, contrast gate, generated guide and drift check; phase-02 specs/webref/csf/tui renders and the phase-03 ledger bundle with its cite-gate receipt.",
       test: "packages/opencode/test/design.test.ts",
+    },
+    claims: {
+      support: "enforced",
+      detail:
+        "Witnessed claims and dossiers: the evidence cache, dossiers and the claim ledger are tool-only; a forged source is denied on the host.",
+      test: PLUGIN,
+    },
+    audit: {
+      support: "enforced",
+      detail:
+        "Code-audit pair: only auditor seats record verdicts; every finding is witnessed on disk (a hallucinated line is refused); verdicts block.",
+      test: "packages/opencode/test/fires.test.ts",
+    },
+    scout: {
+      support: "enforced",
+      detail:
+        "OSS scout: cached-only web, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited.",
+      test: "packages/opencode/test/fires.test.ts",
     },
   }),
   claude: [

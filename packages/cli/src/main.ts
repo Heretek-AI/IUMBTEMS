@@ -13,6 +13,7 @@ import {
   checkDrift,
   compileToCssVars,
   designPaths,
+  exportBrief,
   Factory,
   factoryLayout,
   factorySummary,
@@ -41,23 +42,37 @@ import {
   recordConsent,
   renderBrainstorm,
   renderGuide,
+  researchOptions,
   researchTools,
   SlotLoop,
   scanSource,
   startRun as startBrainstorm,
   validateTokens,
   verifyAuditChain,
+  verifyBrief,
   writeArtifacts,
   writeProfile,
 } from "@heretek-ai/es-core"
 import { type Args, flag, parseArgs } from "./args.ts"
 import { gatesRun, installGitHooks } from "./gates.ts"
 import { DRIVERS, runHeadless } from "./headless.ts"
-import { approve, type HumanContext, rebaselineControl, recordPr, resume, trust, waive } from "./human.ts"
+import {
+  approve,
+  configSet,
+  type HumanContext,
+  rebaselineControl,
+  recordPr,
+  resume,
+  retract,
+  trust,
+  waive,
+} from "./human.ts"
+import { auditCommand, auditDismiss, auditShow, scoutCommand, scoutShow } from "./jobs.ts"
 import { serveStdio } from "./mcp.ts"
 import { type ConfirmIO, confirmWithCode, NotInteractive, terminalIO } from "./tty.ts"
+import { VERSION } from "./version.ts"
 
-export const VERSION = "1.0.0"
+export { VERSION }
 
 const HELP = `es ${VERSION} — Epistemic Swarm build factory
 
@@ -88,6 +103,9 @@ Other
   research search <query>       Search with the configured provider
   research fetch <url>          Fetch and cache a source (prints its sha256)
   research audit [file] [--prune]  Epistemic audit of a research report
+  research export [--out <file>]   Signed research brief (.factory/research/brief.pcrb.json)
+  research verify-brief <file> [--allow-unverifiable]  Check a brief's sources, manifest, signature, quotes
+  research retract <sha256> --event retracted|revised [--note "…"]   Degrade claims citing a source   [human, TTY]
   brainstorm plan "<idea>"      Freeze a lens fan-out plan (.factory/brainstorm)
         [--lenses a,b] [--ideas N] [--shortlist N] [--force]
   brainstorm show [--json]      Show the plan/progress or the finished shortlist
@@ -98,10 +116,18 @@ Other
   design render                 Re-render tokens.css + STYLE_GUIDE.md from tokens.json
   design check                  Fail on render drift, invalid tokens or one-off mints
   config show                   Show the effective config and its layers
+  config set <key> <value> [--global]   Set one key (schema-validated)   [human, TTY]
   lsp [status]                  Language servers and how each resolves
   lsp diagnostics <file>        Diagnostics for one file
   lsp install <server>          Pinned, checksummed install   [human, TTY]
+  audit <phase id | path>       Code audit by the auditor pair, driven headlessly   [human]
+        [--max-usd N] [--open-only] [--max-turns N] [--driver opencode]
+  audit show [id]               Code audits in this run and their reports
+  audit dismiss <id> --reason "…"   Stop an audit from blocking   [human, TTY]
   audit verify                  Verify the hash-chained audit log
+  scout "<feature>"             Find and vet open-source candidates, headlessly   [human]
+        [--max-usd N] [--max-turns N]
+  scout show [--json]           The scout's ranked verdicts
   mcp                           Serve the factory tools over MCP (stdio)
   version
 `
@@ -129,6 +155,9 @@ const BOOLEAN_FLAGS = [
   "uninstall",
   "help",
   "force",
+  "allow-unverifiable",
+  "global",
+  "open-only",
 ]
 
 export async function main(argv: readonly string[], io: MainIO): Promise<number> {
@@ -148,10 +177,11 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
     ...(io.stateDir ? { stateDir: io.stateDir } : {}),
   }
   const subArgs = (from: number): Args => ({ positionals: args.positionals.slice(from), flags: args.flags })
-  const factory = () =>
+  const factory = (extra: { researchDepth?: number } = {}) =>
     new Factory(root, {
       gates: gateRunner(io.stateDir ? { stateDir: io.stateDir } : {}),
       ...(io.stateDir ? { stateDir: io.stateDir } : {}),
+      ...extra,
     })
 
   try {
@@ -163,9 +193,14 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
       case "version":
         io.print(VERSION)
         return 0
-      case "status":
-        io.print(factorySummary(await factory().read()))
+      case "status": {
+        const depth = await loadEsConfig(root).then(
+          (loaded) => loaded.config.research.depth,
+          () => undefined,
+        )
+        io.print(await factory(depth === undefined ? {} : { researchDepth: depth }).summary())
         return 0
+      }
       case "approve":
         return await approve(context, subArgs(1))
       case "trust":
@@ -175,8 +210,58 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
       case "waive":
         return await waive(context, subArgs(1))
       case "research": {
+        if (sub === "retract") return await retract(context, subArgs(2))
+        if (sub === "export") {
+          const out = flag(args, "out")
+          const { file, brief } = await exportBrief(root, {
+            ...(io.stateDir ? { stateDir: io.stateDir } : {}),
+            ...(out ? { out: path.resolve(io.cwd, out) } : {}),
+          })
+          const witnessed = brief.claims.filter((claim) => claim.witness.ok).length
+          io.print(
+            [
+              `Exported ${path.relative(root, file) || file}`,
+              `Claims: ${brief.claims.length} (${witnessed} witnessed), ranked strongest first`,
+              `Sources: ${Object.keys(brief.sources).length} bundled · signed by key ${brief.signature.keyId}`,
+            ].join("\n"),
+          )
+          return 0
+        }
+        if (sub === "verify-brief") {
+          if (!rest[0]) {
+            io.print("Usage: es research verify-brief <file> [--allow-unverifiable]")
+            return 2
+          }
+          let raw: unknown
+          try {
+            raw = JSON.parse(await readFile(path.resolve(io.cwd, rest[0]), "utf8"))
+          } catch (error) {
+            io.print(`Cannot read ${rest[0]}: ${error instanceof Error ? error.message : String(error)}`)
+            return 2
+          }
+          const result = await verifyBrief(raw, {
+            ...(io.stateDir ? { stateDir: io.stateDir } : {}),
+            allowUnverifiable: args.flags["allow-unverifiable"] === true,
+          })
+          io.print(
+            [
+              `${result.ok ? "Brief OK" : "Brief FAILED"}: source identity ${result.checks.sourceIdentity}, manifest ${result.checks.manifest}, signature ${result.checks.signature}, quotes ${result.checks.quotes}`,
+              `${result.stats.claims} claims, ${result.stats.sources} sources, ${result.stats.quotesVerified} quotes verified, ${result.stats.quotesFailed} not witnessed`,
+              ...result.failures
+                .slice(0, 25)
+                .map(
+                  (item) => `  ✗ ${item.check}${item.member ? ` ${item.member.slice(0, 22)}` : ""}: ${item.message}`,
+                ),
+            ].join("\n"),
+          )
+          return result.ok ? 0 : 1
+        }
+        const config = await loadEsConfig(root)
+          .then((loaded) => loaded.config)
+          .catch(() => undefined)
         const tools = researchTools({
           root,
+          ...(config ? researchOptions(config) : {}),
           policy: () => Promise.resolve({ root, ...(io.stateDir ? { stateDir: io.stateDir } : {}) }),
         })
         const tool = (name: string) => tools.find((item) => item.name === name)!
@@ -196,7 +281,9 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           io.print(text)
           return /Audit passed/.test(text) || /Pruned/.test(text) ? 0 : 1
         }
-        io.print("Usage: es research search <query> | fetch <url> | audit [file] [--prune]")
+        io.print(
+          "Usage: es research search <query> | fetch <url> | audit [file] [--prune] | export [--out <file>] | verify-brief <file> | retract <sha256> --event retracted|revised",
+        )
         return 2
       }
       case "brainstorm": {
@@ -410,6 +497,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         return 2
       }
       case "config": {
+        if (sub === "set") return await configSet(context, subArgs(2))
         if (sub === "show" || sub === undefined) {
           try {
             const loaded = await loadEsConfig(root)
@@ -429,7 +517,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
             return 1
           }
         }
-        io.print("Usage: es config show")
+        io.print("Usage: es config show | set <key> <value> [--global]")
         return 2
       }
       case "lsp": {
@@ -494,13 +582,20 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         return 0
       }
       case "audit": {
-        if (sub !== "verify") break
-        const result = await verifyAuditChain(root)
-        io.print(
-          result.valid ? `Audit log OK (${result.entries.length} entries).` : `Audit log INVALID: ${result.error}`,
-        )
-        return result.valid ? 0 : 1
+        if (sub === "verify") {
+          const result = await verifyAuditChain(root)
+          io.print(
+            result.valid ? `Audit log OK (${result.entries.length} entries).` : `Audit log INVALID: ${result.error}`,
+          )
+          return result.valid ? 0 : 1
+        }
+        if (sub === "show") return await auditShow(context, subArgs(2))
+        if (sub === "dismiss") return await auditDismiss(context, subArgs(2))
+        return await auditCommand(context, subArgs(1))
       }
+      case "scout":
+        if (sub === "show") return await scoutShow(context, subArgs(2))
+        return await scoutCommand(context, subArgs(1))
       case "gates":
         if (sub === "run") return await gatesRun(context, subArgs(2))
         if (sub === "install-git") return await installGitHooks(context, subArgs(2))
@@ -519,7 +614,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           return 0
         }
         if (sub === "status") {
-          io.print(factorySummary(await factory().read()))
+          io.print(await factory().summary())
           return 0
         }
         if (sub === "resume") return await resume(context, subArgs(2))

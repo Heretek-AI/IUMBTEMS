@@ -17,6 +17,16 @@ import path from "node:path"
 import { seatOf } from "../agents/registry.ts"
 import { readApproval, verifyApproval } from "../approval/record.ts"
 import { appendAuditEntry } from "../audit/chain.ts"
+import {
+  claimVerdict,
+  computeEpistemicScoreFromClaims,
+  constitutionFromPack,
+  loadDomainPack,
+} from "../claims/constitution.ts"
+import { readRetractions } from "../claims/degrade.ts"
+import { buildDossier, writeDossier } from "../claims/dossier.ts"
+import { claimsFromAudit } from "../claims/research.ts"
+import { ClaimStore } from "../claims/store.ts"
 import { factoryLayout } from "../layout.ts"
 import { auditMarkdown, formatCoverage } from "../research/auditor.ts"
 import { researchCache } from "../research/ops.ts"
@@ -25,13 +35,17 @@ import { type AcceptanceCriterion, parseGoalMarkdown } from "../schema/goal.ts"
 import { RoadmapSchema } from "../schema/roadmap.ts"
 import { rebaseline, verifyControl } from "../trust/control.ts"
 import { checkStopFile } from "../trust/stop.ts"
-import { appendLine, exists, readJson, withLock, writeJson } from "../util/fs.ts"
+import { appendLine, exists, readJson, relativeInside, withLock, writeJson } from "../util/fs.ts"
 import { sha256 } from "../util/hash.ts"
 import { run, splitCommand } from "../util/proc.ts"
 import * as Git from "../worktree/git.ts"
 import { once } from "./journal.ts"
 import {
+  type Audit,
+  type AuditTarget,
   DEFAULT_LIMITS,
+  describeTarget,
+  FACTORY_STATE_VERSION,
   type FactoryLimits,
   type FactoryState,
   FactoryStateSchema,
@@ -39,6 +53,8 @@ import {
   type Stage,
   type Verdict,
 } from "./state.ts"
+import { factorySummary } from "./summary.ts"
+import { deferredFacts, diffFrontier, readFrontier, reopenedNodes, treeCounts } from "./tree.ts"
 
 /** The operation was refused; state is unchanged. */
 export class FactoryError extends Error {}
@@ -98,6 +114,10 @@ export interface FactoryDeps {
   readonly now?: () => Date
   /** Require a red test run before `complete` (failing test first). Default true. */
   readonly requireRedFirst?: boolean
+  /** Config research.depth, shown in the summary during RESEARCH (advisory). */
+  readonly researchDepth?: number
+  /** Config domainPack: the constitution RESEARCH must satisfy (unset keeps the legacy behaviour). */
+  readonly domainPack?: string
 }
 
 export interface CompleteResult {
@@ -133,20 +153,26 @@ export class Factory {
   // ------------------------------------------------------------ state io
 
   async read(): Promise<FactoryState | undefined> {
-    const raw = await readJson(this.layout.state)
-    return raw === undefined ? undefined : FactoryStateSchema.parse(raw)
+    const raw = await readJson<{ version?: unknown }>(this.layout.state)
+    if (raw === undefined) return undefined
+    if (raw.version !== FACTORY_STATE_VERSION)
+      throw new FactoryError(
+        `.factory/runtime/state.json is a version ${String(raw.version)} run; 1.1 needs a fresh run (state version ${FACTORY_STATE_VERSION}). A human removes .factory/runtime/state.json (and an old frontier) and starts again with /grill.`,
+      )
+    return FactoryStateSchema.parse(raw)
   }
 
   private fresh(): FactoryState {
     const at = this.now().toISOString()
     return {
-      version: 1,
+      version: FACTORY_STATE_VERSION,
       runId: newRunId(this.now()),
       stage: "GRILL",
       createdAt: at,
       updatedAt: at,
       spend: { usd: 0, estimated: false, events: 0 },
       phases: [],
+      audits: [],
     }
   }
 
@@ -242,26 +268,60 @@ export class Factory {
     )
   }
 
-  /** Grill writes the design tree through this (agents cannot write the control file directly). */
+  /**
+   * Grill writes the design tree through this (agents cannot write the control
+   * file directly). Each write carries the full tree and is checked against the
+   * previous one (see diffFrontier): no deleted nodes, no silent edits to
+   * settled answers, no going back a round.
+   */
   async writeFrontier(agentId: string | undefined, frontier: unknown): Promise<Frontier> {
     this.requireSeat(agentId, "grill", "factory")
     return this.mutate(
       `agent:${agentId}`,
       async (state) => {
         this.requireStage(state, "GRILL")
-        const parsed = FrontierSchema.parse(frontier)
-        await writeJson(this.layout.frontier, parsed)
+        const parsed = FrontierSchema.safeParse(frontier)
+        if (!parsed.success)
+          throw new FactoryError(
+            `The frontier is invalid: ${parsed.error.issues.map((issue) => `${issue.path.join(".") || "frontier"}: ${issue.message}`).join("; ")}`,
+          )
+        const previous = await readFrontier(this.root).catch((error: Error) => {
+          throw new FactoryError(error.message)
+        })
+        const problems = diffFrontier(previous, parsed.data)
+        if (problems.length) throw new FactoryError(`The frontier write was refused:\n- ${problems.join("\n- ")}`)
+        await writeJson(this.layout.frontier, parsed.data)
         await rebaseline(this.root, `agent:${agentId} via es_frontier_write`)
-        await this.audit(`agent:${agentId}`, "frontier.write", { settled: parsed.settled, nodes: parsed.nodes.length })
-        return parsed
+        const counts = treeCounts(parsed.data)
+        await this.audit(`agent:${agentId}`, "frontier.write", {
+          settled: parsed.data.settled,
+          nodes: counts.total,
+          round: counts.round,
+          open: counts.open,
+          deferred: counts.deferred,
+          reopened: reopenedNodes(previous, parsed.data),
+        })
+        return parsed.data
       },
       { create: true },
     )
   }
 
+  /** The `<factory-state>` block with the design tree's progress line. */
+  async summary(state?: FactoryState): Promise<string> {
+    const current = state ?? (await this.read())
+    const frontier = await readFrontier(this.root).catch(() => undefined)
+    return factorySummary(current, {
+      ...(frontier ? { frontier } : {}),
+      ...(this.deps.researchDepth !== undefined ? { researchDepth: this.deps.researchDepth } : {}),
+      ...(this.deps.domainPack !== undefined ? { domainPack: this.deps.domainPack } : {}),
+    })
+  }
+
   async beginResearch(actor: string): Promise<FactoryState> {
     return this.mutate(actor, async (state) => {
       this.requireStage(state, "GRILL")
+      this.requireAuditsClear(state)
       const check = await verifyApproval(this.root, "frontier", { stateDir: this.deps.stateDir })
       if (!check.ok) throw new FactoryError(check.reason)
       state.spendCeilingUSD = check.record.spendCeilingUSD
@@ -277,12 +337,13 @@ export class Factory {
     this.requireSeat(agentId, "factory")
     return this.mutate(`agent:${agentId}`, async (state) => {
       this.requireStage(state, "RESEARCH")
+      this.requireAuditsClear(state)
       const report = await readFile(this.layout.researchReport, "utf8").catch(() => undefined)
       if (report === undefined)
         throw new FactoryError("Research is not done: .factory/research/REPORT.md does not exist.")
       const cache = researchCache(this.root)
       const audit = await auditMarkdown(report, cache)
-      await writeJson(path.join(this.layout.research, "coverage.json"), {
+      await writeJson(this.layout.researchCoverage, {
         ...audit.coverage,
         passed: audit.passed,
         at: this.now().toISOString(),
@@ -291,13 +352,78 @@ export class Factory {
         throw new FactoryError(
           `The research report does not pass the epistemic audit.\n${formatCoverage(audit)}\nFix or prune the claims (es_research_audit with prune:true), then try again.`,
         )
-      // Keep only the evidence the report cites, so the tracked cache stays small.
-      const removed = await cache.prune(new Set(audit.cited))
+      // Facts the grill could not settle from the repo are research's to answer:
+      // each deferred fact node must be cited on a (grounded) claim line.
+      const frontier = await readFrontier(this.root).catch(() => undefined)
+      const unanswered = (frontier ? deferredFacts(frontier) : []).filter(
+        (fact) => !audit.claims.some((claim) => claim.text.includes(`(fact:${fact.id})`)),
+      )
+      if (unanswered.length)
+        throw new FactoryError(
+          `Research must answer every fact the grill deferred to it. Missing: ${unanswered
+            .map((fact) => `${fact.id} — ${fact.question}`)
+            .join(
+              "; ",
+            )}. Answer each on a tagged claim line in REPORT.md marked (fact:<id>), e.g. "- Postgres 16 is supported (fact:db) [VERIFIED: …]".`,
+        )
+      // The report's claims become the research dossier (witnessed again on
+      // write). With a domain pack active, its constitution vets every claim
+      // and gates the report by the pack's accept threshold; no pack leaves
+      // the 1.0 behaviour unchanged.
+      const claims = await claimsFromAudit(audit, cache)
+      let packAudit: { readonly packId: string; readonly score: number } | undefined
+      if (this.deps.domainPack !== undefined) {
+        const pack = await loadDomainPack(this.deps.domainPack).catch((error: Error) => {
+          throw new FactoryError(`The configured domain pack cannot be loaded: ${error.message}`)
+        })
+        const constitution = constitutionFromPack(pack)
+        const retracted = new Set((await readRetractions(this.root)).map((entry) => entry.source))
+        const knownIds = new Set(claims.map((claim) => claim.id))
+        const rejected = claims
+          .map((claim) => claimVerdict(claim, { constitution, knownIds, retractedHashes: retracted }))
+          .filter((verdict) => verdict.verdict === "REJECTED")
+        if (rejected.length)
+          throw new FactoryError(
+            `The ${pack.packId} domain pack rejects ${rejected.length} claim(s):\n${rejected
+              .map((verdict) => `- ${verdict.claimId}: ${verdict.reasons.join("; ")}`)
+              .join("\n")}`,
+          )
+        const scored = computeEpistemicScoreFromClaims(claims, constitution)
+        if (scored.score < constitution.acceptThreshold)
+          throw new FactoryError(
+            `The ${pack.packId} domain pack scores this report ${scored.score.toFixed(3)}, below its threshold ${constitution.acceptThreshold}. ` +
+              `Verified ${scored.breakdown.verifiedPassed}, rejected ${scored.breakdown.unverifiedRejected}, negative knowledge ${scored.breakdown.negativeKnowledgeCount}, inferred ${scored.breakdown.inferredCount}, hypotheses ${scored.breakdown.hypothesisCount}.`,
+          )
+        packAudit = { packId: pack.packId, score: scored.score }
+      }
+      const dossier = await writeDossier(
+        this.layout.researchDossier,
+        buildDossier({
+          mode: "research",
+          subject: frontier?.idea ?? "research",
+          claims,
+          now: this.now(),
+        }),
+        { cache, now: () => this.now() },
+      ).catch((error: Error) => {
+        throw new FactoryError(`The research dossier could not be written: ${error.message}`)
+      })
+      // Keep only cited evidence, so the tracked cache stays small: what the
+      // report cites, and whatever any other dossier (scout, audits) cites.
+      const store = await ClaimStore.load(this.root)
+      const cited = new Set([
+        ...audit.cited,
+        ...store.all().flatMap((claim) => (claim.source ? [claim.source.sha256] : [])),
+      ])
+      const removed = await cache.prune(cited)
       state.stage = "SPEC"
       await this.audit(`agent:${agentId}`, "stage.spec", {
         reportHash: sha256(report),
         coverage: audit.coverage,
         prunedSources: removed.length,
+        claims: dossier.claims.length,
+        evidenceHash: dossier.evidenceHash,
+        ...(packAudit ? { domainPack: packAudit.packId, epistemicScore: packAudit.score } : {}),
       })
       return state
     })
@@ -309,6 +435,7 @@ export class Factory {
     this.requireSeat(agentId, "factory")
     return this.mutate(`agent:${agentId}`, async (state) => {
       this.requireStage(state, "SPEC")
+      this.requireAuditsClear(state)
       const check = await verifyApproval(this.root, "spec", { stateDir: this.deps.stateDir })
       if (!check.ok) throw new FactoryError(check.reason)
       if (!(await Git.isRepo(this.root))) throw new FactoryError("The project must be a git repository to build.")
@@ -547,8 +674,14 @@ export class Factory {
     })
   }
 
-  async tiebreak(agentId: string | undefined, verdict: "pass" | "fail", notes: string): Promise<FactoryState> {
+  async tiebreak(
+    agentId: string | undefined,
+    verdict: "pass" | "fail",
+    notes: string,
+    options: { audit?: string } = {},
+  ): Promise<FactoryState> {
     this.requireSeat(agentId, "manager")
+    if (options.audit) return this.auditTiebreak(agentId!, options.audit, verdict, notes)
     return this.mutate(`agent:${agentId}`, async (state) => {
       this.requireStage(state, "QA")
       const phase = this.active(state)
@@ -562,14 +695,28 @@ export class Factory {
     })
   }
 
+  private qaOutcome(phase: PhaseRuntime): "pass" | "fail" | undefined {
+    const { functional, adversarial, tiebreak } = phase.qa
+    if (!functional || !adversarial) return undefined
+    return functional.verdict === adversarial.verdict ? functional.verdict : tiebreak?.verdict
+  }
+
   private async settleQa(state: FactoryState, phase: PhaseRuntime) {
     const { functional, adversarial, tiebreak } = phase.qa
-    if (!functional || !adversarial) return
-    const outcome =
-      functional.verdict === adversarial.verdict ? functional.verdict : tiebreak ? tiebreak.verdict : undefined
-    if (!outcome) return
-    if (outcome === "pass") await this.passPhase(state, phase)
-    else
+    const outcome = this.qaOutcome(phase)
+    if (!outcome || !functional || !adversarial) return
+    if (outcome === "pass") {
+      // An opened phase audit must pass (or be dismissed by a human) before the phase merges.
+      if (phase.audit && phase.audit.status !== "passed" && phase.audit.status !== "dismissed") {
+        phase.history.push({
+          at: this.now().toISOString(),
+          event: "qa-passed",
+          notes: `awaiting audit ${phase.audit.id}`,
+        })
+        return
+      }
+      await this.passPhase(state, phase)
+    } else
       await this.failPhase(
         state,
         phase,
@@ -610,6 +757,8 @@ export class Factory {
   private async failPhase(state: FactoryState, phase: PhaseRuntime, notes: string) {
     phase.failures += 1
     phase.qa = {}
+    // The reworked head needs auditing again.
+    if (phase.audit && phase.audit.status !== "dismissed") reopen(phase.audit)
     phase.history.push({ at: this.now().toISOString(), event: `failed-${phase.failures}`, notes })
     await this.audit("system", "phase.fail", { phase: phase.id, failures: phase.failures })
     if (phase.failures >= this.limits.maxFailuresPerPhase) {
@@ -653,12 +802,215 @@ export class Factory {
     })
   }
 
+  // ------------------------------------------------------------ code audits
+
+  /**
+   * Open (or re-open) a code audit of the active phase or a path in the
+   * project. The factory seat or a human may open one at any stage. With no
+   * run, a human who names a ceiling starts a GRILL run whose provisional
+   * spend ceiling it is (a later frontier approval sets the real one).
+   */
+  async openAudit(
+    actor: string,
+    target: AuditTarget,
+    options: { ceilingUSD?: number } = {},
+  ): Promise<{ state: FactoryState; audit: Audit }> {
+    const human = actor.startsWith("human:")
+    if (!human) this.requireSeat(actor, "factory")
+    if (options.ceilingUSD !== undefined && !(options.ceilingUSD > 0))
+      throw new FactoryError("A spend ceiling must be a positive amount.")
+    const label = human ? actor : `agent:${actor}`
+    if (target.kind === "path") target = { kind: "path", path: await this.auditPath(target.path) }
+    return this.mutate(
+      label,
+      async (state) => {
+        if (human && options.ceilingUSD !== undefined && state.spendCeilingUSD === undefined)
+          state.spendCeilingUSD = options.ceilingUSD
+        if (state.spendCeilingUSD === undefined)
+          throw new FactoryError(
+            "An audit needs a spend ceiling: this run has none yet. Run `es audit <target> --max-usd N` (a human, at a terminal).",
+          )
+        const at = this.now().toISOString()
+        const fresh = (): Audit => ({
+          id: `audit-${String(allAudits(state).length + 1).padStart(2, "0")}`,
+          target,
+          round: 1,
+          status: "open",
+          openedAt: at,
+          openedBy: label,
+        })
+        let audit: Audit
+        if (target.kind === "phase") {
+          const phase = this.active(state)
+          if (phase.id !== target.phase)
+            throw new FactoryError(
+              `Only the active phase (${phase.id}) can be audited as a phase; audit a path instead.`,
+            )
+          phase.audit = phase.audit ? reopen(phase.audit, label, at) : fresh()
+          audit = phase.audit
+        } else {
+          const existing = state.audits.find(
+            (item) => item.target.kind === "path" && item.target.path === target.path && item.status !== "dismissed",
+          )
+          audit = existing ? reopen(existing, label, at) : fresh()
+          if (!existing) state.audits.push(audit)
+        }
+        await this.audit(label, "audit.open", { id: audit.id, target, round: audit.round })
+        return { state, audit: structuredClone(audit) }
+      },
+      { create: human && options.ceilingUSD !== undefined },
+    )
+  }
+
+  /**
+   * Human-only (es audit / es scout --max-usd): make sure a run with a spend
+   * ceiling exists, starting a GRILL run with this provisional ceiling when
+   * there is none. An existing ceiling is never changed here.
+   */
+  async provisionRun(human: string, ceilingUSD: number): Promise<FactoryState> {
+    if (!(ceilingUSD > 0)) throw new FactoryError("A spend ceiling must be a positive amount.")
+    return this.mutate(
+      `human:${human}`,
+      async (state) => {
+        if (state.spendCeilingUSD === undefined) {
+          state.spendCeilingUSD = ceilingUSD
+          await this.audit(`human:${human}`, "factory.ceiling.provisional", { ceilingUSD })
+        }
+        return state
+      },
+      { create: true },
+    )
+  }
+
+  /** A path to audit, POSIX and relative to the root: must exist inside the project, outside .factory and .git. */
+  private async auditPath(target: string): Promise<string> {
+    const relative = relativeInside(this.root, target)
+    if (relative === undefined) throw new FactoryError(`${target} is outside the project.`)
+    if (/^(\.factory|\.git)(\/|$)/.test(relative))
+      throw new FactoryError(`${relative} is factory state, not code to audit.`)
+    if (!(await exists(path.join(this.root, relative)))) throw new FactoryError(`${relative} does not exist.`)
+    return relative
+  }
+
+  /** Absolute directory whose files an audit's findings must point into. */
+  async auditTree(auditId: string): Promise<{ audit: Audit; root: string; scope: string }> {
+    const state = await this.read()
+    const found = state && findAudit(state, auditId)
+    if (!found) throw new FactoryError(`No audit "${auditId}" in this run.`)
+    if (found.audit.target.kind === "path")
+      return { audit: found.audit, root: this.root, scope: found.audit.target.path }
+    if (!found.phase?.worktree) throw new FactoryError(`Phase ${found.audit.target.phase} has no worktree to audit.`)
+    return { audit: found.audit, root: path.join(this.root, found.phase.worktree), scope: "." }
+  }
+
+  /** An auditor seat records its verdict; findings were witnessed by the caller (codeaudit). */
+  async auditVerdict(
+    agentId: string | undefined,
+    auditId: string,
+    verdict: "pass" | "fail",
+    notes: string,
+  ): Promise<{ state: FactoryState; audit: Audit; round: number }> {
+    this.requireSeat(agentId, "auditor-thesis", "auditor-antithesis")
+    return this.mutate(`agent:${agentId}`, async (state) => {
+      const { audit, phase } = verdictTarget(state, auditId)
+      const entry: Verdict = { verdict, by: agentId!, at: this.now().toISOString(), notes }
+      if (seatOf(agentId) === "auditor-thesis") audit.thesis = entry
+      else audit.antithesis = entry
+      const round = audit.round
+      await this.audit(`agent:${agentId}`, "audit.verdict", { id: audit.id, round, verdict })
+      // Settling may fail the phase, which re-opens its audit for the next round.
+      await this.settleAudit(state, audit, phase)
+      return { state, audit: structuredClone(audit), round }
+    })
+  }
+
+  /** Would an auditor's verdict on this audit be accepted now? Throws the refusal when not (read-only). */
+  async checkAuditVerdict(agentId: string | undefined, auditId: string): Promise<Audit> {
+    this.requireSeat(agentId, "auditor-thesis", "auditor-antithesis")
+    const state = await this.read()
+    if (!state) throw new FactoryError("No factory run here yet.")
+    if (state.stage === "HALTED") throw new FactoryHalted(`Factory halted: ${state.halt?.reason}`)
+    return structuredClone(verdictTarget(state, auditId).audit)
+  }
+
+  private async auditTiebreak(agentId: string, auditId: string, verdict: "pass" | "fail", notes: string) {
+    return this.mutate(`agent:${agentId}`, async (state) => {
+      const found = findAudit(state, auditId)
+      if (!found) throw new FactoryError(`No audit "${auditId}" in this run.`)
+      const { audit, phase } = found
+      if (
+        audit.status !== "open" ||
+        !audit.thesis ||
+        !audit.antithesis ||
+        audit.thesis.verdict === audit.antithesis.verdict
+      )
+        throw new FactoryError("An audit tiebreak is only possible when the two auditors disagree.")
+      audit.tiebreak = { verdict, by: agentId, at: this.now().toISOString(), notes }
+      await this.audit(`agent:${agentId}`, "audit.tiebreak", { id: audit.id, verdict })
+      await this.settleAudit(state, audit, phase)
+      return state
+    })
+  }
+
+  private async settleAudit(state: FactoryState, audit: Audit, phase: PhaseRuntime | undefined) {
+    const { thesis, antithesis, tiebreak } = audit
+    if (!thesis || !antithesis) return
+    const outcome = thesis.verdict === antithesis.verdict ? thesis.verdict : tiebreak?.verdict
+    if (!outcome) return
+    audit.status = outcome === "pass" ? "passed" : "failed"
+    await this.audit("system", `audit.${audit.status}`, { id: audit.id, round: audit.round })
+    if (!phase) return
+    if (audit.status === "passed") {
+      if (this.qaOutcome(phase) === "pass") await this.passPhase(state, phase)
+    } else
+      await this.failPhase(
+        state,
+        phase,
+        `audit ${audit.id}: ${[thesis, antithesis, tiebreak]
+          .filter((item) => item?.verdict === "fail")
+          .map((item) => item!.notes)
+          .join(" | ")}`,
+      )
+  }
+
+  /** Human-only (es audit dismiss): stop an audit from blocking, with the reason on record. */
+  async dismissAudit(human: string, auditId: string, reason: string): Promise<FactoryState> {
+    if (!reason.trim()) throw new FactoryError("Dismissing an audit needs a reason.")
+    return this.mutate(`human:${human}`, async (state) => {
+      const found = findAudit(state, auditId)
+      if (!found) throw new FactoryError(`No audit "${auditId}" in this run.`)
+      const { audit, phase } = found
+      if (audit.status === "passed" || audit.status === "dismissed")
+        throw new FactoryError(`Audit ${audit.id} is already ${audit.status}.`)
+      audit.status = "dismissed"
+      audit.dismissed = { by: `human:${human}`, at: this.now().toISOString(), reason }
+      await this.audit(`human:${human}`, "audit.dismiss", { id: audit.id, reason })
+      if (phase && state.stage === "QA" && phase.status === "qa" && this.qaOutcome(phase) === "pass")
+        await this.passPhase(state, phase)
+      return state
+    })
+  }
+
+  /** Decision 2: an open or failed audit outside a phase refuses the next stage transition. */
+  private requireAuditsClear(state: FactoryState) {
+    const blocking = state.audits.filter((audit) => audit.status === "open" || audit.status === "failed")
+    if (blocking.length)
+      throw new FactoryError(
+        `Blocked by code audit(s): ${blocking
+          .map((audit) => `${audit.id} on ${describeTarget(audit.target)} is ${audit.status}`)
+          .join(
+            "; ",
+          )}. The auditors must pass it (re-open after fixes), the manager break a split, or a human run \`es audit dismiss <id> --reason …\`.`,
+      )
+  }
+
   // ------------------------------------------------------------ release
 
   async release(agentId: string | undefined): Promise<FactoryState> {
     this.requireSeat(agentId, "factory")
     const state = await this.mutate(`agent:${agentId}`, (current) => {
       this.requireStage(current, "RELEASE")
+      this.requireAuditsClear(current)
       return structuredClone(current)
     })
     const runBranch = state.runBranch!
@@ -800,4 +1152,43 @@ export class Factory {
       { guard: false },
     )
   }
+}
+
+/** Every audit in the run: phase audits and path audits. */
+export function allAudits(state: FactoryState): Audit[] {
+  return [...state.phases.flatMap((phase) => (phase.audit ? [phase.audit] : [])), ...state.audits]
+}
+
+/** The audit a verdict would land on, refusing when it cannot take one now. */
+function verdictTarget(state: FactoryState, auditId: string): { audit: Audit; phase?: PhaseRuntime } {
+  const found = findAudit(state, auditId)
+  if (!found) throw new FactoryError(`No audit "${auditId}" in this run.`)
+  const { audit, phase } = found
+  if (audit.status !== "open")
+    throw new FactoryError(
+      `Audit ${audit.id} is ${audit.status}; it must be re-opened (es_audit_open) for a new round.`,
+    )
+  if (phase && (state.stage !== "QA" || phase.id !== state.activePhase || phase.status !== "qa"))
+    throw new FactoryError(
+      `Phase ${phase.id} is ${phase.status}; phase audits take verdicts in QA, at its committed head.`,
+    )
+  return found
+}
+
+function findAudit(state: FactoryState, id: string): { audit: Audit; phase?: PhaseRuntime } | undefined {
+  for (const phase of state.phases) if (phase.audit?.id === id) return { audit: phase.audit, phase }
+  const audit = state.audits.find((item) => item.id === id)
+  return audit ? { audit } : undefined
+}
+
+/** A new round: verdicts cleared, open again. */
+function reopen(audit: Audit, by?: string, at?: string): Audit {
+  audit.round += 1
+  audit.status = "open"
+  delete audit.thesis
+  delete audit.antithesis
+  delete audit.tiebreak
+  if (by) audit.openedBy = by
+  if (at) audit.openedAt = at
+  return audit
 }

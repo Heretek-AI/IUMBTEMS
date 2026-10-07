@@ -8,14 +8,16 @@ export function registerWebsearch(
   editor: { add(definition: any): void; default: { get(): unknown; set(id: string): void } },
   runtime: Runtime,
 ) {
-  const provider = selectProvider(runtime.options.searchProvider)
+  const searxng = runtime.config.research?.searxngUrl
+  const env = searxng ? { ...process.env, SEARXNG_URL: searxng } : process.env
+  const provider = selectProvider(runtime.options.searchProvider, env)
   if (!provider) return
   const cache = researchCache(runtime.root)
   editor.add({
     id: "epistemic-swarm",
     name: `Epistemic Swarm (${provider.id}, cached)`,
     execute: async (input: { query: string; limit?: number }, context: { signal: AbortSignal }) => {
-      const results = await provider.search(input.query, { limit: input.limit ?? 8, signal: context.signal })
+      const results = await provider.search(input.query, { limit: input.limit ?? 8, signal: context.signal, env })
       const out = []
       for (const result of results) {
         const cached = await cache.put({

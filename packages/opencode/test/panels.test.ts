@@ -22,6 +22,8 @@ test("each panel renders its state, follows server changes and shows failures", 
   expect(frames.factory).toContain("Stage: BUILD · run-7")
   expect(frames.factory).toContain("Spend: $1.25 / $5 (estimated)")
   expect(frames.factory).toContain("▶ p2 · building · failures 1")
+  expect(frames.factory).toContain("Design tree (round 3): 6 settled · 1 open · 2 deferred (1 for research)")
+  expect(frames.factory).toContain("audit-01 · path src · failed r1 · t:pass a:fail x:fail")
   expect(frames.factoryAfterChange).toContain("Stage: QA")
 
   expect(frames.lsp).toContain("● typescript [.ts .tsx] · 1 running")

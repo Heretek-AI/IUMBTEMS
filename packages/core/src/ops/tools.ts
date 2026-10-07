@@ -5,8 +5,10 @@
 import { seatOf } from "../agents/registry.ts"
 import { approvalSubject } from "../approval/record.ts"
 import { appendAuditEntry } from "../audit/chain.ts"
+import { auditRankView } from "../codeaudit/store.ts"
 import type { Factory } from "../factory/machine.ts"
 import { factorySummary } from "../factory/summary.ts"
+import { computeFrontier, treeCounts } from "../factory/tree.ts"
 import { validateArtifacts } from "../gates/artifacts.ts"
 import { formatReport, runGates } from "../gates/engine.ts"
 import { factoryLayout } from "../layout.ts"
@@ -66,7 +68,7 @@ export function esTools(ops: OpsContext): EsToolDef[] {
   const { factory, root } = ops
   const status = async () => {
     const state = await factory.read()
-    const lines = [factorySummary(state)]
+    const lines = [await factory.summary(state)]
     const pending = await pendingApprovals(root)
     if (pending.length)
       lines.push(
@@ -95,12 +97,22 @@ export function esTools(ops: OpsContext): EsToolDef[] {
     {
       name: "es_frontier_write",
       description:
-        "Grill only: save the full design-tree frontier (validated). Set settled:true only when no node is open and the human agrees.",
+        "Grill only: save the full design tree (validated against the previous save: nodes are never deleted; reopen a settled node with status open before changing it). Returns the next round's questions. Set settled:true only when no node is open and the human agrees.",
       input: object({ frontier: { type: "object", description: "The complete frontier.json object." } }, ["frontier"]),
       execute: async ({ frontier }, context) => {
         const saved = await factory.writeFrontier(context.agent, frontier)
-        const open = saved.nodes.filter((node) => node.status === "open").length
-        return `Saved frontier: ${saved.nodes.length} nodes (${open} open), ceiling $${saved.spendCeiling.maxAmount}, settled=${saved.settled}.`
+        const counts = treeCounts(saved)
+        const next = computeFrontier(saved)
+        return [
+          `Saved frontier (round ${counts.round}): ${counts.total} nodes — ${counts.settled} settled, ${counts.open} open, ${counts.deferred} deferred${counts.facts ? ` (${counts.facts} fact(s) for research)` : ""}; ceiling $${saved.spendCeiling.maxAmount}; settled=${saved.settled}.`,
+          next.length
+            ? `Next round (${next.length}): ${next.map((node) => node.id).join(", ")}. Ask them all in one message, numbered, each with your recommendation.`
+            : counts.open
+              ? "Open nodes remain, but each waits on an unsettled parent: settle or defer the parents."
+              : saved.settled
+                ? "The tree is frozen. Request the human's approval with es_request_approval (stage frontier)."
+                : "No open questions left: summarise the settled constraints, confirm with the human, then save settled:true.",
+        ].join("\n")
       },
     },
     {
@@ -224,13 +236,26 @@ export function esTools(ops: OpsContext): EsToolDef[] {
     },
     {
       name: "es_tiebreak",
-      description: "Manager only: decide a phase when the two QA seats disagree.",
-      input: object({ verdict: { type: "string", enum: ["pass", "fail"] }, notes: { type: "string" } }, [
-        "verdict",
-        "notes",
-      ]),
-      execute: async ({ verdict, notes }, context) =>
-        factorySummary(await factory.tiebreak(context.agent, verdict, notes)),
+      description:
+        "Manager only: decide a phase when the two QA seats disagree, or (with audit) an audit round when the two auditors disagree.",
+      input: object(
+        {
+          verdict: { type: "string", enum: ["pass", "fail"] },
+          notes: { type: "string" },
+          audit: { type: "string", description: "The audit id, for an auditor split" },
+        },
+        ["verdict", "notes"],
+      ),
+      execute: async ({ verdict, notes, audit }, context) => {
+        if (!audit) return factorySummary(await factory.tiebreak(context.agent, verdict, notes))
+        const before = await factory.auditTree(String(audit)).catch(() => undefined)
+        const state = await factory.tiebreak(context.agent, verdict, notes, { audit: String(audit) })
+        const view = before ? await auditRankView(root, before.audit.id, before.audit.round) : []
+        return [
+          await factory.summary(state),
+          ...(view.length ? ["Findings, ranked:", ...view.map((line) => `  ${line}`)] : []),
+        ].join("\n")
+      },
     },
     {
       name: "es_replan",

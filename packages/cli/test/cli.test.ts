@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { exists, Factory, factoryLayout, gateRunner, readApproval } from "@heretek-ai/es-core"
@@ -8,9 +8,13 @@ import { type HarnessDriver, runHeadless } from "../src/headless.ts"
 import { main } from "../src/main.ts"
 import { createMcpServer } from "../src/mcp.ts"
 import { type ConfirmIO, confirmWithCode, NotInteractive } from "../src/tty.ts"
+import { VERSION } from "../src/version.ts"
 
 let root: string
 let state: string
+// The global config layer lives under XDG_CONFIG_HOME: point it into the
+// test's state dir so `--global` never touches the real ~/.config.
+const realXdgConfig = process.env.XDG_CONFIG_HOME
 const git = async (...args: string[]) => {
   const proc = Bun.spawn(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" })
   await proc.exited
@@ -19,12 +23,15 @@ const git = async (...args: string[]) => {
 beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), "es-cli-"))
   state = await mkdtemp(path.join(tmpdir(), "es-cli-state-"))
+  process.env.XDG_CONFIG_HOME = path.join(state, "xdg-config")
   await git("init", "-q", "-b", "main")
   await writeFile(path.join(root, "README.md"), "# x\n")
   await git("add", "-A")
   await git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
 })
 afterEach(async () => {
+  if (realXdgConfig === undefined) delete process.env.XDG_CONFIG_HOME
+  else process.env.XDG_CONFIG_HOME = realXdgConfig
   await rm(root, { recursive: true, force: true })
   await rm(state, { recursive: true, force: true })
 })
@@ -50,7 +57,7 @@ async function run(argv: string[], confirm: ConfirmIO = pipe) {
 async function grilledFrontier() {
   const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
   await factory.writeFrontier("grill", {
-    version: "1.0",
+    version: "1.1",
     idea: "cli test",
     spendCeiling: { currency: "USD", maxAmount: 3 },
     settled: true,
@@ -104,6 +111,124 @@ describe("human-only confirmation", () => {
     )
     expect(granted.code).toBe(0)
     expect(granted.out).toContain("granted")
+  })
+})
+
+describe("research brief and retractions", () => {
+  async function researched() {
+    const { buildDossier, normalizeClaim, researchSourcesDir, SourceCache, writeDossier } = await import(
+      "@heretek-ai/es-core"
+    )
+    const cache = new SourceCache(researchSourcesDir(root))
+    const source = await cache.put({
+      url: "https://x.test/cli",
+      text: "The CLI exports a signed brief that anyone holding the key can verify.",
+      provider: "fetch",
+    })
+    const claim = normalizeClaim({
+      tag: "VERIFIED",
+      statement: "Briefs are signed.",
+      source: { sha256: source.meta.sha256, quote: "exports a signed brief" },
+    })
+    await writeFile(path.join(root, ".factory/research/REPORT.md"), "# R\n")
+    await writeDossier(
+      factoryLayout(root).researchDossier,
+      buildDossier({ mode: "research", subject: "cli", claims: [claim] }),
+      { cache },
+    )
+    return source.meta.sha256
+  }
+
+  test("export writes a signed brief that verify-brief accepts, and a tampered one fails", async () => {
+    await researched()
+    expect((await run(["research", "export", "--help"])).code).toBe(0)
+    expect(await exists(factoryLayout(root).researchBrief)).toBe(false)
+    const exported = await run(["research", "export"])
+    expect(exported.code).toBe(0)
+    expect(exported.out).toContain("Exported .factory/research/brief.pcrb.json")
+    const verified = await run(["research", "verify-brief", ".factory/research/brief.pcrb.json"])
+    expect([verified.code, verified.out.split("\n")[0]]).toEqual([
+      0,
+      "Brief OK: source identity pass, manifest pass, signature valid, quotes pass",
+    ])
+    const file = factoryLayout(root).researchBrief
+    const brief = JSON.parse(await Bun.file(file).text())
+    brief.claims[0].statement = "Briefs are unsigned."
+    await writeFile(path.join(root, "tampered.json"), JSON.stringify(brief))
+    const tampered = await run(["research", "verify-brief", "tampered.json"])
+    expect(tampered.code).toBe(1)
+    expect(tampered.out).toContain("Brief FAILED")
+    expect((await run(["research", "verify-brief"])).code).toBe(2)
+  })
+
+  test("retract is human-only and degrades the claims that cite the source", async () => {
+    const { ClaimStore } = await import("@heretek-ai/es-core")
+    const source = await researched()
+    expect((await run(["research", "retract", source, "--event", "retracted"])).code).toBe(3)
+    expect(await exists(factoryLayout(root).retractions)).toBe(false)
+    expect((await run(["research", "retract", "abc", "--event", "retracted"], human())).code).toBe(2)
+    expect((await run(["research", "retract", source, "--event", "maybe"], human())).code).toBe(2)
+    const recorded = await run(["research", "retract", source, "--event", "retracted", "--note", "withdrawn"], human())
+    expect(recorded.code).toBe(0)
+    expect(recorded.out).toContain("1 claim(s) citing")
+    expect((await ClaimStore.load(root)).citing(source).map((claim) => claim.status)).toEqual(["STALE"])
+  })
+})
+
+describe("es config set", () => {
+  const projectConfig = () => Bun.file(factoryLayout(root).config).json()
+
+  test("is human-only, schema-validated, previewed, and re-pins the project config", async () => {
+    const { verifyAuditChain, verifyControl, rebaseline } = await import("@heretek-ai/es-core")
+    await rebaseline(root, "test")
+    expect((await run(["config", "set", "research.depth", "3", "--help"])).code).toBe(0)
+    expect((await run(["config", "set", "research.depth", "3"])).code).toBe(3)
+    expect(await exists(factoryLayout(root).config)).toBe(false)
+    const io = human()
+    const set = await run(["config", "set", "research.depth", "3"], io)
+    expect(set.code).toBe(0)
+    expect(io.output.join("")).toContain("research.depth: (unset) → 3")
+    expect(await projectConfig()).toEqual({ research: { depth: 3 } })
+    expect((await verifyControl(root)).clean).toBe(true)
+    const audit = await verifyAuditChain(root)
+    expect(audit.entries.map((entry) => entry.action)).toContain("config.set")
+    expect((await run(["config", "set", "research.depth", "3"], human())).out).toContain("already 3")
+    expect((await run(["config", "show"])).out).toContain('"depth": 3')
+  })
+
+  test("rejects unknown keys, invalid values and project-forbidden keys (those go --global)", async () => {
+    const typo = await run(["config", "set", "reserch.depth", "3"], human())
+    expect([typo.code, typo.out]).toEqual([1, expect.stringContaining("Refused")])
+    expect((await run(["config", "set", "research.depth", "9"], human())).code).toBe(1)
+    expect((await run(["config", "set", "afterEdit", "sometimes"], human())).code).toBe(1)
+    const forbidden = await run(["config", "set", "research.searxngUrl", "https://search.test"], human())
+    expect([forbidden.code, forbidden.out]).toEqual([1, expect.stringContaining("--global")])
+    expect(await exists(factoryLayout(root).config)).toBe(false)
+    const global = await run(["config", "set", "research.searxngUrl", "https://search.test", "--global"], human())
+    expect(global.code).toBe(0)
+    const file = path.join(state, "xdg-config", "epistemic-swarm", "config.json")
+    expect(await Bun.file(file).json()).toEqual({ research: { searxngUrl: "https://search.test" } })
+    expect((await run(["config", "set", "research.searxngUrl", "null", "--global"], human())).code).toBe(0)
+    expect(await Bun.file(file).json()).toEqual({ research: {} })
+    expect((await run(["config", "set", "research.depth"], human())).code).toBe(2)
+  })
+
+  test("never launders drift in other control files; accepts a pending hand edit to config.json only openly", async () => {
+    const { rebaseline, verifyControl } = await import("@heretek-ai/es-core")
+    await mkdir(factoryLayout(root).dir, { recursive: true })
+    await writeFile(factoryLayout(root).config, '{"pr":"off"}\n')
+    await rebaseline(root, "test")
+    await writeFile(factoryLayout(root).gates, '{"version":1}\n')
+    const refused = await run(["config", "set", "research.depth", "4"], human())
+    expect([refused.code, refused.out]).toEqual([1, expect.stringContaining("es rebaseline")])
+    expect(await projectConfig()).toEqual({ pr: "off" })
+    await rebaseline(root, "test")
+    await writeFile(factoryLayout(root).config, '{"pr":"gh"}\n')
+    const io = human()
+    expect((await run(["config", "set", "research.depth", "4"], io)).code).toBe(0)
+    expect(io.output.join("")).toContain("accepted along with it")
+    expect(await projectConfig()).toEqual({ pr: "gh", research: { depth: 4 } })
+    expect((await verifyControl(root)).clean).toBe(true)
   })
 })
 
@@ -265,5 +390,144 @@ describe("headless", () => {
     await run(["approve", "frontier"], human())
     const events = await collect(driver(() => factory.halt("system", "test halt").then(() => undefined)))
     expect(events.at(-1)).toMatchObject({ type: "halted", reason: "test halt" })
+  })
+})
+
+describe("es audit and es scout (headless jobs)", () => {
+  const AUTH = `export function login(db, user) {\n  const sql = "SELECT * FROM users WHERE name = '" + user + "'"\n  return db.query(sql)\n}\n`
+  /** A fake harness turn that plays the seats through the core tools. */
+  const seatDriver = (onTurn: (prompt: string) => Promise<void>): HarnessDriver => ({
+    id: "fake",
+    available: async () => true,
+    async *turn({ prompt }) {
+      yield { text: "working" }
+      await onTurn(prompt)
+      return "ses_fake"
+    },
+  })
+  const core = () => import("@heretek-ai/es-core")
+
+  test("--help has no side effects; no run and no ceiling is refused; creating a run needs a terminal", async () => {
+    const { DRIVERS } = await import("../src/headless.ts")
+    await mkdir(path.join(root, "src"), { recursive: true })
+    await writeFile(path.join(root, "src/auth.js"), AUTH)
+    for (const argv of [
+      ["audit", "src", "--help"],
+      ["scout", "x", "--help"],
+    ])
+      expect((await run(argv)).code).toBe(0)
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
+    const bare = await run(["audit", "src", "--open-only"])
+    expect([bare.code, bare.out]).toEqual([2, expect.stringContaining("--max-usd <USD>")])
+    expect((await run(["audit", "src", "--max-usd", "5", "--open-only"])).code).toBe(3)
+    DRIVERS.fake = seatDriver(async () => {})
+    try {
+      expect((await run(["scout", "a parser", "--max-usd", "5", "--driver", "fake"])).code).toBe(3)
+    } finally {
+      delete DRIVERS.fake
+    }
+    expect(await exists(factoryLayout(root).state)).toBe(false)
+  })
+
+  test("an unavailable driver starts nothing: no run, no audit round", async () => {
+    const { DRIVERS } = await import("../src/headless.ts")
+    await mkdir(path.join(root, "src"), { recursive: true })
+    await writeFile(path.join(root, "src/auth.js"), AUTH)
+    await run(["audit", "src", "--max-usd", "5", "--open-only"], human())
+    DRIVERS.down = { id: "down", available: async () => false, async *turn() {} }
+    try {
+      const audit = await run(["audit", "src", "--driver", "down"])
+      expect([audit.code, audit.out]).toEqual([2, expect.stringContaining("nothing was started")])
+      expect((await run(["scout", "a parser", "--driver", "down"])).code).toBe(2)
+    } finally {
+      delete DRIVERS.down
+    }
+    expect((await run(["audit", "show", "audit-01"])).out).toContain("open (round 1)")
+  })
+
+  test("es audit opens on a run (provisioning its ceiling at a TTY), drives the pair, and reports the verdict", async () => {
+    const { DRIVERS } = await import("../src/headless.ts")
+    const { codeAuditTools, Factory } = await core()
+    await mkdir(path.join(root, "src"), { recursive: true })
+    await writeFile(path.join(root, "src/auth.js"), AUTH)
+    const opened = await run(["audit", "src", "--max-usd", "5", "--open-only"], human())
+    expect([opened.code, opened.out]).toEqual([0, expect.stringContaining("Opened audit-01 (round 1) on path src.")])
+    // Now the run has a ceiling: no terminal needed for the next round.
+    const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+    const verdict = codeAuditTools({ root, factory, stateDir: state }).find((tool) => tool.name === "es_audit_verdict")!
+    const prompts: string[] = []
+    DRIVERS.fake = seatDriver(async (prompt) => {
+      prompts.push(prompt)
+      for (const agent of ["es-auditor-thesis", "es-auditor-antithesis"])
+        await verdict.execute({ audit: "audit-01", verdict: "pass", findings: [], notes: "ok" }, { agent })
+    })
+    try {
+      const driven = await run(["audit", "src", "--driver", "fake"])
+      expect(driven.code).toBe(0)
+      expect(driven.out).toContain("Opened audit-01 (round 2) on path src.")
+      expect(driven.out).toContain("Audit audit-01 passed. Report: .factory/audits/audit-01/REPORT.md")
+      expect(prompts[0]).toContain("Headless code audit audit-01 on path src")
+    } finally {
+      delete DRIVERS.fake
+    }
+    const shown = await run(["audit", "show"])
+    expect(shown.out).toContain("audit-01 · path src · passed (round 2)")
+  })
+
+  test("es audit dismiss is human-only and unblocks", async () => {
+    await mkdir(path.join(root, "src"), { recursive: true })
+    await writeFile(path.join(root, "src/auth.js"), AUTH)
+    await run(["audit", "src", "--max-usd", "5", "--open-only"], human())
+    expect((await run(["audit", "dismiss", "audit-01"], human())).code).toBe(2)
+    expect((await run(["audit", "dismiss", "audit-01", "--reason", "vendored"])).code).toBe(3)
+    expect((await run(["audit", "dismiss", "audit-01", "--reason", "vendored code we never ship"], human())).code).toBe(
+      0,
+    )
+    expect((await run(["audit", "show", "audit-01"])).out).toContain("dismissed by human:")
+  })
+
+  test("es scout drives the scout seat until it completes and prints the ranked verdicts", async () => {
+    const { DRIVERS } = await import("../src/headless.ts")
+    const { scoutTools } = await core()
+    await mkdir(path.join(root, "vendor/tiny"), { recursive: true })
+    await writeFile(path.join(root, "vendor/tiny/index.js"), "module.exports = () => 1\n")
+    await writeFile(path.join(root, "vendor/tiny/package.json"), '{"name":"tiny","version":"1.0.0"}')
+    const tool = (name: string) => scoutTools({ root, stateDir: state }).find((item) => item.name === name)!
+    DRIVERS.fake = seatDriver(async () => {
+      const scout = { agent: "scout" }
+      await tool("es_scout_plan").execute(
+        { objective: "a tiny helper", candidates: [{ name: "tiny", source: "local:./vendor/tiny" }] },
+        scout,
+      )
+      await tool("es_scout_scan").execute({ candidate: "tiny" }, scout)
+      await tool("es_scout_record").execute(
+        { candidate: "tiny", maintenance: "slow", proposal: "adopt", rationale: "small enough to keep", claims: [] },
+        scout,
+      )
+      await tool("es_scout_complete").execute({}, scout)
+    })
+    try {
+      const scouted = await run(["scout", "a tiny helper", "--max-usd", "3", "--driver", "fake"], human())
+      expect(scouted.code).toBe(0)
+      // No license file: adopt is downgraded by core, whatever the seat proposed.
+      expect(scouted.out).toContain("1. tiny: clean-room")
+      expect(scouted.out).toContain("Report: .factory/scout/REPORT.md. Adoption is your decision.")
+    } finally {
+      delete DRIVERS.fake
+    }
+    expect((await run(["scout", "show"])).out).toContain("1. tiny — unknown (unverified) — clean-room")
+  })
+})
+
+describe("release version", () => {
+  test("VERSION equals the package version, and every version surface uses it", async () => {
+    const pkg = JSON.parse(await readFile(path.join(import.meta.dir, "..", "package.json"), "utf8")) as {
+      version: string
+    }
+    expect(VERSION).toBe(pkg.version)
+    expect((await run(["version"])).out).toBe(VERSION)
+    // The MCP serverInfo fallback must be the same constant, not a stale literal.
+    const source = await readFile(path.join(import.meta.dir, "..", "src", "mcp.ts"), "utf8")
+    expect(source).toContain("options.version ?? VERSION")
   })
 })

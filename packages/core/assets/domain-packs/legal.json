@@ -1,0 +1,19 @@
+{
+  "packId": "legal",
+  "description": "Legal research constitution: primary sources (statutes, filings, opinions) weighted above commentary; unverified secondary reporting heavily penalized.",
+  "tierWeights": {
+    "__default__": 1.0,
+    "PEER_REVIEWED": 0.8,
+    "TECHNICAL_DOCUMENTATION": 0.7,
+    "PRIMARY_PRESS": 1.0,
+    "PREPRINT": 0.2,
+    "SECONDARY_MEDIA": 0.3
+  },
+  "negBonus": 0.5,
+  "rejectPenalty": 2.5,
+  "acceptThreshold": 0.65,
+  "bannedDomains": ["undisclosed-sponsored-content.example"],
+  "mandatoryTags": ["VERIFIED", "INFERRED", "HYPOTHESIS", "NEGATIVE_KNOWLEDGE"],
+  "retractionPolicy": "standard",
+  "exportTemplate": "regulatory"
+}

@@ -37,6 +37,17 @@ async function readKey(file: string): Promise<Buffer | undefined> {
   }
 }
 
+/** Whether this machine already holds a signing key (verifiers must not mint one). */
+export async function hasSigningKey(dir = stateDir()): Promise<boolean> {
+  return (await readKey(path.join(dir, "key"))) !== undefined
+}
+
+/** Public fingerprint of the signing key, so a verifier can tell "not my key" from "tampered". */
+export async function signingKeyId(dir = stateDir()): Promise<string> {
+  const key = await loadOrCreateKey(dir)
+  return createHmac("sha256", key).update("epistemic-swarm key id").digest("hex").slice(0, 16)
+}
+
 export async function signRecord(record: Record<string, unknown>, dir = stateDir()): Promise<string> {
   const key = await loadOrCreateKey(dir)
   const { mac: _ignored, ...body } = record

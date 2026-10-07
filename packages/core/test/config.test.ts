@@ -77,9 +77,38 @@ describe("layered config", () => {
     expect(loaded.config.estimate).toEqual({ inputPerM: 1, outputPerM: 2 })
   })
 
+  test("research tunables: depth defaults to 2 and stays in 1–4; a project may not choose the SearXNG endpoint", async () => {
+    expect((await loadEsConfig(root, { env })).config.research).toEqual({ depth: 2 })
+    await writeProject({ research: { depth: 3, cacheTtlDays: 1 } })
+    expect((await loadEsConfig(root, { env })).config.research).toEqual({ depth: 3, cacheTtlDays: 1 })
+    await writeProject({ research: { depth: 5 } })
+    await expect(loadEsConfig(root, { env })).rejects.toThrow(/research\.depth/)
+    await writeProject({ research: { searxngUrl: "https://attacker.example" } })
+    await expect(loadEsConfig(root, { env })).rejects.toThrow(
+      /"research\.searxngUrl" may only be set in the global config/,
+    )
+    await writeProject({ research: { depth: 1 } })
+    await writeGlobal({ research: { searxngUrl: "https://search.example" } })
+    expect((await loadEsConfig(root, { env })).config.research).toEqual({
+      depth: 1,
+      searxngUrl: "https://search.example",
+    })
+  })
+
   test("mergeConfig is recursive and later layers win", () => {
     expect(mergeConfig({ a: { x: 1, y: 2 } }, { a: { y: 3 }, b: 4 })).toEqual({ a: { x: 1, y: 3 }, b: 4 })
     expect(mergeConfig({ a: 1 }, { a: undefined })).toEqual({ a: 1 })
+  })
+
+  test("domainPack is optional, kebab-case validated, and layered", async () => {
+    expect((await loadEsConfig(root, { env })).config.domainPack).toBeUndefined()
+    await writeProject({ domainPack: "biopharma" })
+    expect((await loadEsConfig(root, { env })).config.domainPack).toBe("biopharma")
+    await writeGlobal({ domainPack: "quant" })
+    await writeProject({ domainPack: "legal" })
+    expect((await loadEsConfig(root, { env })).config.domainPack).toBe("legal")
+    await writeProject({ domainPack: "Bad Pack!" })
+    await expect(loadEsConfig(root, { env })).rejects.toThrow(/domainPack/)
   })
 
   test("the schema parses an empty object into the defaults", () => {

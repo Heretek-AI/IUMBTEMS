@@ -15,6 +15,18 @@ const data: Record<string, any> = {
       { id: "p2", title: "Gate", status: "building", failures: 1, qa: {} },
     ],
     pending: [],
+    tree: { round: 3, total: 9, settled: 6, open: 1, deferred: 2, facts: 1, frontier: 1 },
+    audits: [
+      {
+        id: "audit-01",
+        target: "path src",
+        status: "failed",
+        round: 1,
+        thesis: "pass",
+        antithesis: "fail",
+        tiebreak: "fail",
+      },
+    ],
   },
   lspState: {
     enabled: true,

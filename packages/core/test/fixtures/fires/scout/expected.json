@@ -1,0 +1,10 @@
+{
+  "note": "License fixtures for scout-fires: every candidate is proposed for adoption; core must keep adopt only for the verified permissive licenses.",
+  "candidates": [
+    { "name": "mit", "license": "MIT", "verdict": "adopt" },
+    { "name": "apache", "license": "Apache-2.0", "verdict": "adopt" },
+    { "name": "gpl", "license": "GPL-3.0-only", "verdict": "clean-room" },
+    { "name": "agpl", "license": "AGPL-3.0-only", "verdict": "clean-room" },
+    { "name": "none", "license": null, "verdict": "clean-room" }
+  ]
+}

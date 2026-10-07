@@ -8,10 +8,20 @@
 import { accessSync, constants } from "node:fs"
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { gradeFireCase } from "../packages/core/src/evals/fires.ts"
 import { type EvalCase, evalWorkspace, runEvalCase } from "../packages/core/src/evals/run.ts"
 
 const root = path.resolve(import.meta.dir, "..")
 const casesDir = path.join(root, "evals/cases")
+const fixturesDir = path.join(root, "packages/core/test/fixtures")
+
+/** Seed values may be "@fixture:<path>" (relative to packages/core/test/fixtures) to keep cases small. */
+async function seedFiles(files: Record<string, string> | undefined): Promise<Record<string, string>> {
+  const out: Record<string, string> = {}
+  for (const [file, value] of Object.entries(files ?? {}))
+    out[file] = value.startsWith("@fixture:") ? await readFile(path.join(fixturesDir, value.slice(9)), "utf8") : value
+  return out
+}
 const resultsDir = path.join(root, "evals/results")
 const model = process.env.ES_EVAL_MODEL
 const maxSteps = Number(process.env.ES_EVAL_MAX_STEPS ?? 6)
@@ -40,13 +50,22 @@ const files = (await readdir(casesDir)).filter((file) => file.endsWith(".json"))
 const results = []
 for (const file of files) {
   const testCase = JSON.parse(await readFile(path.join(casesDir, file), "utf8")) as EvalCase & { maxSteps?: number }
-  const workspace = await evalWorkspace({ pluginDir: path.join(root, "packages/opencode"), model })
+  const workspace = await evalWorkspace({
+    pluginDir: path.join(root, "packages/opencode"),
+    model,
+    files: await seedFiles(testCase.files as Record<string, string> | undefined),
+  })
   try {
-    const result = await runEvalCase(testCase, workspace, {
+    const ran = await runEvalCase(testCase, workspace, {
       binary,
       maxSteps: Math.min(testCase.maxSteps ?? maxSteps, maxSteps),
       timeoutMs,
     })
+    // A fire is scored by the same deterministic grader the CI suites use.
+    const fire = testCase.fire ? await gradeFireCase(testCase.fire, workspace.dir) : undefined
+    const result = fire
+      ? { ...ran, pass: ran.pass && fire.pass, failures: [...ran.failures, ...fire.failures] }
+      : ran
     results.push({
       id: result.id,
       pass: result.pass,
