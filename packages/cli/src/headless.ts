@@ -227,8 +227,13 @@ export async function* driveHeadless(options: HeadlessOptions, job: HeadlessJob)
       let pending = turn.next()
       for (;;) {
         const timer = tick(options.progressMs ?? 30_000)
-        const next = await Promise.race([pending, timer.promise])
-        timer.cancel()
+        let next: IteratorResult<unknown, string | undefined> | typeof TICK
+        try {
+          next = await Promise.race([pending, timer.promise])
+        } finally {
+          // Also when the turn rejects: a live timer would keep the CLI alive.
+          timer.cancel()
+        }
         if (next === TICK) {
           yield { type: "progress", ...(await progressReport(options.root, factory)) }
           continue

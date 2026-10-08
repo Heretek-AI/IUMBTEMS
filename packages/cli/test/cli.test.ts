@@ -583,6 +583,25 @@ describe("headless", () => {
     expect(progress[0]).toMatchObject({ headline: expect.stringContaining("Research"), seats: [] })
   })
 
+  test("a failing turn ends with an error event and leaves no progress timer behind", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const failing: HarnessDriver = {
+      id: "failing",
+      available: async () => true,
+      // biome-ignore lint/correctness/useYield: the turn fails before producing anything
+      async *turn() {
+        throw new Error("opencode run exited 1")
+      },
+    }
+    const started = Date.now()
+    const events: HeadlessEvent[] = []
+    for await (const event of runHeadless({ root, driver: failing, maxTurns: 1, stateDir: state, progressMs: 60_000 }))
+      events.push(event)
+    expect(events.at(-1)).toEqual({ type: "error", message: "opencode run exited 1" })
+    expect(Date.now() - started).toBeLessThan(10_000)
+  })
+
   test("reports a halt", async () => {
     const factory = await grilledFrontier()
     await run(["approve", "frontier"], human())
