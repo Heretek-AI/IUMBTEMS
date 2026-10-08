@@ -111,8 +111,24 @@ describe("write policy", () => {
     for (const agent of [undefined, "build", "factory", "es-research-alpha", "es-research-beta", "es-manager"])
       for (const file of evidence)
         expect([agent, file, effect(evaluateWrite(ctx(), agent, file))]).toEqual([agent, file, "deny"])
-    expect(effect(evaluateWrite(ctx(), "es-research-alpha", ".factory/research/REPORT.md"))).toBe("allow")
     expect(effect(evaluateWrite(ctx(), "factory", ".factory/research/REPORT.md"))).toBe("allow")
+  })
+
+  test("one writer per research file: alpha its notes, beta its notes, the factory the report (#60)", () => {
+    const owner: Record<string, string> = {
+      ".factory/research/alpha.md": "es-research-alpha",
+      ".factory/research/beta.md": "es-research-beta",
+      ".factory/research/REPORT.md": "factory",
+    }
+    for (const [file, writer] of Object.entries(owner))
+      for (const agent of ["es-research-alpha", "es-research-beta", "factory"])
+        expect([file, agent, effect(evaluateWrite(ctx(), agent, file))]).toEqual([
+          file,
+          agent,
+          agent === writer ? "allow" : "deny",
+        ])
+    // Seats keep no other files under research/.
+    expect(effect(evaluateWrite(ctx(), "es-research-alpha", ".factory/research/notes.md"))).toBe("deny")
   })
 
   test("manager cannot escape docs/ with ..", () => {

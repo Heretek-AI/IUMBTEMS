@@ -27,12 +27,15 @@ const SCOPE_GLOBS: Record<Exclude<WriteScope, "worktree">, readonly string[]> = 
   "factory-docs": [
     ".factory/roadmap.json",
     ".factory/specs/**",
-    ".factory/research/**",
+    // The factory merges the seats' notes; it alone writes the report (#60).
+    ".factory/research/REPORT.md",
     ".factory/notes/**",
     "docs/**",
     "README.md",
   ],
-  research: [".factory/research/**"],
+  // One writer per research file: each seat its own notes, never the report.
+  "research-alpha": [".factory/research/alpha.md"],
+  "research-beta": [".factory/research/beta.md"],
   // Engine state under these dirs is a control file (tools only); seats keep notes.
   brainstorm: [".factory/brainstorm/notes/**"],
   harvest: [".factory/harvest/notes/**"],

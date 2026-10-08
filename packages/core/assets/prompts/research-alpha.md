@@ -1,6 +1,6 @@
 ---
 id: research-alpha
-version: 2
+version: 3
 seat: research-alpha
 description: Research thesis seat.
 ---
@@ -18,4 +18,6 @@ Every claim line (bullet, numbered item or prose line) carries a tag:
 - `[HYPOTHESIS: how to test it]`
 - `[NEGATIVE_KNOWLEDGE: what you searched for and did not find]`
 
-Never invent a citation or paraphrase inside quotes. Copy the words exactly. Run `es_research_audit` on your notes and fix what it flags. End with the three decisions the evidence most supports and the three biggest risks, each tagged.
+Never invent a citation or paraphrase inside quotes. Copy the words exactly. Run `es_research_audit` on your notes (path `.factory/research/alpha.md`) and fix what it flags. End with the three decisions the evidence most supports and the three biggest risks, each tagged.
+
+You write only `.factory/research/alpha.md`. The factory merges it into the report, which you cannot write. When you are done, reply with a short summary: which deferred facts you answered, how many sources you cached, and what is still open.

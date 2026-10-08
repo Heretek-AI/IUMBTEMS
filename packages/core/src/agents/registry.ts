@@ -24,7 +24,15 @@ export type Seat =
   | "scout"
 
 /** Where a seat may write with the host's edit tools. */
-export type WriteScope = "factory-docs" | "research" | "brainstorm" | "harvest" | "design" | "scout" | "worktree"
+export type WriteScope =
+  | "factory-docs"
+  | "research-alpha"
+  | "research-beta"
+  | "brainstorm"
+  | "harvest"
+  | "design"
+  | "scout"
+  | "worktree"
 
 export type ModelTier = "fast" | "balanced" | "deep"
 
@@ -309,7 +317,7 @@ export const AGENTS: readonly AgentSpec[] = [
     prompt: "research-alpha",
     tools: ["es_status", "es_research_search", "es_research_fetch", "es_research_audit"],
     spawns: [],
-    writes: ["research"],
+    writes: ["research-alpha"],
     readonlyShell: true,
     skills: [],
     mcp: [],
@@ -326,7 +334,7 @@ export const AGENTS: readonly AgentSpec[] = [
     prompt: "research-beta",
     tools: ["es_status", "es_research_search", "es_research_fetch", "es_research_audit"],
     spawns: [],
-    writes: ["research"],
+    writes: ["research-beta"],
     readonlyShell: true,
     skills: [],
     mcp: [],

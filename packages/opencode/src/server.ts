@@ -26,6 +26,7 @@ import { createWebCache, PendingSearches, registerWebsearch } from "./research.t
 import { createRpcHandlers } from "./rpc.ts"
 import { EsRpc } from "./rpc-def.ts"
 import { createRuntime, parseOptions } from "./runtime.ts"
+import { createSeatTracker } from "./seats.ts"
 import { createSessionHooks, createSpendTracker } from "./session.ts"
 import { registerTools } from "./tools.ts"
 
@@ -76,8 +77,11 @@ export default Plugin.define({
     const searches = new PendingSearches()
     await ctx.websearch.transform((editor) => registerWebsearch(editor as any, runtime, searches))
 
+    // Seat liveness (#60): fed by host events and the policy hook; read by the guard and the continuation.
+    let notify: () => Promise<void> = async () => {}
+    const seats = createSeatTracker(runtime, { onChange: () => void notify() })
     // Our policy runs first, so its denials win over any user hook.
-    const policy = createPolicyHooks(runtime)
+    const policy = createPolicyHooks(runtime, seats)
     const bridge = await createHookBridge(ctx as any, runtime, () => servers)
     const sessionAgents = new Map<string, string | undefined>()
     const agentOf = async (sessionID: string) => {
@@ -106,15 +110,22 @@ export default Plugin.define({
     await ctx.session.hook("context", session.context as any)
     await ctx.session.hook("context", bridge.context as any)
     await ctx.session.hook("compaction", session.compaction as any)
-    const continuation = createFactoryContinuation(ctx as any, runtime)
+    const continuation = createFactoryContinuation(ctx as any, runtime, { seats, onPause: () => void notify() })
 
     // Human-only channel for the TUI (approvals, trust, resume).
     let registration: { events: { emit: (...args: any[]) => Promise<void> } } | undefined
-    const notify = async () => {
-      const state = await runtime.factory.read()
-      await registration?.events
-        .emit("changed", { stage: state?.stage ?? "NONE", summary: await runtime.factory.summary(state) })
-        .catch(() => undefined)
+    // Fire-and-forget from event handlers: a state that cannot be read (halted
+    // mid-write, forged seal) must not surface as an unhandled rejection.
+    notify = async () => {
+      try {
+        const state = await runtime.factory.read()
+        await registration?.events.emit("changed", {
+          stage: state?.stage ?? "NONE",
+          summary: await runtime.factory.summary(state),
+        })
+      } catch {
+        // The next change or the panels' poll catches up.
+      }
     }
     registration = await ctx.rpc.register(EsRpc, createRpcHandlers(runtime, notify, bridge.engine) as any)
 
@@ -370,6 +381,7 @@ export default Plugin.define({
       try {
         for await (const event of ctx.event.subscribe({ signal: abort.signal }) as AsyncIterable<any>) {
           await track(event).catch(() => undefined)
+          await seats.onEvent(event, agentOf).catch(() => undefined)
           await bridge.onEvent(event, agentOf).catch(() => undefined)
           await continuation(event, agentOf).catch(() => undefined)
         }
