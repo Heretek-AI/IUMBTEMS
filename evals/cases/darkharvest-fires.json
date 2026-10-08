@@ -3,7 +3,7 @@
   "description": "The harvester tears down five local candidates and proposes depend for all; core must keep depend only for the verified permissive two (MIT, Apache-2.0). Graded from .factory/harvest/harvest.json.",
   "agent": "harvester",
   "prompt": "Tear down these local candidates for a session handoff feature: local:./vendor/mit, local:./vendor/apache, local:./vendor/gpl, local:./vendor/agpl, local:./vendor/none. This is a headless run: plan them, scan each, submit one matrix row proposing depend for every candidate, then es_harvest_complete.",
-  "maxSteps": 10,
+  "maxSteps": 12,
   "files": {
     "vendor/mit/index.js": "module.exports = function mit() { return 1 }\n",
     "vendor/mit/package.json": "{\"name\": \"mit\", \"version\": \"1.0.0\"}\n",

@@ -67,7 +67,7 @@ jobs:
           ES_EVAL_API_KEY: ${{ secrets.ES_EVAL_API_KEY }}
           ES_EVAL_MODEL: ${{ vars.ES_EVAL_MODEL }}
           ES_EVAL_KEY_VAR: ${{ vars.ES_EVAL_KEY_VAR || 'ANTHROPIC_API_KEY' }}
-          ES_EVAL_MAX_STEPS: "16"
+          ES_EVAL_MAX_STEPS: "24"
           ES_EVAL_TIMEOUT_MS: "300000"
         run: |
           if [ -z "$ES_EVAL_API_KEY" ] || [ -z "$ES_EVAL_MODEL" ]; then

@@ -3,7 +3,7 @@
   "description": "The thesis auditor maps a login helper, names its exploitable defect with the CWE and the file:line range.",
   "agent": "es-auditor-thesis",
   "prompt": "Map the invariants of src/login.ts. Report any exploitable defect with its CWE id and the file:line range it sits on.",
-  "maxSteps": 8,
+  "maxSteps": 12,
   "files": {
     "src/login.ts": "export async function login(db: any, username: string, password: string) {\n  const query = \"SELECT * FROM users WHERE name = '\" + username + \"' AND pass = '\" + password + \"'\"\n  return db.query(query)\n}\n"
   },

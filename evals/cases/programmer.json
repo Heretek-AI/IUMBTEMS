@@ -1,13 +1,14 @@
 {
   "id": "programmer",
-  "description": "The programmer implements a stub so the staged suite passes, then confirms green with the gate run.",
+  "description": "The programmer implements a stub in its phase worktree so the suite passes, then confirms green with the gate run.",
   "agent": "es-programmer",
-  "prompt": "Implement src/sum.ts so the staged suite passes, then run es_gates_run to confirm green.",
-  "maxSteps": 10,
+  "prompt": "Your phase worktree is .factory/worktrees/phase-01 (absolute path in es_status). Implement src/sum.ts inside the worktree so the suite passes, then run es_gates_run with no arguments (full scope) to confirm green. Inspect files with the read tool, never shell reads of .factory files or opencode.json. This run is headless: never call the question tool. Make independent tool calls in the same block.",
+  "maxSteps": 14,
   "files": {
-    "package.json": "{\n  \"name\": \"sum-fixture\",\n  \"version\": \"1.0.0\",\n  \"scripts\": { \"test\": \"bun test\" }\n}\n",
-    "src/sum.ts": "export function sum(a: number, b: number): number {\n  throw new Error(\"not implemented\")\n}\n",
-    "test/sum.test.ts": "import { expect, test } from \"bun:test\"\nimport { sum } from \"../src/sum.ts\"\ntest(\"adds\", () => expect(sum(2, 3)).toBe(5))\n"
+    ".factory/runtime/state.json": "{\n  \"version\": 2,\n  \"runId\": \"run-eval-programmer-01\",\n  \"stage\": \"BUILD\",\n  \"createdAt\": \"2026-10-08T00:00:00.000Z\",\n  \"updatedAt\": \"2026-10-08T00:00:00.000Z\",\n  \"spendCeilingUSD\": 15,\n  \"spend\": {\n    \"usd\": 0,\n    \"estimated\": false,\n    \"events\": 0\n  },\n  \"phases\": [\n    {\n      \"id\": \"phase-01\",\n      \"title\": \"Sum helper\",\n      \"status\": \"building\",\n      \"goalHash\": \"ccc7ed499e931926f1e28ec380232ff96e0194c60c9f49ce93342d9e31506609\",\n      \"failures\": 0,\n      \"replanned\": false,\n      \"branch\": \"factory/run-eval-programmer-01/phase-phase-01\",\n      \"worktree\": \".factory/worktrees/phase-01\",\n      \"history\": []\n    }\n  ],\n  \"activePhase\": \"phase-01\",\n  \"audits\": []\n}\n",
+    ".factory/worktrees/phase-01/package.json": "{\n  \"name\": \"sum-fixture\",\n  \"version\": \"1.0.0\",\n  \"scripts\": { \"test\": \"bun test\" }\n}\n",
+    ".factory/worktrees/phase-01/src/sum.ts": "export function sum(a: number, b: number): number {\n  throw new Error(\"not implemented\")\n}\n",
+    ".factory/worktrees/phase-01/test/sum.test.ts": "import { expect, test } from \"bun:test\"\nimport { sum } from \"../src/sum.ts\"\ntest(\"adds\", () => expect(sum(2, 3)).toBe(5))\n"
   },
   "checks": { "toolsUsed": ["es_gates_run"], "contains": ["0 error(s)"] }
 }

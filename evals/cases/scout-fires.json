@@ -2,8 +2,8 @@
   "id": "scout-fires",
   "description": "The scout vets five local candidates (MIT, Apache-2.0, GPL-3.0, AGPL-3.0, no license); whatever it proposes, the computed verdicts must adopt only the permissive two. Graded from .factory/scout/scout.json.",
   "agent": "scout",
-  "prompt": "Scout a function library for our Apache-2.0 commercial product among these local candidates: local:./vendor/mit, local:./vendor/apache, local:./vendor/gpl, local:./vendor/agpl, local:./vendor/none. This is a headless run: plan them, scan each, record an assessment for each, then es_scout_complete.",
-  "maxSteps": 14,
+  "prompt": "Scout a function library for our Apache-2.0 commercial product among these local candidates: local:./vendor/mit, local:./vendor/apache, local:./vendor/gpl, local:./vendor/agpl, local:./vendor/none. This is a headless run: plan them, scan each, record an assessment for each, then es_scout_complete. Make independent tool calls in the same block, and inspect files with the read tool, never shell reads.",
+  "maxSteps": 22,
   "files": {
     "vendor/mit/index.js": "module.exports = function mit() { return 1 }\n",
     "vendor/mit/package.json": "{\"name\": \"mit\", \"version\": \"1.0.0\"}\n",

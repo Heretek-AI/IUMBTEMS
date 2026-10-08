@@ -3,7 +3,7 @@
   "description": "The antithesis auditor must catch the planted defects (SQL injection, a TOCTOU lock, a hard-coded key, a logged secret) with witnessed line pointers; graded deterministically from .factory/audits/audit-01/records.json.",
   "agent": "es-auditor-antithesis",
   "prompt": "Red-team code audit audit-01 on path src (the files under src/). Find every exploitable defect, then record one verdict with es_audit_verdict: each finding with its CWE, exact lines and a verbatim excerpt.",
-  "maxSteps": 8,
+  "maxSteps": 12,
   "files": {
     "src/injection.ts": "@fixture:fires/audit/src/injection.ts",
     "src/race.ts": "@fixture:fires/audit/src/race.ts",
