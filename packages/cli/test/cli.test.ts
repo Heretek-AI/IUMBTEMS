@@ -847,6 +847,39 @@ describe("status and runs (1.1.3)", () => {
     }
   })
 
+  test("es watch needs a terminal, redraws es status until q, and validates --interval", async () => {
+    const refused = await run(["watch"])
+    expect(refused.code).toBe(2)
+    expect(refused.out).toContain("es watch needs a terminal")
+
+    await begin()
+    const frames: string[] = []
+    let press: ((key: string) => void) | undefined
+    const terminal = {
+      interactive: true,
+      write: (text: string) => {
+        frames.push(text)
+        if (frames.length === 2) press?.("q")
+      },
+      onKey: (listener: (key: string) => void) => {
+        press = listener
+        return () => {
+          press = undefined
+        }
+      },
+    }
+    const watch = (argv: string[]) =>
+      main(argv, { print: () => {}, confirm: pipe, cwd: root, stateDir: state, terminal })
+    expect(await watch(["watch", "--interval", "0.2"])).toBe(0)
+    expect(frames).toHaveLength(2)
+    expect(frames[0]).toStartWith("\x1b[2J\x1b[H")
+    expect(frames[0]).toContain("The grill is running")
+    expect(frames[0]).toContain("q quit · refreshes every 0.2s")
+    // The key listener is released on exit.
+    expect(press).toBeUndefined()
+    expect(await watch(["watch", "--interval", "0"])).toBe(2)
+  })
+
   test("es runs hides finished runs unless --all, and says so when there are none", async () => {
     expect((await run(["runs"])).out).toContain("No active runs")
     expect((await run(["runs", "--all"])).out).toContain("No indexed runs")

@@ -247,8 +247,9 @@ export function livenessLines(state: FactoryState | undefined, liveness: Livenes
 export const headerLine = (state: FactoryState, liveness: Liveness) =>
   `run ${state.runId} · ${state.stage} · ${liveness.root} · updated ${ago(liveness, state.updatedAt)}`
 
-/** "01:58:40  human:john  stage.research". */
-export const eventLine = (event: LivenessEvent) => `${event.at.slice(11, 19)}  ${event.actor}  ${event.action}`
+/** "21:58:40  human:john  stage.research", in local time (the views are for the human at this machine). */
+export const eventLine = (event: LivenessEvent) =>
+  `${new Date(event.at).toTimeString().slice(0, 8)}  ${event.actor}  ${event.action}`
 
 /**
  * The one-line TUI footer indicator: hidden without a run, otherwise the

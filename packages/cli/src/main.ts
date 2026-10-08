@@ -77,6 +77,7 @@ import { serveStdio } from "./mcp.ts"
 import { runsCommand, statusCommand } from "./status.ts"
 import { type ConfirmIO, confirmHuman, NotInteractive, terminalIO } from "./tty.ts"
 import { VERSION } from "./version.ts"
+import { terminalWatchIO, type WatchIO, watchCommand } from "./watch.ts"
 
 export { VERSION }
 
@@ -87,6 +88,7 @@ Usage: es [--cwd <dir> | --run <run id>] <command>
 Factory
   status [--json]               Is the run working, waiting, stuck or done? (headline, seats, research progress)
   runs [--all] [--json]         Recent runs across your projects (* marks this one)
+  watch [--interval S]          es status, redrawn every S seconds (default 2); q quits   [terminal]
   factory begin                 Start a run (normally done by /grill)
   factory run --headless        Drive the factory through a harness CLI, emitting JSON lines
         [--driver opencode] [--max-turns N] [--log-level quiet|info|debug]
@@ -166,6 +168,8 @@ export interface MainIO {
   readonly confirm: ConfirmIO
   readonly cwd: string
   readonly stateDir?: string
+  /** The terminal `es watch` draws on (absent: not a terminal). */
+  readonly terminal?: WatchIO
 }
 
 async function projectRoot(cwd: string): Promise<string> {
@@ -236,6 +240,12 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         return await statusCommand({ root, stateDir: userState, print: io.print }, args)
       case "runs":
         return await runsCommand({ root, stateDir: userState, print: io.print }, args)
+      case "watch":
+        return await watchCommand(
+          { root, stateDir: userState, print: io.print },
+          args,
+          io.terminal ?? { interactive: false, write: io.print, onKey: () => () => {} },
+        )
       case "approve":
         return await approve(context, subArgs(1))
       case "trust":
@@ -730,6 +740,7 @@ if (import.meta.main) {
     print: (text) => console.log(text),
     confirm: terminalIO(),
     cwd: process.cwd(),
+    terminal: terminalWatchIO(),
   })
   process.exit(code)
 }

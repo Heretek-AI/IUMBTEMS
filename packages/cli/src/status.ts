@@ -64,13 +64,25 @@ export function otherRunHint(
     : `A run is active elsewhere: ${where}. \`es status --run ${other.runId}\` shows it.`
 }
 
-export async function statusCommand(context: StatusContext, args: Args): Promise<number> {
+/** Everything `es status` and `es watch` show, read once. */
+export async function statusSnapshot(context: StatusContext) {
   const now = context.now?.() ?? new Date()
   const factory = await configuredFactory(context.root, context.stateDir)
   const state = await factory.read()
   const liveness = await readLiveness(context.root, state, { now })
   const summary = await factory.summary(state)
   const hint = otherRunHint(await listRuns(context.stateDir), { root: context.root, state }, now)
+  return {
+    state,
+    liveness,
+    summary,
+    hint,
+    text: [formatHuman(state, liveness, summary), ...(hint ? [hint] : [])].join("\n"),
+  }
+}
+
+export async function statusCommand(context: StatusContext, args: Args): Promise<number> {
+  const { state, liveness, summary, hint, text } = await statusSnapshot(context)
   if (args.flags.json === true) {
     context.print(
       JSON.stringify(
@@ -81,7 +93,7 @@ export async function statusCommand(context: StatusContext, args: Args): Promise
     )
     return 0
   }
-  context.print([formatHuman(state, liveness, summary), ...(hint ? [hint] : [])].join("\n"))
+  context.print(text)
   return 0
 }
 

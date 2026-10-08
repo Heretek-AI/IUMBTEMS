@@ -5,6 +5,14 @@ const { main } = await import(new URL(entry, import.meta.url).href)
 const { terminalIO } = await import(
   new URL(typeof Bun !== "undefined" ? "../src/tty.ts" : "../dist/es.js", import.meta.url).href
 )
+const { terminalWatchIO } = await import(
+  new URL(typeof Bun !== "undefined" ? "../src/watch.ts" : "../dist/es.js", import.meta.url).href
+)
 process.exit(
-  await main(process.argv.slice(2), { print: (text) => console.log(text), confirm: terminalIO(), cwd: process.cwd() }),
+  await main(process.argv.slice(2), {
+    print: (text) => console.log(text),
+    confirm: terminalIO(),
+    cwd: process.cwd(),
+    terminal: terminalWatchIO(),
+  }),
 )
