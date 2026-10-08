@@ -2,9 +2,18 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { exists, Factory, factoryLayout, gateRunner, readApproval, sealHumanKey } from "@heretek-ai/es-core"
+import {
+  exists,
+  Factory,
+  factoryLayout,
+  gateRunner,
+  readApproval,
+  researchSourcesDir,
+  SourceCache,
+  sealHumanKey,
+} from "@heretek-ai/es-core"
 import { parseArgs, parseExpiry } from "../src/args.ts"
-import { type HarnessDriver, runHeadless } from "../src/headless.ts"
+import { type HarnessDriver, type HeadlessEvent, presentEvent, runHeadless } from "../src/headless.ts"
 import { main } from "../src/main.ts"
 import { createMcpServer } from "../src/mcp.ts"
 import { type ConfirmIO, confirmHuman, NotInteractive } from "../src/tty.ts"
@@ -482,11 +491,102 @@ describe("headless", () => {
     expect(stalled.at(-1)).toMatchObject({ type: "stalled" })
   })
 
+  test("a stall carries its evidence: the headline, last activity and running seats", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const stalled = (await collect(driver(async () => {}))).at(-1) as any
+    expect(stalled).toMatchObject({ type: "stalled", turns: 2, seats: [] })
+    expect(stalled.headline).toStartWith("Research in progress")
+    expect(typeof stalled.lastActivityAgoSec).toBe("number")
+  })
+
+  test("research artifacts count as progress: a run caching sources hits the turn cap, not a stall", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const cache = new SourceCache(researchSourcesDir(root), state)
+    let n = 0
+    const events = await collect(
+      driver(async () => {
+        n++
+        await cache.put({
+          url: `https://example.test/${n}`,
+          text: `Source number ${n} for the run.`,
+          provider: "fetch",
+        })
+      }),
+      4,
+    )
+    expect(events.filter((event) => event.type === "turn")).toHaveLength(4)
+    expect(events.at(-1)).toEqual({ type: "turn-cap", turns: 4 })
+  })
+
+  test("a long turn reports progress while it runs; start names where to watch", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const slow: HarnessDriver = {
+      id: "slow",
+      available: async () => true,
+      async *turn() {
+        await Bun.sleep(120)
+        yield { type: "text", part: { text: "done fetching" } }
+        return "ses_slow"
+      },
+    }
+    const events: HeadlessEvent[] = []
+    for await (const event of runHeadless({ root, driver: slow, maxTurns: 1, stateDir: state, progressMs: 30 }))
+      events.push(event)
+    expect(events[0]).toMatchObject({ type: "start", monitor: expect.stringContaining("es watch") })
+    const progress = events.filter((event) => event.type === "progress")
+    expect(progress.length).toBeGreaterThan(0)
+    expect(progress[0]).toMatchObject({ headline: expect.stringContaining("Research"), seats: [] })
+  })
+
   test("reports a halt", async () => {
     const factory = await grilledFrontier()
     await run(["approve", "frontier"], human())
     const events = await collect(driver(() => factory.halt("system", "test halt").then(() => undefined)))
     expect(events.at(-1)).toMatchObject({ type: "halted", reason: "test halt" })
+  })
+})
+
+describe("headless log levels (#59)", () => {
+  const big = "x".repeat(5000)
+  const toolUse = {
+    type: "tool_use",
+    part: { tool: "read", state: { status: "completed", input: { path: ".factory/frontier.json" }, output: big } },
+  }
+
+  test("info: one compact line per tool call and the text; steps are dropped", () => {
+    expect(presentEvent({ type: "driver", event: toolUse }, "info")).toEqual({
+      type: "tool",
+      tool: "read",
+      status: "completed",
+      target: ".factory/frontier.json",
+    })
+    expect(presentEvent({ type: "driver", event: { type: "text", part: { text: "Merging." } } }, "info")).toEqual({
+      type: "text",
+      text: "Merging.",
+    })
+    expect(presentEvent({ type: "driver", event: { type: "step_finish", part: {} } }, "info")).toBeUndefined()
+  })
+
+  test("debug keeps the raw event with long strings clipped; quiet drops driver events, never lifecycle", () => {
+    const shown = JSON.stringify(presentEvent({ type: "driver", event: toolUse }, "debug"))
+    expect(shown).toContain(".factory/frontier.json")
+    expect(shown).toContain("…[+2952 chars]")
+    expect(shown.length).toBeLessThan(2500)
+    expect(presentEvent({ type: "driver", event: toolUse }, "quiet")).toBeUndefined()
+    expect(presentEvent({ type: "turn", n: 1, stage: "RESEARCH" }, "quiet")).toEqual({
+      type: "turn",
+      n: 1,
+      stage: "RESEARCH",
+    })
+  })
+
+  test("an unknown level is refused before anything runs", async () => {
+    const result = await run(["factory", "run", "--headless", "--log-level", "all"])
+    expect(result.code).toBe(2)
+    expect(result.out).toContain("quiet, info, debug")
   })
 })
 

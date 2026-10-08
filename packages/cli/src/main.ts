@@ -58,7 +58,7 @@ import {
 } from "@heretek-ai/es-core"
 import { type Args, flag, parseArgs } from "./args.ts"
 import { gatesRun, installGitHooks } from "./gates.ts"
-import { DRIVERS, runHeadless } from "./headless.ts"
+import { DRIVERS, LOG_LEVELS, logLevel, presentEvent, runHeadless } from "./headless.ts"
 import {
   approve,
   configSet,
@@ -89,7 +89,7 @@ Factory
   runs [--all] [--json]         Recent runs across your projects (* marks this one)
   factory begin                 Start a run (normally done by /grill)
   factory run --headless        Drive the factory through a harness CLI, emitting JSON lines
-        [--driver opencode] [--max-turns N]
+        [--driver opencode] [--max-turns N] [--log-level quiet|info|debug]
   factory stop [reason]         Create .factory/STOP (kill switch)
   factory resume                Clear a halt            [human, TTY]
         [--accept-drift] [--raise-ceiling USD] [--extend-runtime]
@@ -672,6 +672,11 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
             io.print(`Unknown driver. Available: ${Object.keys(DRIVERS).join(", ")}`)
             return 2
           }
+          const level = logLevel(args)
+          if (!level) {
+            io.print(`Unknown --log-level. Use one of: ${LOG_LEVELS.join(", ")} (default info).`)
+            return 2
+          }
           let code = 0
           for await (const event of runHeadless({
             root,
@@ -679,8 +684,9 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
             ...(flag(args, "max-turns") ? { maxTurns: Number(flag(args, "max-turns")) } : {}),
             ...(io.stateDir ? { stateDir: io.stateDir } : {}),
           })) {
-            io.print(JSON.stringify(event))
-            if (event.type === "error" || event.type === "halted" || event.type === "stalled") code = 1
+            const shown = presentEvent(event, level)
+            if (shown !== undefined) io.print(JSON.stringify(shown))
+            if (["error", "halted", "stalled", "turn-cap"].includes(event.type)) code = 1
           }
           return code
         }

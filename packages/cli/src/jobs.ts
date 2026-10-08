@@ -17,7 +17,15 @@ import {
   scoutPaths,
 } from "@heretek-ai/es-core"
 import { type Args, flag } from "./args.ts"
-import { DRIVERS, driveHeadless, type HeadlessEvent } from "./headless.ts"
+import {
+  DRIVERS,
+  driveHeadless,
+  type HeadlessEvent,
+  LOG_LEVELS,
+  type LogLevel,
+  logLevel,
+  presentEvent,
+} from "./headless.ts"
 import type { HumanContext } from "./human.ts"
 import { confirmHuman } from "./tty.ts"
 
@@ -74,11 +82,23 @@ async function driverFor(context: HumanContext, args: Args) {
   return driver
 }
 
-async function* drain(context: HumanContext, events: AsyncGenerator<HeadlessEvent>): AsyncGenerator<HeadlessEvent> {
+async function* drain(
+  context: HumanContext,
+  level: LogLevel,
+  events: AsyncGenerator<HeadlessEvent>,
+): AsyncGenerator<HeadlessEvent> {
   for await (const event of events) {
-    context.print(JSON.stringify(event))
+    const shown = presentEvent(event, level)
+    if (shown !== undefined) context.print(JSON.stringify(shown))
     yield event
   }
+}
+
+/** The job's `--log-level`, or undefined after printing why it is invalid. */
+function levelFor(context: HumanContext, args: Args): LogLevel | undefined {
+  const level = logLevel(args)
+  if (!level) context.print(`Unknown --log-level. Use one of: ${LOG_LEVELS.join(", ")} (default info).`)
+  return level
 }
 
 const turns = (args: Args) => (flag(args, "max-turns") ? Number(flag(args, "max-turns")) : undefined)
@@ -91,6 +111,8 @@ export async function auditCommand(context: HumanContext, args: Args): Promise<n
     )
     return 2
   }
+  const level = levelFor(context, args)
+  if (!level) return 2
   const openOnly = args.flags["open-only"] === true
   const driver = openOnly ? undefined : await driverFor(context, args)
   if (!openOnly && !driver) return 2
@@ -113,6 +135,7 @@ export async function auditCommand(context: HumanContext, args: Args): Promise<n
   let outcome: HeadlessEvent | undefined
   for await (const event of drain(
     context,
+    level,
     driveHeadless(
       {
         root: context.root,
@@ -123,7 +146,7 @@ export async function auditCommand(context: HumanContext, args: Args): Promise<n
       {
         agent: "factory",
         prompt: async (current, f) =>
-          `${await f.summary(current)}\nHeadless code audit ${audit.id} on ${describeTarget(audit.target)}: launch es-auditor-thesis and es-auditor-antithesis in parallel with the audit id and target. If they disagree, launch es-manager to break the tie (es_tiebreak with audit). No human will answer questions.`,
+          `${await f.summary(current)}\nHeadless code audit ${audit.id} on ${describeTarget(audit.target)}: launch es-auditor-thesis and es-auditor-antithesis in parallel (both subagent calls in one message, in the foreground) with the audit id and target. If they disagree, launch es-manager to break the tie (es_tiebreak with audit). No human will answer questions.`,
         finished: async (current) => {
           const now = allAudits(current).find((item) => item.id === audit.id)
           if (!now || now.status === "open") return undefined
@@ -205,6 +228,8 @@ export async function scoutCommand(context: HumanContext, args: Args): Promise<n
     context.print('Usage: es scout "<feature to adopt or rebuild>" [--max-usd N] [--max-turns N] | show [--json]')
     return 2
   }
+  const level = levelFor(context, args)
+  if (!level) return 2
   const driver = await driverFor(context, args)
   if (!driver) return 2
   const ready = await ensureCeiling(context, args, "A scout")
@@ -217,6 +242,7 @@ export async function scoutCommand(context: HumanContext, args: Args): Promise<n
   let outcome: HeadlessEvent | undefined
   for await (const event of drain(
     context,
+    level,
     driveHeadless(
       {
         root: context.root,
