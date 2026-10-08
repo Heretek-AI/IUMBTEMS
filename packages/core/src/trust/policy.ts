@@ -157,17 +157,76 @@ function isPlainHelp(command: string): boolean {
   return help > 0 && (end === -1 || help < end)
 }
 
-/** Whether the command invokes a human-only es verb, however it is quoted or wrapped. */
+/** A word position, and whether a `--` before it made every word positional. */
+interface Cursor {
+  readonly at: number
+  readonly literal: boolean
+}
+
+/**
+ * Where the CLI parser's next positional could be, scanning from `from` (an
+ * index past the end means there is none). The parser takes flags anywhere
+ * (#88): `--` makes the rest positional, and `--flag value` consumes the
+ * value unless the flag is boolean. The boolean list is the CLI's, so a bare
+ * `--flag` counts both ways; `--flag=value` is two words here (`words` splits
+ * at `=`) and reads the same.
+ */
+function nextPositionals(tokens: readonly string[], from: Cursor): Cursor[] {
+  const found: Cursor[] = []
+  const seen = new Set<string>()
+  const stack = [from]
+  while (stack.length > 0) {
+    const cursor = stack.pop()!
+    const key = `${cursor.at}:${cursor.literal}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const token = tokens[cursor.at]
+    if (token === undefined || cursor.literal || !token.startsWith("--")) found.push(cursor)
+    else if (token === "--") stack.push({ at: cursor.at + 1, literal: true })
+    else stack.push({ at: cursor.at + 1, literal: false }, { at: cursor.at + 2, literal: false })
+  }
+  return found
+}
+
+/** Whether the es binary at `tokens[binary]` can run a human-only verb. */
+function humanVerbAfter(tokens: readonly string[], binary: number): boolean {
+  return nextPositionals(tokens, { at: binary + 1, literal: false }).some((verb) => {
+    const rule = HUMAN_VERBS.find(([name]) => name === tokens[verb.at])
+    if (rule === undefined) return false
+    const [, sub] = rule
+    if (sub === undefined) return true
+    return nextPositionals(tokens, { at: verb.at + 1, literal: verb.literal }).some((next) => sub(tokens[next.at]))
+  })
+}
+
+/**
+ * Whether the command invokes a human-only es verb, however it is quoted or
+ * wrapped. Deliberately quote-blind, so text that only names a verb (a
+ * here-doc, a `-m` or `--body` argument) reads as a call too (#86). That false
+ * positive is the price of catching `sh -c`, `xargs` and interpreter wrappers;
+ * the refusal tells the agent to pass such text by file instead.
+ */
 export function invokesHumanOnly(command: string): boolean {
   if (isPlainHelp(command)) return false
   const tokens = words(unquoteShell(command))
-  return tokens.some((token, index) => {
-    if (!ES_BINARY.test(token)) return false
-    const verb = tokens[index + 1]
-    const rule = HUMAN_VERBS.find(([name]) => name === verb)
-    return rule !== undefined && (rule[1] === undefined || rule[1](tokens[index + 2]))
-  })
+  return tokens.some((token, index) => ES_BINARY.test(token) && humanVerbAfter(tokens, index))
 }
+
+/**
+ * Whether a human-only match is a plain call: no here-doc, and an es binary
+ * heading its segment. Anything else may be text that only names the verb.
+ */
+const calledAtHead = (command: string): boolean =>
+  !command.includes("<<") &&
+  segments(unquoteShell(command)).some((segment) => {
+    const tokens = words(segment)
+    return ES_BINARY.test(tokens[0] ?? "") && humanVerbAfter(tokens, 0)
+  })
+
+const HUMAN_ONLY =
+  "That command is human-only (approvals, trust, waivers, resume, rebaseline, keys, config set, retractions, exports, audit and scout runs); agents cannot run it."
+const MENTION_HINT =
+  " If it only names the verb in text (a here-doc, a commit message, a `--body` argument), the rule still reads a call: write the text to a file with the edit tool and pass the file (`gh … --body-file`, `git commit -F`)."
 
 const CONTROL_MENTION =
   /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|audits\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design|scout)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/i
@@ -249,11 +308,7 @@ export function evaluateShell(
   const spec = agentSpec(agentId)
   const plain = unquoteShell(command)
   if (invokesHumanOnly(command))
-    return {
-      effect: "deny",
-      reason:
-        "That command is human-only (approvals, trust, waivers, resume, rebaseline, keys, config set, retractions, exports, audit and scout runs); agents cannot run it.",
-    }
+    return { effect: "deny", reason: calledAtHead(command) ? HUMAN_ONLY : HUMAN_ONLY + MENTION_HINT }
   const privateDir = canonicalPath(context.stateDir ?? stateDir())
   if (plain.includes(privateDir) || /epistemic-swarm\/(key|trust|engine)|state\/epistemic-swarm/i.test(plain))
     return { effect: "deny", reason: "Agents may not access Epistemic Swarm's private state dir." }

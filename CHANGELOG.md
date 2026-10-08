@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.1.4 — 2026-10-08
+
+A security fix for the human-only shell rule, plus the E2E feedback fixes
+(#85). This closes the 1.1.x proof-of-work phase (#35); the user waived the
+dogfood and the local real-model run.
+
+**Security.**
+- **#88: a flag before the verb slipped past the human-only shell rule.**
+  The rule read only the word right after the es binary, but the CLI takes
+  `--flag`, `--flag value`, `--flag=value` and `--` anywhere. So
+  `es --cwd . approve spec`, `es -- approve spec`,
+  `es --run <id> factory resume` and `es factory --cwd . resume` were
+  allowed for every agent, factory seats included.
+  - Approvals and keys stayed guarded by the masked key and the
+    terminal-only passphrase. Spend-bearing `audit` and `scout` runs and
+    `factory resume` were not.
+  - The rule now finds the verb the way the CLI parser does. A bare `--flag`
+    counts both as a boolean and as taking a value.
+  - Upgrade from any earlier version.
+
+**Fixes.**
+- **#86: refusals for text that only names a guarded verb.** The rule stays
+  quote-blind, so a here-doc, a commit message or a `--body` argument that
+  mentions a human-only verb is still refused. The refusal now says how to
+  pass such text by file (`gh … --body-file`, `git commit -F`).
+- **The grill skill's first turn asks and never records** (#85). The seat
+  had been writing the frontier before asking anything.
+
+**Evals and CI (#85).**
+- The `programmer` case stages a BUILD run with a phase worktree, so it can
+  pass (#66).
+- Step caps were re-budgeted from observed need, and the `ES_EVAL_MAX_STEPS`
+  ceiling went from 16 to 24 (#67).
+- `e2e-feedback` fails only when a historically stable case fails
+  (`scripts/e2e-gate.ts`, #68). `audit-fires` is marked model-limited on the
+  free CI model.
+- Grading reads completed tool outputs, except the raw fetch tools, whose
+  verbatim quoting is the skill under test.
+- Kept workspaces mirror `.factory/` to `keep/factory/`, because the
+  artifact upload drops dot-dirs.
+
+**Dependencies.** `@babel/core` 7.29.6, dev only (GHSA-4x5r-pxfx-6jf8).
+
 ## 1.1.3 — 2026-10-08
 
 Live-run visibility and seat discipline, from the 1.1.2 dogfood (#63): a
