@@ -232,6 +232,34 @@ describe("shell policy", () => {
       expect([command, shell("build", command).effect]).toEqual([command, "deny"])
   })
 
+  test("a flag or `--` before the verb still reads as that verb, as the CLI parser does (#88)", () => {
+    for (const command of [
+      "es --cwd . approve spec",
+      "es --cwd=. approve spec",
+      "es -- approve spec",
+      "es --json approve spec",
+      "es --cwd . reseal --sign",
+      "es --cwd . --json key seal",
+      "es --run run-1 factory resume",
+      "es factory --cwd . resume",
+      "es gates --cwd=. install-git",
+      "es --cwd . audit src --max-usd 5",
+      "es --cwd . config set models.deep x/y",
+      "npx @heretek-ai/es-cli --cwd . approve spec",
+    ])
+      for (const agent of ["build", "es-programmer"])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // Reads keep working with flags around them.
+    for (const command of [
+      "es --cwd . status",
+      "es --run run-1 status",
+      "es --cwd . config show",
+      "es --cwd . audit verify",
+      "es --cwd . factory status",
+    ])
+      expect([command, shell("build", command).effect]).toEqual([command, "allow"])
+  })
+
   test("seats may not reach the evidence cache from the shell; others may read but not mutate it", () => {
     expect(shell("es-research-alpha", "cat .factory/research/sources/index.json").effect).toBe("deny")
     expect(shell("build", "cat .factory/research/sources/index.json").effect).toBe("allow")

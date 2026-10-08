@@ -157,16 +157,53 @@ function isPlainHelp(command: string): boolean {
   return help > 0 && (end === -1 || help < end)
 }
 
+/** A word position, and whether a `--` before it made every word positional. */
+interface Cursor {
+  readonly at: number
+  readonly literal: boolean
+}
+
+/**
+ * Where the CLI parser's next positional could be, scanning from `from` (an
+ * index past the end means there is none). The parser takes flags anywhere
+ * (#88): `--` makes the rest positional, and `--flag value` consumes the
+ * value unless the flag is boolean. The boolean list is the CLI's, so a bare
+ * `--flag` counts both ways; `--flag=value` is two words here (`words` splits
+ * at `=`) and reads the same.
+ */
+function nextPositionals(tokens: readonly string[], from: Cursor): Cursor[] {
+  const found: Cursor[] = []
+  const seen = new Set<string>()
+  const stack = [from]
+  while (stack.length > 0) {
+    const cursor = stack.pop()!
+    const key = `${cursor.at}:${cursor.literal}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const token = tokens[cursor.at]
+    if (token === undefined || cursor.literal || !token.startsWith("--")) found.push(cursor)
+    else if (token === "--") stack.push({ at: cursor.at + 1, literal: true })
+    else stack.push({ at: cursor.at + 1, literal: false }, { at: cursor.at + 2, literal: false })
+  }
+  return found
+}
+
+/** Whether the es binary at `tokens[binary]` can run a human-only verb. */
+function humanVerbAfter(tokens: readonly string[], binary: number): boolean {
+  return nextPositionals(tokens, { at: binary + 1, literal: false }).some((verb) => {
+    const rule = HUMAN_VERBS.find(([name]) => name === tokens[verb.at])
+    if (rule === undefined) return false
+    const [, sub] = rule
+    if (sub === undefined) return true
+    return nextPositionals(tokens, { at: verb.at + 1, literal: verb.literal }).some((next) => sub(tokens[next.at]))
+  })
+}
+
 /** Whether the command invokes a human-only es verb, however it is quoted or wrapped. */
 export function invokesHumanOnly(command: string): boolean {
   if (isPlainHelp(command)) return false
   const tokens = words(unquoteShell(command))
-  return tokens.some((token, index) => {
-    if (!ES_BINARY.test(token)) return false
-    const verb = tokens[index + 1]
-    const rule = HUMAN_VERBS.find(([name]) => name === verb)
-    return rule !== undefined && (rule[1] === undefined || rule[1](tokens[index + 2]))
-  })
+  return tokens.some((token, index) => ES_BINARY.test(token) && humanVerbAfter(tokens, index))
 }
 
 const CONTROL_MENTION =
