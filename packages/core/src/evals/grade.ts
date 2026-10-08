@@ -58,6 +58,25 @@ const num = (value: unknown): number => (typeof value === "number" && Number.isF
  */
 const RAW_EVIDENCE_TOOLS: ReadonlySet<string> = new Set(["es_research_fetch", "es_research_search"])
 
+interface ToolCall {
+  readonly tool: string
+  readonly status?: string
+  readonly output?: unknown
+}
+
+/** Record one tool call: its name, its completion, and — for completed
+ * calls — its output, which is what the stream said. A gate verdict quoted
+ * nowhere in the narration still counts (the programmer case); errored
+ * calls report no work.
+ */
+function collectToolCall(acc: { text: string[]; tools: string[]; completed: string[] }, call: ToolCall): void {
+  acc.tools.push(call.tool)
+  if (call.status !== "completed") return
+  acc.completed.push(call.tool)
+  if (typeof call.output !== "string" || RAW_EVIDENCE_TOOLS.has(call.tool)) return
+  acc.text.push(call.output)
+}
+
 export function readTranscript(events: readonly unknown[]): EvalTranscript {
   const text: string[] = []
   const tools: string[] = []
@@ -80,15 +99,9 @@ export function readTranscript(events: readonly unknown[]): EvalTranscript {
     }
     if (event?.type === "step_start") steps++
     else if (event?.type === "text" && typeof event.part?.text === "string") text.push(event.part.text)
-    else if (event?.type === "tool_use" && typeof event.part?.tool === "string") {
-      tools.push(event.part.tool)
-      if (event.part.state?.status === "completed") completed.push(event.part.tool)
-      // A completed call's output is what the stream said: a gate verdict
-      // quoted nowhere in the narration still counts (the programmer case).
-      // Raw-evidence tools are excluded (above); errored calls report no work.
-      if (event.part.state?.status === "completed" && typeof event.part.state?.output === "string")
-        if (!RAW_EVIDENCE_TOOLS.has(event.part.tool)) text.push(event.part.state.output)
-    } else if (event?.type === "step_finish") {
+    else if (event?.type === "tool_use" && typeof event.part?.tool === "string")
+      collectToolCall({ text, tools, completed }, { tool: event.part.tool, ...event.part.state })
+    else if (event?.type === "step_finish") {
       costUSD += num(event.part?.cost)
       tokens.input += num(event.part?.tokens?.input)
       tokens.output += num(event.part?.tokens?.output)

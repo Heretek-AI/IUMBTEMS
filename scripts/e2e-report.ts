@@ -126,7 +126,8 @@ lines.push(`| case | agent | steps | cost | tools | verdict | failures |`)
 lines.push(`| ---- | ----- | ----- | ---- | ----- | ------- | -------- |`)
   for (const row of rows) {
   const failures = (row.failures ?? []).join("; ").slice(0, 160).replaceAll("|", "\\|")
-  const verdict = row.pass ? "PASS" : row.modelLimited ? "FAIL (model-limited)" : "FAIL"
+  let verdict = row.pass ? "PASS" : "FAIL"
+  if (!row.pass && row.modelLimited) verdict = "FAIL (model-limited)"
   lines.push(
     `| \`${row.id}\` | ${row.agent ?? "?"} | ${row.steps ?? "?"}/${row.maxSteps ?? "?"} | $${(row.costUSD ?? 0).toFixed(4)} | ${(row.tools ?? []).join(", ") || "—"} | ${verdict} | ${failures || "—"} |`,
   )

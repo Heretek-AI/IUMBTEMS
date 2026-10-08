@@ -123,15 +123,13 @@ jobs:
 
       # Regression gate (#68): fails the job only when a historically
       # stable case fails now. Runs even when evals fail; skipped cleanly
-      # when evals never ran (missing secrets).
+      # when evals never ran (missing secrets). The script gates the newest
+      # evals/results JSON itself.
       - name: Gate on regressions only
         if: always() && steps.evals.outputs.skipped != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          newest="$(ls -t evals/results/*.json 2>/dev/null | head -1)"
-          [ -n "$newest" ] || { echo "regression gate: no evals/results/*.json (evals never wrote one); skipping."; exit 0; }
-          bun scripts/e2e-gate.ts "$newest"
+        run: bun scripts/e2e-gate.ts
 
       # One best-effort agent turn over the deterministic report, bounded by
       # `timeout`. Never fails the job: the eval verdict above is what

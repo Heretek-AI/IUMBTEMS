@@ -15,6 +15,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 
 const root = path.resolve(import.meta.dir, "..")
+const resultsDir = path.join(root, "evals", "results")
 
 interface EvalRow {
   id: string
@@ -25,22 +26,24 @@ interface EvalFile {
   results?: EvalRow[]
 }
 
-const resultsPath = process.argv[2]
+/** The newest flat results JSON. No path argument: the gate reads what the
+ * eval run just wrote, so no caller-supplied path can reach the filesystem.
+ */
+async function newestResults(): Promise<string | undefined> {
+  const flat = (await readdir(resultsDir).catch(() => [] as string[]))
+    .filter((file) => file.endsWith(".json"))
+    .sort()
+  const latest = flat.at(-1)
+  return latest ? path.join(resultsDir, latest) : undefined
+}
+
+const resultsPath = await newestResults()
 if (!resultsPath) {
-  console.error("usage: bun scripts/e2e-gate.ts <evals-results-json>")
+  console.error("e2e-gate: no evals/results/*.json (the eval run never wrote one)")
   process.exit(2)
 }
 
-// The results file must live under evals/results/: the path comes from the
-// command line, so resolve it and refuse anything that escapes (S8707).
-const resultsDir = path.join(root, "evals", "results")
-const resolved = path.resolve(root, resultsPath)
-if (resolved !== resultsDir && !resolved.startsWith(`${resultsDir}${path.sep}`)) {
-  console.error(`e2e-gate: results must be inside ${path.relative(root, resultsDir)} (got ${resultsPath})`)
-  process.exit(2)
-}
-
-const raw = await readFile(resolved, "utf8").catch(() => undefined)
+const raw = await readFile(resultsPath, "utf8").catch(() => undefined)
 if (raw === undefined) {
   console.error(`e2e-gate: cannot read ${resultsPath}`)
   process.exit(2)
