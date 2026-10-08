@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { appendFile, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { factoryLayout } from "../src/layout.ts"
+import { engineKeyPath, ensureEngineKey } from "../src/research/seal.ts"
 import { signEngineFile, verifyEngineFile } from "../src/trust/sidecar.ts"
+import { exists } from "../src/util/fs.ts"
 import { type Fixture, gitRepo } from "./helpers.ts"
 
 let fx: Fixture
@@ -31,6 +35,7 @@ describe("engine sidecars", () => {
       const file = `${fx.root}/note.json`
       await writeFile(file, '{"a":1}\n')
       await signEngineFile(file, other.state)
+      await ensureEngineKey(fx.state)
       expect(await verifyEngineFile(file, fx.state)).toBe("signature mismatch")
     } finally {
       await other.cleanup()
@@ -58,6 +63,47 @@ describe("engine sidecars", () => {
     // Re-signing the reviewed file (what `es reseal --sign` does) restores reads.
     await signEngineFile(factoryLayout(fx.root).state, fx.state)
     expect((await factory.read())!.stage).toBe("GRILL")
+  })
+
+  test("a verifier that cannot see the engine key says so and never mints one (#59)", async () => {
+    const { Factory } = await import("../src/factory/index.ts")
+    const gates = async () => ({ passed: true, findings: [], summary: "green" })
+    await new Factory(fx.root, { gates, stateDir: fx.state }).begin("human:tester")
+    // An agent sandbox masks the state dir with an empty tmpfs: the same shape as a fresh dir.
+    const masked = await mkdtemp(path.join(tmpdir(), "es-masked-"))
+    const saved = process.env.ES_SANDBOX
+    try {
+      expect(await verifyEngineFile(factoryLayout(fx.root).state, masked)).toBe("missing engine key")
+      expect(await exists(engineKeyPath(masked))).toBe(false)
+      const blind = new Factory(fx.root, { gates, stateDir: masked })
+      delete process.env.ES_SANDBOX
+      await expect(blind.read()).rejects.toThrow(`there is no engine key at ${engineKeyPath(masked)}`)
+      await expect(blind.read()).rejects.toThrow("ES_STATE_DIR")
+      process.env.ES_SANDBOX = "readonly"
+      await expect(blind.read()).rejects.toThrow('agent shell (sandbox "readonly")')
+      await expect(blind.read()).rejects.toThrow("call the es_status tool")
+      expect(await exists(engineKeyPath(masked))).toBe(false)
+      // The engine's own reader is untouched.
+      expect((await new Factory(fx.root, { gates, stateDir: fx.state }).read())!.stage).toBe("GRILL")
+    } finally {
+      if (saved === undefined) delete process.env.ES_SANDBOX
+      else process.env.ES_SANDBOX = saved
+      await rm(masked, { recursive: true, force: true })
+    }
+  })
+
+  test("a mismatch names the key it checked against and the reseal caveat", async () => {
+    const { Factory } = await import("../src/factory/index.ts")
+    const factory = new Factory(fx.root, {
+      gates: async () => ({ passed: true, findings: [], summary: "green" }),
+      stateDir: fx.state,
+    })
+    await factory.begin("human:tester")
+    await appendFile(factoryLayout(fx.root).state, " ")
+    await expect(factory.read()).rejects.toThrow(
+      `signature mismatch against the engine key at ${engineKeyPath(fx.state)}`,
+    )
+    await expect(factory.read()).rejects.toThrow("If `es reseal` reports that every sidecar verifies")
   })
 
   test("concurrent spend writes and reads never observe a half-signed pair", async () => {

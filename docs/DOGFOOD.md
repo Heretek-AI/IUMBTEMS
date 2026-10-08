@@ -56,22 +56,66 @@ Answer the interview (one question at a time). Set the **spend ceiling**
 explicitly — the run cannot start without it. When the design tree is settled,
 approve it:
 
-- TUI: `/es-approve` → type the code; or
-- terminal: `es approve frontier`
+- TUI: `/es-approve` previews what you are approving, then points at the terminal; or
+- terminal: `es approve frontier` (asks for your passphrase)
 
 ## 3. Research and spec
 
-Run `/factory` and let the factory drive RESEARCH (cited `REPORT.md` enforced
-by the auditor) and SPEC (roadmap + GOAL.md per phase). When the spec is ready,
-approve it the same way (`/es-approve` or `es approve spec`).
+Run `/factory` in the TUI, or `es factory run --headless` in a terminal for an
+unattended run. Either way the factory drives RESEARCH and then SPEC:
+
+- **RESEARCH** produces a cited `REPORT.md`, which the auditor enforces.
+  Research alpha writes `alpha.md` and then beta attacks it in `beta.md`;
+  only the factory merges them into `REPORT.md`.
+- **SPEC** produces the roadmap plus a GOAL.md per phase.
+
+Seats run in the foreground, so a research turn can take minutes. That is
+work, not a stall: see "Watching a run" below. When the spec is ready,
+approve it the same way (`/es-approve` previews it; `es approve spec` records
+it).
 
 ## 4. Autonomous build
 
 `/factory` again; after the spec approval the run is autonomous: worktree per
 phase, gates (including the new complexity check once built), dual QA
-(functional + adversarial), manager tiebreak, retries bounded. Watch it in the
-**factory dashboard** panel (`/es-factory`) or `es status`. If something goes
-wrong: `.factory/STOP` halts everything; `/es-resume` clears a halt.
+(functional + adversarial), manager tiebreak, retries bounded. Watch it as
+below. If something goes wrong: `.factory/STOP` halts everything;
+`es factory resume` clears a halt (`/es-resume` previews it).
+
+## Watching a run
+
+Every view leads with one plain sentence: is the run working, waiting on
+you, possibly stuck, halted or done? It names the seat, its last tool and how
+long ago it acted.
+
+- **`es status`** (in the project): the headline; then which run, in which
+  project, and how fresh it is; then each seat's state and last activity,
+  research progress (cached sources, `alpha.md`, `beta.md`, `REPORT.md`,
+  coverage), recent events, and anything waiting on you. `--json` gives the
+  same to scripts. If another project's run is more recently active, it says
+  so: `es status --run <id>` targets it.
+- **`es watch`**: `es status`, redrawn every 2 s (`--interval S`); `q` quits.
+- **`es runs`**: recent runs across your projects; `*` marks the one here.
+- **TUI**:
+  - `/es-factory` opens the factory dashboard beside the session. `Esc` or
+    `q` closes it, `f` toggles fullscreen and `r` refreshes; `/es-close`
+    also closes it.
+  - The prompt footer shows `ES · <stage> · <seat> running · <age>`, or what
+    waits on you.
+  - A toast announces stage changes, and also a paused factory after three
+    turns without progress (run `/factory` to continue).
+- **Headless**: `es factory run --headless` prints JSON lines.
+  - It emits a `progress` event every 30 s while a turn runs.
+  - `stalled` carries its evidence (the headline, last activity, running
+    seats); `turn-cap` means the turn limit was reached.
+  - `--log-level quiet|info|debug` (default `info`) sets the detail:
+    - `quiet`: lifecycle and progress only;
+    - `info`: one line per tool call;
+    - `debug`: raw harness events with long strings clipped.
+
+`es status` from an agent's shell cannot verify the run (the private state
+dir is masked there); agents call the `es_status` tool, which shows the same
+liveness.
 
 ## 5. Release
 

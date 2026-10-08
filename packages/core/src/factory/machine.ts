@@ -27,20 +27,22 @@ import { readRetractions } from "../claims/degrade.ts"
 import { buildDossier, writeDossier } from "../claims/dossier.ts"
 import { claimsFromAudit } from "../claims/research.ts"
 import { ClaimStore } from "../claims/store.ts"
-import { factoryLayout } from "../layout.ts"
+import { stateDir as defaultStateDir, factoryLayout } from "../layout.ts"
 import { auditMarkdown, formatCoverage } from "../research/auditor.ts"
 import { researchCache } from "../research/ops.ts"
+import { engineKeyPath } from "../research/seal.ts"
 import { type Frontier, FrontierSchema } from "../schema/frontier.ts"
 import { type AcceptanceCriterion, parseGoalMarkdown } from "../schema/goal.ts"
 import { RoadmapSchema } from "../schema/roadmap.ts"
 import { rebaseline, repinControl, verifyControl } from "../trust/control.ts"
-import { signEngineFile, verifyEngineFile } from "../trust/sidecar.ts"
+import { type SidecarProblem, signEngineFile, verifyEngineFile } from "../trust/sidecar.ts"
 import { checkStopFile } from "../trust/stop.ts"
 import { appendLine, exists, readJson, relativeInside, withLock, writeJson } from "../util/fs.ts"
 import { sha256 } from "../util/hash.ts"
 import { run, splitCommand } from "../util/proc.ts"
 import * as Git from "../worktree/git.ts"
 import { once } from "./journal.ts"
+import { indexRun } from "./runs.ts"
 import {
   type Audit,
   type AuditTarget,
@@ -145,9 +147,41 @@ const newRunId = (now: Date) =>
 const TEST_FILE =
   /(^|\/)(test|tests|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.(py|go)$/
 
+/**
+ * Why the run state cannot be read, and what fixes it. A missing key is not
+ * tampering: the reader cannot see the engine's key (#59), so reseal is the
+ * wrong fix and the message says what is.
+ */
+function sealProblemMessage(problem: SidecarProblem, dir: string | undefined): string {
+  const key = engineKeyPath(dir ?? defaultStateDir())
+  if (problem === "missing engine key") {
+    const sandbox = process.env.ES_SANDBOX
+    return (
+      `Cannot verify .factory/runtime/state.json: there is no engine key at ${key}. ` +
+      (sandbox
+        ? `This is an agent shell (sandbox "${sandbox}"), where Epistemic Swarm's private state dir is masked: call the es_status tool instead of \`es status\`.`
+        : "The plugin may be using another state dir (its stateDir option): point this shell at it with ES_STATE_DIR, then retry.")
+    )
+  }
+  if (problem === "missing sidecar")
+    return (
+      ".factory/runtime/state.json has a missing sidecar: it was not written by this engine (pre-seeded, or written by an older version). " +
+      "Review it, then a human re-signs it with `es reseal --sign`."
+    )
+  return (
+    `.factory/runtime/state.json has a signature mismatch against the engine key at ${key}: it was not written with that key. ` +
+    "If someone edited it on purpose, review it, then a human re-signs it with `es reseal --sign`. " +
+    "If `es reseal` reports that every sidecar verifies, this shell sees a different key than the engine (ES_STATE_DIR, XDG_STATE_HOME or an agent sandbox)."
+  )
+}
+
+/** The run index is refreshed on a stage change, or at most this often otherwise. */
+const RUN_INDEX_INTERVAL_MS = 60_000
+
 export class Factory {
   private readonly limits: FactoryLimits
   private readonly layout: ReturnType<typeof factoryLayout>
+  private indexed?: { readonly runId: string; readonly stage: Stage; readonly at: number }
 
   constructor(
     readonly root: string,
@@ -173,7 +207,14 @@ export class Factory {
   async read(): Promise<FactoryState | undefined> {
     // No state file, no run: return before locking (the lock mkdirs).
     if (!(await exists(this.layout.state))) return undefined
-    return withLock(this.layout.state, () => this.readUnsafe())
+    try {
+      return await withLock(this.layout.state, () => this.readUnsafe())
+    } catch (error: any) {
+      // A read-only .factory (an agent sandbox) cannot hold the lock; read
+      // without it, so the reader learns what it can and cannot verify.
+      if (error?.code === "EROFS" || error?.code === "EACCES") return this.readUnsafe()
+      throw error
+    }
   }
 
   /** Read + verify without taking the state lock (the caller holds it). */
@@ -188,11 +229,7 @@ export class Factory {
     // file was pre-seeded or tampered with outside the engine. Only a human
     // re-signs it (`es reseal --sign`) after reviewing what changed.
     const problem = await verifyEngineFile(this.layout.state, this.deps.stateDir)
-    if (problem)
-      throw new FactoryError(
-        `.factory/runtime/state.json has a ${problem}: it was not written by this engine. ` +
-          `Review it (es_status will not run), then a human re-signs it with \`es reseal --sign\`.`,
-      )
+    if (problem) throw new FactoryError(sealProblemMessage(problem, this.deps.stateDir))
     return FactoryStateSchema.parse(raw)
   }
 
@@ -214,6 +251,22 @@ export class Factory {
     state.updatedAt = this.now().toISOString()
     await writeJson(this.layout.state, FactoryStateSchema.parse(state))
     await signEngineFile(this.layout.state, this.deps.stateDir)
+    await this.indexRun(state)
+  }
+
+  /** Keep this run's entry in the per-user run index (`es runs`) fresh. */
+  private async indexRun(state: FactoryState) {
+    const at = this.now().getTime()
+    const last = this.indexed
+    if (last?.runId === state.runId && last.stage === state.stage && at - last.at < RUN_INDEX_INTERVAL_MS) return
+    this.indexed = { runId: state.runId, stage: state.stage, at }
+    await indexRun(this.deps.stateDir ?? defaultStateDir(), {
+      runId: state.runId,
+      root: this.root,
+      stage: state.stage,
+      createdAt: state.createdAt,
+      updatedAt: state.updatedAt,
+    })
   }
 
   private audit(actor: string, action: string, payload: Record<string, unknown> = {}) {
@@ -1140,9 +1193,10 @@ export class Factory {
   // ------------------------------------------------------------ spend, halt, resume
 
   async recordSpend(usd: number, estimated: boolean): Promise<FactoryState | undefined> {
-    if (!(usd > 0)) return this.readUnsafe()
+    if (!(usd > 0)) return this.read()
     // No run, nothing to charge; taking the lock would create .factory/runtime/ in any project.
-    if (!(await this.readUnsafe())) return undefined
+    // (An existence check, not an unlocked read: that could meet a half-written state/sidecar pair.)
+    if (!(await exists(this.layout.state))) return undefined
     return withLock(this.layout.state, async () => {
       const state = await this.readUnsafe()
       if (!state || state.stage === "HALTED" || state.stage === "DONE") return state

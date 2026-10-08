@@ -6,16 +6,17 @@ import { seatOf } from "../agents/registry.ts"
 import { approvalSubject } from "../approval/record.ts"
 import { appendAuditEntry } from "../audit/chain.ts"
 import { auditRankView } from "../codeaudit/store.ts"
+import { livenessLines, readLiveness } from "../factory/liveness.ts"
 import type { Factory } from "../factory/machine.ts"
+import { pendingApprovals } from "../factory/pending.ts"
 import { factorySummary } from "../factory/summary.ts"
 import { computeFrontier, treeCounts } from "../factory/tree.ts"
 import { validateArtifacts } from "../gates/artifacts.ts"
 import { formatReport, runGates } from "../gates/engine.ts"
 import { factoryLayout } from "../layout.ts"
-import type { ApprovalStage } from "../schema/approval.ts"
 import type { GateFinding } from "../schema/gates.ts"
 import { relativeTo } from "../trust/paths.ts"
-import { readJson, writeJson } from "../util/fs.ts"
+import { writeJson } from "../util/fs.ts"
 
 export type EsToolContext = { readonly agent: string; readonly sessionID?: string; readonly signal?: AbortSignal }
 export interface EsToolDef {
@@ -53,22 +54,11 @@ function findingsText(findings: readonly GateFinding[]): string {
     .join("\n")
 }
 
-export interface PendingApproval {
-  readonly stage: ApprovalStage
-  readonly requestedBy: string
-  readonly at: string
-  readonly note?: string
-}
-
-export async function pendingApprovals(root: string): Promise<PendingApproval[]> {
-  return (await readJson<PendingApproval[]>(factoryLayout(root).pending).catch(() => undefined)) ?? []
-}
-
 export function esTools(ops: OpsContext): EsToolDef[] {
   const { factory, root } = ops
   const status = async () => {
     const state = await factory.read()
-    const lines = [await factory.summary(state)]
+    const lines = [await factory.summary(state), ...livenessLines(state, await readLiveness(root, state))]
     const pending = await pendingApprovals(root)
     if (pending.length)
       lines.push(
@@ -90,7 +80,7 @@ export function esTools(ops: OpsContext): EsToolDef[] {
     {
       name: "es_status",
       description:
-        "Show the factory state: stage, phases, worktree paths, QA verdicts, spend and pending human approvals.",
+        "Show the factory state: stage, phases, worktree paths, QA verdicts, spend, pending human approvals, and liveness (each seat's state and last activity, research progress).",
       input: object(),
       execute: status,
     },

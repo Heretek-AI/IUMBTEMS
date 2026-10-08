@@ -1,5 +1,70 @@
 # Changelog
 
+## 1.1.3 — 2026-10-08
+
+Live-run visibility and seat discipline, from the 1.1.2 dogfood (#63): a
+human could not tell a working run from a frozen one, and the factory
+relaunched live research seats as second writers.
+
+**Behaviour changes.**
+- Factory seats launch seats in the foreground only. `subagent` with
+  `background: true` from a seat is refused, and so is launching a seat
+  that is still running. A pair (QA, auditors, brainstorm lenses) is
+  several calls in one message, which the host runs in parallel. RESEARCH
+  runs alpha, then beta.
+- One writer per research file. Alpha writes only `research/alpha.md`, beta
+  only `research/beta.md`, and only the factory writes `research/REPORT.md`.
+- Prompts: factory v7, research alpha/beta v3, brainstormer v2.
+- `es factory run --headless` emits `progress` events. `stalled` carries
+  evidence, and the turn cap is its own `turn-cap` event. The default
+  output is one line per tool call (`--log-level quiet|info|debug`).
+
+**Fixes.**
+- **#60: the false stall and the duplicate writer.** Three causes:
+  - The in-host continuation re-prompted the factory right after it
+    launched background seats.
+  - The headless driver's own turns suspended those seats.
+  - Neither counted research artifacts as progress.
+
+  Progress is now a shared fingerprint over the stage machine, research
+  artifacts, seat outcomes and the audit head. The continuation waits while
+  a seat runs, and announces its pause instead of going silent.
+- **#59: the signature-mismatch dead end.** `es status` from an agent shell
+  minted a throwaway engine key in the sandbox's masked state dir and
+  called the run state forged.
+  - Verifiers never create the key. A missing key gets its own message
+    (use the `es_status` tool in an agent shell; otherwise set
+    `ES_STATE_DIR`), and sandboxes set `ES_SANDBOX`.
+  - `es reseal` names the key it checks and refuses to sign without it.
+  - Sidecars are written atomically.
+- **#59: `--help`.** A plain `es <command> --help` is allowed for agents,
+  and prints that command's usage. The seat block on control paths points
+  at the read tool, glob, grep and `es_status`.
+- **#57: the dashboard.** It shows the headline, the run header, seats,
+  research progress, phases (no dangling `Phases:`), what waits on you and
+  recent events. It opens beside the session: `Esc`/`q` closes, `f` toggles
+  fullscreen, `r` refreshes, and `/es-close` closes it too.
+- **#62: the RPC `changed` event is emitted.** It fires after `es_*` tools
+  and seat transitions (coalesced to one a second) and with pause notices.
+  The TUI toasts only stage changes and notices.
+
+**New (#58, #61).**
+- `es status` leads with a plain sentence, then the run id, stage, project
+  path and age, seats, research progress and recent events.
+  - `--json` gives the same data to scripts.
+  - `--run <id>` targets another project's run.
+  - It hints when another project's run is fresher.
+- `es runs [--all] [--json]` lists recent runs across projects, from a
+  per-user index under the state dir.
+- `es watch [--interval S]` redraws `es status` in the terminal; `q` quits.
+- `es_status` and `/status` add the headline, last activity, seats and
+  research progress. The `<factory-state>` block injected into prompts is
+  unchanged.
+- The TUI prompt footer shows `ES · <stage> · <seat> running · <age>`, or
+  what waits on you.
+- Seat records live in `.factory/runtime/seats.json` (advisory, written by
+  the plugin).
+
 ## 1.1.2 — 2026-10-07
 
 Proof-of-work follow-up to the 1.1.1 security release (#54).

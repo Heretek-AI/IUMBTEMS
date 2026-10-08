@@ -27,12 +27,15 @@ const SCOPE_GLOBS: Record<Exclude<WriteScope, "worktree">, readonly string[]> = 
   "factory-docs": [
     ".factory/roadmap.json",
     ".factory/specs/**",
-    ".factory/research/**",
+    // The factory merges the seats' notes; it alone writes the report (#60).
+    ".factory/research/REPORT.md",
     ".factory/notes/**",
     "docs/**",
     "README.md",
   ],
-  research: [".factory/research/**"],
+  // One writer per research file: each seat its own notes, never the report.
+  "research-alpha": [".factory/research/alpha.md"],
+  "research-beta": [".factory/research/beta.md"],
   // Engine state under these dirs is a control file (tools only); seats keep notes.
   brainstorm: [".factory/brainstorm/notes/**"],
   harvest: [".factory/harvest/notes/**"],
@@ -139,8 +142,24 @@ const HUMAN_VERBS: ReadonlyArray<readonly [string, ((next: string | undefined) =
   ["scout", (next) => next !== undefined && next !== "show"],
 ]
 
+/**
+ * A single plain `es … --help`: no separators, quoting, escapes, expansions,
+ * redirections or wrappers, the es binary first, and a standalone `--help`
+ * before any `--`. The CLI prints usage for it before doing anything else, so
+ * it is safe for agents (#59); everything else keeps the human-only check.
+ */
+function isPlainHelp(command: string): boolean {
+  if (/[;&|\n()'"`$\\<>{}]/.test(command)) return false
+  const argv = command.trim().split(/\s+/)
+  if (!ES_BINARY.test(argv[0] ?? "")) return false
+  const help = argv.indexOf("--help")
+  const end = argv.indexOf("--")
+  return help > 0 && (end === -1 || help < end)
+}
+
 /** Whether the command invokes a human-only es verb, however it is quoted or wrapped. */
 export function invokesHumanOnly(command: string): boolean {
+  if (isPlainHelp(command)) return false
   const tokens = words(unquoteShell(command))
   return tokens.some((token, index) => {
     if (!ES_BINARY.test(token)) return false
@@ -243,7 +262,8 @@ export function evaluateShell(
     if (CONTROL_MENTION.test(plain))
       return {
         effect: "deny",
-        reason: "Factory seats may not reference control files from the shell; use the read tool to inspect them.",
+        reason:
+          "Factory seats may not reference control files from the shell. Inspect them with the read tool (it lists directories too), glob or grep; es_status summarizes the run (seats, research progress, last activity).",
       }
     const git = seatForbiddenGit(command)
     if (git)

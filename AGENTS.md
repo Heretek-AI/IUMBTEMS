@@ -35,15 +35,16 @@ spike as proof).
 - `bun run docs:gen` / `bun run docs:check` (drift; CI runs the check)
 - `scripts/v2-head.sh [tests…]` — real-host suite against OpenCode `v2` HEAD
   (repoints node_modules symlinks; `bun install` restores them)
-- `es <status|approve|trust|waive|gates|factory|research|brainstorm|harvest|design|config|lsp|hooks|audit|scout|mcp>`
-- OpenCode slash commands: `/grill /factory /audit /scout /brainstorm /harvest /design /research /gates /status /lsp /hooks /config` plus `es-*` TUI palette commands.
+- `es <status|runs|watch|approve|trust|waive|gates|factory|research|brainstorm|harvest|design|config|lsp|hooks|audit|scout|mcp>`
+- OpenCode slash commands: `/grill /factory /audit /scout /brainstorm /harvest /design /research /gates /status /lsp /hooks /config` plus `es-*` TUI palette commands (panels: `/es-factory`, `/es-lsp-panel`, `/es-hooks`, `/es-brainstorm`; `/es-close`).
 
 ## Contract invariants (do not break)
 | Invariant | Where |
 | :--- | :--- |
 | Approvals, waivers, trust and resume are human-only: terminal passphrase confirmation unlocks the sealed Ed25519 human key (signed, hash-bound); the approve/trust/resume RPCs no longer exist and the TUI only previews, then points at the terminal command; agents may request, never grant | `approval/`, `gates/waivers.ts` |
 | Control files are deny-write for all agents: `.factory/{gates.json,config.json,frontier.json,waivers,approvals,runtime}`, the evidence (`.factory/research/{sources,coverage.json,dossier.json,brief.pcrb.json}`, `.factory/claims/`), `.git/config` and git hooks. The pinned ones (gates, config, frontier, approvals, waivers) are also hash-checked at every gate run; cached sources are engine-sealed (HMAC) and content-addressed | `trust/control.ts` |
-| Per-seat path scopes: manager writes factory docs, programmer writes its worktree, QA and the auditor pair write nothing, brainstorm/harvest/design/scout write only their `.factory/<x>/notes/`; research, scout and auditor seats are `web: "cached"` (host websearch/webfetch denied, web facts only through the cached `es_research_*` tools) and run `--unshare-net` sandboxed, while user agents keep host web tools | `trust/policy.ts`, `agents/registry.ts` |
+| Per-seat path scopes: manager writes factory docs, programmer writes its worktree, QA and the auditor pair write nothing, research alpha/beta write only their own notes (`.factory/research/alpha.md` / `beta.md`) and only the factory writes `research/REPORT.md`, brainstorm/harvest/design/scout write only their `.factory/<x>/notes/`; research, scout and auditor seats are `web: "cached"` (host websearch/webfetch denied, web facts only through the cached `es_research_*` tools) and run `--unshare-net` sandboxed, while user agents keep host web tools | `trust/policy.ts`, `agents/registry.ts` |
+| Factory seats launch seats in the foreground only: `subagent` with `background: true` from any seat is refused, and so is launching a seat that is still running; seat state and last activity are recorded in `.factory/runtime/seats.json` (advisory) | `opencode/src/policy.ts`, `opencode/src/seats.ts` |
 | Code audits block: an opened phase audit holds `passPhase` (a missing one too with `audit.phase: required`, set via `es config set`), any other open or failed audit refuses the next stage transition; every finding is witnessed against the file on disk; only a human dismisses one | `factory/machine.ts`, `codeaudit/` |
 | Scout verdicts are computed by core: `adopt` survives only for a verified, whitelisted, permissive license | `scout/verdict.ts` |
 | Gate command sets are trust-pinned by hash; untrusted commands never run | `trust/store.ts` |

@@ -9,6 +9,7 @@ import {
   ConfigError,
   type ConfigSetPlan,
   commandSetHash,
+  engineKeyPath,
   engineSignedFiles,
   Factory,
   factoryLayout,
@@ -25,6 +26,7 @@ import {
   researchSourcesDir,
   SourceCache,
   signEngineFile,
+  stateDir,
   trustProject,
   verifyControl,
   verifyEngineFile,
@@ -172,6 +174,16 @@ export async function reseal(context: HumanContext, sign: boolean): Promise<numb
     if (problem) problems.set(file, problem)
   }
   const rel = (file: string) => file.slice(context.root.length + 1)
+  const key = engineKeyPath(context.stateDir ?? stateDir())
+  context.print(`Engine key: ${key}`)
+  if ([...problems.values()].includes("missing engine key")) {
+    // Signing here would mint a new key and break every reader that uses the real one.
+    context.print(
+      `This shell cannot see the engine key (no file at ${key}), so it can neither verify nor re-sign. ` +
+        "Run es reseal where the plugin's state dir is visible (set ES_STATE_DIR to the plugin's stateDir).",
+    )
+    return 1
+  }
   if (!sign) {
     for (const file of targets) context.print(`${rel(file)}: ${problems.get(file) ?? "ok"}`)
     if (problems.size) {

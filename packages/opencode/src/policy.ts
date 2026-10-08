@@ -22,6 +22,7 @@ import {
 import { Error as ToolError } from "@opencode/plugin/promise/tool"
 import { HOST_WEB_TOOLS } from "./agents.ts"
 import type { Runtime } from "./runtime.ts"
+import type { SeatTracker } from "./seats.ts"
 
 const WRITE_TOOLS = new Set(["write", "edit"])
 
@@ -49,10 +50,32 @@ const appendContent = (content: unknown, text: string) =>
       ? [...content, { type: "text", text }]
       : text
 
-export function createPolicyHooks(runtime: Runtime) {
-  const before = async (event: { tool: string; agent: string; id: string; input: unknown }) => {
+/**
+ * Factory seats launch seats in the foreground only (#60). A background seat
+ * ends the launcher's turn, and in a headless run that turn's process exits
+ * and suspends the seat until the next turn; the launcher then reads "no
+ * progress" as a stall and relaunches a second writer. A foreground call
+ * returns when the seat finishes; two calls in one message run in parallel.
+ */
+function guardSeatLaunch(event: { agent: string; input: Record<string, any> }, seats: SeatTracker | undefined) {
+  if (event.input.background === true)
+    deny(
+      "Factory seats run in the foreground: call the subagent tool without background (it returns when the seat finishes). To run a pair in parallel, put both subagent calls in the same message.",
+    )
+  const target = typeof event.input.agent === "string" ? event.input.agent : undefined
+  const live = target ? seats?.running(target).find((seat) => seat.sessionID !== event.input.sessionID) : undefined
+  if (live)
+    deny(
+      `${live.agent} is still running (session ${live.sessionID}, last activity ${live.lastActivityAt}); wait for it to finish instead of launching a second one. es_status lists the running seats.`,
+    )
+}
+
+export function createPolicyHooks(runtime: Runtime, seats?: SeatTracker) {
+  const before = async (event: { tool: string; agent: string; id: string; sessionID?: string; input: unknown }) => {
     const seat = seatOf(event.agent)
     const input = (event.input ?? {}) as Record<string, any>
+    if (seat && event.tool === "subagent") guardSeatLaunch({ agent: event.agent, input }, seats)
+    if (seat && event.sessionID) await seats?.onTool(event.sessionID, event.agent, event.tool)
     if (seat || event.tool.startsWith("es_")) {
       const stop = await checkStopFile(runtime.root)
       if (stop.stopped)

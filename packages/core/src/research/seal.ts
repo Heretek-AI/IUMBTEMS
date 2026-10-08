@@ -50,6 +50,32 @@ export async function ensureEngineKey(dir: string = stateDir()): Promise<Buffer>
   })
 }
 
+/** Where the engine key lives in a state dir. */
+export const engineKeyPath = (dir: string = stateDir()) => path.join(dir, ENGINE_KEY_FILE)
+
+/**
+ * Read the engine key without ever creating it: verifiers use this, so a
+ * shell that cannot see the real key (an agent sandbox masks the state dir,
+ * or ES_STATE_DIR points elsewhere) reports a missing key instead of minting
+ * a throwaway one and calling every signed file forged (#59).
+ */
+export async function readEngineKey(dir: string = stateDir()): Promise<Buffer | undefined> {
+  let handle: Awaited<ReturnType<typeof open>>
+  try {
+    handle = await open(engineKeyPath(dir), constants.O_RDONLY | constants.O_NOFOLLOW)
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return undefined
+    throw error
+  }
+  try {
+    const key = await handle.readFile()
+    if (key.length < 32) throw new Error(`${ENGINE_KEY_FILE} exists but is shorter than 32 bytes; remove it and retry`)
+    return key
+  } finally {
+    await handle.close()
+  }
+}
+
 /** HMAC-SHA256 over the canonical meta (minus any previous seal), hex. */
 export function sealMeta(meta: Record<string, unknown>, key: Buffer): string {
   const { seal: _seal, ...body } = meta

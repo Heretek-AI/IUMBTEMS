@@ -102,7 +102,7 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     panels: {
       support: "enforced",
       detail:
-        "Four session.panel dashboards (factory, LSP, hooks, brainstorm), rendered by OpenTUI and refreshed on server changes.",
+        "Four session.panel dashboards (factory, LSP, hooks, brainstorm), rendered by OpenTUI and refreshed on server changes; Esc/q closes a panel, f toggles fullscreen. The factory dashboard leads with the run headline, seats and research progress; a prompt-footer indicator shows the stage and the running seat.",
       test: "packages/opencode/test/panels.test.ts",
     },
     research: {

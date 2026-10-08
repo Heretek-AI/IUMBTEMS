@@ -142,6 +142,9 @@ export function sandboxArgv(
     if (runtime && probe.exists(runtime)) args.push("--tmpfs", runtime)
     for (const name of CREDENTIAL_ENV) args.push("--unsetenv", name)
   }
+  // Tells the es CLI it runs in an agent sandbox (the state dir is masked), so
+  // it can point at the es_status tool instead of reporting a forged seal (#59).
+  args.push("--setenv", "ES_SANDBOX", spec.kind)
   if (spec.offline) args.push("--unshare-net")
   // The user's agent may leave servers running in the background; seats and gates may not.
   if (!user) args.push("--unshare-pid", "--die-with-parent")

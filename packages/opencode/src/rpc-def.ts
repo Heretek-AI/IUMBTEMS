@@ -23,9 +23,15 @@ const Preview = obj({ ok: { type: "boolean" }, title: str, lines: strArray, prob
 export const EsRpc = Rpc.define({
   id: "epistemic-swarm",
   methods: {
+    /** The summary block, plus the plain headline and the one-line footer indicator (absent without a run). */
     status: {
       input: obj({}),
-      output: obj({ summary: str, stage: str, pending: strArray }, ["summary", "stage", "pending"]),
+      output: obj({ summary: str, stage: str, pending: strArray, headline: str, footer: str, paused: str }, [
+        "summary",
+        "stage",
+        "pending",
+        "headline",
+      ]),
     },
     /** The effective config (JSON), the files it came from, and load warnings to show once. */
     configState: {
@@ -60,6 +66,13 @@ export const EsRpc = Rpc.define({
           phases: { type: "array" },
           pending: strArray,
           audits: { type: "array" },
+          /** Liveness (1.1.3), rendered on the server with core's formatters. */
+          headline: str,
+          header: str,
+          seats: strArray,
+          research: str,
+          events: strArray,
+          paused: str,
           tree: obj(
             Object.fromEntries(
               ["round", "total", "settled", "open", "deferred", "facts", "frontier"].map((key) => [
@@ -70,7 +83,7 @@ export const EsRpc = Rpc.define({
             ["round", "total", "settled", "open", "deferred", "facts", "frontier"],
           ),
         },
-        ["stage", "spend", "phases", "pending"],
+        ["stage", "spend", "phases", "pending", "headline", "seats", "events"],
       ),
     },
     lspState: {
@@ -119,6 +132,7 @@ export const EsRpc = Rpc.define({
     },
   },
   events: {
-    changed: { schema: obj({ stage: str, summary: str }, ["stage", "summary"]) },
+    /** The factory state changed; `notice` carries an announcement (a paused continuation). */
+    changed: { schema: obj({ stage: str, summary: str, notice: str }, ["stage", "summary"]) },
   },
 })

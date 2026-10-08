@@ -111,8 +111,24 @@ describe("write policy", () => {
     for (const agent of [undefined, "build", "factory", "es-research-alpha", "es-research-beta", "es-manager"])
       for (const file of evidence)
         expect([agent, file, effect(evaluateWrite(ctx(), agent, file))]).toEqual([agent, file, "deny"])
-    expect(effect(evaluateWrite(ctx(), "es-research-alpha", ".factory/research/REPORT.md"))).toBe("allow")
     expect(effect(evaluateWrite(ctx(), "factory", ".factory/research/REPORT.md"))).toBe("allow")
+  })
+
+  test("one writer per research file: alpha its notes, beta its notes, the factory the report (#60)", () => {
+    const owner: Record<string, string> = {
+      ".factory/research/alpha.md": "es-research-alpha",
+      ".factory/research/beta.md": "es-research-beta",
+      ".factory/research/REPORT.md": "factory",
+    }
+    for (const [file, writer] of Object.entries(owner))
+      for (const agent of ["es-research-alpha", "es-research-beta", "factory"])
+        expect([file, agent, effect(evaluateWrite(ctx(), agent, file))]).toEqual([
+          file,
+          agent,
+          agent === writer ? "allow" : "deny",
+        ])
+    // Seats keep no other files under research/.
+    expect(effect(evaluateWrite(ctx(), "es-research-alpha", ".factory/research/notes.md"))).toBe("deny")
   })
 
   test("manager cannot escape docs/ with ..", () => {
@@ -157,6 +173,34 @@ describe("write policy", () => {
 describe("shell policy", () => {
   const shell = (agent: string | undefined, command: string, sandboxAvailable = true) =>
     evaluateShell(ctx(), agent, command, { sandboxAvailable })
+
+  test("a plain `es <human verb> --help` is allowed for every agent: the CLI prints usage first (#59)", () => {
+    for (const command of [
+      "es reseal --help",
+      "es approve frontier --help",
+      "es factory --help",
+      "es audit --help",
+      "es --cwd . key seal --help",
+    ])
+      for (const agent of ["build", "factory", "es-research-alpha"])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "allow"])
+    // Anything that could run the verb for real stays human-only.
+    for (const command of [
+      "es approve --help; es approve frontier",
+      "es approve --help && es approve frontier",
+      "es approve frontier -- --help",
+      "es approve frontier --help=no",
+      'sh -c "es approve frontier" --help',
+      "env X=1 es approve frontier --help",
+      "es approve frontier $(echo --help)",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal shell parameter expansion
+      "es approve frontier ${X:---help}",
+      "es approve frontier `true` --help",
+      "es approve frontier --help | cat",
+      "es approve \\\nfrontier --help; true",
+    ])
+      expect([command, shell("build", command).effect]).toEqual([command, "deny"])
+  })
 
   test("human-only CLIs are denied for every agent, however they are quoted or wrapped", () => {
     expect(shell("build", "es approve spec").effect).toBe("deny")

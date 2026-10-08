@@ -27,6 +27,7 @@ import {
   installServer,
   LENSES,
   LspManager,
+  listRuns,
   loadEsConfig,
   loadHooks,
   loadInterview,
@@ -48,6 +49,7 @@ import {
   SlotLoop,
   scanSource,
   startRun as startBrainstorm,
+  stateDir as userStateDir,
   validateTokens,
   verifyAuditChain,
   verifyBrief,
@@ -56,7 +58,7 @@ import {
 } from "@heretek-ai/es-core"
 import { type Args, flag, parseArgs } from "./args.ts"
 import { gatesRun, installGitHooks } from "./gates.ts"
-import { DRIVERS, runHeadless } from "./headless.ts"
+import { DRIVERS, LOG_LEVELS, logLevel, presentEvent, runHeadless } from "./headless.ts"
 import {
   approve,
   configSet,
@@ -72,20 +74,24 @@ import {
 import { auditCommand, auditDismiss, auditShow, scoutCommand, scoutShow } from "./jobs.ts"
 import { keySeal, keyStatus } from "./key.ts"
 import { serveStdio } from "./mcp.ts"
+import { runsCommand, statusCommand } from "./status.ts"
 import { type ConfirmIO, confirmHuman, NotInteractive, terminalIO } from "./tty.ts"
 import { VERSION } from "./version.ts"
+import { terminalWatchIO, type WatchIO, watchCommand } from "./watch.ts"
 
 export { VERSION }
 
 const HELP = `es ${VERSION} — Epistemic Swarm build factory
 
-Usage: es [--cwd <dir>] <command>
+Usage: es [--cwd <dir> | --run <run id>] <command>
 
 Factory
-  status                        Show the factory state
+  status [--json]               Is the run working, waiting, stuck or done? (headline, seats, research progress)
+  runs [--all] [--json]         Recent runs across your projects (* marks this one)
+  watch [--interval S]          es status, redrawn every S seconds (default 2); q quits   [terminal]
   factory begin                 Start a run (normally done by /grill)
   factory run --headless        Drive the factory through a harness CLI, emitting JSON lines
-        [--driver opencode] [--max-turns N]
+        [--driver opencode] [--max-turns N] [--log-level quiet|info|debug]
   factory stop [reason]         Create .factory/STOP (kill switch)
   factory resume                Clear a halt            [human, TTY]
         [--accept-drift] [--raise-ceiling USD] [--extend-runtime]
@@ -138,11 +144,32 @@ Other
   version
 `
 
+/**
+ * Usage for one command: its lines (and their continuation lines) from HELP,
+ * or the full HELP for an unknown or absent command.
+ */
+export function commandHelp(command: string | undefined): string {
+  if (!command) return HELP
+  const lines = HELP.split("\n")
+  const picked: string[] = []
+  const head = new RegExp(`^  ${command.replace(/[^\w-]/g, "")}(\\s|$)`)
+  for (let i = 0; i < lines.length; i++) {
+    if (!head.test(lines[i]!)) continue
+    picked.push(lines[i]!)
+    while (lines[i + 1]?.startsWith("        ")) picked.push(lines[++i]!)
+  }
+  return picked.length
+    ? `Usage: es ${command} … (es ${VERSION})\n${picked.join("\n")}\n\nAll commands: es --help`
+    : HELP
+}
+
 export interface MainIO {
   readonly print: (text: string) => void
   readonly confirm: ConfirmIO
   readonly cwd: string
   readonly stateDir?: string
+  /** The terminal `es watch` draws on (absent: not a terminal). */
+  readonly terminal?: WatchIO
 }
 
 async function projectRoot(cwd: string): Promise<string> {
@@ -165,18 +192,28 @@ const BOOLEAN_FLAGS = [
   "global",
   "open-only",
   "sign",
+  "all",
 ]
 
 export async function main(argv: readonly string[], io: MainIO): Promise<number> {
   const args = parseArgs(argv, BOOLEAN_FLAGS)
   const [command, sub, ...rest] = args.positionals
   // `--help` is side-effect free on every subcommand: print usage without
-  // minting runs, writing files, or touching the factory state.
-  if (args.flags.help === true) {
-    io.print(HELP)
+  // minting runs, writing files, or touching the factory state. Any value
+  // (`--help=x`) still means help, never "run the command".
+  if (args.flags.help !== undefined) {
+    io.print(commandHelp(command))
     return 0
   }
-  const root = await projectRoot(path.resolve(io.cwd, flag(args, "cwd") ?? "."))
+  const userState = io.stateDir ?? userStateDir()
+  // `--run <id>` is `--cwd <that run's project>`, looked up in the run index.
+  const runId = flag(args, "run")
+  const indexed = runId ? (await listRuns(userState)).find((entry) => entry.runId === runId) : undefined
+  if (runId && !indexed) {
+    io.print(`Unknown run ${runId}. \`es runs\` lists the runs this machine has seen.`)
+    return 2
+  }
+  const root = indexed?.root ?? (await projectRoot(path.resolve(io.cwd, flag(args, "cwd") ?? ".")))
   const context: HumanContext = {
     root,
     io: io.confirm,
@@ -184,11 +221,10 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
     ...(io.stateDir ? { stateDir: io.stateDir } : {}),
   }
   const subArgs = (from: number): Args => ({ positionals: args.positionals.slice(from), flags: args.flags })
-  const factory = (extra: { researchDepth?: number; auditPhase?: "optional" | "required" } = {}) =>
+  const factory = () =>
     new Factory(root, {
       gates: gateRunner(io.stateDir ? { stateDir: io.stateDir } : {}),
       ...(io.stateDir ? { stateDir: io.stateDir } : {}),
-      ...extra,
     })
 
   try {
@@ -200,19 +236,16 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
       case "version":
         io.print(VERSION)
         return 0
-      case "status": {
-        const loaded = await loadEsConfig(root).then(
-          (loaded) => ({ depth: loaded.config.research.depth, auditPhase: loaded.config.audit.phase }),
-          () => undefined,
+      case "status":
+        return await statusCommand({ root, stateDir: userState, print: io.print }, args)
+      case "runs":
+        return await runsCommand({ root, stateDir: userState, print: io.print }, args)
+      case "watch":
+        return await watchCommand(
+          { root, stateDir: userState, print: io.print },
+          args,
+          io.terminal ?? { interactive: false, write: io.print, onKey: () => () => {} },
         )
-        io.print(
-          await factory({
-            ...(loaded?.depth === undefined ? {} : { researchDepth: loaded.depth }),
-            ...(loaded?.auditPhase === "required" ? { auditPhase: "required" as const } : {}),
-          }).summary(),
-        )
-        return 0
-      }
       case "approve":
         return await approve(context, subArgs(1))
       case "trust":
@@ -647,10 +680,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           io.print(factorySummary(await factory().begin("human:cli")))
           return 0
         }
-        if (sub === "status") {
-          io.print(await factory().summary())
-          return 0
-        }
+        if (sub === "status") return await statusCommand({ root, stateDir: userState, print: io.print }, args)
         if (sub === "resume") return await resume(context, subArgs(2))
         if (sub === "pr") return await recordPr(context, subArgs(2))
         if (sub === "stop") {
@@ -672,6 +702,11 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
             io.print(`Unknown driver. Available: ${Object.keys(DRIVERS).join(", ")}`)
             return 2
           }
+          const level = logLevel(args)
+          if (!level) {
+            io.print(`Unknown --log-level. Use one of: ${LOG_LEVELS.join(", ")} (default info).`)
+            return 2
+          }
           let code = 0
           for await (const event of runHeadless({
             root,
@@ -679,8 +714,9 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
             ...(flag(args, "max-turns") ? { maxTurns: Number(flag(args, "max-turns")) } : {}),
             ...(io.stateDir ? { stateDir: io.stateDir } : {}),
           })) {
-            io.print(JSON.stringify(event))
-            if (event.type === "error" || event.type === "halted" || event.type === "stalled") code = 1
+            const shown = presentEvent(event, level)
+            if (shown !== undefined) io.print(JSON.stringify(shown))
+            if (["error", "halted", "stalled", "turn-cap"].includes(event.type)) code = 1
           }
           return code
         }
@@ -704,6 +740,7 @@ if (import.meta.main) {
     print: (text) => console.log(text),
     confirm: terminalIO(),
     cwd: process.cwd(),
+    terminal: terminalWatchIO(),
   })
   process.exit(code)
 }

@@ -2,13 +2,17 @@
 // panels.test.ts in a subprocess with the Solid transform preloaded) and
 // prints the captured frames as JSON.
 import { testRender } from "@opentui/solid"
-import { PANEL_COMPONENTS } from "../../src/panels.tsx"
+import { FactoryFooter, PANEL_COMPONENTS } from "../../src/panels.tsx"
 
 const data: Record<string, any> = {
   factoryState: {
     stage: "BUILD",
     runId: "run-7",
     activePhase: "p2",
+    headline: "Building p2 is running: es-programmer last ran edit 4s ago.",
+    header: "run run-7 · BUILD · /work/demo · updated 4s ago",
+    seats: ["es-programmer  running  edit 4s ago  ses_prog"],
+    events: ["02:10:00  agent:factory  build.start"],
     spend: { usd: 1.25, estimated: true, ceilingUSD: 5 },
     phases: [
       { id: "p1", title: "Parser", status: "done", failures: 0, qa: {} },
@@ -62,6 +66,22 @@ const data: Record<string, any> = {
   },
 }
 
+// RESEARCH with no phases yet (#57): no dangling "Phases:" header; seats and research progress instead.
+const research = {
+  stage: "RESEARCH",
+  runId: "run-8",
+  headline: "Research is running: es-research-alpha last ran es_research_fetch 12s ago.",
+  header: "run run-8 · RESEARCH · /work/demo · updated 12s ago",
+  seats: ["es-research-alpha  running  es_research_fetch 12s ago  ses_alpha"],
+  research: "10 sources (newest 1m ago) · alpha.md 4.1 KB (2m ago) · beta.md — · REPORT.md — · coverage not checked",
+  events: ["01:58:40  human:john  stage.research"],
+  spend: { usd: 6.41, estimated: true, ceilingUSD: 500 },
+  phases: [],
+  pending: [],
+  audits: [],
+  tree: { round: 4, total: 24, settled: 21, open: 0, deferred: 3, facts: 3, frontier: 0 },
+}
+
 const listeners = new Set<() => void>()
 const call = (method: string) => Promise.resolve(structuredClone(data[method]))
 const subscribe = (listener: () => void) => {
@@ -71,16 +91,61 @@ const subscribe = (listener: () => void) => {
 
 const frames: Record<string, string> = {}
 for (const [name, Panel] of Object.entries(PANEL_COMPONENTS)) {
-  const setup = await testRender(() => <Panel call={call} subscribe={subscribe} />, { width: 100, height: 24 })
+  const setup = await testRender(() => <Panel call={call} subscribe={subscribe} />, { width: 110, height: 40 })
   frames[name] = await setup.waitForFrame((frame) => !frame.includes("Loading"), { timeout: 5_000 })
   if (name === "factory") {
     // A server change event refetches: the dashboard follows the run.
-    data.factoryState.stage = "QA"
+    data.factoryState.header = "run run-7 · QA · /work/demo · updated 1s ago"
     for (const listener of listeners) listener()
-    frames.factoryAfterChange = await setup.waitForFrame((frame) => frame.includes("Stage: QA"), { timeout: 5_000 })
+    frames.factoryAfterChange = await setup.waitForFrame((frame) => frame.includes("· QA ·"), { timeout: 5_000 })
   }
   setup.renderer.destroy()
 }
+{
+  const setup = await testRender(
+    () => <PANEL_COMPONENTS.factory call={() => Promise.resolve(structuredClone(research))} subscribe={subscribe} />,
+    { width: 140, height: 40 },
+  )
+  frames.research = await setup.waitForFrame((frame) => frame.includes("Research:"), { timeout: 5_000 })
+  setup.renderer.destroy()
+}
+
+// The panel's keys go through the host's keymap layer; Esc/q closes, f toggles fullscreen.
+{
+  const bound: Array<{ title: string; bind: string; run: () => void }> = []
+  const handled: string[] = []
+  const setup = await testRender(
+    () => (
+      <PANEL_COMPONENTS.factory
+        call={call}
+        subscribe={subscribe}
+        panel={{ close: () => handled.push("close"), toggleFullscreen: () => handled.push("fullscreen") }}
+        layer={(factory) => bound.push(...factory().commands)}
+      />
+    ),
+    { width: 110, height: 40 },
+  )
+  await setup.waitForFrame((frame) => !frame.includes("Loading"), { timeout: 5_000 })
+  for (const command of bound) if (command.title !== "refresh") command.run()
+  frames.keys = JSON.stringify({ binds: bound.map((command) => command.bind), handled })
+  setup.renderer.destroy()
+}
+
+// The prompt-footer indicator: the server's footer line, hidden without one.
+{
+  const setup = await testRender(
+    () => (
+      <FactoryFooter
+        call={() => Promise.resolve({ footer: "ES · RESEARCH · es-research-alpha running · 12s" })}
+        subscribe={subscribe}
+      />
+    ),
+    { width: 80, height: 3 },
+  )
+  frames.footer = await setup.waitForFrame((frame) => frame.includes("ES ·"), { timeout: 5_000 })
+  setup.renderer.destroy()
+}
+
 // An RPC failure renders as text instead of throwing.
 const failing = await testRender(
   () => <PANEL_COMPONENTS.lsp call={() => Promise.reject(new Error("server gone"))} subscribe={subscribe} />,

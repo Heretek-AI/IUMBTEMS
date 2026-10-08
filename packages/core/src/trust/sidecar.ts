@@ -15,9 +15,10 @@
 // the engine through host edit tools, the latter bypass it through the
 // terminal and rebaseline.
 import { createHmac, timingSafeEqual } from "node:crypto"
-import { readFile, writeFile } from "node:fs/promises"
+import { readFile } from "node:fs/promises"
 import { stateDir as defaultStateDir, factoryLayout } from "../layout.ts"
-import { ensureEngineKey } from "../research/seal.ts"
+import { ensureEngineKey, readEngineKey } from "../research/seal.ts"
+import { atomicWrite } from "../util/fs.ts"
 
 /** Engine-owned files with sidecars, as paths relative to the project root. */
 export function engineSignedFiles(root: string): string[] {
@@ -26,23 +27,32 @@ export function engineSignedFiles(root: string): string[] {
 
 export const sidecarFor = (file: string): string => `${file}.sig`
 
-/** Sign `file`'s current bytes (absolute path); overwrites any old sidecar. */
+/**
+ * Sign `file`'s current bytes (absolute path); replaces any old sidecar
+ * atomically, so a reader outside the state lock never sees a torn one.
+ */
 export async function signEngineFile(file: string, stateDir?: string): Promise<void> {
   const key = await ensureEngineKey(stateDir ?? defaultStateDir())
   const bytes = await readFile(file)
-  await writeFile(sidecarFor(file), `${createHmac("sha256", key).update(bytes).digest("hex")}\n`)
+  await atomicWrite(sidecarFor(file), `${createHmac("sha256", key).update(bytes).digest("hex")}\n`)
 }
 
-export type SidecarProblem = "missing sidecar" | "signature mismatch"
+/**
+ * "missing engine key": the file has a sidecar but this process cannot see
+ * the engine key (an agent sandbox masks the state dir, or another state dir
+ * is in use); nothing about the file itself is known to be wrong.
+ */
+export type SidecarProblem = "missing sidecar" | "signature mismatch" | "missing engine key"
 
-/** Verify `file` against its sidecar; undefined means the seal holds. */
+/** Verify `file` against its sidecar; undefined means the seal holds. Never creates the engine key. */
 export async function verifyEngineFile(file: string, stateDir?: string): Promise<SidecarProblem | undefined> {
-  const key = await ensureEngineKey(stateDir ?? defaultStateDir())
   const [bytes, raw] = await Promise.all([
     readFile(file).catch(() => undefined),
     readFile(sidecarFor(file), "utf8").catch(() => undefined),
   ])
   if (bytes === undefined || raw === undefined) return "missing sidecar"
+  const key = await readEngineKey(stateDir ?? defaultStateDir())
+  if (!key) return "missing engine key"
   let presented: Buffer
   try {
     presented = Buffer.from(raw.trim(), "hex")

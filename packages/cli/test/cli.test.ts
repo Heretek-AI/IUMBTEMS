@@ -2,9 +2,18 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { exists, Factory, factoryLayout, gateRunner, readApproval, sealHumanKey } from "@heretek-ai/es-core"
+import {
+  exists,
+  Factory,
+  factoryLayout,
+  gateRunner,
+  readApproval,
+  researchSourcesDir,
+  SourceCache,
+  sealHumanKey,
+} from "@heretek-ai/es-core"
 import { parseArgs, parseExpiry } from "../src/args.ts"
-import { type HarnessDriver, runHeadless } from "../src/headless.ts"
+import { type HarnessDriver, type HeadlessEvent, presentEvent, runHeadless } from "../src/headless.ts"
 import { main } from "../src/main.ts"
 import { createMcpServer } from "../src/mcp.ts"
 import { type ConfirmIO, confirmHuman, NotInteractive } from "../src/tty.ts"
@@ -79,6 +88,26 @@ describe("args", () => {
     const now = new Date("2026-10-06T00:00:00Z")
     expect(parseExpiry("7d", now).toISOString()).toBe("2026-10-13T00:00:00.000Z")
     expect(() => parseExpiry("soon")).toThrow()
+  })
+})
+
+describe("--help (#59)", () => {
+  test("`es <command> --help` prints that command's usage; any --help value means help", async () => {
+    const reseal = await run(["reseal", "--help"])
+    expect(reseal.code).toBe(0)
+    expect(reseal.out).toContain("reseal [--sign]")
+    expect(reseal.out).not.toContain("approve <frontier|spec>")
+    const factory = await run(["factory", "--help"])
+    expect(factory.out).toContain("factory run --headless")
+    expect(factory.out).toContain("[--log-level quiet|info|debug]")
+    expect(factory.out).toContain("factory resume")
+    expect((await run(["--help"])).out).toContain("Usage: es [--cwd <dir> | --run <run id>] <command>")
+    expect((await run(["nonsense", "--help"])).out).toContain("Usage: es [--cwd")
+    // `--help=x` never falls through to the command: nothing is approved or created.
+    const approve = await run(["approve", "frontier", "--help=no"], human())
+    expect(approve.code).toBe(0)
+    expect(approve.out).toContain("approve <frontier|spec>")
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
   })
 })
 
@@ -319,6 +348,28 @@ describe("es reseal", () => {
     expect((await factory().read())!.stage).toBe("GRILL")
   })
 
+  test("names the key it checks, and refuses to sign when it cannot see the engine key (#59)", async () => {
+    await factory().begin("human:tester")
+    expect((await run(["reseal"])).out).toContain(`Engine key: ${path.join(state, "engine.key")}`)
+    const elsewhere = await mkdtemp(path.join(tmpdir(), "es-cli-elsewhere-"))
+    try {
+      const printed: string[] = []
+      const code = await main(["reseal", "--sign"], {
+        print: (text) => printed.push(text),
+        confirm: human(),
+        cwd: root,
+        stateDir: elsewhere,
+      })
+      expect(code).toBe(1)
+      expect(printed.join("\n")).toContain("This shell cannot see the engine key")
+      expect(await exists(path.join(elsewhere, "engine.key"))).toBe(false)
+      // The engine's own view is unchanged.
+      expect((await factory().read())!.stage).toBe("GRILL")
+    } finally {
+      await rm(elsewhere, { recursive: true, force: true })
+    }
+  })
+
   test("adopts a legacy pre-sidecar run after review", async () => {
     await factory().begin("human:tester")
     await rm(`${stateFile()}.sig`)
@@ -482,11 +533,121 @@ describe("headless", () => {
     expect(stalled.at(-1)).toMatchObject({ type: "stalled" })
   })
 
+  test("a stall carries its evidence: the headline, last activity and running seats", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const stalled = (await collect(driver(async () => {}))).at(-1) as any
+    expect(stalled).toMatchObject({ type: "stalled", turns: 2, seats: [] })
+    expect(stalled.headline).toStartWith("Research in progress")
+    expect(typeof stalled.lastActivityAgoSec).toBe("number")
+  })
+
+  test("research artifacts count as progress: a run caching sources hits the turn cap, not a stall", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const cache = new SourceCache(researchSourcesDir(root), state)
+    let n = 0
+    const events = await collect(
+      driver(async () => {
+        n++
+        await cache.put({
+          url: `https://example.test/${n}`,
+          text: `Source number ${n} for the run.`,
+          provider: "fetch",
+        })
+      }),
+      4,
+    )
+    expect(events.filter((event) => event.type === "turn")).toHaveLength(4)
+    expect(events.at(-1)).toEqual({ type: "turn-cap", turns: 4 })
+  })
+
+  test("a long turn reports progress while it runs; start names where to watch", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const slow: HarnessDriver = {
+      id: "slow",
+      available: async () => true,
+      async *turn() {
+        await Bun.sleep(120)
+        yield { type: "text", part: { text: "done fetching" } }
+        return "ses_slow"
+      },
+    }
+    const events: HeadlessEvent[] = []
+    for await (const event of runHeadless({ root, driver: slow, maxTurns: 1, stateDir: state, progressMs: 30 }))
+      events.push(event)
+    expect(events[0]).toMatchObject({ type: "start", monitor: expect.stringContaining("es watch") })
+    const progress = events.filter((event) => event.type === "progress")
+    expect(progress.length).toBeGreaterThan(0)
+    expect(progress[0]).toMatchObject({ headline: expect.stringContaining("Research"), seats: [] })
+  })
+
+  test("a failing turn ends with an error event and leaves no progress timer behind", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const failing: HarnessDriver = {
+      id: "failing",
+      available: async () => true,
+      // biome-ignore lint/correctness/useYield: the turn fails before producing anything
+      async *turn() {
+        throw new Error("opencode run exited 1")
+      },
+    }
+    const started = Date.now()
+    const events: HeadlessEvent[] = []
+    for await (const event of runHeadless({ root, driver: failing, maxTurns: 1, stateDir: state, progressMs: 60_000 }))
+      events.push(event)
+    expect(events.at(-1)).toEqual({ type: "error", message: "opencode run exited 1" })
+    expect(Date.now() - started).toBeLessThan(10_000)
+  })
+
   test("reports a halt", async () => {
     const factory = await grilledFrontier()
     await run(["approve", "frontier"], human())
     const events = await collect(driver(() => factory.halt("system", "test halt").then(() => undefined)))
     expect(events.at(-1)).toMatchObject({ type: "halted", reason: "test halt" })
+  })
+})
+
+describe("headless log levels (#59)", () => {
+  const big = "x".repeat(5000)
+  const toolUse = {
+    type: "tool_use",
+    part: { tool: "read", state: { status: "completed", input: { path: ".factory/frontier.json" }, output: big } },
+  }
+
+  test("info: one compact line per tool call and the text; steps are dropped", () => {
+    expect(presentEvent({ type: "driver", event: toolUse }, "info")).toEqual({
+      type: "tool",
+      tool: "read",
+      status: "completed",
+      target: ".factory/frontier.json",
+    })
+    expect(presentEvent({ type: "driver", event: { type: "text", part: { text: "Merging." } } }, "info")).toEqual({
+      type: "text",
+      text: "Merging.",
+    })
+    expect(presentEvent({ type: "driver", event: { type: "step_finish", part: {} } }, "info")).toBeUndefined()
+  })
+
+  test("debug keeps the raw event with long strings clipped; quiet drops driver events, never lifecycle", () => {
+    const shown = JSON.stringify(presentEvent({ type: "driver", event: toolUse }, "debug"))
+    expect(shown).toContain(".factory/frontier.json")
+    expect(shown).toContain("…[+2952 chars]")
+    expect(shown.length).toBeLessThan(2500)
+    expect(presentEvent({ type: "driver", event: toolUse }, "quiet")).toBeUndefined()
+    expect(presentEvent({ type: "turn", n: 1, stage: "RESEARCH" }, "quiet")).toEqual({
+      type: "turn",
+      n: 1,
+      stage: "RESEARCH",
+    })
+  })
+
+  test("an unknown level is refused before anything runs", async () => {
+    const result = await run(["factory", "run", "--headless", "--log-level", "all"])
+    expect(result.code).toBe(2)
+    expect(result.out).toContain("quiet, info, debug")
   })
 })
 
@@ -643,5 +804,105 @@ describe("release version", () => {
     // The MCP serverInfo fallback must be the same constant, not a stale literal.
     const source = await readFile(path.join(import.meta.dir, "..", "src", "mcp.ts"), "utf8")
     expect(source).toContain("options.version ?? VERSION")
+  })
+})
+
+describe("status and runs (1.1.3)", () => {
+  const begin = (at: string = root) =>
+    new Factory(at, { gates: gateRunner({ stateDir: state }), stateDir: state }).begin("human:tester")
+
+  test("es status without a run says how to start one", async () => {
+    const result = await run(["status"])
+    expect(result.code).toBe(0)
+    expect(result.out).toContain("No factory run in this project. Start one with /grill.")
+  })
+
+  test("es status leads with a plain headline and the run header naming the project", async () => {
+    const begun = await begin()
+    const result = await run(["status"])
+    expect(result.code).toBe(0)
+    const lines = result.out.split("\n")
+    expect(lines[0]).toBe("The grill is running: answer its questions in the grill session.")
+    expect(lines[1]).toStartWith(`run ${begun.runId} · GRILL · ${root} · updated `)
+    expect(result.out).toContain("recent events:")
+    expect(result.out).not.toContain("<factory-state>")
+    expect((await run(["factory", "status"])).out).toBe(result.out)
+  })
+
+  test("es status --json carries the headline, liveness and summary block", async () => {
+    await begin()
+    const parsed = JSON.parse((await run(["status", "--json"])).out)
+    expect(parsed.headline).toContain("The grill is running")
+    expect(parsed.liveness.stage).toBe("GRILL")
+    expect(parsed.liveness.root).toBe(root)
+    expect(parsed.summary).toContain("<factory-state>")
+  })
+
+  test("es runs lists runs across projects; --run targets another project; the cwd is warned about a fresher run", async () => {
+    const here = await begin()
+    const other = await mkdtemp(path.join(tmpdir(), "es-cli-other-"))
+    try {
+      // The other project's run saves a moment later, so it is the more recently active one.
+      await Bun.sleep(5)
+      const there = await begin(other)
+      const runs = await run(["runs"])
+      expect(runs.out.split("\n")[0]).toContain(there.runId)
+      expect(runs.out).toContain(`* ${here.runId}`)
+      expect(runs.out).toContain(other)
+
+      const status = await run(["status"])
+      expect(status.out).toContain(`Note: a more recently active run is ${there.runId} (GRILL) in ${other}`)
+      expect(status.out).toContain(`es status --run ${there.runId}`)
+
+      const targeted = await run(["status", "--run", there.runId])
+      expect(targeted.out.split("\n")[1]).toStartWith(`run ${there.runId} · GRILL · ${other}`)
+      expect(targeted.out).not.toContain("Note: a more recently active run")
+
+      const unknown = await run(["status", "--run", "run-20990101-000000-ffff"])
+      expect(unknown.code).toBe(2)
+      expect(unknown.out).toContain("es runs")
+    } finally {
+      await rm(other, { recursive: true, force: true })
+    }
+  })
+
+  test("es watch needs a terminal, redraws es status until q, and validates --interval", async () => {
+    const refused = await run(["watch"])
+    expect(refused.code).toBe(2)
+    expect(refused.out).toContain("es watch needs a terminal")
+
+    await begin()
+    const frames: string[] = []
+    let press: ((key: string) => void) | undefined
+    const terminal = {
+      interactive: true,
+      write: (text: string) => {
+        frames.push(text)
+        if (frames.length === 2) press?.("q")
+      },
+      onKey: (listener: (key: string) => void) => {
+        press = listener
+        return () => {
+          press = undefined
+        }
+      },
+    }
+    const watch = (argv: string[]) =>
+      main(argv, { print: () => {}, confirm: pipe, cwd: root, stateDir: state, terminal })
+    expect(await watch(["watch", "--interval", "0.2"])).toBe(0)
+    expect(frames).toHaveLength(2)
+    expect(frames[0]).toStartWith("\x1b[2J\x1b[H")
+    expect(frames[0]).toContain("The grill is running")
+    expect(frames[0]).toContain("q quit · refreshes every 0.2s")
+    // The key listener is released on exit.
+    expect(press).toBeUndefined()
+    expect(await watch(["watch", "--interval", "0"])).toBe(2)
+  })
+
+  test("es runs hides finished runs unless --all, and says so when there are none", async () => {
+    expect((await run(["runs"])).out).toContain("No active runs")
+    expect((await run(["runs", "--all"])).out).toContain("No indexed runs")
+    const begun = await begin()
+    expect(JSON.parse((await run(["runs", "--json"])).out)[0].runId).toBe(begun.runId)
   })
 })

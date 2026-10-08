@@ -7,7 +7,7 @@ import path from "node:path"
 import { factoryLayout } from "../layout.ts"
 import { atomicWrite, readJson } from "../util/fs.ts"
 import { sha256 } from "../util/hash.ts"
-import { ensureEngineKey, sealMeta, verifyMetaSeal } from "./seal.ts"
+import { ensureEngineKey, readEngineKey, sealMeta, verifyMetaSeal } from "./seal.ts"
 import { canonicalUrl } from "./url.ts"
 
 export interface SourceMeta {
@@ -63,7 +63,9 @@ export class SourceCache {
 
   private async sealed(meta: SourceMeta): Promise<boolean> {
     if (!this.stateDir) return true
-    return verifyMetaSeal(meta as unknown as Record<string, unknown>, await ensureEngineKey(this.stateDir))
+    // Never mint a key to verify: without the engine's key nothing verifies (#59).
+    const key = await readEngineKey(this.stateDir)
+    return key !== undefined && verifyMetaSeal(meta as unknown as Record<string, unknown>, key)
   }
 
   async put(input: {
