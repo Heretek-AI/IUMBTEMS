@@ -16,6 +16,7 @@ import path from "node:path"
 import { gradeFireCase } from "../packages/core/src/evals/fires.ts"
 import { caseStepCap, type EvalCase, evalWorkspace, runEvalCase } from "../packages/core/src/evals/run.ts"
 import { renderEvalPrompt, startServeFixtures } from "../packages/core/src/evals/serve.ts"
+import { exists } from "../packages/core/src/util/fs.ts"
 import { sealHumanKey, unlockHumanKey } from "../packages/core/src/approval/keystore.ts"
 import { detectGates } from "../packages/core/src/gates/detect.ts"
 import { commandSetHash, trustProject } from "../packages/core/src/trust/store.ts"
@@ -139,6 +140,11 @@ for (const file of files) {
       const keep = path.join(resultsDir, stamp, testCase.id)
       await mkdir(keep, { recursive: true })
       await cp(workspace.dir, path.join(keep, "project"), { recursive: true, verbatimSymlinks: true })
+      // The artifact upload drops dot-directories, so mirror .factory/ under
+      // a visible name too; without it the kept project has no run state,
+      // worktree or gate logs to debug from.
+      const dotFactory = path.join(workspace.dir, ".factory")
+      if (await exists(dotFactory)) await cp(dotFactory, path.join(keep, "factory"), { recursive: true })
       await writeFile(path.join(keep, "events.jsonl"), result.events.map((event) => JSON.stringify(event)).join("\n"))
       await writeFile(path.join(keep, "stderr.txt"), result.stderr)
       kept = path.relative(root, keep)

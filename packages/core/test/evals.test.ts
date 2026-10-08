@@ -88,6 +88,29 @@ describe("transcripts", () => {
     expect(readTranscript([{ type: "step_finish", part: { cost: "n/a" } }]).costUSD).toBe(0)
   })
 
+  test("a completed call's output is graded text, except raw evidence and errored calls", () => {
+    const transcript = readTranscript([
+      { type: "step_start", part: {} },
+      {
+        type: "tool_use",
+        part: { tool: "es_gates_run", state: { status: "completed", output: "Gates passed: 0 error(s)" } },
+      },
+      {
+        type: "tool_use",
+        part: { tool: "es_research_fetch", state: { status: "completed", output: "single file path" } },
+      },
+      {
+        type: "tool_use",
+        part: { tool: "es_gates_run", state: { status: "error", output: "Gates failed: 9 error(s)" } },
+      },
+    ])
+    expect(gradeTranscript(transcript, { contains: ["0 error(s)"] }).pass).toBe(true)
+    expect(gradeTranscript(transcript, { contains: ["single file path"] }).failures).toEqual([
+      "missing: single file path",
+    ])
+    expect(gradeTranscript(transcript, { contains: ["9 error(s)"] }).failures).toEqual(["missing: 9 error(s)"])
+  })
+
   test("tool checks and error events grade the run", () => {
     const transcript = readTranscript(events)
     expect(gradeTranscript(transcript, { toolsUsed: ["es_brainstorm_plan"], contains: ["inversion"] }).pass).toBe(true)

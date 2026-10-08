@@ -50,6 +50,14 @@ export interface EvalTranscript {
 
 const num = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0)
 
+/**
+ * Tools whose outputs are raw evidence, not the seat's own words. Quoting
+ * that evidence verbatim is the skill under test (the research case), so
+ * their outputs stay out of the graded text: a fetch alone must never
+ * satisfy a `contains` check.
+ */
+const RAW_EVIDENCE_TOOLS: ReadonlySet<string> = new Set(["es_research_fetch", "es_research_search"])
+
 export function readTranscript(events: readonly unknown[]): EvalTranscript {
   const text: string[] = []
   const tools: string[] = []
@@ -64,7 +72,7 @@ export function readTranscript(events: readonly unknown[]): EvalTranscript {
       part?: {
         text?: string
         tool?: string
-        state?: { status?: string }
+        state?: { status?: string; output?: unknown }
         cost?: unknown
         tokens?: { input?: unknown; output?: unknown; reasoning?: unknown; cache?: { read?: unknown; write?: unknown } }
       }
@@ -75,6 +83,11 @@ export function readTranscript(events: readonly unknown[]): EvalTranscript {
     else if (event?.type === "tool_use" && typeof event.part?.tool === "string") {
       tools.push(event.part.tool)
       if (event.part.state?.status === "completed") completed.push(event.part.tool)
+      // A completed call's output is what the stream said: a gate verdict
+      // quoted nowhere in the narration still counts (the programmer case).
+      // Raw-evidence tools are excluded (above); errored calls report no work.
+      if (event.part.state?.status === "completed" && typeof event.part.state?.output === "string")
+        if (!RAW_EVIDENCE_TOOLS.has(event.part.tool)) text.push(event.part.state.output)
     } else if (event?.type === "step_finish") {
       costUSD += num(event.part?.cost)
       tokens.input += num(event.part?.tokens?.input)

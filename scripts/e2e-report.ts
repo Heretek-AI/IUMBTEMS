@@ -139,7 +139,7 @@ for (const row of rows) {
   )
   const refused = (row.tools ?? []).filter((tool, index, all) => all.indexOf(tool) === index && !(row.completed ?? []).includes(tool))
   if (row.completed && refused.length > 0) lines.push(`- Called but never completed: ${refused.join(", ")}`)
-  if (row.kept) lines.push(`- Evidence kept at \`${row.kept}/\` (project with \`.factory/\`, \`events.jsonl\`, \`stderr.txt\`)`)
+  if (row.kept) lines.push(`- Evidence kept at \`${row.kept}/\` (project, \`factory/\` mirror of its \`.factory/\`, \`events.jsonl\`, \`stderr.txt\`)`)
   if ((row.errors ?? []).length > 0) {
     lines.push(`- Error events:`)
     for (const error of row.errors!) lines.push(`  - ${error.slice(0, 300)}`)
