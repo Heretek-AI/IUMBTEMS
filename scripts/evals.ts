@@ -4,7 +4,7 @@
 // its usual env var) and skips cleanly without them. Each case runs one real
 // turn in an isolated workspace loading this repo's plugin, killed at:
 // - its own step cap (`maxSteps`, sized for a model that makes one call per
-//   step), bounded by the ceiling ES_EVAL_MAX_STEPS (default 16);
+//   step), bounded by the ceiling ES_EVAL_MAX_STEPS (default 24);
 // - the timeout (ES_EVAL_TIMEOUT_MS, default 300000);
 // - the run's spend budget ES_EVAL_MAX_USD (optional; summed from the stream's
 //   step_finish cost). Once it is spent, the remaining cases are not run.
@@ -16,6 +16,10 @@ import path from "node:path"
 import { gradeFireCase } from "../packages/core/src/evals/fires.ts"
 import { caseStepCap, type EvalCase, evalWorkspace, runEvalCase } from "../packages/core/src/evals/run.ts"
 import { renderEvalPrompt, startServeFixtures } from "../packages/core/src/evals/serve.ts"
+import { exists } from "../packages/core/src/util/fs.ts"
+import { sealHumanKey, unlockHumanKey } from "../packages/core/src/approval/keystore.ts"
+import { detectGates } from "../packages/core/src/gates/detect.ts"
+import { commandSetHash, trustProject } from "../packages/core/src/trust/store.ts"
 import { engineSignedFiles, signEngineFile } from "../packages/core/src/trust/sidecar.ts"
 
 const root = path.resolve(import.meta.dir, "..")
@@ -31,7 +35,7 @@ async function seedFiles(files: Record<string, string> | undefined): Promise<Rec
 }
 const resultsDir = path.join(root, "evals/results")
 const model = process.env.ES_EVAL_MODEL
-const stepCeiling = Number(process.env.ES_EVAL_MAX_STEPS || 16)
+const stepCeiling = Number(process.env.ES_EVAL_MAX_STEPS || 24)
 const timeoutMs = Number(process.env.ES_EVAL_TIMEOUT_MS || 300_000)
 const budgetUSD = process.env.ES_EVAL_MAX_USD ? Number(process.env.ES_EVAL_MAX_USD) : undefined
 if (!Number.isInteger(stepCeiling) || stepCeiling <= 0) {
@@ -75,7 +79,7 @@ for (const file of files) {
   const remaining = budgetUSD === undefined ? undefined : budgetUSD - spentUSD
   if (remaining !== undefined && remaining <= 0) {
     const failure = `not run: spend budget $${budgetUSD} used up`
-    results.push({ id: testCase.id, agent: testCase.agent, description: testCase.description, pass: false, maxSteps, failures: [failure] })
+    results.push({ id: testCase.id, agent: testCase.agent, description: testCase.description, pass: false, maxSteps, failures: [failure], ...(testCase.modelLimited ? { modelLimited: testCase.modelLimited } : {}) })
     console.log(`SKIP ${testCase.id} — ${failure}`)
     continue
   }
@@ -92,6 +96,36 @@ for (const file of files) {
     const seeded = (testCase.files as Record<string, string> | undefined)?.[path.relative(workspace.dir, file)]
     if (seeded !== undefined) await signEngineFile(file, workspace.stateDir)
   }
+  // Seeded phase worktrees (reviewed fixtures, e.g. the programmer BUILD
+  // run) need two things a bare seed lacks, or no model can pass:
+  // committed files, so full-scope gates see them via `git ls-files`, and a
+  // trusted gate command set, or every es_gates_run fails trust/untrusted.
+  // Both are adopted the way `es reseal --sign` and `es trust` adopt
+  // reviewed content: fixtures are reviewed like code, and the ephemeral
+  // human key lives in this workspace's state dir only.
+  const worktreeDirs = [
+    ...new Set(
+      Object.keys((testCase.files as Record<string, string> | undefined) ?? {})
+        .filter((file) => file.startsWith(".factory/worktrees/") && file.endsWith("/package.json"))
+        .map((file) => path.join(workspace.dir, path.dirname(file))),
+    ),
+  ]
+  if (worktreeDirs.length) {
+    const git = (args: string[]) =>
+      Bun.spawnSync(["git", ...args], { cwd: workspace.dir, stdout: "ignore", stderr: "ignore" }).exitCode === 0
+    if (git(["rev-parse", "--is-inside-work-tree"])) {
+      git(["add", "-A"])
+      git(["-c", "user.name=es-eval", "-c", "user.email=es-eval@local", "commit", "-qm", "seed eval fixture"])
+    }
+    await sealHumanKey("es-eval-fixture", workspace.stateDir)
+    const signer = await unlockHumanKey("es-eval-fixture", workspace.stateDir)
+    for (const dir of worktreeDirs) {
+      const detected = await detectGates(dir)
+      if (!detected.commands.length) continue
+      const { hash, lines } = await commandSetHash(dir, detected.commands)
+      await trustProject(workspace.dir, hash, lines, { stateDir: workspace.stateDir, signer })
+    }
+  }
   try {
     const ran = await runEvalCase(testCase, workspace, { binary, maxSteps, timeoutMs, budgetUSD: remaining })
     spentUSD += ran.transcript.costUSD
@@ -106,6 +140,11 @@ for (const file of files) {
       const keep = path.join(resultsDir, stamp, testCase.id)
       await mkdir(keep, { recursive: true })
       await cp(workspace.dir, path.join(keep, "project"), { recursive: true, verbatimSymlinks: true })
+      // The artifact upload drops dot-directories, so mirror .factory/ under
+      // a visible name too; without it the kept project has no run state,
+      // worktree or gate logs to debug from.
+      const dotFactory = path.join(workspace.dir, ".factory")
+      if (await exists(dotFactory)) await cp(dotFactory, path.join(keep, "factory"), { recursive: true })
       await writeFile(path.join(keep, "events.jsonl"), result.events.map((event) => JSON.stringify(event)).join("\n"))
       await writeFile(path.join(keep, "stderr.txt"), result.stderr)
       kept = path.relative(root, keep)
@@ -116,6 +155,7 @@ for (const file of files) {
       description: testCase.description,
       pass: result.pass,
       maxSteps,
+      ...(testCase.modelLimited ? { modelLimited: testCase.modelLimited } : {}),
       exitCode: result.exitCode,
       capped: result.capped,
       timedOut: result.timedOut,

@@ -25,6 +25,12 @@ export interface EvalCase {
   readonly fire?: FireSpec
   /** This case's step cap, sized for a model that makes one call per step (see `caseStepCap`). */
   readonly maxSteps?: number
+  /**
+   * When set, the case is explicitly model-limited (#65): the checked-in
+   * model systematically misses this, with the reason stated. The report
+   * marks it so a red row reads as a known limit, not a regression.
+   */
+  readonly modelLimited?: string
 }
 
 /** Step cap for a case that sets no `maxSteps` of its own. */

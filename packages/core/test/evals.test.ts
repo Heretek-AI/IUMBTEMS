@@ -88,6 +88,29 @@ describe("transcripts", () => {
     expect(readTranscript([{ type: "step_finish", part: { cost: "n/a" } }]).costUSD).toBe(0)
   })
 
+  test("a completed call's output is graded text, except raw evidence and errored calls", () => {
+    const transcript = readTranscript([
+      { type: "step_start", part: {} },
+      {
+        type: "tool_use",
+        part: { tool: "es_gates_run", state: { status: "completed", output: "Gates passed: 0 error(s)" } },
+      },
+      {
+        type: "tool_use",
+        part: { tool: "es_research_fetch", state: { status: "completed", output: "single file path" } },
+      },
+      {
+        type: "tool_use",
+        part: { tool: "es_gates_run", state: { status: "error", output: "Gates failed: 9 error(s)" } },
+      },
+    ])
+    expect(gradeTranscript(transcript, { contains: ["0 error(s)"] }).pass).toBe(true)
+    expect(gradeTranscript(transcript, { contains: ["single file path"] }).failures).toEqual([
+      "missing: single file path",
+    ])
+    expect(gradeTranscript(transcript, { contains: ["9 error(s)"] }).failures).toEqual(["missing: 9 error(s)"])
+  })
+
   test("tool checks and error events grade the run", () => {
     const transcript = readTranscript(events)
     expect(gradeTranscript(transcript, { toolsUsed: ["es_brainstorm_plan"], contains: ["inversion"] }).pass).toBe(true)
@@ -241,8 +264,10 @@ describe("eval cases (evals/cases)", () => {
             true,
           ])
       if (body.fire) expect([file, ["audit", "scout", "harvest"].includes(body.fire.kind)]).toEqual([file, true])
-      // Each case sizes its own cap for a one-call-per-step model, within the default ceiling.
-      expect([file, Number.isInteger(body.maxSteps) && body.maxSteps >= 2 && body.maxSteps <= 16]).toEqual([file, true])
+      if (body.modelLimited !== undefined)
+        expect([file, typeof body.modelLimited === "string" && body.modelLimited.length > 0]).toEqual([file, true])
+      // Each case sizes its own cap for a one-call-per-step model, within the step ceiling (24).
+      expect([file, Number.isInteger(body.maxSteps) && body.maxSteps >= 2 && body.maxSteps <= 24]).toEqual([file, true])
     }
   })
 
@@ -251,5 +276,18 @@ describe("eval cases (evals/cases)", () => {
     const audit = cases.find((item) => item.file === "audit-fires.json")!.body
     const state = FactoryStateSchema.parse(JSON.parse(audit.files[".factory/runtime/state.json"]))
     expect(state.audits.map((item) => [item.id, item.status])).toEqual([["audit-01", "open"]])
+  })
+
+  test("the seeded programmer state is a valid v2 BUILD run with a worktree", async () => {
+    const { FactoryStateSchema } = await import("../src/factory/state.ts")
+    const prog = cases.find((item) => item.file === "programmer.json")!.body
+    const state = FactoryStateSchema.parse(JSON.parse(prog.files[".factory/runtime/state.json"]))
+    expect(state.stage).toBe("BUILD")
+    expect(state.activePhase).toBe("phase-01")
+    const phase = state.phases.find((item) => item.id === state.activePhase)!
+    expect(phase.status).toBe("building")
+    expect(phase.worktree).toBe(".factory/worktrees/phase-01")
+    for (const file of ["package.json", "src/sum.ts", "test/sum.test.ts"])
+      expect([file, typeof prog.files[`.factory/worktrees/phase-01/${file}`]]).toEqual([file, "string"])
   })
 })

@@ -14,6 +14,8 @@ interface EvalRow {
   agent?: string
   description?: string
   pass: boolean
+  /** Explicit model limit (#65): a red row with this reads as a known limit, not a regression. */
+  modelLimited?: string
   exitCode?: number | null
   capped?: boolean
   timedOut?: boolean
@@ -122,10 +124,12 @@ lines.push(`- Result: **${passed}/${rows.length} passed**${passed === rows.lengt
 lines.push(``)
 lines.push(`| case | agent | steps | cost | tools | verdict | failures |`)
 lines.push(`| ---- | ----- | ----- | ---- | ----- | ------- | -------- |`)
-for (const row of rows) {
+  for (const row of rows) {
   const failures = (row.failures ?? []).join("; ").slice(0, 160).replaceAll("|", "\\|")
+  let verdict = row.pass ? "PASS" : "FAIL"
+  if (!row.pass && row.modelLimited) verdict = "FAIL (model-limited)"
   lines.push(
-    `| \`${row.id}\` | ${row.agent ?? "?"} | ${row.steps ?? "?"}/${row.maxSteps ?? "?"} | $${(row.costUSD ?? 0).toFixed(4)} | ${(row.tools ?? []).join(", ") || "—"} | ${row.pass ? "PASS" : "FAIL"} | ${failures || "—"} |`,
+    `| \`${row.id}\` | ${row.agent ?? "?"} | ${row.steps ?? "?"}/${row.maxSteps ?? "?"} | $${(row.costUSD ?? 0).toFixed(4)} | ${(row.tools ?? []).join(", ") || "—"} | ${verdict} | ${failures || "—"} |`,
   )
 }
 lines.push(``)
@@ -134,12 +138,13 @@ for (const row of rows) {
   lines.push(``)
   if (row.description) lines.push(`${row.description}`)
   lines.push(``)
+  if (row.modelLimited) lines.push(`- Model-limited: ${row.modelLimited}`)
   lines.push(
     `- Agent: \`${row.agent ?? "?"}\`, exit: ${row.exitCode ?? "?"}, capped: ${row.capped ?? "?"}, timed out: ${row.timedOut ?? "?"}, over budget: ${row.overBudget ?? "?"}`,
   )
   const refused = (row.tools ?? []).filter((tool, index, all) => all.indexOf(tool) === index && !(row.completed ?? []).includes(tool))
   if (row.completed && refused.length > 0) lines.push(`- Called but never completed: ${refused.join(", ")}`)
-  if (row.kept) lines.push(`- Evidence kept at \`${row.kept}/\` (project with \`.factory/\`, \`events.jsonl\`, \`stderr.txt\`)`)
+  if (row.kept) lines.push(`- Evidence kept at \`${row.kept}/\` (project, \`factory/\` mirror of its \`.factory/\`, \`events.jsonl\`, \`stderr.txt\`)`)
   if ((row.errors ?? []).length > 0) {
     lines.push(`- Error events:`)
     for (const error of row.errors!) lines.push(`  - ${error.slice(0, 300)}`)

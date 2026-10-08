@@ -2,7 +2,7 @@
   "id": "designer",
   "description": "The designer opens the interview with the status tool, then asks its first question.",
   "agent": "designer",
-  "prompt": "Start a design interview for a minimal CLI theme: check es_design_status, then ask your first question.",
-  "maxSteps": 4,
+  "prompt": "Start a design interview for a minimal CLI theme: check es_design_status, then ask your first question in text (the question tool is unavailable in this headless run).",
+  "maxSteps": 6,
   "checks": { "toolsUsed": ["es_design_status"], "contains": ["?"] }
 }

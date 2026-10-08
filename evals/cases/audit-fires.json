@@ -3,7 +3,8 @@
   "description": "The antithesis auditor must catch the planted defects (SQL injection, a TOCTOU lock, a hard-coded key, a logged secret) with witnessed line pointers; graded deterministically from .factory/audits/audit-01/records.json.",
   "agent": "es-auditor-antithesis",
   "prompt": "Red-team code audit audit-01 on path src (the files under src/). Find every exploitable defect, then record one verdict with es_audit_verdict: each finding with its CWE, exact lines and a verbatim excerpt.",
-  "maxSteps": 8,
+  "maxSteps": 12,
+  "modelLimited": "The free CI model takes the fixture's own NOSONAR annotation at face value and reports the planted non-credential at src/leak.ts L2 as non-exploitable (0/5 catches over 5 runs), so the hardcoded-key plant never fires. Re-check on a stronger model before trusting this plant.",
   "files": {
     "src/injection.ts": "@fixture:fires/audit/src/injection.ts",
     "src/race.ts": "@fixture:fires/audit/src/race.ts",

@@ -10,6 +10,10 @@ name: E2E feedback (opencode + plugin)
 #   its workspace, event stream and stderr under evals/results/<stamp>/.
 # - `bun scripts/e2e-report.ts` renders the deterministic report, and
 #   evals/results/ is uploaded as the `e2e-feedback` artifact.
+# - `bun scripts/e2e-gate.ts` decides the verdict (#68, option 1): the job
+#   fails only when a historically stable case (90%+ over 5+ sampled runs)
+#   fails now, so a red job means a regression, not model noise. The evals
+#   step itself is `continue-on-error`; this gate owns the outcome.
 # - The `agent-feedback` step asks the model to diagnose that report (one
 #   `timeout`-bounded turn; best-effort, never masks the eval verdict).
 #
@@ -30,15 +34,17 @@ on:
       max_steps:
         description: "Step ceiling: each case runs under its own maxSteps, never above this"
         required: false
-        default: "16"
+        default: "24"
       max_usd:
         description: "Spend budget for the whole run in USD, from step_finish cost (empty = none)"
         required: false
         default: ""
 
-# Least privilege: the workflow only reads the checkout.
+# Least privilege: the workflow reads the checkout and its own past runs
+# (the regression gate samples recent `e2e-feedback` artifacts).
 permissions:
   contents: read
+  actions: read
 
 jobs:
   e2e-feedback:
@@ -47,7 +53,7 @@ jobs:
     env:
       ES_EVAL_MODEL: ${{ inputs.model || vars.ES_EVAL_MODEL }}
       ES_EVAL_KEY_VAR: ${{ vars.ES_EVAL_KEY_VAR || 'ANTHROPIC_API_KEY' }}
-      ES_EVAL_MAX_STEPS: ${{ inputs.max_steps || '16' }}
+      ES_EVAL_MAX_STEPS: ${{ inputs.max_steps || '24' }}
       ES_EVAL_MAX_USD: ${{ inputs.max_usd }}
       ES_EVAL_TIMEOUT_MS: "300000"
     steps:
@@ -84,6 +90,9 @@ jobs:
 
       - name: Exercise seats against the real model
         id: evals
+        # The regression gate below owns the verdict (#68); a failing eval
+        # run must not mask the report, feedback, upload or gate steps.
+        continue-on-error: true
         env:
           ES_EVAL_API_KEY: ${{ secrets.ES_EVAL_API_KEY }}
         run: |
@@ -111,6 +120,16 @@ jobs:
             echo
             cat "${newest%.json}.md"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Regression gate (#68): fails the job only when a historically
+      # stable case fails now. Runs even when evals fail; skipped cleanly
+      # when evals never ran (missing secrets). The script gates the newest
+      # evals/results JSON itself.
+      - name: Gate on regressions only
+        if: always() && steps.evals.outputs.skipped != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun scripts/e2e-gate.ts
 
       # One best-effort agent turn over the deterministic report, bounded by
       # `timeout`. Never fails the job: the eval verdict above is what
