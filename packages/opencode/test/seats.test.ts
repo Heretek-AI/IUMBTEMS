@@ -8,6 +8,7 @@ import path from "node:path"
 import { Factory, gateRunner, readSeats, type SeatRecord } from "@heretek-ai/es-core"
 import { boot, directiveScript, type Harness } from "@heretek-ai/es-testkit"
 import { createPolicyHooks } from "../src/policy.ts"
+import { EsRpc } from "../src/rpc-def.ts"
 import type { SeatTracker } from "../src/seats.ts"
 
 const pluginDir = path.resolve(import.meta.dir, "..")
@@ -68,6 +69,29 @@ describe("seat discipline on the real host (#60)", () => {
     const status = await h.run(`status ${call("es_status", {})}`, { agent: "factory" })
     expect(status.tools[0]?.text).toContain("seats:")
     expect(status.tools[0]?.text).toMatch(/es-qa-functional {2}completed/)
+  })
+
+  test("the TUI channel carries liveness, and an es_* tool emits `changed` (#57, #62)", async () => {
+    const rpc = (h.opencode as any).rpc(EsRpc)
+    const where = { location: h.location }
+    const dashboard = await rpc.factoryState({}, where)
+    expect(dashboard.headline).toBe("The grill is running: answer its questions in the grill session.")
+    expect(dashboard.header).toContain(`· GRILL · ${h.directory} · updated`)
+    expect(dashboard.seats.some((line: string) => /^es-qa-functional {2}completed/.test(line))).toBe(true)
+    expect(dashboard.events.some((line: string) => line.includes("factory.begin"))).toBe(true)
+    const status = await rpc.status({}, where)
+    expect(status.footer).toStartWith("ES · GRILL · last activity")
+
+    const seen: any[] = []
+    const off = rpc.events.on("changed", (event: any) => seen.push(event))
+    try {
+      await h.run(`status ${call("es_status", {})}`, { agent: "factory" })
+      for (let i = 0; i < 150 && !seen.length; i++) await Bun.sleep(20)
+      expect(seen.length).toBeGreaterThan(0)
+      expect(seen[0].data?.stage ?? seen[0].stage).toBe("GRILL")
+    } finally {
+      off?.()
+    }
   })
 })
 

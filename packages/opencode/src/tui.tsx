@@ -117,6 +117,14 @@ export default Plugin.define({
       toast((await call("lspInstall", { id, user, token })).message, "success")
     })
 
+    // Panels open beside the session (the host goes fullscreen on narrow
+    // terminals; f toggles it, Esc or q closes it). Only a session route can
+    // show a panel: say so instead of doing nothing.
+    const openPanel = (name: string) => {
+      if (!context.ui.panel.open(name, { presentation: "panel" }))
+        toast("Open a session first: Epistemic Swarm panels show beside a session.", "info")
+    }
+
     const status = guarded(async () => {
       const result = await call("status")
       await context.ui.dialog.alert({
@@ -174,9 +182,15 @@ export default Plugin.define({
           group: "Epistemic Swarm",
           palette: true,
           slash: { name: "es-factory" },
-          run: () => {
-            context.ui.panel.open("factory", { presentation: "fullscreen" })
-          },
+          run: () => openPanel("factory"),
+        },
+        {
+          id: "es.panel.close",
+          title: "Epistemic Swarm: close the panel",
+          group: "Epistemic Swarm",
+          palette: true,
+          slash: { name: "es-close" },
+          run: () => context.ui.panel.close(),
         },
         {
           id: "es.panel.lsp",
@@ -184,9 +198,7 @@ export default Plugin.define({
           group: "Epistemic Swarm",
           palette: true,
           slash: { name: "es-lsp-panel" },
-          run: () => {
-            context.ui.panel.open("lsp", { presentation: "fullscreen" })
-          },
+          run: () => openPanel("lsp"),
         },
         {
           id: "es.panel.hooks",
@@ -194,9 +206,7 @@ export default Plugin.define({
           group: "Epistemic Swarm",
           palette: true,
           slash: { name: "es-hooks" },
-          run: () => {
-            context.ui.panel.open("hooks", { presentation: "fullscreen" })
-          },
+          run: () => openPanel("hooks"),
         },
         {
           id: "es.panel.brainstorm",
@@ -204,14 +214,20 @@ export default Plugin.define({
           group: "Epistemic Swarm",
           palette: true,
           slash: { name: "es-brainstorm" },
-          run: () => {
-            context.ui.panel.open("brainstorm", { presentation: "fullscreen" })
-          },
+          run: () => openPanel("brainstorm"),
         },
       ],
     }))
 
-    const stop = rpc.events.on("changed", (event: any) => toast(`Factory → ${event.data.stage}`))
+    // `changed` fires on every seat transition and es_* tool run: toast only
+    // a stage change, or an announcement such as a paused continuation.
+    let lastStage: string | undefined
+    const stop = rpc.events.on("changed", (event: any) => {
+      const { stage, notice } = event.data ?? {}
+      if (notice) toast(notice, "info")
+      if (lastStage !== undefined && stage !== lastStage) toast(`Factory → ${stage}`)
+      lastStage = stage
+    })
     return () => {
       stopPanels()
       stop()

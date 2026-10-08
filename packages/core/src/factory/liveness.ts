@@ -243,6 +243,35 @@ export function livenessLines(state: FactoryState | undefined, liveness: Livenes
   return lines
 }
 
+/** "run run-… · RESEARCH · /path/to/project · updated 40s ago": which run, where, how fresh. */
+export const headerLine = (state: FactoryState, liveness: Liveness) =>
+  `run ${state.runId} · ${state.stage} · ${liveness.root} · updated ${ago(liveness, state.updatedAt)}`
+
+/** "01:58:40  human:john  stage.research". */
+export const eventLine = (event: LivenessEvent) => `${event.at.slice(11, 19)}  ${event.actor}  ${event.action}`
+
+/**
+ * The one-line TUI footer indicator: hidden without a run, otherwise the
+ * stage and what it is doing ("ES · RESEARCH · es-research-alpha running ·
+ * 12s"), or what it waits for.
+ */
+export function footerLine(state: FactoryState | undefined, liveness: Liveness, paused?: string): string | undefined {
+  if (!state) return undefined
+  if (state.stage === "HALTED") return "ES · HALTED · a human must resume"
+  if (state.stage === "DONE") return "ES · DONE"
+  if (liveness.pending.length)
+    return `ES · waiting on you: approve ${liveness.pending.map((item) => item.stage).join(", ")}`
+  if (paused) return `ES · ${state.stage} · paused (no progress) · /factory continues`
+  const running = liveness.seats.filter((seat) => seat.state === "running")
+  const newest = running.reduce<SeatRecord | undefined>(
+    (best, seat) => (!best || seat.lastActivityAt > best.lastActivityAt ? seat : best),
+    undefined,
+  )
+  if (newest)
+    return `ES · ${state.stage} · ${running.length === 1 ? `${newest.agent} running` : `${running.length} seats running`} · ${formatAge(elapsed(newest.lastActivityAt, liveness.now))}`
+  return `ES · ${state.stage} · last activity ${ago(liveness, liveness.lastActivityAt)}`
+}
+
 /**
  * The human view (`es status`, `es watch`): the headline, then which run in
  * which project and how fresh it is, then the summary block's lines, seats,
@@ -251,7 +280,7 @@ export function livenessLines(state: FactoryState | undefined, liveness: Livenes
 export function formatHuman(state: FactoryState | undefined, liveness: Liveness, summary: string): string {
   const lines = [headline(state, liveness)]
   if (!state) return lines.join("\n")
-  lines.push(`run ${state.runId} · ${state.stage} · ${liveness.root} · updated ${ago(liveness, state.updatedAt)}`)
+  lines.push(headerLine(state, liveness))
   const body = summary
     .replace(/^<factory-state>\n?/, "")
     .replace(/\n?<\/factory-state>$/, "")
@@ -266,7 +295,7 @@ export function formatHuman(state: FactoryState | undefined, liveness: Liveness,
   if (research) lines.push(`research: ${research}`)
   if (liveness.events.length) {
     lines.push("recent events:")
-    for (const event of liveness.events) lines.push(`  ${event.at.slice(11, 19)}  ${event.actor}  ${event.action}`)
+    for (const event of liveness.events) lines.push(`  ${eventLine(event)}`)
   }
   if (liveness.pending.length)
     lines.push(

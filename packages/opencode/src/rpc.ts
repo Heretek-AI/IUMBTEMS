@@ -10,23 +10,29 @@ import {
   capabilityLoss,
   commandSetHash,
   describeTarget,
+  eventLine,
   factorySummary,
+  footerLine,
   type HookEngine,
   hashJson,
+  headerLine,
+  headline,
   installServer,
   isTrusted,
   loadGatesConfig,
   readFrontier,
   readIdeas,
+  readLiveness,
   readPlan,
   readResult,
   readScores,
   recordConsent,
+  researchLine,
+  seatLine,
   treeCounts,
   verifyControl,
 } from "@heretek-ai/es-core"
 import type { Runtime } from "./runtime.ts"
-import { pendingApprovals } from "./tools.ts"
 
 interface Ticket {
   readonly kind: string
@@ -36,7 +42,12 @@ interface Ticket {
 
 const TTL_MS = 120_000
 
-export function createRpcHandlers(runtime: Runtime, _notify: () => Promise<void>, hooks?: HookEngine) {
+export function createRpcHandlers(
+  runtime: Runtime,
+  _notify: () => Promise<void>,
+  hooks?: HookEngine,
+  live: { readonly paused?: () => string | undefined } = {},
+) {
   const tickets = new Map<string, Ticket>()
   const issue = (kind: string, subject: unknown) => {
     const token = randomBytes(12).toString("hex")
@@ -74,10 +85,16 @@ export function createRpcHandlers(runtime: Runtime, _notify: () => Promise<void>
   return {
     status: async () => {
       const state = await runtime.factory.read()
+      const liveness = await readLiveness(runtime.root, state)
+      const paused = live.paused?.()
+      const footer = footerLine(state, liveness, paused)
       return {
         summary: await runtime.factory.summary(state),
         stage: state?.stage ?? "NONE",
-        pending: (await pendingApprovals(runtime.root)).map((item) => item.stage),
+        pending: liveness.pending.map((item) => item.stage),
+        headline: headline(state, liveness),
+        ...(footer ? { footer } : {}),
+        ...(paused ? { paused } : {}),
       }
     },
     configState: async () => ({
@@ -88,7 +105,16 @@ export function createRpcHandlers(runtime: Runtime, _notify: () => Promise<void>
     factoryState: async () => {
       const state = await runtime.factory.read()
       const frontier = await readFrontier(runtime.root).catch(() => undefined)
+      const liveness = await readLiveness(runtime.root, state)
+      const research = researchLine(liveness)
+      const paused = live.paused?.()
       return {
+        headline: headline(state, liveness),
+        ...(state ? { header: headerLine(state, liveness) } : {}),
+        seats: liveness.seats.map((seat) => seatLine(liveness, seat)),
+        ...(research ? { research } : {}),
+        events: liveness.events.map(eventLine),
+        ...(paused ? { paused } : {}),
         ...(frontier ? { tree: treeCounts(frontier) } : {}),
         stage: state?.stage ?? "NONE",
         ...(state?.runId ? { runId: state.runId } : {}),
@@ -107,7 +133,7 @@ export function createRpcHandlers(runtime: Runtime, _notify: () => Promise<void>
           failures: phase.failures,
           qa: Object.fromEntries(Object.entries(phase.qa).filter(([, verdict]) => verdict !== undefined)),
         })),
-        pending: (await pendingApprovals(runtime.root)).map((item) => item.stage),
+        pending: liveness.pending.map((item) => item.stage),
         audits: (state ? allAudits(state) : []).map((audit) => ({
           id: audit.id,
           target: describeTarget(audit.target),

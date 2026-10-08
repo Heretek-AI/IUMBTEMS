@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, readFile, utimes, writeFile } from "node:fs/promises"
 import path from "node:path"
 import {
+  footerLine,
   formatAge,
   formatHuman,
   headline,
@@ -244,6 +245,40 @@ describe("progressPrint", () => {
       seats[0] = { ...seats[0]!, state: "completed", endedAt: at(40).toISOString() }
     })
     expect(await print(current)).not.toBe(fourth)
+  })
+})
+
+describe("footerLine", () => {
+  test("hidden without a run; names the running seat, a pause, a pending approval, a halt", async () => {
+    expect(footerLine(undefined, await readLiveness(fx.root, undefined, { now: T0 }))).toBeUndefined()
+    const current = state({ updatedAt: at(20).toISOString() })
+    expect(footerLine(current, await readLiveness(fx.root, current, { now: at(60) }))).toBe(
+      "ES · RESEARCH · last activity 40s ago",
+    )
+    await updateSeats(fx.root, current.runId, (seats) => {
+      seats.push(seat({ lastActivityAt: at(48).toISOString() }))
+    })
+    const live = await readLiveness(fx.root, current, { now: at(60) })
+    expect(footerLine(current, live)).toBe("ES · RESEARCH · es-research-alpha running · 12s")
+    expect(footerLine(current, live, "paused")).toBe("ES · RESEARCH · paused (no progress) · /factory continues")
+    await updateSeats(fx.root, current.runId, (seats) => {
+      seats.push(seat({ sessionID: "ses_beta", agent: "es-research-beta", lastActivityAt: at(55).toISOString() }))
+    })
+    expect(footerLine(current, await readLiveness(fx.root, current, { now: at(60) }))).toBe(
+      "ES · RESEARCH · 2 seats running · 5s",
+    )
+    const halted = state({ stage: "HALTED", halt: { reason: "x", at: T0.toISOString(), from: "BUILD" } })
+    expect(footerLine(halted, await readLiveness(fx.root, halted, { now: T0 }))).toBe(
+      "ES · HALTED · a human must resume",
+    )
+    await mkdir(factoryLayout(fx.root).runtime, { recursive: true })
+    await writeFile(
+      factoryLayout(fx.root).pending,
+      JSON.stringify([{ stage: "spec", requestedBy: "agent:factory", at: T0.toISOString() }]),
+    )
+    expect(footerLine(current, await readLiveness(fx.root, current, { now: at(60) }))).toBe(
+      "ES · waiting on you: approve spec",
+    )
   })
 })
 

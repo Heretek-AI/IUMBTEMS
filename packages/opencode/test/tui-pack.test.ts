@@ -74,17 +74,17 @@ function stubContext(shape: "release" | "later" | "none") {
 }
 
 for (const shape of ["release", "later"] as const) {
-  test(`packed tui claims four session.panel slots via ${shape === "release" ? "ui.slot" : "bare slot"}`, async () => {
+  test(`packed tui claims four session.panel slots and the footer via ${shape === "release" ? "ui.slot" : "bare slot"}`, async () => {
     const plugin = await loadPackedTui()
     expect(plugin.id).toBe("epistemic-swarm.tui")
     const fx = stubContext(shape)
     const cleanup = await plugin.setup(fx.context)
     expect(typeof cleanup === "function" || cleanup === undefined).toBe(true)
-    expect(fx.slots).toHaveLength(4)
-    for (const claim of fx.slots) {
-      expect(claim.append).toBe("session.panel")
-      expect(claim.render({ name: "other" })).toBeNull()
-    }
+    expect(fx.slots.map((claim: any) => claim.append)).toEqual([
+      ...Array(4).fill("session.panel"),
+      "prompt.footer.status",
+    ])
+    for (const claim of fx.slots.slice(0, 4)) expect(claim.render({ name: "other" })).toBeNull()
     expect(fx.layers[0].commands.map((command: any) => command.slash.name)).toContain("es-approve")
   }, 60_000)
 }

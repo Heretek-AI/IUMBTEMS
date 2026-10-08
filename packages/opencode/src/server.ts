@@ -77,9 +77,24 @@ export default Plugin.define({
     const searches = new PendingSearches()
     await ctx.websearch.transform((editor) => registerWebsearch(editor as any, runtime, searches))
 
+    // `changed` reaches the TUI (dashboard refetch, stage toast, footer). Bursts
+    // (seat activity, tool runs) are coalesced to at most one emit a second.
+    let emitChanged: (notice?: string) => Promise<void> = async () => {}
+    let lastEmit = 0
+    let queued: ReturnType<typeof setTimeout> | undefined
+    const notifySoon = () => {
+      if (queued) return
+      queued = setTimeout(
+        () => {
+          queued = undefined
+          lastEmit = Date.now()
+          void emitChanged()
+        },
+        Math.max(0, 1000 - (Date.now() - lastEmit)),
+      )
+    }
     // Seat liveness (#60): fed by host events and the policy hook; read by the guard and the continuation.
-    let notify: () => Promise<void> = async () => {}
-    const seats = createSeatTracker(runtime, { onChange: () => void notify() })
+    const seats = createSeatTracker(runtime, { onChange: notifySoon })
     // Our policy runs first, so its denials win over any user hook.
     const policy = createPolicyHooks(runtime, seats)
     const bridge = await createHookBridge(ctx as any, runtime, () => servers)
@@ -110,24 +125,35 @@ export default Plugin.define({
     await ctx.session.hook("context", session.context as any)
     await ctx.session.hook("context", bridge.context as any)
     await ctx.session.hook("compaction", session.compaction as any)
-    const continuation = createFactoryContinuation(ctx as any, runtime, { seats, onPause: () => void notify() })
+    const continuation = createFactoryContinuation(ctx as any, runtime, {
+      seats,
+      onPause: (notice) => void emitChanged(notice),
+    })
 
     // Human-only channel for the TUI (approvals, trust, resume).
     let registration: { events: { emit: (...args: any[]) => Promise<void> } } | undefined
     // Fire-and-forget from event handlers: a state that cannot be read (halted
     // mid-write, forged seal) must not surface as an unhandled rejection.
-    notify = async () => {
+    emitChanged = async (notice) => {
       try {
         const state = await runtime.factory.read()
         await registration?.events.emit("changed", {
           stage: state?.stage ?? "NONE",
           summary: await runtime.factory.summary(state),
+          ...(notice ? { notice } : {}),
         })
       } catch {
         // The next change or the panels' poll catches up.
       }
     }
-    registration = await ctx.rpc.register(EsRpc, createRpcHandlers(runtime, notify, bridge.engine) as any)
+    registration = await ctx.rpc.register(
+      EsRpc,
+      createRpcHandlers(runtime, () => emitChanged(), bridge.engine, { paused: () => continuation.paused() }) as any,
+    )
+    // Every es_* tool may move the factory: let the TUI know (#62).
+    await ctx.tool.hook("execute.after", (async (event: { tool: string }) => {
+      if (event.tool.startsWith("es_")) notifySoon()
+    }) as any)
 
     await ctx.command.transform((editor) => {
       editor.add({
@@ -391,6 +417,7 @@ export default Plugin.define({
     })()
     return async () => {
       abort.abort()
+      if (queued) clearTimeout(queued)
       await runtime.lsp.stopAll()
     }
   },
