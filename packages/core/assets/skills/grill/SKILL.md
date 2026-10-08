@@ -17,6 +17,6 @@ description: Socratic grilling technique for settling a design before building i
 - Settle a decision only with an explicit answer and a one-line justification.
   - Postpone explicitly (`deferred`), never silently.
   - Change a settled answer by reopening it first, never by overwriting it.
-- Record the tree after every round. Revisit earlier nodes when a later answer contradicts them.
+- Record the tree after every round, once the human has answered it. The first turn only asks: never record before the first answers arrive. Revisit earlier nodes when a later answer contradicts them.
 - Freeze only when the frontier is empty and the human confirms: summarise the settled constraints first.
 - The factory needs an explicit USD spend ceiling before any autonomous work.
