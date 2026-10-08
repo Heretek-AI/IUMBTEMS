@@ -2,7 +2,7 @@
   "id": "scout-fires",
   "description": "The scout vets three local candidates (MIT, GPL-3.0, no license); whatever it proposes, the computed verdicts must adopt only the permissive one. Graded from .factory/scout/scout.json.",
   "agent": "scout",
-  "prompt": "Scout a function library for our Apache-2.0 commercial product among these local candidates: local:./vendor/mit, local:./vendor/gpl, local:./vendor/none. This is a headless run: plan them, scan each, record an assessment for each, then es_scout_complete. Make independent tool calls in the same block, and inspect files with the read tool, never shell reads.",
+  "prompt": "Scout a function library for our Apache-2.0 commercial product among these local candidates: local:./vendor/mit, local:./vendor/gpl, local:./vendor/none. Plan and record them under exactly these names: mit, gpl, none. Propose adopt or clean-room only (never reject: an unwanted license gets a clean-room blueprint). This is a headless run: plan them, scan each, record an assessment for each, then es_scout_complete. Make independent tool calls in the same block, and inspect files with the read tool, never shell reads.",
   "maxSteps": 22,
   "files": {
     "vendor/mit/index.js": "module.exports = function mit() { return 1 }\n",
