@@ -264,6 +264,8 @@ describe("eval cases (evals/cases)", () => {
             true,
           ])
       if (body.fire) expect([file, ["audit", "scout", "harvest"].includes(body.fire.kind)]).toEqual([file, true])
+      if (body.modelLimited !== undefined)
+        expect([file, typeof body.modelLimited === "string" && body.modelLimited.length > 0]).toEqual([file, true])
       // Each case sizes its own cap for a one-call-per-step model, within the step ceiling (24).
       expect([file, Number.isInteger(body.maxSteps) && body.maxSteps >= 2 && body.maxSteps <= 24]).toEqual([file, true])
     }

@@ -79,7 +79,7 @@ for (const file of files) {
   const remaining = budgetUSD === undefined ? undefined : budgetUSD - spentUSD
   if (remaining !== undefined && remaining <= 0) {
     const failure = `not run: spend budget $${budgetUSD} used up`
-    results.push({ id: testCase.id, agent: testCase.agent, description: testCase.description, pass: false, maxSteps, failures: [failure] })
+    results.push({ id: testCase.id, agent: testCase.agent, description: testCase.description, pass: false, maxSteps, failures: [failure], ...(testCase.modelLimited ? { modelLimited: testCase.modelLimited } : {}) })
     console.log(`SKIP ${testCase.id} — ${failure}`)
     continue
   }
@@ -155,6 +155,7 @@ for (const file of files) {
       description: testCase.description,
       pass: result.pass,
       maxSteps,
+      ...(testCase.modelLimited ? { modelLimited: testCase.modelLimited } : {}),
       exitCode: result.exitCode,
       capped: result.capped,
       timedOut: result.timedOut,

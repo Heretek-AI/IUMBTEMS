@@ -14,6 +14,8 @@ interface EvalRow {
   agent?: string
   description?: string
   pass: boolean
+  /** Explicit model limit (#65): a red row with this reads as a known limit, not a regression. */
+  modelLimited?: string
   exitCode?: number | null
   capped?: boolean
   timedOut?: boolean
@@ -122,10 +124,11 @@ lines.push(`- Result: **${passed}/${rows.length} passed**${passed === rows.lengt
 lines.push(``)
 lines.push(`| case | agent | steps | cost | tools | verdict | failures |`)
 lines.push(`| ---- | ----- | ----- | ---- | ----- | ------- | -------- |`)
-for (const row of rows) {
+  for (const row of rows) {
   const failures = (row.failures ?? []).join("; ").slice(0, 160).replaceAll("|", "\\|")
+  const verdict = row.pass ? "PASS" : row.modelLimited ? "FAIL (model-limited)" : "FAIL"
   lines.push(
-    `| \`${row.id}\` | ${row.agent ?? "?"} | ${row.steps ?? "?"}/${row.maxSteps ?? "?"} | $${(row.costUSD ?? 0).toFixed(4)} | ${(row.tools ?? []).join(", ") || "—"} | ${row.pass ? "PASS" : "FAIL"} | ${failures || "—"} |`,
+    `| \`${row.id}\` | ${row.agent ?? "?"} | ${row.steps ?? "?"}/${row.maxSteps ?? "?"} | $${(row.costUSD ?? 0).toFixed(4)} | ${(row.tools ?? []).join(", ") || "—"} | ${verdict} | ${failures || "—"} |`,
   )
 }
 lines.push(``)
@@ -134,6 +137,7 @@ for (const row of rows) {
   lines.push(``)
   if (row.description) lines.push(`${row.description}`)
   lines.push(``)
+  if (row.modelLimited) lines.push(`- Model-limited: ${row.modelLimited}`)
   lines.push(
     `- Agent: \`${row.agent ?? "?"}\`, exit: ${row.exitCode ?? "?"}, capped: ${row.capped ?? "?"}, timed out: ${row.timedOut ?? "?"}, over budget: ${row.overBudget ?? "?"}`,
   )
