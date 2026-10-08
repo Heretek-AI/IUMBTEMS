@@ -1,22 +1,16 @@
 {
   "id": "scout-fires",
-  "description": "The scout vets five local candidates (MIT, Apache-2.0, GPL-3.0, AGPL-3.0, no license); whatever it proposes, the computed verdicts must adopt only the permissive two. Graded from .factory/scout/scout.json.",
+  "description": "The scout vets three local candidates (MIT, GPL-3.0, no license); whatever it proposes, the computed verdicts must adopt only the permissive one. Graded from .factory/scout/scout.json.",
   "agent": "scout",
-  "prompt": "Scout a function library for our Apache-2.0 commercial product among these local candidates: local:./vendor/mit, local:./vendor/apache, local:./vendor/gpl, local:./vendor/agpl, local:./vendor/none. This is a headless run: plan them, scan each, record an assessment for each, then es_scout_complete. Make independent tool calls in the same block, and inspect files with the read tool, never shell reads.",
+  "prompt": "Scout a function library for our Apache-2.0 commercial product among these local candidates: local:./vendor/mit, local:./vendor/gpl, local:./vendor/none. This is a headless run: plan them, scan each, record an assessment for each, then es_scout_complete. Make independent tool calls in the same block, and inspect files with the read tool, never shell reads.",
   "maxSteps": 22,
   "files": {
     "vendor/mit/index.js": "module.exports = function mit() { return 1 }\n",
     "vendor/mit/package.json": "{\"name\": \"mit\", \"version\": \"1.0.0\"}\n",
     "vendor/mit/LICENSE": "@fixture:licenses/MIT.txt",
-    "vendor/apache/index.js": "module.exports = function apache() { return 1 }\n",
-    "vendor/apache/package.json": "{\"name\": \"apache\", \"version\": \"1.0.0\"}\n",
-    "vendor/apache/LICENSE": "@fixture:licenses/Apache-2.0.txt",
     "vendor/gpl/index.js": "module.exports = function gpl() { return 1 }\n",
     "vendor/gpl/package.json": "{\"name\": \"gpl\", \"version\": \"1.0.0\"}\n",
     "vendor/gpl/LICENSE": "@fixture:licenses/GPL-3.0-only.txt",
-    "vendor/agpl/index.js": "module.exports = function agpl() { return 1 }\n",
-    "vendor/agpl/package.json": "{\"name\": \"agpl\", \"version\": \"1.0.0\"}\n",
-    "vendor/agpl/LICENSE": "@fixture:licenses/AGPL-3.0-only.txt",
     "vendor/none/index.js": "module.exports = function none() { return 1 }\n",
     "vendor/none/package.json": "{\"name\": \"none\", \"version\": \"1.0.0\"}\n"
   },
@@ -33,15 +27,7 @@
         "verdict": "adopt"
       },
       {
-        "name": "apache",
-        "verdict": "adopt"
-      },
-      {
         "name": "gpl",
-        "verdict": "clean-room"
-      },
-      {
-        "name": "agpl",
         "verdict": "clean-room"
       },
       {

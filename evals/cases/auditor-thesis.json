@@ -2,7 +2,7 @@
   "id": "auditor-thesis",
   "description": "The thesis auditor maps a login helper, names its exploitable defect with the CWE and the file:line range.",
   "agent": "es-auditor-thesis",
-  "prompt": "Map the invariants of src/login.ts. Report any exploitable defect with its CWE id and the file:line range it sits on.",
+  "prompt": "Map the invariants of src/login.ts. Report any exploitable defect with its CWE id and the file:line range it sits on. Inspect the file with the read tool, never the shell; do not run gates. This run is headless: never call the question tool. Make independent tool calls in the same block.",
   "maxSteps": 14,
   "files": {
     "src/login.ts": "export async function login(db: any, username: string, password: string) {\n  const query = \"SELECT * FROM users WHERE name = '\" + username + \"' AND pass = '\" + password + \"'\"\n  return db.query(query)\n}\n"
