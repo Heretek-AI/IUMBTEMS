@@ -199,12 +199,34 @@ function humanVerbAfter(tokens: readonly string[], binary: number): boolean {
   })
 }
 
-/** Whether the command invokes a human-only es verb, however it is quoted or wrapped. */
+/**
+ * Whether the command invokes a human-only es verb, however it is quoted or
+ * wrapped. Deliberately quote-blind, so text that only names a verb (a
+ * here-doc, a `-m` or `--body` argument) reads as a call too (#86). That false
+ * positive is the price of catching `sh -c`, `xargs` and interpreter wrappers;
+ * the refusal tells the agent to pass such text by file instead.
+ */
 export function invokesHumanOnly(command: string): boolean {
   if (isPlainHelp(command)) return false
   const tokens = words(unquoteShell(command))
   return tokens.some((token, index) => ES_BINARY.test(token) && humanVerbAfter(tokens, index))
 }
+
+/**
+ * Whether a human-only match is a plain call: no here-doc, and an es binary
+ * heading its segment. Anything else may be text that only names the verb.
+ */
+const calledAtHead = (command: string): boolean =>
+  !command.includes("<<") &&
+  segments(unquoteShell(command)).some((segment) => {
+    const tokens = words(segment)
+    return ES_BINARY.test(tokens[0] ?? "") && humanVerbAfter(tokens, 0)
+  })
+
+const HUMAN_ONLY =
+  "That command is human-only (approvals, trust, waivers, resume, rebaseline, keys, config set, retractions, exports, audit and scout runs); agents cannot run it."
+const MENTION_HINT =
+  " If it only names the verb in text (a here-doc, a commit message, a `--body` argument), the rule still reads a call: write the text to a file with the edit tool and pass the file (`gh … --body-file`, `git commit -F`)."
 
 const CONTROL_MENTION =
   /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|audits\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design|scout)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/i
@@ -286,11 +308,7 @@ export function evaluateShell(
   const spec = agentSpec(agentId)
   const plain = unquoteShell(command)
   if (invokesHumanOnly(command))
-    return {
-      effect: "deny",
-      reason:
-        "That command is human-only (approvals, trust, waivers, resume, rebaseline, keys, config set, retractions, exports, audit and scout runs); agents cannot run it.",
-    }
+    return { effect: "deny", reason: calledAtHead(command) ? HUMAN_ONLY : HUMAN_ONLY + MENTION_HINT }
   const privateDir = canonicalPath(context.stateDir ?? stateDir())
   if (plain.includes(privateDir) || /epistemic-swarm\/(key|trust|engine)|state\/epistemic-swarm/i.test(plain))
     return { effect: "deny", reason: "Agents may not access Epistemic Swarm's private state dir." }

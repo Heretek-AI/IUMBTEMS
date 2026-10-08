@@ -260,6 +260,23 @@ describe("shell policy", () => {
       expect([command, shell("build", command).effect]).toEqual([command, "allow"])
   })
 
+  test("a verb only mentioned in text is still denied, and the refusal points at passing the text by file (#86)", () => {
+    const hint = /--body-file/
+    const reason = (decision: ReturnType<typeof shell>) => (decision.effect === "deny" ? decision.reason : "")
+    for (const command of [
+      "gh issue comment 1 --body \"$(cat <<'EOF'\nrun es approve spec in a terminal\nEOF\n)\"",
+      "gh issue comment 1 --body-file - <<'EOF'\nes approve spec\nEOF",
+      'git commit -m "docs: es reseal --sign re-signs the state"',
+    ]) {
+      const decision = shell("build", command)
+      expect([command, decision.effect]).toEqual([command, "deny"])
+      expect([command, reason(decision)]).toEqual([command, expect.stringMatching(hint)])
+    }
+    // A plain call gets the plain refusal.
+    for (const command of ["es approve spec", "cd x && es --cwd . reseal --sign"])
+      expect([command, reason(shell("build", command))]).toEqual([command, expect.not.stringMatching(hint)])
+  })
+
   test("seats may not reach the evidence cache from the shell; others may read but not mutate it", () => {
     expect(shell("es-research-alpha", "cat .factory/research/sources/index.json").effect).toBe("deny")
     expect(shell("build", "cat .factory/research/sources/index.json").effect).toBe("allow")
