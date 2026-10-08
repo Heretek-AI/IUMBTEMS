@@ -215,6 +215,11 @@ describe("pipeline A", () => {
     const stopped = await h.run(`status ${call("es_status", {})}`, { agent: "factory" })
     expect(stopped.tools[0]?.status).toBe("error")
     expect(stopped.tools[0]?.text).toContain("pause")
+    // The halt itself is recorded asynchronously (the plugin's event loop
+    // charges the turn's spend and its guard sees STOP): wait for it before
+    // a human removes STOP, or the resume can race the halt.
+    for (let i = 0; i < 250 && (await factory().read())?.stage !== "HALTED"; i++) await Bun.sleep(20)
+    expect((await factory().read())?.stage).toBe("HALTED")
     await rm(path.join(h.directory, ".factory/STOP"))
     expect((await factory().resume("tester")).stage).toBe("BUILD")
   }, 240_000)
