@@ -28,7 +28,7 @@ spike as proof).
 - GENERATED — never hand-edit: `schemas/*.schema.json`, `docs/SCHEMAS.md`,
   `docs/CAPABILITIES.md`, `docs/CONFIG.md`. Edit the Zod schema / capability
   table, then run `bun run docs:gen`.
-- Hand-maintained: `README.md`, `AGENTS.md`, `SYSTEM_ARCHITECTURE.md`, `docs/DOGFOOD.md`, `docs/adr/*.md`, `spikes/*/RESULTS.md`, `.github/**`.
+- Hand-maintained: `README.md`, `AGENTS.md`, `SYSTEM_ARCHITECTURE.md`, `docs/DOGFOOD.md`, `docs/adr/*.md`, `docs/roadmap/*.md`, `spikes/*/RESULTS.md`, `.github/**`.
 - One repo, one npm package per surface (`docs/adr/0001-monorepo.md`): core never imports the CLI or the plugin, and the CLI never imports the plugin (`bun run deps:check`).
 
 ## Commands
