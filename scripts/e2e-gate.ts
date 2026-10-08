@@ -31,9 +31,16 @@ if (!resultsPath) {
   process.exit(2)
 }
 
-const raw = await readFile(path.isAbsolute(resultsPath) ? resultsPath : path.join(root, resultsPath), "utf8").catch(
-  () => undefined,
-)
+// The results file must live under evals/results/: the path comes from the
+// command line, so resolve it and refuse anything that escapes (S8707).
+const resultsDir = path.join(root, "evals", "results")
+const resolved = path.resolve(root, resultsPath)
+if (resolved !== resultsDir && !resolved.startsWith(`${resultsDir}${path.sep}`)) {
+  console.error(`e2e-gate: results must be inside ${path.relative(root, resultsDir)} (got ${resultsPath})`)
+  process.exit(2)
+}
+
+const raw = await readFile(resolved, "utf8").catch(() => undefined)
 if (raw === undefined) {
   console.error(`e2e-gate: cannot read ${resultsPath}`)
   process.exit(2)
