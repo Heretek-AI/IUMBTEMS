@@ -45,7 +45,7 @@
     "@opencode/plugin": "2.0.24"
   },
   "devDependencies": {
-    "@babel/core": "7.28.0",
+    "@babel/core": "7.29.6",
     "@babel/preset-typescript": "7.27.1",
     "@heretek-ai/es-testkit": "workspace:*",
     "@opencode/sdk": "2.0.24",
