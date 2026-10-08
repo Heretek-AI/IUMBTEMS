@@ -27,7 +27,7 @@ import { readRetractions } from "../claims/degrade.ts"
 import { buildDossier, writeDossier } from "../claims/dossier.ts"
 import { claimsFromAudit } from "../claims/research.ts"
 import { ClaimStore } from "../claims/store.ts"
-import { factoryLayout } from "../layout.ts"
+import { stateDir as defaultStateDir, factoryLayout } from "../layout.ts"
 import { auditMarkdown, formatCoverage } from "../research/auditor.ts"
 import { researchCache } from "../research/ops.ts"
 import { type Frontier, FrontierSchema } from "../schema/frontier.ts"
@@ -41,6 +41,7 @@ import { sha256 } from "../util/hash.ts"
 import { run, splitCommand } from "../util/proc.ts"
 import * as Git from "../worktree/git.ts"
 import { once } from "./journal.ts"
+import { indexRun } from "./runs.ts"
 import {
   type Audit,
   type AuditTarget,
@@ -145,9 +146,13 @@ const newRunId = (now: Date) =>
 const TEST_FILE =
   /(^|\/)(test|tests|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.(py|go)$/
 
+/** The run index is refreshed on a stage change, or at most this often otherwise. */
+const RUN_INDEX_INTERVAL_MS = 60_000
+
 export class Factory {
   private readonly limits: FactoryLimits
   private readonly layout: ReturnType<typeof factoryLayout>
+  private indexed?: { readonly runId: string; readonly stage: Stage; readonly at: number }
 
   constructor(
     readonly root: string,
@@ -214,6 +219,22 @@ export class Factory {
     state.updatedAt = this.now().toISOString()
     await writeJson(this.layout.state, FactoryStateSchema.parse(state))
     await signEngineFile(this.layout.state, this.deps.stateDir)
+    await this.indexRun(state)
+  }
+
+  /** Keep this run's entry in the per-user run index (`es runs`) fresh. */
+  private async indexRun(state: FactoryState) {
+    const at = this.now().getTime()
+    const last = this.indexed
+    if (last?.runId === state.runId && last.stage === state.stage && at - last.at < RUN_INDEX_INTERVAL_MS) return
+    this.indexed = { runId: state.runId, stage: state.stage, at }
+    await indexRun(this.deps.stateDir ?? defaultStateDir(), {
+      runId: state.runId,
+      root: this.root,
+      stage: state.stage,
+      createdAt: state.createdAt,
+      updatedAt: state.updatedAt,
+    })
   }
 
   private audit(actor: string, action: string, payload: Record<string, unknown> = {}) {

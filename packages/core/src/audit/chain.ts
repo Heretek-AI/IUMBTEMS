@@ -66,6 +66,19 @@ export async function auditHead(root: string): Promise<{ seq: number; hash: stri
   return { seq: last.seq, hash: last.hash }
 }
 
+/** The last `count` entries, oldest first, for display (the chain is not verified; malformed lines are skipped). */
+export async function recentAuditEntries(root: string, count: number): Promise<AuditEntry[]> {
+  const entries: AuditEntry[] = []
+  for (const line of (await readLines(factoryLayout(root).audit)).slice(-count)) {
+    try {
+      entries.push(AuditEntrySchema.parse(JSON.parse(line)))
+    } catch {
+      // A corrupt line is `es audit verify`'s to report, not the status view's.
+    }
+  }
+  return entries
+}
+
 export interface VerifyChainResult {
   readonly valid: boolean
   readonly entries: readonly AuditEntry[]

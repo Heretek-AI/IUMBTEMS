@@ -645,3 +645,70 @@ describe("release version", () => {
     expect(source).toContain("options.version ?? VERSION")
   })
 })
+
+describe("status and runs (1.1.3)", () => {
+  const begin = (at: string = root) =>
+    new Factory(at, { gates: gateRunner({ stateDir: state }), stateDir: state }).begin("human:tester")
+
+  test("es status without a run says how to start one", async () => {
+    const result = await run(["status"])
+    expect(result.code).toBe(0)
+    expect(result.out).toContain("No factory run in this project. Start one with /grill.")
+  })
+
+  test("es status leads with a plain headline and the run header naming the project", async () => {
+    const begun = await begin()
+    const result = await run(["status"])
+    expect(result.code).toBe(0)
+    const lines = result.out.split("\n")
+    expect(lines[0]).toBe("The grill is running: answer its questions in the grill session.")
+    expect(lines[1]).toStartWith(`run ${begun.runId} · GRILL · ${root} · updated `)
+    expect(result.out).toContain("recent events:")
+    expect(result.out).not.toContain("<factory-state>")
+    expect((await run(["factory", "status"])).out).toBe(result.out)
+  })
+
+  test("es status --json carries the headline, liveness and summary block", async () => {
+    await begin()
+    const parsed = JSON.parse((await run(["status", "--json"])).out)
+    expect(parsed.headline).toContain("The grill is running")
+    expect(parsed.liveness.stage).toBe("GRILL")
+    expect(parsed.liveness.root).toBe(root)
+    expect(parsed.summary).toContain("<factory-state>")
+  })
+
+  test("es runs lists runs across projects; --run targets another project; the cwd is warned about a fresher run", async () => {
+    const here = await begin()
+    const other = await mkdtemp(path.join(tmpdir(), "es-cli-other-"))
+    try {
+      // The other project's run saves a moment later, so it is the more recently active one.
+      await Bun.sleep(5)
+      const there = await begin(other)
+      const runs = await run(["runs"])
+      expect(runs.out.split("\n")[0]).toContain(there.runId)
+      expect(runs.out).toContain(`* ${here.runId}`)
+      expect(runs.out).toContain(other)
+
+      const status = await run(["status"])
+      expect(status.out).toContain(`Note: a more recently active run is ${there.runId} (GRILL) in ${other}`)
+      expect(status.out).toContain(`es status --run ${there.runId}`)
+
+      const targeted = await run(["status", "--run", there.runId])
+      expect(targeted.out.split("\n")[1]).toStartWith(`run ${there.runId} · GRILL · ${other}`)
+      expect(targeted.out).not.toContain("Note: a more recently active run")
+
+      const unknown = await run(["status", "--run", "run-20990101-000000-ffff"])
+      expect(unknown.code).toBe(2)
+      expect(unknown.out).toContain("es runs")
+    } finally {
+      await rm(other, { recursive: true, force: true })
+    }
+  })
+
+  test("es runs hides finished runs unless --all, and says so when there are none", async () => {
+    expect((await run(["runs"])).out).toContain("No active runs")
+    expect((await run(["runs", "--all"])).out).toContain("No indexed runs")
+    const begun = await begin()
+    expect(JSON.parse((await run(["runs", "--json"])).out)[0].runId).toBe(begun.runId)
+  })
+})

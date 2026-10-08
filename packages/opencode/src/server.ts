@@ -9,9 +9,11 @@ import {
   factoryLayout,
   formatReport,
   git,
+  livenessLines,
   loadSkills,
   parseAuditTarget,
   readJson,
+  readLiveness,
   researchSourcesDir,
   runGates,
 } from "@heretek-ai/es-core"
@@ -309,7 +311,10 @@ export default Plugin.define({
         name: "status",
         description: "Show the factory state (Epistemic Swarm)",
         execute: async ({ sessionID }) => {
-          await ctx.session.synthetic({ sessionID, text: await runtime.factory.summary() } as any)
+          const state = await runtime.factory.read()
+          const liveness = await readLiveness(runtime.root, state)
+          const text = [await runtime.factory.summary(state), ...livenessLines(state, liveness)].join("\n")
+          await ctx.session.synthetic({ sessionID, text } as any)
         },
       })
       editor.add({

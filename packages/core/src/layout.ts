@@ -72,6 +72,7 @@ export function factoryLayout(root: string) {
     audit: path.join(runtime, "audit.jsonl"),
     control: path.join(runtime, "control.json"),
     pending: path.join(runtime, "pending-approvals.json"),
+    seats: path.join(runtime, "seats.json"),
     runs: path.join(dir, "runs"),
     run: (runId: string) => path.join(dir, "runs", runId),
     worktrees: path.join(dir, "worktrees"),

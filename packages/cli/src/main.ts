@@ -27,6 +27,7 @@ import {
   installServer,
   LENSES,
   LspManager,
+  listRuns,
   loadEsConfig,
   loadHooks,
   loadInterview,
@@ -48,6 +49,7 @@ import {
   SlotLoop,
   scanSource,
   startRun as startBrainstorm,
+  stateDir as userStateDir,
   validateTokens,
   verifyAuditChain,
   verifyBrief,
@@ -72,6 +74,7 @@ import {
 import { auditCommand, auditDismiss, auditShow, scoutCommand, scoutShow } from "./jobs.ts"
 import { keySeal, keyStatus } from "./key.ts"
 import { serveStdio } from "./mcp.ts"
+import { runsCommand, statusCommand } from "./status.ts"
 import { type ConfirmIO, confirmHuman, NotInteractive, terminalIO } from "./tty.ts"
 import { VERSION } from "./version.ts"
 
@@ -79,10 +82,11 @@ export { VERSION }
 
 const HELP = `es ${VERSION} — Epistemic Swarm build factory
 
-Usage: es [--cwd <dir>] <command>
+Usage: es [--cwd <dir> | --run <run id>] <command>
 
 Factory
-  status                        Show the factory state
+  status [--json]               Is the run working, waiting, stuck or done? (headline, seats, research progress)
+  runs [--all] [--json]         Recent runs across your projects (* marks this one)
   factory begin                 Start a run (normally done by /grill)
   factory run --headless        Drive the factory through a harness CLI, emitting JSON lines
         [--driver opencode] [--max-turns N]
@@ -165,6 +169,7 @@ const BOOLEAN_FLAGS = [
   "global",
   "open-only",
   "sign",
+  "all",
 ]
 
 export async function main(argv: readonly string[], io: MainIO): Promise<number> {
@@ -176,7 +181,15 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
     io.print(HELP)
     return 0
   }
-  const root = await projectRoot(path.resolve(io.cwd, flag(args, "cwd") ?? "."))
+  const userState = io.stateDir ?? userStateDir()
+  // `--run <id>` is `--cwd <that run's project>`, looked up in the run index.
+  const runId = flag(args, "run")
+  const indexed = runId ? (await listRuns(userState)).find((entry) => entry.runId === runId) : undefined
+  if (runId && !indexed) {
+    io.print(`Unknown run ${runId}. \`es runs\` lists the runs this machine has seen.`)
+    return 2
+  }
+  const root = indexed?.root ?? (await projectRoot(path.resolve(io.cwd, flag(args, "cwd") ?? ".")))
   const context: HumanContext = {
     root,
     io: io.confirm,
@@ -184,11 +197,10 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
     ...(io.stateDir ? { stateDir: io.stateDir } : {}),
   }
   const subArgs = (from: number): Args => ({ positionals: args.positionals.slice(from), flags: args.flags })
-  const factory = (extra: { researchDepth?: number; auditPhase?: "optional" | "required" } = {}) =>
+  const factory = () =>
     new Factory(root, {
       gates: gateRunner(io.stateDir ? { stateDir: io.stateDir } : {}),
       ...(io.stateDir ? { stateDir: io.stateDir } : {}),
-      ...extra,
     })
 
   try {
@@ -200,19 +212,10 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
       case "version":
         io.print(VERSION)
         return 0
-      case "status": {
-        const loaded = await loadEsConfig(root).then(
-          (loaded) => ({ depth: loaded.config.research.depth, auditPhase: loaded.config.audit.phase }),
-          () => undefined,
-        )
-        io.print(
-          await factory({
-            ...(loaded?.depth === undefined ? {} : { researchDepth: loaded.depth }),
-            ...(loaded?.auditPhase === "required" ? { auditPhase: "required" as const } : {}),
-          }).summary(),
-        )
-        return 0
-      }
+      case "status":
+        return await statusCommand({ root, stateDir: userState, print: io.print }, args)
+      case "runs":
+        return await runsCommand({ root, stateDir: userState, print: io.print }, args)
       case "approve":
         return await approve(context, subArgs(1))
       case "trust":
@@ -647,10 +650,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           io.print(factorySummary(await factory().begin("human:cli")))
           return 0
         }
-        if (sub === "status") {
-          io.print(await factory().summary())
-          return 0
-        }
+        if (sub === "status") return await statusCommand({ root, stateDir: userState, print: io.print }, args)
         if (sub === "resume") return await resume(context, subArgs(2))
         if (sub === "pr") return await recordPr(context, subArgs(2))
         if (sub === "stop") {
