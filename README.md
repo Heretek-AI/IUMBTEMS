@@ -5,15 +5,15 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 1.1.1 security release (unreleased).** Published 1.1.0 (and
-> 1.0.x) are deprecated. 1.1.1 ships the security fixes: the S1 quote law,
-> the S2 argv-aware shell policy, the S3 bubblewrap sandbox for every agent
-> shell and gate run, and the S4 passphrase-sealed Ed25519 human key with
-> terminal-only approvals — plus the engine-sealed source cache (#52) and
-> the per-file control re-pin (#32). Install from npm
-> (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`, `@heretek-ai/es-cli`);
-> run `es key seal` once, then re-record approvals, trust and waivers (v1
-> HMAC records are refused).
+> **Status: 1.1.3.** Live-run visibility and seat discipline from the 1.1.2
+> dogfood (#63). Every status view leads with whether the run is working,
+> waiting, stuck or done: `es status`, `es watch`, `es runs`, the factory
+> dashboard and a TUI footer indicator. Factory seats run in the foreground,
+> with one writer per research file. 1.1.2 added `audit.phase`, pipeline A and
+> signed run state; 1.1.1 was the security release (bubblewrap for every agent
+> shell, the passphrase-sealed Ed25519 human key, terminal-only approvals).
+> Install from npm (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`,
+> `@heretek-ai/es-cli`); run `es key seal` once.
 
 ## Naming
 
@@ -43,6 +43,11 @@
   tears down competitor projects with fail-closed SPDX detection, per-field
   provenance and clean-room specs; queereye interviews you into a
   contrast-gated DTCG token system with a generated style guide.
+- **Live-run visibility.** `es status`, `es watch` and the factory dashboard
+  lead with one plain sentence (working, waiting on you, possibly stuck,
+  halted or done), then each seat's state and last activity and the research
+  progress. `es runs` lists runs across projects. The TUI footer shows the
+  stage and the running seat; headless runs emit `progress` events.
 - **OpenCode v2 native.** One plugin registers agents, tools, commands, the
   hook bridge, the LSP runtime and four TUI panels — additively, with no files
   written. Host web results are cached (citable by hash) only for factory
