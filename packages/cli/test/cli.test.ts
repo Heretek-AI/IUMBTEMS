@@ -91,6 +91,26 @@ describe("args", () => {
   })
 })
 
+describe("--help (#59)", () => {
+  test("`es <command> --help` prints that command's usage; any --help value means help", async () => {
+    const reseal = await run(["reseal", "--help"])
+    expect(reseal.code).toBe(0)
+    expect(reseal.out).toContain("reseal [--sign]")
+    expect(reseal.out).not.toContain("approve <frontier|spec>")
+    const factory = await run(["factory", "--help"])
+    expect(factory.out).toContain("factory run --headless")
+    expect(factory.out).toContain("[--log-level quiet|info|debug]")
+    expect(factory.out).toContain("factory resume")
+    expect((await run(["--help"])).out).toContain("Usage: es [--cwd <dir> | --run <run id>] <command>")
+    expect((await run(["nonsense", "--help"])).out).toContain("Usage: es [--cwd")
+    // `--help=x` never falls through to the command: nothing is approved or created.
+    const approve = await run(["approve", "frontier", "--help=no"], human())
+    expect(approve.code).toBe(0)
+    expect(approve.out).toContain("approve <frontier|spec>")
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
+  })
+})
+
 describe("human-only confirmation", () => {
   test("needs a TTY and the correct passphrase", async () => {
     await expect(confirmHuman(pipe, "x", [], state)).rejects.toBeInstanceOf(NotInteractive)
@@ -326,6 +346,28 @@ describe("es reseal", () => {
     expect((await run(["reseal", "--sign"], human())).code).toBe(0)
     expect((await run(["reseal"])).out).toContain("state.json: ok")
     expect((await factory().read())!.stage).toBe("GRILL")
+  })
+
+  test("names the key it checks, and refuses to sign when it cannot see the engine key (#59)", async () => {
+    await factory().begin("human:tester")
+    expect((await run(["reseal"])).out).toContain(`Engine key: ${path.join(state, "engine.key")}`)
+    const elsewhere = await mkdtemp(path.join(tmpdir(), "es-cli-elsewhere-"))
+    try {
+      const printed: string[] = []
+      const code = await main(["reseal", "--sign"], {
+        print: (text) => printed.push(text),
+        confirm: human(),
+        cwd: root,
+        stateDir: elsewhere,
+      })
+      expect(code).toBe(1)
+      expect(printed.join("\n")).toContain("This shell cannot see the engine key")
+      expect(await exists(path.join(elsewhere, "engine.key"))).toBe(false)
+      // The engine's own view is unchanged.
+      expect((await factory().read())!.stage).toBe("GRILL")
+    } finally {
+      await rm(elsewhere, { recursive: true, force: true })
+    }
   })
 
   test("adopts a legacy pre-sidecar run after review", async () => {

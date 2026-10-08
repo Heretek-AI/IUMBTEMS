@@ -174,6 +174,34 @@ describe("shell policy", () => {
   const shell = (agent: string | undefined, command: string, sandboxAvailable = true) =>
     evaluateShell(ctx(), agent, command, { sandboxAvailable })
 
+  test("a plain `es <human verb> --help` is allowed for every agent: the CLI prints usage first (#59)", () => {
+    for (const command of [
+      "es reseal --help",
+      "es approve frontier --help",
+      "es factory --help",
+      "es audit --help",
+      "es --cwd . key seal --help",
+    ])
+      for (const agent of ["build", "factory", "es-research-alpha"])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "allow"])
+    // Anything that could run the verb for real stays human-only.
+    for (const command of [
+      "es approve --help; es approve frontier",
+      "es approve --help && es approve frontier",
+      "es approve frontier -- --help",
+      "es approve frontier --help=no",
+      'sh -c "es approve frontier" --help',
+      "env X=1 es approve frontier --help",
+      "es approve frontier $(echo --help)",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal shell parameter expansion
+      "es approve frontier ${X:---help}",
+      "es approve frontier `true` --help",
+      "es approve frontier --help | cat",
+      "es approve \\\nfrontier --help; true",
+    ])
+      expect([command, shell("build", command).effect]).toEqual([command, "deny"])
+  })
+
   test("human-only CLIs are denied for every agent, however they are quoted or wrapped", () => {
     expect(shell("build", "es approve spec").effect).toBe("deny")
     expect(shell(undefined, "cd x && epistemic-swarm waive lint/check").effect).toBe("deny")

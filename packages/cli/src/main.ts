@@ -142,6 +142,25 @@ Other
   version
 `
 
+/**
+ * Usage for one command: its lines (and their continuation lines) from HELP,
+ * or the full HELP for an unknown or absent command.
+ */
+export function commandHelp(command: string | undefined): string {
+  if (!command) return HELP
+  const lines = HELP.split("\n")
+  const picked: string[] = []
+  const head = new RegExp(`^  ${command.replace(/[^\w-]/g, "")}(\\s|$)`)
+  for (let i = 0; i < lines.length; i++) {
+    if (!head.test(lines[i]!)) continue
+    picked.push(lines[i]!)
+    while (lines[i + 1]?.startsWith("        ")) picked.push(lines[++i]!)
+  }
+  return picked.length
+    ? `Usage: es ${command} … (es ${VERSION})\n${picked.join("\n")}\n\nAll commands: es --help`
+    : HELP
+}
+
 export interface MainIO {
   readonly print: (text: string) => void
   readonly confirm: ConfirmIO
@@ -176,9 +195,10 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
   const args = parseArgs(argv, BOOLEAN_FLAGS)
   const [command, sub, ...rest] = args.positionals
   // `--help` is side-effect free on every subcommand: print usage without
-  // minting runs, writing files, or touching the factory state.
-  if (args.flags.help === true) {
-    io.print(HELP)
+  // minting runs, writing files, or touching the factory state. Any value
+  // (`--help=x`) still means help, never "run the command".
+  if (args.flags.help !== undefined) {
+    io.print(commandHelp(command))
     return 0
   }
   const userState = io.stateDir ?? userStateDir()
