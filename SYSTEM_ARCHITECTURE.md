@@ -101,12 +101,16 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
 
 ## 4. Trust model (non-negotiable invariants)
 
-1. **Approvals, waivers, trust and resume are human-only** — terminal
-   passphrase confirmation unlocks the passphrase-sealed Ed25519 human key
+1. **Approvals are human-only; trust, waivers and resume stay terminal-only**
+   — passphrase confirmation (terminal echo-off, TUI masked dialog, or
+   loopback browser input per ADR 0002) unlocks the passphrase-sealed
+   Ed25519 human key
    (scrypt + AES-256-GCM; `es key seal` once, `es key status` shows the
    fingerprint), which signs the record; agents may request
    (`es_request_approval`) but never grant. The approve/trust/resume RPCs no
-   longer exist; the TUI previews, then points at the terminal command. v1
+   longer exist; per ADR 0002 (proposed) approvals complete in the TUI
+   (masked dialog, in-process signing, #119) as well as the CLI, while trust
+   and resume preview in the TUI and sign at the terminal. v1
    HMAC records are refused and must be re-recorded.
 2. **Control files are deny-write for every agent**: gates, config, frontier,
    approvals, waivers, runtime state, the research evidence, claim ledger,
