@@ -32,6 +32,14 @@ the run halts. `.factory/STOP` halts every seat tool (except `es_status` when
 halted by spend/runtime); resuming is human-only. The spend ceiling is
 mandatory and raising it is a human act.
 
+**Research-only runs** (`mode: "research"`) answer one objective outside the
+software flow: `beginResearchRun({objective, ceilingUSD})` enters RESEARCH
+directly with no frontier, no approvals and no git repo required, and
+`completeResearch` ends at DONE (deferred frontier facts are not required;
+the dossier takes the run's objective). Spend tracking, STOP, halts, liveness,
+`es status`/`es watch`/`es runs` and the sealed evidence cache are the same
+machinery. The completing seat will be the research coordinator (#111).
+
 ## 2. Seats
 
 Seats are what the trust policy reasons about; the registry is

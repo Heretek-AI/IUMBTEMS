@@ -23,6 +23,7 @@ const DEPTH = ["", "a brief", "thesis + antithesis", "thesis + antithesis, then 
 export function factorySummary(state: FactoryState | undefined, extras: SummaryExtras = {}): string {
   if (!state) return "<factory-state>No factory run in this project. Start one with /grill.</factory-state>"
   const lines = [`run ${state.runId} · stage ${state.stage}`]
+  if (state.mode === "research" && state.objective) lines.push(`research run objective: ${state.objective}`)
   if (extras.frontier) lines.push(treeLine(extras.frontier))
   if (state.stage === "RESEARCH" && extras.researchDepth !== undefined)
     lines.push(`research depth ${extras.researchDepth}: ${DEPTH[extras.researchDepth] ?? "custom"}`)

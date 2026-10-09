@@ -147,6 +147,21 @@ describe("research on the real host", () => {
     expect(tools[0]?.status).toBe("error")
   })
 
+  test("#110: a research run's seats use the host web cache, because .factory/ exists", async () => {
+    const { Factory } = await import("@heretek-ai/es-core")
+    const research = new Factory(h.directory, {
+      gates: async () => ({ passed: true, findings: [], summary: "stub" }),
+      stateDir: state,
+    })
+    // A real research-only run (no git needed, no frontier), not a mkdir.
+    const begun = await research.beginResearchRun({ objective: "Do gates keep agents honest?", ceilingUSD: 5 })
+    expect(begun).toMatchObject({ mode: "research", stage: "RESEARCH" })
+    const { tools } = await h.run(call("websearch", { query: "factory gates" }), { agent: "factory" })
+    expect(tools[0]?.status).toBe("completed")
+    expect(tools[0]?.text).toContain("cached sha256:")
+    expect(tools[0]?.text).toContain("gates keep agents honest")
+  })
+
   test("#106: search fails over from a failing backend to the next one in order", async () => {
     // Brave looks configured but its key is invalid, so the chain must move
     // on to the local SearXNG instance and report its id.

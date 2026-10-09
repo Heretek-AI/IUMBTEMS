@@ -239,6 +239,7 @@ export class Factory {
       version: FACTORY_STATE_VERSION,
       runId: newRunId(this.now()),
       stage: "GRILL",
+      mode: "build",
       createdAt: at,
       updatedAt: at,
       spend: { usd: 0, estimated: false, events: 0 },
@@ -431,13 +432,51 @@ export class Factory {
     })
   }
 
+  /**
+   * Start a research-only run (#110, Option A): no frontier, no approvals, no
+   * git repo needed. The run enters RESEARCH directly with an objective and a
+   * mandatory spend ceiling, and completes at DONE. Spend tracking, STOP,
+   * halts, liveness and the run index are the factory machinery, unchanged.
+   * Setting the ceiling is human-only: the CLI and the headless verb pass
+   * `--max-usd`, never an agent.
+   */
+  async beginResearchRun(input: { objective: string; ceilingUSD: number }, actor = "system"): Promise<FactoryState> {
+    const objective = String(input.objective ?? "").trim()
+    if (!objective) throw new FactoryError("A research run needs an objective: what question is it answering?")
+    if (!Number.isFinite(input.ceilingUSD) || !(input.ceilingUSD > 0))
+      throw new FactoryError(
+        "A research run needs a spend ceiling in USD (--max-usd <USD>); seats halt when the spend reaches it.",
+      )
+    return this.mutate(
+      actor,
+      async (state) => {
+        if (await exists(this.layout.state))
+          throw new FactoryError(`A run already exists (${state.runId}, ${state.stage}).`)
+        state.mode = "research"
+        state.objective = objective
+        state.spendCeilingUSD = input.ceilingUSD
+        state.stage = "RESEARCH"
+        await this.audit(actor, "research.begin", {
+          runId: state.runId,
+          objective,
+          spendCeilingUSD: state.spendCeilingUSD,
+        })
+        return state
+      },
+      { create: true },
+    )
+  }
+
   // ------------------------------------------------------------ research → spec
 
   async completeResearch(agentId: string | undefined): Promise<FactoryState> {
+    // The research coordinator (#111) completes research runs; until it
+    // lands, the factory seat completes both modes.
     this.requireSeat(agentId, "factory")
     return this.mutate(`agent:${agentId}`, async (state) => {
       this.requireStage(state, "RESEARCH")
       this.requireAuditsClear(state)
+      const researchMode = state.mode === "research"
       const report = await readFile(this.layout.researchReport, "utf8").catch(() => undefined)
       if (report === undefined)
         throw new FactoryError("Research is not done: .factory/research/REPORT.md does not exist.")
@@ -454,18 +493,21 @@ export class Factory {
         )
       // Facts the grill could not settle from the repo are research's to answer:
       // each deferred fact node must be cited on a (grounded) claim line.
+      // Research runs have no frontier, so there is nothing to require.
       const frontier = await readFrontier(this.root).catch(() => undefined)
-      const unanswered = (frontier ? deferredFacts(frontier) : []).filter(
-        (fact) => !audit.claims.some((claim) => claim.text.includes(`(fact:${fact.id})`)),
-      )
-      if (unanswered.length)
-        throw new FactoryError(
-          `Research must answer every fact the grill deferred to it. Missing: ${unanswered
-            .map((fact) => `${fact.id} — ${fact.question}`)
-            .join(
-              "; ",
-            )}. Answer each on a tagged claim line in REPORT.md marked (fact:<id>), e.g. "- Postgres 16 is supported (fact:db) [VERIFIED: …]".`,
+      if (!researchMode) {
+        const unanswered = (frontier ? deferredFacts(frontier) : []).filter(
+          (fact) => !audit.claims.some((claim) => claim.text.includes(`(fact:${fact.id})`)),
         )
+        if (unanswered.length)
+          throw new FactoryError(
+            `Research must answer every fact the grill deferred to it. Missing: ${unanswered
+              .map((fact) => `${fact.id} — ${fact.question}`)
+              .join(
+                "; ",
+              )}. Answer each on a tagged claim line in REPORT.md marked (fact:<id>), e.g. "- Postgres 16 is supported (fact:db) [VERIFIED: …]".`,
+          )
+      }
       // The report's claims become the research dossier (witnessed again on
       // write). With a domain pack active, its constitution vets every claim
       // and gates the report by the pack's accept threshold; no pack leaves
@@ -500,7 +542,7 @@ export class Factory {
         this.layout.researchDossier,
         buildDossier({
           mode: "research",
-          subject: frontier?.idea ?? "research",
+          subject: frontier?.idea ?? state.objective ?? "research",
           claims,
           now: this.now(),
         }),
@@ -516,8 +558,9 @@ export class Factory {
         ...store.all().flatMap((claim) => (claim.source ? [claim.source.sha256] : [])),
       ])
       const removed = await cache.prune(cited)
-      state.stage = "SPEC"
-      await this.audit(`agent:${agentId}`, "stage.spec", {
+      // A research run ends here; a build run moves on to SPEC.
+      state.stage = researchMode ? "DONE" : "SPEC"
+      await this.audit(`agent:${agentId}`, researchMode ? "stage.done" : "stage.spec", {
         reportHash: sha256(report),
         coverage: audit.coverage,
         prunedSources: removed.length,
