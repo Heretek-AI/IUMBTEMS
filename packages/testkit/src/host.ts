@@ -82,6 +82,11 @@ export async function boot(options: HarnessOptions = {}): Promise<Harness> {
   }
   if (options.git) {
     await git(directory, "init", "-q", "-b", "main")
+    // Repo-local identity: merges (fleet landings) must work without any
+    // ambient git config, as in CI. The initial commit keeps its own -c
+    // flags; this pins the repo for everything after it.
+    await git(directory, "config", "user.name", "test")
+    await git(directory, "config", "user.email", "test@test")
     await git(directory, "add", "-A")
     await git(
       directory,
