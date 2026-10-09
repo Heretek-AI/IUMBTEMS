@@ -52,8 +52,8 @@
     "@babel/preset-typescript": "7.27.1",
     "@heretek-ai/es-testkit": "workspace:*",
     "@opencode/sdk": "2.0.24",
-    "@opentui/core": "0.5.14",
-    "@opentui/solid": "0.5.14",
+    "@opentui/core": "0.5.17",
+    "@opentui/solid": "0.5.17",
     "babel-preset-solid": "1.9.12",
     "solid-js": "1.9.15"
   },
