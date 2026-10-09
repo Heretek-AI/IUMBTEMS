@@ -124,6 +124,7 @@ describe("read-only RPC", () => {
         for (const [method, params] of [
           ["fleet.status", {}],
           ["fleet.task", { id: "a" }],
+          ["fleet.task.liveness", { id: "a" }],
           ["fleet.pending", {}],
           ["fleet.events", { since: 0 }],
         ] as const) {

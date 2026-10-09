@@ -22,6 +22,7 @@ import { z } from "zod"
 import { ApproveTickets, CsrfTokens } from "./approve.ts"
 import { planConfigFile, readConfigView } from "./configview.ts"
 import { exportEvidence, readEvidenceClaim, readEvidenceClaims, readEvidenceSource } from "./evidence.ts"
+import { readTaskLiveness } from "./liveness.ts"
 import { fleetPaths } from "./state.ts"
 import {
   loopbackOriginOk,
@@ -208,6 +209,8 @@ const StrictObject = (shape: Record<string, z.ZodTypeAny>) => z.strictObject(sha
 const RpcSchemas = {
   "fleet.status": StrictObject({}),
   "fleet.task": StrictObject({ id: z.string().min(1) }),
+  /** Per-task run liveness (#130, feeds the web dashboard): read-only. */
+  "fleet.task.liveness": StrictObject({ id: z.string().min(1) }),
   "fleet.pending": StrictObject({}),
   "fleet.events": StrictObject({ since: z.number().int().min(0).default(0) }),
   /** Read-only config preview (#132, preview-only): no apply method exists. */
@@ -749,6 +752,10 @@ export class TelemetryServer {
         const task = snapshot.tasks.find((entry) => entry.id === id)
         if (!task) throw new Error(`unknown task ${JSON.stringify(id)}`)
         return { task }
+      }
+      case "fleet.task.liveness": {
+        const id = (params as { id: string }).id
+        return readTaskLiveness(await this.runDir(id), id)
       }
       case "fleet.events": {
         const since = (params as { since?: number }).since ?? 0

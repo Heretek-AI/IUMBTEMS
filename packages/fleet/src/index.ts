@@ -7,7 +7,17 @@ export {
   ApproveTickets,
   CsrfTokens,
 } from "./approve.ts"
-export { VERSION } from "./bin.ts"
+export type { StartDecision } from "./bin.ts"
+export {
+  awaitStartGrant,
+  readStatusToken,
+  START_GRANT_TIMEOUT_MS,
+  START_GRANT_TYPE,
+  STARTED_TIMEOUT_MS,
+  STARTED_TYPE,
+  startDecision,
+  VERSION,
+} from "./bin.ts"
 export {
   type ConfigDrift,
   type ConfigPlan,
@@ -43,6 +53,7 @@ export {
   startFleet,
   stopFleet,
 } from "./lifecycle.ts"
+export { readTaskLiveness, type TaskLiveness } from "./liveness.ts"
 export {
   applyDecision,
   type CancelEntry,
@@ -93,6 +104,8 @@ export {
   EventLog,
   ensureToken,
   type FleetSnapshot,
+  field,
+  parseHeaders,
   readTelemetryEndpoint,
   type SnapshotTask,
   scrubPayload,
@@ -136,6 +149,7 @@ export {
   WorkerSupervisor,
 } from "./worker.ts"
 export {
+  ALLOCATING_STALE_MS,
   type AllocateOptions,
   allocateWorktree,
   emptyRegistry,
