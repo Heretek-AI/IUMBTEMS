@@ -5,10 +5,11 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 1.5.0.** Phase 4 web control plane: the fleet daemon serves a
-> browser UI on loopback behind a one-time URL — fleet dashboard, browser
-> approvals, preview-only config editor and evidence explorer
-> (#129–#133, #145 follows for browser-apply). Install from npm
+> **Status: 1.6.0.** Phase 5 self-improvement: telemetry harvest
+> (`es improve harvest`), distillation into reviewable proposals
+> (`es improve distill`), and the self-dogfood factory preset
+> (`docs/SELF-DOGFOOD.md`) — runs learn from runs, and the factory builds
+> this repo into draft PRs a human reviews (#135–#138). Install from npm
 > (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`, `@heretek-ai/es-cli`);
 > run `es key seal` once.
 
