@@ -49,9 +49,9 @@ export function safeUrl(url: string): string | undefined {
   return /^https?:\/\/[^\s<>"']+$/i.test(trimmed) ? trimmed : undefined
 }
 
-const sortedClaims = (claims: readonly Claim[]) => [...claims].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+const sortedClaims = (claims: readonly Claim[]) => [...claims].sort((a, b) => a.id.localeCompare(b.id))
 const sortedSources = (sources: readonly RenderSource[]) =>
-  [...sources].sort((a, b) => (a.meta.sha256 < b.meta.sha256 ? -1 : a.meta.sha256 > b.meta.sha256 ? 1 : 0))
+  [...sources].sort((a, b) => a.meta.sha256.localeCompare(b.meta.sha256))
 
 const statusCounts = (claims: readonly Claim[]) => {
   const counts = new Map<string, number>()
@@ -107,7 +107,7 @@ function mdBlocks(escaped: string): string {
 export function renderDossierMarkdown(input: DossierRenderInput): string {
   const claims = sortedClaims(input.claims)
   const sources = sortedSources(input.sources)
-  const missing = [...(input.missingSources ?? [])].sort()
+  const missing = [...(input.missingSources ?? [])].sort((a, b) => a.localeCompare(b))
   const lines = [
     `# Research dossier: ${input.objective}`,
     "",
@@ -161,7 +161,7 @@ const CSS = [
 export function renderDossierHtml(input: DossierRenderInput): string {
   const claims = sortedClaims(input.claims)
   const sources = sortedSources(input.sources)
-  const missing = [...(input.missingSources ?? [])].sort()
+  const missing = [...(input.missingSources ?? [])].sort((a, b) => a.localeCompare(b))
   const sourceById = new Map(sources.map((source) => [source.meta.sha256, source]))
   const claimRows = claims
     .map((claim) => {
