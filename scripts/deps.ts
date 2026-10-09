@@ -36,15 +36,18 @@ if (!check.ok) {
 // it declares which packages it may not import, and core and cli may never
 // import a new surface (their entries must ban it).
 const BOUNDARIES = [
-  { pkg: "core", banned: ["cli", "opencode", "testkit"] },
-  { pkg: "cli", banned: ["opencode", "testkit"] },
+  { pkg: "core", banned: ["cli", "opencode", "testkit", "fleet"] },
+  { pkg: "cli", banned: ["opencode", "testkit", "fleet"] },
   { pkg: "opencode", banned: [] as string[] },
   { pkg: "testkit", banned: [] as string[] },
+  // Fleet depends on core only (#122): never on the CLI or the plugin.
+  { pkg: "fleet", banned: ["cli", "opencode"] },
 ] as const
 const NPM_NAME: Record<string, string> = {
   cli: "@heretek-ai/es-cli",
   opencode: "@heretek-ai/epistemic-swarm",
   testkit: "@heretek-ai/es-testkit",
+  fleet: "@heretek-ai/es-fleet",
 }
 const SPECIFIER = /\b(?:from|import)\s*\(?\s*["']([^"']+)["']/g
 

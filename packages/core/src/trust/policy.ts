@@ -128,6 +128,13 @@ export const unquoteShell = (command: string) => command.replaceAll(/['"\\]/g, "
 const words = (command: string) => command.split(/[^\w@./=:-]+/).filter(Boolean)
 
 const ES_BINARY = /^(es|epistemic-swarm|es\.js|es-cli|@heretek-ai\/es-cli(@[\w.-]+)?)$|\/(es|es\.js|epistemic-swarm)$/
+/**
+ * The fleet daemon binary (#122). It has its own verbs (`start`, `stop`,
+ * `status`, `task`, `watch`, `gc`), so it is matched separately: the whole
+ * binary is human-only except `status` and `--help`, because a running fleet
+ * spends money.
+ */
+const FLEET_BINARY = /^(es-fleet|es-fleet\.js|@heretek-ai\/es-fleet(@[\w.-]+)?)$|\/es-fleet(\.js)?$/
 /** Human-only verbs: the next word(s) after the es binary. Exported for the
  *  argv-parity property test (#97): the CLI grammar lives in core. */
 export type HumanVerbRule = readonly [string, ((next: string | undefined) => boolean)?]
@@ -158,7 +165,7 @@ export const HUMAN_VERBS: ReadonlyArray<HumanVerbRule> = [
 function isPlainHelp(command: string): boolean {
   if (/[;&|\n()'"`$\\<>{}]/.test(command)) return false
   const argv = command.trim().split(/\s+/)
-  if (!ES_BINARY.test(argv[0] ?? "")) return false
+  if (!ES_BINARY.test(argv[0] ?? "") && !FLEET_BINARY.test(argv[0] ?? "")) return false
   const help = argv.indexOf("--help")
   const end = argv.indexOf("--")
   return help > 0 && (end === -1 || help < end)
@@ -202,6 +209,33 @@ function nextPositionals(tokens: readonly string[], from: Cursor): Cursor[] {
   return found
 }
 
+/**
+ * Whether the fleet binary at `tokens[binary]` runs a human-only verb: every
+ * verb except `status` (#122). Resolution is single-path and fail-closed:
+ * known booleans (the CLI's BOOLEAN_FLAGS, #97) never consume a word, while
+ * every other `--flag` is assumed to take a value, so an unknown flag swallows
+ * the next word and the command stays human-only. `--` makes the rest
+ * positional, and `--flag=value` never consumes.
+ */
+function fleetHumanOnlyAfter(tokens: readonly string[], binary: number): boolean {
+  let i = binary + 1
+  let literal = false
+  while (i < tokens.length) {
+    const token = tokens[i]!
+    if (literal || !token.startsWith("--")) return token !== "status"
+    if (token === "--") {
+      literal = true
+      i += 1
+      continue
+    }
+    const name = token.slice(2).split("=", 1)[0]!
+    if (BOOLEAN_FLAGS.includes(name) || token.includes("=")) i += 1
+    else i += 2
+  }
+  // A bare `es-fleet` (or flags alone) can still start work: human-only.
+  return true
+}
+
 /** Whether the es binary at `tokens[binary]` can run a human-only verb. */
 function humanVerbAfter(tokens: readonly string[], binary: number): boolean {
   return nextPositionals(tokens, { at: binary + 1, literal: false }).some((verb) => {
@@ -223,7 +257,11 @@ function humanVerbAfter(tokens: readonly string[], binary: number): boolean {
 export function invokesHumanOnly(command: string): boolean {
   if (isPlainHelp(command)) return false
   const tokens = words(unquoteShell(command))
-  return tokens.some((token, index) => ES_BINARY.test(token) && humanVerbAfter(tokens, index))
+  return tokens.some(
+    (token, index) =>
+      (ES_BINARY.test(token) && humanVerbAfter(tokens, index)) ||
+      (FLEET_BINARY.test(token) && fleetHumanOnlyAfter(tokens, index)),
+  )
 }
 
 /**
@@ -234,11 +272,14 @@ const calledAtHead = (command: string): boolean =>
   !command.includes("<<") &&
   segments(unquoteShell(command)).some((segment) => {
     const tokens = words(segment)
-    return ES_BINARY.test(tokens[0] ?? "") && humanVerbAfter(tokens, 0)
+    return (
+      (ES_BINARY.test(tokens[0] ?? "") && humanVerbAfter(tokens, 0)) ||
+      (FLEET_BINARY.test(tokens[0] ?? "") && fleetHumanOnlyAfter(tokens, 0))
+    )
   })
 
 const HUMAN_ONLY =
-  "That command is human-only (approvals, trust, waivers, resume, rebaseline, keys, config set, retractions, exports, audit and scout runs); agents cannot run it."
+  "That command is human-only (approvals, trust, waivers, resume, rebaseline, keys, config set, retractions, exports, audit and scout runs, fleet start/stop); agents cannot run it."
 const MENTION_HINT =
   " If it only names the verb in text (a here-doc, a commit message, a `--body` argument), the rule still reads a call: write the text to a file with the edit tool and pass the file (`gh … --body-file`, `git commit -F`)."
 

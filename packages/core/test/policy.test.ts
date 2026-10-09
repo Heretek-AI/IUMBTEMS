@@ -308,6 +308,53 @@ describe("shell policy", () => {
       expect([command, shell("build", command).effect]).toEqual([command, "allow"])
   })
 
+  test("the fleet binary is human-only except status and --help (#122)", () => {
+    // Starting or stopping the fleet spends or kills money: never from an agent.
+    for (const command of [
+      "es-fleet start --max-usd 10",
+      "es-fleet stop",
+      "es-fleet task add --file dag.json",
+      "es-fleet task list",
+      "es-fleet task cancel t1",
+      "es-fleet watch",
+      "es-fleet gc",
+      "es-fleet",
+      "es-fleet --max-usd 10",
+      "es-fleet 'start' --max-usd 10",
+      "npx -y @heretek-ai/es-fleet start --max-usd 10",
+      "bunx @heretek-ai/es-fleet@0.1.0 stop",
+      "node ./node_modules/@heretek-ai/es-fleet/bin/es-fleet.js start --max-usd 10",
+      `bun -e "Bun.spawn(['es-fleet','stop'])"`,
+      "sh -c 'es-fleet start --max-usd 10'",
+    ])
+      for (const agent of ["build", "factory", "es-programmer", undefined])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // Flags (and `--`) before the verb still read as that verb (#88 shapes).
+    for (const command of [
+      "es-fleet --state-dir /tmp/s start --max-usd 10",
+      "es-fleet --state-dir=/tmp/s stop",
+      "es-fleet -- stop",
+      "es-fleet --max-usd 10 start",
+      "es-fleet --json task list",
+      "es-fleet --bogus-flag status --verbose",
+    ])
+      for (const agent of ["build", "es-programmer"])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // Status is a read: agents may poll it (and read --help) in any flag shape.
+    for (const command of [
+      "es-fleet status",
+      "es-fleet --state-dir /tmp/s status",
+      "es-fleet --state-dir=/tmp/s status",
+      "es-fleet --json status",
+      "es-fleet -- status",
+      "es-fleet status --json",
+      "es-fleet --help",
+      "es-fleet status --help",
+    ])
+      for (const agent of ["build", "factory", "es-programmer", undefined])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "allow"])
+  })
+
   test("a verb only mentioned in text is still denied, and the refusal points at passing the text by file (#86)", () => {
     const hint = /--body-file/
     const reason = (decision: ReturnType<typeof shell>) => (decision.effect === "deny" ? decision.reason : "")

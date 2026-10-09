@@ -22,6 +22,9 @@ spike as proof).
 - `packages/opencode/src/**` — the plugin (server + TUI entrypoints). The
   canonical agent registry (`packages/core/src/agents/registry.ts`) compiles to
   v2 agents with wildcard-deny scoping; never touch built-ins or defaults.
+- `packages/fleet/src/**` — the human-only fleet daemon (`es-fleet`, private
+  until its RPC is stable). Depends on core only; core, CLI and plugin never
+  import it (`scripts/deps.ts` boundaries + a path-filtered CI job).
 - `packages/core/src/capabilities.ts` — the capability matrix. ENFORCED rows
   must name a proof (test file or spike record) that exists; `bun run docs:check`
   and `capabilities.test.ts` fail otherwise.

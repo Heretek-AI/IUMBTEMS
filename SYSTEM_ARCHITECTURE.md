@@ -176,6 +176,7 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
 | `packages/opencode/src/` | plugin: agents, policy, tools, commands, panels |
 | `packages/cli/src/` | `es` CLI, human-only commands, headless jobs |
 | `packages/testkit/` | real-host `boot`, scripted fake model |
+| `packages/fleet/` | `es-fleet` daemon: task DAGs, isolated worktrees, per-task ceilings (private) |
 
 The queereye designer domain is `packages/core/src/queereye/`; the
 `.factory/design/` tree holds `interview.json`, `tokens.*`, `probes.json`,
