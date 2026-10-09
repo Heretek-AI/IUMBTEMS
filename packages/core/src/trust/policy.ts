@@ -74,6 +74,24 @@ export function evaluateWrite(context: PolicyContext, agentId: string | undefine
     }
   }
 
+  // Fleet isolation (#124): task worktrees live under `.fleet/`. Any agent
+  // may write only inside its own active worktree (seats still pass the
+  // scope check below); every other `.fleet/` write is denied, including
+  // the user's own agents outside a task worktree.
+  if (relative !== undefined && (relative === ".fleet" || relative.startsWith(".fleet/"))) {
+    const worktree = context.worktree ? canonicalPath(context.worktree) : undefined
+    const inner = worktree ? relativeTo(worktree, absolute) : undefined
+    const own =
+      inner !== undefined &&
+      inner !== "." &&
+      inner !== ".git" &&
+      !inner.startsWith(".git/") &&
+      inner !== ".fleet" &&
+      !inner.startsWith(".fleet/")
+    if (!own)
+      return deny(`"${relative}" is fleet isolation state; agents may write only inside their own task worktree.`)
+  }
+
   if (!spec) return allow
   if (relative === undefined) return deny(`Factory seat "${spec.id}" may not write outside the project: ${absolute}`)
 
@@ -287,6 +305,8 @@ const CONTROL_MENTION =
   /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|audits\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design|scout)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/i
 /** Any mention of the factory dir (a `cd .factory` reaches control files without naming them). */
 const FACTORY_MENTION = /(^|[\s/=:])\.factory(\/|[\s;|&]|$)/i
+/** Any mention of fleet isolation state (task worktrees live under `.fleet/`). */
+const FLEET_MENTION = /(^|[\s/=:])\.fleet(\/|[\s;|&]|$)/i
 const MUTATING =
   /(>|\btee\b|\brm\b|\bmv\b|\bcp\b|\bln\b|\btruncate\b|\bchmod\b|\bchown\b|\btouch\b|\bsed\s+(-[a-zA-Z]*i|--in-place)|\bdd\b|\binstall\b|\bgit\s+(checkout|restore|rm|mv|reset|clean|apply|am|stash))/
 
@@ -375,6 +395,19 @@ export function evaluateShell(
         reason:
           "Factory seats may not reference control files from the shell. Inspect them with the read tool (it lists directories too), glob or grep; es_status summarizes the run (seats, research progress, last activity).",
       }
+    // Fleet isolation (#124): a seat's shell may name its own task worktree
+    // but never another task's `.fleet/` paths.
+    const ownWorktree = context.worktree ? canonicalPath(context.worktree) : undefined
+    const ownRelative = ownWorktree ? relativeTo(canonicalPath(context.root), ownWorktree) : undefined
+    const withoutOwn = [ownWorktree, ownRelative, ownRelative ? `./${ownRelative}` : undefined]
+      .filter((name): name is string => !!name)
+      .reduce((text, name) => text.split(name).join(""), plain)
+    if (FLEET_MENTION.test(withoutOwn))
+      return {
+        effect: "deny",
+        reason:
+          "Factory seats may not reference other tasks' fleet worktrees (.fleet/) from the shell; work only inside your own task worktree.",
+      }
     const git = seatForbiddenGit(command)
     if (git)
       return {
@@ -386,13 +419,13 @@ export function evaluateShell(
   }
   // The user's own agents: control files and the factory dir only in provably read-only commands.
   if (
-    (CONTROL_MENTION.test(plain) || FACTORY_MENTION.test(plain)) &&
+    (CONTROL_MENTION.test(plain) || FACTORY_MENTION.test(plain) || FLEET_MENTION.test(plain)) &&
     (MUTATING.test(plain) || !isProvablyReadOnly(plain))
   )
     return {
       effect: "deny",
       reason:
-        "Epistemic Swarm's .factory/ and control files may only be mentioned in a provably read-only shell command (no interpreters, redirection or substitution); use the read tool otherwise.",
+        "Epistemic Swarm's .factory/ and .fleet/ state may only be mentioned in a provably read-only shell command (no interpreters, redirection or substitution); use the read tool otherwise.",
     }
   return options.sandboxAvailable
     ? { effect: "allow", mode: "sandbox", kind: "user", offline: false }

@@ -110,18 +110,18 @@ describe("failure policies", () => {
   test("retry(n): re-queued up to n times, then failed", () => {
     let dag = dagOf([{ id: "a", extra: { policy: { strategy: "retry", maxAttempts: 1 } } }])
     dag = runTo(dag, ["a"], "failed")
-    expect(dag.tasks["a"]!.status).toBe("pending")
-    expect(dag.tasks["a"]!.attempts).toBe(1)
+    expect(dag.tasks.a!.status).toBe("pending")
+    expect(dag.tasks.a!.attempts).toBe(1)
     dag = runTo(dag, ["a"], "failed")
-    expect(dag.tasks["a"]!.status).toBe("failed")
-    expect(dag.tasks["a"]!.attempts).toBe(2)
+    expect(dag.tasks.a!.status).toBe("failed")
+    expect(dag.tasks.a!.attempts).toBe(2)
   })
 
   test("replan: the task waits for a human with the reason recorded", () => {
     let dag = dagOf([{ id: "a", extra: { policy: { strategy: "replan" } } }])
     dag = runTo(dag, ["a"], "failed")
-    expect(dag.tasks["a"]!.status).toBe("waiting-human")
-    expect(dag.tasks["a"]!.reason).toMatch(/replan/i)
+    expect(dag.tasks.a!.status).toBe("waiting-human")
+    expect(dag.tasks.a!.reason).toMatch(/replan/i)
   })
 })
 

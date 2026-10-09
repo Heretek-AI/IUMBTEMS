@@ -41,3 +41,26 @@ and `reportTask` take `now` for stamps.
 
 CLI: `es-fleet task add --file <task.json>` (one object or an array;
 human-only), `task list [--json]`, `task cancel <id>` (human-only).
+
+## Worktree coordinator (#124)
+
+- One worktree per task at `<repo>/.fleet/worktrees/<taskId>/` (gitignored)
+  on branch `fleet/<taskId>`, from a recorded base commit. Absolute symlinks
+  pointing into the repo are rebased to the worktree on allocation.
+- The registry (`<stateDir>/fleet/worktrees.json`) maps taskId → dir,
+  branch, base, createdAt, status (`allocated`/`merged`/`abandoned`), under
+  the shared fleet lock. Allocation is two-phase (check, git work under the
+  per-repo admin lock, commit with re-check); a double allocation is refused.
+- Release removes the checkout and marks the record. Abandoned branches are
+  anchored at `refs/fleet-salvage/<taskId>` before deletion; merged branches
+  are kept. `es-fleet gc` (human-only) salvages and removes orphaned
+  worktrees and drops stale records.
+- Landing (`landTask`) is transactional: gates run in the task worktree
+  first (no state change on failure), then a `--no-ff` merge onto
+  `fleet/integration/<dagId>` inside a throwaway worktree with the pre-merge
+  tip captured — a conflict aborts, verifies the rollback, and reports
+  `conflict: true` so the caller marks the task `waiting-human`.
+- The base branch is never checked out, reset, or merged: the suite asserts
+  its ref is stable across every operation.
+- Policy: `.fleet/` is deny-write for every agent outside its own task
+  worktree, and seats may not name other tasks' `.fleet/` paths in the shell.

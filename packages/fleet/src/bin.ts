@@ -9,6 +9,7 @@ import { stateDir } from "@heretek-ai/es-core"
 import { assertHumanStart, FleetError, fleetStatus, startFleet, stopFleet } from "./lifecycle.ts"
 import { reportTask } from "./scheduler.ts"
 import { addTask, loadDag, saveDag, TERMINAL } from "./tasks.ts"
+import { gcWorktrees } from "./worktree.ts"
 
 export const VERSION = "0.1.0"
 
@@ -21,6 +22,7 @@ Usage:
   es-fleet task add --file <task.json>                              add a task from a JSON file (human-only)
   es-fleet task list [--json]                                       list tasks
   es-fleet task cancel <id> [--reason <text>]                       cancel a task (human-only)
+  es-fleet gc [--repo <dir>]                                        remove orphaned worktrees (human-only)
 
 Options:
   --state-dir <dir>   override the user state dir (default: es state dir)
@@ -156,6 +158,15 @@ export async function main(argv: readonly string[]): Promise<number> {
           return 0
         }
         throw new FleetError(`Unknown task subcommand ${JSON.stringify(sub ?? "")}: want add, list or cancel.`)
+      }
+      case "gc": {
+        assertHumanStart(process.env, "collect fleet worktrees")
+        const repo = valueFlag(rest, ["--repo"]) ?? process.cwd()
+        const report = await gcWorktrees(repo, root)
+        process.stdout.write(
+          `gc: removed ${report.removed.length} worktree(s), salvaged ${report.salvaged.length} branch(es), dropped ${report.dropped.length} record(s).\n`,
+        )
+        return 0
       }
       default:
         process.stderr.write(`Unknown command ${JSON.stringify(command ?? "")}.\n\n${HELP}`)
