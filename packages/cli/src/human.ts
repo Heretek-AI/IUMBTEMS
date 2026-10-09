@@ -67,7 +67,6 @@ export async function approve(context: HumanContext, args: Args): Promise<number
     stage,
     channel: "cli",
     signer,
-    ...(context.stateDir ? { stateDir: context.stateDir } : {}),
   })
   const pending =
     (await readJson<Array<{ stage: string }>>(factoryLayout(context.root).pending).catch(() => undefined)) ?? []

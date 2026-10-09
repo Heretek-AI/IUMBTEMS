@@ -1,5 +1,5 @@
 // Waivers are requested by agents but granted only by a human through the
-// CLI (TTY) or TUI dialog. Records are HMAC-signed like approvals; unsigned,
+// CLI (TTY) or TUI dialog. Records are Ed25519-signed like approvals; unsigned,
 // malformed or expired waivers are ignored and reported.
 import { readdir, readFile } from "node:fs/promises"
 import { hostname, userInfo } from "node:os"
