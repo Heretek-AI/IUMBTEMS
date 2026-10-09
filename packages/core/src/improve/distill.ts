@@ -163,12 +163,14 @@ const KIND_FOR_CLUSTER: Record<ClusterKind, ProposalKind> = {
   eval: "domain-pack",
 }
 
-const slug = (text: string): string =>
-  text
+const slug = (text: string): string => {
+  const words = text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "proposal"
+    .replace(/^-+/, "")
+    .replace(/-+$/, "")
+  return words.slice(0, 48) || "proposal"
+}
 
 /** Stable proposal id from the cluster key (deterministic across runs). */
 export const proposalId = (kind: ProposalKind, cluster: Pick<Cluster, "key">): string =>
