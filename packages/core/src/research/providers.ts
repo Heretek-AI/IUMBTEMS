@@ -1,6 +1,8 @@
 // Pluggable web search providers (Brave, Firecrawl, SearXNG) and a plain
 // page fetcher. Each provider is available when its credentials/endpoint are
 // configured in the environment; DuckDuckGo scraping is deliberately absent.
+import { promises as dns } from "node:dns"
+import { isIP } from "node:net"
 import { htmlToText } from "./html.ts"
 
 export interface SearchResult {
@@ -168,6 +170,16 @@ const blockedIPv6 = (host: string, allowLoopback: boolean): boolean => {
 }
 
 /**
+ * Resolve a fetch-target hostname to its addresses (injectable so tests stay
+ * hermetic; production resolves for real). The default asks the system
+ * resolver for every address, verbatim.
+ */
+export type HostResolver = (host: string) => Promise<readonly string[]>
+
+const defaultResolveHost: HostResolver = async (host) =>
+  (await dns.lookup(host, { all: true, verbatim: true })).map((entry) => entry.address)
+
+/**
  * Whether fetchPage must refuse this host without fetching: literal
  * non-routable IPs (loopback unless the fixture allowance is on) and
  * localhost. The hostname comes from WHATWG URL parsing (the same parser
@@ -199,7 +211,7 @@ const loopbackAllowed = (env: NodeJS.ProcessEnv | undefined): boolean =>
   /^(1|true|yes)$/i.test(env?.ES_RESEARCH_ALLOW_LOOPBACK ?? "")
 
 /** Parse an http(s) fetch target and refuse non-routable hosts before any fetch. */
-const assertRoutable = (raw: string, allowLoopback: boolean): URL => {
+const assertRoutable = async (raw: string, allowLoopback: boolean, resolveHost: HostResolver): Promise<URL> => {
   let parsed: URL
   try {
     parsed = new URL(raw)
@@ -209,6 +221,30 @@ const assertRoutable = (raw: string, allowLoopback: boolean): URL => {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw blocked("Only http(s) URLs can be fetched")
   if (blockedHost(parsed.hostname, allowLoopback))
     throw blocked(`Refusing to fetch ${parsed.hostname}: it resolves to a non-routable address (SSRF guard)`)
+  // A DNS name is only as routable as what it resolves to: a name like
+  // 169.254.169.254.nip.io or localtest.me sails past the literal-IP check
+  // above, so resolve every hop (including each redirect) and refuse when
+  // ANY address is blocked, honouring the loopback allowance. Lookup
+  // failures refuse too: fail closed, never fetch on a guess.
+  //
+  // Residual window (DNS rebinding): the address checked here is the one the
+  // resolver returned at check time, not necessarily the one fetch connects
+  // to — a hostile name can answer differently per query or expire fast. A
+  // pinning outbound proxy would close it; this guard narrows it to names
+  // whose every current answer is routable.
+  if (isIP(parsed.hostname) === 0) {
+    let addresses: readonly string[]
+    try {
+      addresses = await resolveHost(parsed.hostname)
+    } catch {
+      throw blocked(`Refusing to fetch ${parsed.hostname}: DNS lookup failed (SSRF guard, fail closed)`)
+    }
+    if (addresses.length === 0)
+      throw blocked(`Refusing to fetch ${parsed.hostname}: it resolves to no address (SSRF guard, fail closed)`)
+    for (const address of addresses)
+      if (isIP(address) === 0 || blockedHost(address, allowLoopback))
+        throw blocked(`Refusing to fetch ${parsed.hostname}: it resolves to a non-routable address (SSRF guard)`)
+  }
   return parsed
 }
 
@@ -224,14 +260,15 @@ async function fetchOnce(current: string, doFetch: typeof fetch, signal: AbortSi
   })
 }
 
-/** Resolve one redirect target, re-checking routability; undefined stops the chain. */
-function followRedirect(
+/** Resolve one redirect target, re-checking routability (DNS included); undefined stops the chain. */
+async function followRedirect(
   location: string | null | undefined,
   current: string,
   url: string,
   hop: number,
   allowLoopback: boolean,
-): string | undefined {
+  resolveHost: HostResolver,
+): Promise<string | undefined> {
   if (!location) return undefined
   if (hop >= MAX_FETCH_REDIRECTS) throw new Error(`Fetching ${url} failed: too many redirects`)
   let next: URL
@@ -240,7 +277,7 @@ function followRedirect(
   } catch {
     return undefined
   }
-  return assertRoutable(next.toString(), allowLoopback).toString()
+  return (await assertRoutable(next.toString(), allowLoopback, resolveHost)).toString()
 }
 
 /** Decode a fetched response body to text, refusing binary content. */
@@ -260,27 +297,43 @@ async function readBody(response: Response): Promise<{ text: string; contentType
 /** Fetch a page and convert it to text. Only http(s); HTML is converted, text formats are kept. */
 export async function fetchPage(
   url: string,
-  options: { signal?: AbortSignal; fetch?: typeof fetch; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    signal?: AbortSignal
+    fetch?: typeof fetch
+    env?: NodeJS.ProcessEnv
+    /** DNS resolver for the SSRF guard (tests inject a fake); default resolves for real. */
+    resolveHost?: HostResolver
+    /** Per-hop fetch budget in milliseconds (default 30 s); every hop gets its own. */
+    timeoutMs?: number
+  } = {},
 ): Promise<FetchedPage> {
   if (!/^https?:\/\//i.test(url)) throw blocked("Only http(s) URLs can be fetched")
   const doFetch = options.fetch ?? fetch
   const allowLoopback = loopbackAllowed(options.env ?? process.env)
-  // Redirects are followed one hop at a time so every hop is re-checked:
-  // a redirect onto an internal address is refused before it is fetched.
-  // The first hop keeps the caller's spelling (like response.url || url
-  // before); redirect targets use the normalised absolute form.
+  const resolveHost = options.resolveHost ?? defaultResolveHost
+  const timeoutMs = options.timeoutMs ?? 30_000
+  // Redirects are followed one hop at a time so every hop is re-checked
+  // (literals and DNS): a redirect onto an internal address is refused
+  // before it is fetched. The first hop keeps the caller's spelling (like
+  // response.url || url before); redirect targets use the normalised
+  // absolute form. Each hop gets its own timeout, combined with the caller
+  // signal, so a slow first hop cannot starve the next hop's budget — while
+  // a caller abort still aborts. The hop count stays capped at
+  // MAX_FETCH_REDIRECTS.
   let current = url
-  assertRoutable(current, allowLoopback)
-  const signal = options.signal ?? AbortSignal.timeout(30_000)
+  await assertRoutable(current, allowLoopback, resolveHost)
   let response: Response | undefined
   for (let hop = 0; ; hop++) {
+    const hopTimeout = AbortSignal.timeout(timeoutMs)
+    const signal = options.signal ? AbortSignal.any([options.signal, hopTimeout]) : hopTimeout
     response = await fetchOnce(current, doFetch, signal)
-    const next = followRedirect(
+    const next = await followRedirect(
       response.status >= 300 && response.status < 400 ? response.headers.get("location") : undefined,
       current,
       url,
       hop,
       allowLoopback,
+      resolveHost,
     )
     if (next === undefined) break
     current = next

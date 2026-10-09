@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { workspacePackages } from "../../../scripts/packages.ts"
 import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import { exportBrief } from "../src/claims/brief.ts"
 import { normalizeClaim } from "../src/claims/claim.ts"
@@ -134,7 +135,9 @@ describe("misuse guard: no unsealed SourceCache in shipped code", () => {
   test("only research/cache.ts and researchCache construct the cache", async () => {
     const repo = path.resolve(import.meta.dir, "../../..")
     const hits: string[] = []
+    const scanned: string[] = []
     const walk = async (dir: string) => {
+      scanned.push(path.relative(repo, dir))
       for (const entry of await readdir(dir, { withFileTypes: true })) {
         const full = path.join(dir, entry.name)
         if (entry.isDirectory()) await walk(full)
@@ -149,8 +152,12 @@ describe("misuse guard: no unsealed SourceCache in shipped code", () => {
         }
       }
     }
-    for (const pkg of ["core", "cli", "opencode", "testkit"])
-      await walk(path.join(repo, "packages", pkg, "src")).catch(() => undefined)
+    // Every workspace package from scripts/packages.ts (#98): a hard-coded
+    // subset silently missed packages/fleet/src and packages/web/src.
+    const dirs = (await workspacePackages(repo)).map((pkg) => pkg.dir)
+    for (const dir of dirs) await walk(path.join(repo, "packages", dir, "src")).catch(() => undefined)
+    expect(dirs).toEqual(expect.arrayContaining(["core", "fleet", "web"]))
+    expect(scanned).toEqual(expect.arrayContaining(["packages/fleet/src", "packages/web/src"]))
     expect(hits).toEqual([])
   })
 })
