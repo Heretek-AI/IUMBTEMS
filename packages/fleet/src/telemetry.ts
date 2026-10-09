@@ -795,6 +795,9 @@ export class TelemetryServer {
       return
     }
     const key = field(headers, "sec-websocket-key") ?? ""
+    // NOSONAR (typescript:S4790): SHA-1 is mandated here by RFC 6455 §1.3
+    // (the WebSocket accept hash); it authenticates nothing and protects no
+    // secret — the bus token check already ran before the upgrade.
     const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64")
     res.writeHead(101, {
       Upgrade: "websocket",

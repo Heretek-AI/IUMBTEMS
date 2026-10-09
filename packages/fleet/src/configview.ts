@@ -104,7 +104,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 const changedKeysOf = (before: Record<string, unknown>, after: Record<string, unknown>): string[] =>
   [...new Set([...Object.keys(before), ...Object.keys(after)])]
     .filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]))
-    .sort()
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 
 const forbiddenHit = (key: string): string | undefined =>
   PROJECT_FORBIDDEN_KEYS.find((forbidden) => key === forbidden || key.startsWith(`${forbidden}.`))

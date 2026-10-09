@@ -28,6 +28,6 @@ jobs:
         with:
           bun-version: "1.4.2"
       - run: bun install --frozen-lockfile --ignore-scripts
-      - run: bun x biome check packages/fleet
+      - run: bunx biome check packages/fleet
       - run: bun run typecheck
       - run: bun test packages/fleet

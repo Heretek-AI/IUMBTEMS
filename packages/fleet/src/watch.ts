@@ -19,7 +19,7 @@ export async function readFleetSnapshot(stateRoot: string): Promise<FleetSnapsho
           status: task.status,
           ceilingUSD: task.ceilingUSD,
           spendUsd: task.result?.spendUsd ?? 0,
-          deps: [...task.deps].sort(),
+          deps: [...task.deps].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
           ...(task.reason ? { reason: task.reason } : {}),
         }))
     : []

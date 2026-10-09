@@ -48,7 +48,7 @@ export function schedule(dag: DagState, caps: Capacity): Decision {
     throw new FleetError(`Fleet ceiling must be positive (got ${caps.fleetCeilingUsd}).`)
   const unblock: string[] = []
   const cancel: CancelEntry[] = []
-  for (const id of Object.keys(dag.tasks).sort()) {
+  for (const id of Object.keys(dag.tasks).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
     const task = dag.tasks[id]!
     if (task.status !== "pending" && task.status !== "ready") continue
     const depStatus = task.deps.map((dep) => dag.tasks[dep]!.status)
@@ -84,7 +84,7 @@ export function schedule(dag: DagState, caps: Capacity): Decision {
   let usedSlots = running.length
   let usedCeiling = running.reduce((sum, task) => sum + task.ceilingUSD, 0)
   const candidates = Object.keys(dag.tasks)
-    .sort()
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
     .filter((id) => {
       const task = dag.tasks[id]!
       return task.status === "ready" || (task.status === "pending" && unblock.includes(id))
