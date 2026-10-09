@@ -83,6 +83,7 @@
 | `packages/cli` | The `es` CLI and a coarse MCP server for non-OpenCode harnesses. |
 | `packages/testkit` | Real in-process host testing (`boot`, scripted fake model). |
 | `packages/fleet` | The `es-fleet` daemon (private): concurrent task DAGs in isolated worktrees. |
+| `packages/web` | The web control plane (private, never published): dashboard, browser approvals, config editor, evidence explorer — SolidJS, served by `es-fleet` on loopback. |
 | `scripts/` | `docs.ts` (generated contracts/docs) and `v2-head.sh` (nightly compatibility). |
 | `schemas/`, `docs/` | Generated: JSON Schemas, capability matrix, config and schema docs. |
 | `spikes/` | Recorded proofs from the M0/M6 spikes. |

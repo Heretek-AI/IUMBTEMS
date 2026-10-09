@@ -110,6 +110,25 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
 - `es-fleet watch` polls the bus and redraws a terminal dashboard (headline
   spend, task table, pending approvals, recent events); `q` quits, needs a TTY.
 
+## Web control plane (#129)
+
+- `packages/web` (SolidJS + Vite, private, never published; ADR 0003) builds
+  to `packages/web/dist/`, which the daemon serves from the bus port at `/`.
+- `es-fleet web` (human-only, refused under `ES_SANDBOX`) mints a single-use
+  ticket (32 random bytes, TTL 120 s, kept as a file under the masked state
+  dir) and prints a one-time URL `http://127.0.0.1:<port>/?t=<ticket>`. The
+  first load redeems it for an `HttpOnly; SameSite=Strict` session cookie
+  (12 h); the ticket never redeems twice — the claim is an atomic rename, so
+  even concurrent loads grant exactly one session — and expires after 120 s,
+  so browser-history or proxy retention of the URL is harmless.
+- Fail-closed: anonymous loads are 401, bad tickets 403, wrong Host 403, a
+  non-loopback Origin 403, traversal outside the web root 404. The session
+  cookie also authorizes read-only RPC and WS, but only with a loopback
+  Origin present (bearer calls are unaffected). Every web response carries a
+  strict CSP (`default-src 'self'`, no inline scripts, `frame-ancestors
+  'none'`), `X-Content-Type-Options: nosniff` and `Referrer-Policy:
+  no-referrer`.
+
 ## Integration suite (#127)
 
 `packages/fleet/test/integration.test.ts` is merge-blocking (runs in

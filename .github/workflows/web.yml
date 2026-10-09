@@ -1,0 +1,35 @@
+name: Web
+
+# Path-filtered job for packages/web (ADR 0001, ADR 0003): web changes get
+# fast feedback here, while the `check` job in CI stays unfiltered and keeps
+# running on every push and PR (#129).
+
+on:
+  push:
+    branches: [rewrite, main, "integration/**", "ticket-*"]
+    paths:
+      - "packages/web/**"
+      - ".github/workflows/web.yml"
+  pull_request:
+    paths:
+      - "packages/web/**"
+      - ".github/workflows/web.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun x biome check packages/web
+      - run: bun run typecheck
+      - run: bun test packages/web
+      - run: bun run build
+        working-directory: packages/web

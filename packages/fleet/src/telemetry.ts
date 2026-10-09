@@ -10,6 +10,15 @@ import { createServer, type Server, type Socket } from "node:net"
 import path from "node:path"
 import { z } from "zod"
 import { fleetPaths } from "./state.ts"
+import {
+  loopbackOriginOk,
+  parseSessionCookie,
+  redeemWebTicket,
+  resolveWebFile,
+  sessionSetCookie,
+  WEB_SECURITY_HEADERS,
+  WebSessions,
+} from "./web.ts"
 
 export interface BusEvent {
   readonly seq: number
@@ -194,6 +203,11 @@ export interface TelemetryOptions {
   readonly token: string
   readonly getSnapshot: () => FleetSnapshot | Promise<FleetSnapshot>
   readonly secrets?: readonly string[]
+  /**
+   * Directory of the built web UI (#129). When set, `GET /` serves it
+   * behind the single-use ticket exchange; when unset, web loads 404.
+   */
+  readonly webRoot?: string
 }
 
 /** Case-insensitive request header lookup (names with dashes need no literals at use sites). */
@@ -229,6 +243,7 @@ export class TelemetryServer {
   readonly log: EventLog
   private server: Server | undefined
   private actualPort = 0
+  private readonly sessions = new WebSessions()
   private pending: Record<BusChannel, Map<string, BusEvent>> = { changed: new Map(), liveness: new Map() }
   private lastFlush: Record<BusChannel, number> = { changed: 0, liveness: 0 }
   private flushTimer: Record<BusChannel, ReturnType<typeof setTimeout> | undefined> = {
@@ -352,12 +367,16 @@ export class TelemetryServer {
       return
     }
     if (target !== "/fleet/rpc" || method !== "POST") {
+      if (method === "GET" && !(target ?? "").startsWith("/fleet/")) return this.serveWeb(target ?? "/", headers, res)
       res.writeHead(404, { "content-length": 0, connection: "close" })
       res.end()
       return
     }
-    if (!this.bearerOk(field(headers, "authorization"))) {
-      res.writeHead(401, { "content-length": 0, connection: "close" })
+    if (!this.bearerOk(field(headers, "authorization")) && !this.sessionRpcOk(headers)) {
+      // A presented session cookie that cannot authorize is a forbidden
+      // CSRF/origin failure (403); wholly missing credentials are 401.
+      const code = parseSessionCookie(field(headers, "cookie")) !== undefined ? 403 : 401
+      res.writeHead(code, { "content-length": 0, connection: "close" })
       res.end()
       return
     }
@@ -394,6 +413,92 @@ export class TelemetryServer {
     }
   }
 
+  /**
+   * Cookie authentication for read-only RPC (#129): the browser session may
+   * call the bus only when it also presents a loopback Origin. Bearer calls
+   * (CLI, watch, scripts) are unaffected. Fail-closed: no Origin, no cookie
+   * access — browsers always send Origin on a POST fetch.
+   */
+  private sessionRpcOk(headers: Record<string, string>): boolean {
+    return (
+      loopbackOriginOk(field(headers, "origin")) && this.sessions.valid(parseSessionCookie(field(headers, "cookie")))
+    )
+  }
+
+  /**
+   * The web UI (#129): `GET /?t=<ticket>` redeems a single-use ticket for a
+   * session cookie and the entry page; later loads present the cookie.
+   * Anonymous loads are 401, bad tickets 403, everything carries the strict
+   * security headers. Without a configured `webRoot` every load 404s.
+   */
+  private async serveWeb(target: string, headers: Record<string, string>, res: HttpResponder): Promise<void> {
+    const deny = (code: 401 | 403): void => {
+      res.writeHead(code, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
+      res.end()
+    }
+    if (this.options.webRoot === undefined) {
+      res.writeHead(404, { "content-length": 0, connection: "close" })
+      res.end()
+      return
+    }
+    if (!this.originOk(field(headers, "origin"))) {
+      deny(403)
+      return
+    }
+    const query = target.split("?", 2)[1] ?? ""
+    const ticket = query
+      .split("&")
+      .map((part) => part.split("=", 2) as [string, string?])
+      .find(([name]) => name === "t")?.[1]
+    if (ticket !== undefined) {
+      const ok = await redeemWebTicket(this.options.stateRoot, ticket)
+      if (!ok) {
+        deny(403)
+        return
+      }
+      const session = this.sessions.create()
+      await this.sendWebFile(res, this.options.webRoot, "/", {
+        "set-cookie": sessionSetCookie(session),
+      })
+      return
+    }
+    if (!this.sessions.valid(parseSessionCookie(field(headers, "cookie")))) {
+      deny(401)
+      return
+    }
+    await this.sendWebFile(res, this.options.webRoot, target)
+  }
+
+  private async sendWebFile(
+    res: HttpResponder,
+    webRoot: string,
+    target: string,
+    extra: Record<string, string> = {},
+  ): Promise<void> {
+    const found = await resolveWebFile(webRoot, target)
+    if (!found) {
+      res.writeHead(404, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
+      res.end()
+      return
+    }
+    let body: string
+    try {
+      body = await readFile(found.file, "utf8")
+    } catch {
+      res.writeHead(404, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
+      res.end()
+      return
+    }
+    res.writeHead(200, {
+      ...WEB_SECURITY_HEADERS,
+      ...extra,
+      "content-type": found.contentType,
+      "content-length": Buffer.byteLength(body),
+      connection: "close",
+    })
+    res.end(body)
+  }
+
   private async dispatch(method: RpcMethod, params: never): Promise<unknown> {
     const snapshot = await this.options.getSnapshot()
     switch (method) {
@@ -415,10 +520,12 @@ export class TelemetryServer {
   }
 
   private handleUpgrade(socket: Socket, headers: Record<string, string>, res: HttpResponder): void {
+    const cookieOk =
+      loopbackOriginOk(field(headers, "origin")) && this.sessions.valid(parseSessionCookie(field(headers, "cookie")))
     if (
       !this.hostOk(field(headers, "host")) ||
       !this.originOk(field(headers, "origin")) ||
-      !this.bearerOk(field(headers, "authorization"))
+      (!this.bearerOk(field(headers, "authorization")) && !cookieOk)
     ) {
       const code = !this.hostOk(field(headers, "host")) || !this.originOk(field(headers, "origin")) ? 403 : 401
       res.writeHead(code, { "content-length": 0, connection: "close" })

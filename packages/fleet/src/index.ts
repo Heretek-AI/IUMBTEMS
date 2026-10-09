@@ -71,6 +71,21 @@ export {
 } from "./telemetry.ts"
 export { readFleetSnapshot, renderDashboard, type WatchOptions, watchFleet } from "./watch.ts"
 export {
+  contentTypeFor,
+  loopbackOriginOk,
+  mintWebTicket,
+  parseSessionCookie,
+  redeemWebTicket,
+  resolveWebFile,
+  sessionSetCookie,
+  WEB_SECURITY_HEADERS,
+  WEB_SESSION_COOKIE,
+  WEB_SESSION_TTL_MS,
+  WEB_TICKET_TTL_MS,
+  type WebFile,
+  WebSessions,
+} from "./web.ts"
+export {
   type BreakerOptions,
   buildWorkerArgv,
   CircuitBreaker,
