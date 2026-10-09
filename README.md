@@ -5,10 +5,11 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 1.2.0.** Phase 1 epistemic layer: ordered research backends with
-> failover (Scraper-Swarm gateway leading), callable brainstorm and harvest,
-> research-only runs with a deep-research coordinator, dossier renders, and
-> domain-pack tier weights (#106–#114). Install from npm
+> **Status: 1.3.0.** Phase 2 approvals everywhere: frontier/spec approvals
+> complete in the OpenCode TUI (masked dialog, in-process signing) as well
+> as the CLI through one core service (ADR 0002, proposed); the headless
+> runner streams versioned JSONL events with per-turn metrics (#116–#120).
+> Install from npm
 > (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`, `@heretek-ai/es-cli`);
 > run `es key seal` once.
 
