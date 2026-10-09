@@ -328,8 +328,8 @@ export async function researchDeepCommand(context: HumanContext, args: Args): Pr
   }
   const level = levelFor(context, args)
   if (!level) return 2
-  const driver = await driverFor(context, args)
-  if (!driver) return 2
+  // Validate inputs before touching the environment, so usage errors read
+  // the same with or without a driver installed.
   const model = flag(args, "model")
   if (model !== undefined && !parseModelRef(model)) {
     context.print(`Bad --model "${model}": expected "provider/model" (both parts non-empty, no spaces).`)
@@ -341,6 +341,8 @@ export async function researchDeepCommand(context: HumanContext, args: Args): Pr
     context.print("Deep research needs a spend ceiling. Give one: --max-usd <USD>.")
     return 2
   }
+  const driver = await driverFor(context, args)
+  if (!driver) return 2
   const outDir = path.resolve(context.root, flag(args, "output") ?? ".")
   await mkdir(outDir, { recursive: true })
   const factory = new Factory(outDir, {
