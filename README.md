@@ -43,7 +43,10 @@
   its `Authorization` header and is masked in seat sandboxes. Deep research
   runs a question adversarially outside the factory flow — thesis, antithesis,
   synthesis to a grounded report (`es research deep "<question>" --output
-  <dir> --max-usd N`, or `/research deep` in the TUI).
+  <dir> --max-usd N`, or `/research deep` in the TUI). A run renders to
+  readable Markdown or a self-contained HTML dossier — tag, status, verbatim
+  quote, source and seal per claim (`es research render --format md|html`).
+  The signed brief stays human-only (`es research export`).
 - **Lateral work.** Brainstorm fans out eight divergent lenses into a
   deduplicated, rubric-scored shortlist with a forced outlier — callable by
   the grill and the factory at depth 1, with the shortlist back as JSON; darkharvest

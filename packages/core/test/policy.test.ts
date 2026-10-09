@@ -241,6 +241,9 @@ describe("shell policy", () => {
     expect(shell("build", "es research deep 'what queue' --output /tmp/r --max-usd 5").effect).toBe("deny")
     expect(shell("factory", "es research deep 'what queue' --output /tmp/r --max-usd 5").effect).toBe("deny")
     expect(shell("build", "es research search x").effect).toBe("allow")
+    // Rendering signs nothing: any seat may render, but export/retract stay human-only.
+    expect(shell("build", "es research render --format html").effect).toBe("allow")
+    expect(shell("factory", "es research render --format md --out /tmp/r.md").effect).toBe("allow")
     // The 1.1.0 audit (#44, #39): quoting, package runners and interpreters.
     for (const command of [
       "es 'approve' spec",

@@ -1,0 +1,81 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`dossier renders markdown shows tag, status, quote, source and seal for every claim 1`] = `
+"# Research dossier: Which greet library?
+
+Evidence \`eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\` · 4 claim(s) (3 live, 1 stale) · 2 source(s).
+
+## Report
+
+# Findings
+
+Greet libraries expose one function.
+
+## Claims
+
+| id | tag | status | claim | evidence |
+| --- | --- | --- | --- | --- |
+| 111111111111 | VERIFIED | LIVE | Greet functions take a name. | "greet(name) renders a greeting" — [aaaaaaaaaaaa](#source-aaaaaaaaaaaa) |
+| 222222222222 | INFERRED | LIVE | One binary covers both commands. | inferred from 111111111111 |
+| 333333333333 | VERIFIED | STALE | Old API had two steps. | "call init, then greet" — [cccccccccccc](#source-cccccccccccc) |
+| 444444444444 | NEGATIVE_KNOWLEDGE | LIVE | No Windows ARM notes found. | greet windows arm |
+
+## Sources
+
+<a id="source-aaaaaaaaaaaa"></a>### \`aaaaaaaaaaaa\` — https://example.test/greeting
+
+- retrieved 2026-10-01T00:00:00.000Z · provider fetch · sealed · Greeting docs
+
+> The docs say greet(name) renders a greeting for any name.
+
+<a id="source-cccccccccccc"></a>### \`cccccccccccc\` — https://example.test/other
+
+- retrieved 2026-10-02T00:00:00.000Z · provider searxng · unsealed
+
+> Old notes: call init, then greet.
+"
+`;
+
+exports[`dossier renders html is self-contained with expandable quotes and no external resources 1`] = `
+"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Research dossier: Which greet library?</title>
+<style>body{font-family:system-ui,sans-serif;max-width:72ch;margin:2rem auto;padding:0 1rem;color:#1a1a1a}.badge{display:inline-block;padding:0 .5em;border-radius:1em;font-size:.85em;font-weight:600}.tag-VERIFIED{background:#d9ead3}.tag-INFERRED{background:#fff2cc}.tag-HYPOTHESIS{background:#fce5cd}.tag-NEGATIVE_KNOWLEDGE{background:#d0e0e3}.status-LIVE{background:#d9ead3}.status-STALE{background:#f4cccc}.status-SUSPECT{background:#fce5cd}.status-REJECTED{background:#434343;color:#fff}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:.4em;text-align:left;vertical-align:top}pre{background:#f4f4f4;padding:1em;overflow-x:auto;white-space:pre-wrap}details{margin:.5em 0}summary{cursor:pointer;font-weight:600}</style>
+</head>
+<body>
+<h1>Research dossier: Which greet library?</h1>
+<p>Evidence <code>eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee</code> · 4 claim(s) (3 live, 1 stale) · 2 source(s).</p>
+<h2>Report</h2>
+<h1>Findings</h1>
+<p>Greet libraries expose one function.</p>
+<h2>Claims</h2>
+<table><thead><tr><th>id</th><th>tag</th><th>status</th><th>claim</th><th>evidence</th></tr></thead><tbody>
+<tr><td><code>111111111111</code></td><td><span class="badge tag-VERIFIED">VERIFIED</span></td><td><span class="badge status-LIVE">LIVE</span></td><td>Greet functions take a name.</td><td><details><summary>quote from <a href="https://example.test/greeting" rel="noopener noreferrer">aaaaaaaaaaaa</a></summary><blockquote>greet(name) renders a greeting</blockquote></details></td></tr>
+<tr><td><code>222222222222</code></td><td><span class="badge tag-INFERRED">INFERRED</span></td><td><span class="badge status-LIVE">LIVE</span></td><td>One binary covers both commands.</td><td>inferred from 111111111111</td></tr>
+<tr><td><code>333333333333</code></td><td><span class="badge tag-VERIFIED">VERIFIED</span></td><td><span class="badge status-STALE">STALE</span></td><td>Old API had two steps.</td><td><details><summary>quote from <a href="https://example.test/other" rel="noopener noreferrer">cccccccccccc</a></summary><blockquote>call init, then greet</blockquote></details></td></tr>
+<tr><td><code>444444444444</code></td><td><span class="badge tag-NEGATIVE_KNOWLEDGE">NEGATIVE_KNOWLEDGE</span></td><td><span class="badge status-LIVE">LIVE</span></td><td>No Windows ARM notes found.</td><td>greet windows arm</td></tr>
+</tbody></table>
+<h2>Sources</h2>
+<details>
+<summary><code>aaaaaaaaaaaa</code> — https://example.test/greeting</summary>
+<ul>
+<li>retrieved 2026-10-01T00:00:00.000Z · provider fetch · sealed · Greeting docs</li>
+<li>sha256 <code>aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</code></li>
+</ul>
+<pre>The docs say greet(name) renders a greeting for any name.</pre>
+</details>
+<details>
+<summary><code>cccccccccccc</code> — https://example.test/other</summary>
+<ul>
+<li>retrieved 2026-10-02T00:00:00.000Z · provider searxng · unsealed</li>
+<li>sha256 <code>cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc</code></li>
+</ul>
+<pre>Old notes: call init, then greet.</pre>
+</details>
+
+</body>
+</html>
+"
+`;

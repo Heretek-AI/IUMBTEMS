@@ -314,6 +314,23 @@ describe("research brief and retractions", () => {
     expect(recorded.out).toContain("1 claim(s) citing")
     expect((await ClaimStore.load(root)).citing(source).map((claim) => claim.status)).toEqual(["STALE"])
   })
+
+  test("render is agent-safe: md and html to stdout or a file", async () => {
+    const source = await researched()
+    expect((await run(["research", "render", "--format", "bogus"])).code).toBe(2)
+    const md = await run(["research", "render", "--format", "md"])
+    expect(md.code).toBe(0)
+    expect(md.out).toContain("# Research dossier: cli")
+    expect(md.out).toContain("Briefs are signed.")
+    expect(md.out).toContain(source.slice(0, 12))
+    const html = await run(["research", "render", "--format", "html", "--out", "dossier.html"])
+    expect(html.code).toBe(0)
+    expect(html.out).toContain("Rendered dossier.html (html,")
+    const file = await Bun.file(path.join(root, "dossier.html")).text()
+    expect(file).toContain("<!doctype html>")
+    expect(file).not.toContain("<script")
+    expect((await run(["research", "render"])).code).toBe(0)
+  })
 })
 
 describe("es research deep (headless deep research)", () => {

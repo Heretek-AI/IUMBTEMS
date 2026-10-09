@@ -2,7 +2,7 @@
 // resume, git hooks) require an interactive terminal and the human passphrase,
 // which unlocks the passphrase-sealed human key; agent shells are denied
 // these commands by policy as well.
-import { readFile } from "node:fs/promises"
+import { readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import {
   type Args,
@@ -50,6 +50,7 @@ import {
   recordConsent,
   renderBrainstorm,
   renderGuide,
+  renderResearchRun,
   researchOptions,
   researchTools,
   SlotLoop,
@@ -120,6 +121,7 @@ Other
   research search <query>       Search with the configured provider
   research fetch <url>          Fetch and cache a source (prints its sha256)
   research audit [file] [--prune]  Epistemic audit of a research report
+  research render --format md|html [--out <file>]   Readable dossier (Markdown or self-contained HTML)
   research export [--out <file>]   Signed research brief (.factory/research/brief.pcrb.json)   [human, TTY]
   research verify-brief <file> [--allow-unverifiable]  Check a brief's sources, manifest, signature, quotes
   research retract <sha256> --event retracted|revised [--note "…"]   Degrade claims citing a source   [human, TTY]
@@ -338,8 +340,34 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           io.print(text)
           return /Audit passed/.test(text) || /Pruned/.test(text) ? 0 : 1
         }
+        if (sub === "render") {
+          const format = flag(args, "format") ?? "md"
+          if (format !== "md" && format !== "html") {
+            io.print("Usage: es research render --format md|html [--out <file>]")
+            return 2
+          }
+          let text: string
+          try {
+            text = await renderResearchRun(root, {
+              format,
+              ...(io.stateDir ? { stateDir: io.stateDir } : {}),
+            })
+          } catch (error) {
+            io.print(error instanceof Error ? error.message : String(error))
+            return 1
+          }
+          const out = flag(args, "out")
+          if (out) {
+            const file = path.resolve(io.cwd, out)
+            await writeFile(file, text)
+            io.print(`Rendered ${path.relative(root, file) || file} (${format}, ${text.length} bytes)`)
+            return 0
+          }
+          io.print(text)
+          return 0
+        }
         io.print(
-          'Usage: es research search <query> | fetch <url> | audit [file] [--prune] | export [--out <file>] | verify-brief <file> | retract <sha256> --event retracted|revised | deep "<question>" --output <dir> --max-usd N',
+          'Usage: es research search <query> | fetch <url> | audit [file] [--prune] | render --format md|html [--out <file>] | export [--out <file>] | verify-brief <file> | retract <sha256> --event retracted|revised | deep "<question>" --output <dir> --max-usd N',
         )
         return 2
       }
