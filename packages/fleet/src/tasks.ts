@@ -73,7 +73,7 @@ export const TERMINAL: ReadonlySet<TaskStatus> = new Set(["done", "failed", "can
  * first error reported is deterministic.
  */
 export function validateDag(dag: DagState): void {
-  const ids = Object.keys(dag.tasks).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  const ids = Object.keys(dag.tasks).sort((a, b) => a.localeCompare(b))
   for (const id of ids) {
     const task = dag.tasks[id]!
     if (task.id !== id) throw new FleetError(`Task key ${JSON.stringify(id)} holds task ${JSON.stringify(task.id)}.`)
@@ -91,7 +91,7 @@ export function validateDag(dag: DagState): void {
     color.set(root, "gray")
     while (stack.length > 0) {
       const top = stack.at(-1)!
-      const deps = [...dag.tasks[top.id]!.deps].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+      const deps = [...dag.tasks[top.id]!.deps].sort((a, b) => a.localeCompare(b))
       if (top.next >= deps.length) {
         color.set(top.id, "black")
         stack.pop()

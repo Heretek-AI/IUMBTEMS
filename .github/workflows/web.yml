@@ -28,7 +28,8 @@ jobs:
         with:
           bun-version: "1.4.2"
       - run: bun install --frozen-lockfile --ignore-scripts
-      - run: bunx biome check packages/web
+      # Local lockfile-pinned binary (not bun x: S8543, no unverified downloads).
+      - run: ./node_modules/.bin/biome check packages/web
       - run: bun run typecheck
       # Browser conditions: the web tests render with the client Solid build
       # (the default toolchain resolves its server build, whose render throws).
