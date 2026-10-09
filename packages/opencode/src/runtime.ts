@@ -89,7 +89,15 @@ export async function createRuntime(root: string, parsed: ParsedOptions): Promis
     modelProblems: new Map(),
     async policy() {
       const worktree = await factory.activeWorktree().catch(() => undefined)
-      return { root, stateDir, ...(worktree ? { worktree } : {}) }
+      // S1.7: the mode-aware REPORT.md grant needs the sealed run mode. Read
+      // it from the sealed run state; when it cannot be read (no run, a
+      // missing or forged seal) leave it absent so both writers stay denied
+      // (fail closed, trust/policy.ts).
+      const runMode = await factory
+        .read()
+        .then((state) => state?.mode)
+        .catch(() => undefined)
+      return { root, stateDir, ...(worktree ? { worktree } : {}), ...(runMode ? { runMode } : {}) }
     },
   }
 }
