@@ -122,6 +122,24 @@ describe("release and salvage", () => {
       await rm(state, { recursive: true, force: true })
     }
   })
+
+  test("abandoning a record whose branch is already gone still releases (CI flake)", async () => {
+    const { root, base, cleanup } = await fixture()
+    const state = await stateRoot()
+    try {
+      const record = await allocateWorktree(root, state, "task-a", { base })
+      // The daemon's own cleanup won the race: the branch ref is gone while
+      // the registry record still says allocated.
+      await git(root, "update-ref", "-d", `refs/heads/${record.branch}`)
+      await expect(releaseWorktree(root, state, "task-a", "abandoned")).resolves.toEqual({ released: true })
+      const registry = (await loadRegistry(state))!
+      expect(registry.worktrees["task-a"]!.status).toBe("abandoned")
+      expect(await tip(root, "main")).toBe(base)
+    } finally {
+      await cleanup()
+      await rm(state, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("gated landing", () => {

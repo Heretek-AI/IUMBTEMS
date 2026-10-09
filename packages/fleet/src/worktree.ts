@@ -309,7 +309,10 @@ export async function releaseWorktree(
     }
     if (kind === "abandoned") {
       await salvageBranch(repoRoot, current.branch, taskId)
-      await git(repoRoot, ["branch", "-D", current.branch])
+      // The daemon's own cleanup may have won the race and removed the
+      // branch already (CI flake: branch -D "not found" failing case 4).
+      // Salvage already anchored whatever was there; only delete when present.
+      if (await branchExists(repoRoot, current.branch)) await git(repoRoot, ["branch", "-D", current.branch])
     }
   })
   await withLock(paths.lock, async () => {
