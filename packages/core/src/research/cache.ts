@@ -8,6 +8,7 @@ import { factoryLayout } from "../layout.ts"
 import { atomicWrite, readJson } from "../util/fs.ts"
 import { sha256 } from "../util/hash.ts"
 import { ensureEngineKey, readEngineKey, sealMeta, verifyMetaSeal } from "./seal.ts"
+import { classifySourceTier } from "./tier.ts"
 import { canonicalUrl } from "./url.ts"
 
 export interface SourceMeta {
@@ -21,6 +22,8 @@ export interface SourceMeta {
   readonly bytes: number
   /** Engine HMAC seal (#52); present when written through a sealed cache. */
   readonly seal?: string
+  /** Source-quality tier for domain-pack weights (#113); absent means __default__. Sealed with the rest. */
+  readonly tier?: string
 }
 
 export interface CachedSource {
@@ -74,11 +77,14 @@ export class SourceCache {
     title?: string
     provider: string
     query?: string
+    /** Pack tierDomains override for classification; unset uses the built-in table (#113). */
+    tierDomains?: Record<string, string[]>
   }): Promise<CachedSource> {
     let text = normalizeSourceText(input.text)
     if (Buffer.byteLength(text) > MAX_SOURCE_BYTES)
       text = `${Buffer.from(text).subarray(0, MAX_SOURCE_BYTES).toString("utf8")}\n\n[truncated by epistemic-swarm at ${MAX_SOURCE_BYTES} bytes]`
     const hash = sha256(text)
+    const tier = classifySourceTier(input.url, input.tierDomains)
     const meta = await this.seal({
       sha256: hash,
       url: input.url,
@@ -87,6 +93,7 @@ export class SourceCache {
       provider: input.provider,
       ...(input.query ? { query: input.query } : {}),
       bytes: Buffer.byteLength(text),
+      ...(tier ? { tier } : {}),
     })
     const file = path.join(this.dir, `${hash}.md`)
     await atomicWrite(file, text)

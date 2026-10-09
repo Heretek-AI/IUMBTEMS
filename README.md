@@ -47,6 +47,12 @@
   readable Markdown or a self-contained HTML dossier — tag, status, verbatim
   quote, source and seal per claim (`es research render --format md|html`).
   The signed brief stays human-only (`es research export`).
+- **Domain packs.** Pluggable constitutions (quant, biopharma, legal) vet
+  research claims: banned domains, mandatory tags, retraction policy and an
+  accept threshold on the tier-weighted epistemic score. Every cached source
+  is deterministically tiered at ingestion (preprint, peer-reviewed, docs,
+  press — sealed with its metadata) and claims inherit the tier, so source
+  quality moves the score.
 - **Lateral work.** Brainstorm fans out eight divergent lenses into a
   deduplicated, rubric-scored shortlist with a forced outlier — callable by
   the grill and the factory at depth 1, with the shortlist back as JSON; darkharvest

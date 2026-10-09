@@ -51,6 +51,7 @@ async function claimFor(statement: string, tag: Tag, cache: SourceCache): Promis
                 quote: tag.quote,
                 ...(source.meta.url ? { url: source.meta.url } : {}),
               },
+              ...(source.meta.tier ? { tier: source.meta.tier } : {}),
             }
           : {}),
       })

@@ -35,6 +35,8 @@ export interface ResearchOpsContext {
   readonly searchTimeoutS?: number
   /** SearXNG instance (config research.searxngUrl); overrides SEARXNG_URL. */
   readonly searxngUrl?: string
+  /** Pack tierDomains override for source classification at ingestion (#113). */
+  readonly tierDomains?: Record<string, string[]>
   /** Ordered backend ids (config research.backends); overrides searchProvider. */
   readonly backends?: string[]
   /**
@@ -130,6 +132,7 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
                 text: result.content,
                 provider: found.backend,
                 query,
+                ...(context.tierDomains ? { tierDomains: context.tierDomains } : {}),
               })
             : undefined
           lines.push(
@@ -189,6 +192,7 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
             ...(page!.title ? { title: page!.title } : {}),
             text: page!.text,
             provider: fetched!.backend,
+            ...(context.tierDomains ? { tierDomains: context.tierDomains } : {}),
           }))
         const title = cached.meta.title
         const start = Math.max(0, offset ?? 0)

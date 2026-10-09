@@ -38,6 +38,8 @@ export const ClaimSchema = z.object({
   tag: ClaimTagSchema,
   statement: z.string().min(1),
   status: ClaimStatusSchema.default("LIVE"),
+  /** Source-quality tier for domain-pack weights (#113); absent means __default__. Not part of the id. */
+  tier: z.string().min(1).optional(),
   /** VERIFIED evidence from the source cache. */
   source: z
     .object({
