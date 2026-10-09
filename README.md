@@ -23,11 +23,13 @@
 
 - **Factory stages, enforced by code.** Grill → Research → Spec → Build ⇄ QA →
   Release runs through a state machine; every `es_*` tool refuses an
-  out-of-order step. Approvals (frontier, spec), waivers and trust are human-only,
-  signed with the passphrase-sealed Ed25519 human key at a terminal
-  (`es key seal` once, then `es approve` / `es trust` / `es waive`); agents
+  out-of-order step. Approvals (frontier, spec) are human-only and complete
+  in the TUI (masked passphrase dialog, in-process signing) or at a terminal
+  (`es approve`); waivers and trust stay terminal-only (`es waive`,
+  `es trust`), all signed with the passphrase-sealed Ed25519 human key
+  (`es key seal` once); agents
   may request, never grant. The approve/trust/resume RPCs no longer exist:
-  the TUI previews, then points at the terminal command.
+  the TUI signs approvals itself and previews trust/resume for the terminal.
 - **Mechanical gates.** Format, lint and typecheck on touched files, affected
   tests from a tree-sitter import graph (runner-native fallback), secret
   scanning, OSV, budgets (diff size, file length, complexity, dependency

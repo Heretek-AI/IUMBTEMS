@@ -56,7 +56,7 @@ Answer the interview (one question at a time). Set the **spend ceiling**
 explicitly — the run cannot start without it. When the design tree is settled,
 approve it:
 
-- TUI: `/es-approve` previews what you are approving, then points at the terminal; or
+- TUI: `/es-approve` previews what you are approving, asks for your passphrase (masked), and records it; or
 - terminal: `es approve frontier` (asks for your passphrase)
 
 ## 3. Research and spec
@@ -71,8 +71,8 @@ unattended run. Either way the factory drives RESEARCH and then SPEC:
 
 Seats run in the foreground, so a research turn can take minutes. That is
 work, not a stall: see "Watching a run" below. When the spec is ready,
-approve it the same way (`/es-approve` previews it; `es approve spec` records
-it).
+approve it the same way (`/es-approve` records it in the TUI; `es approve spec` records
+it in a terminal).
 
 ## 4. Autonomous build
 

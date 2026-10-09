@@ -1,7 +1,9 @@
-// Server side of the TUI previews. Human-only mutations (approve, trust,
-// resume) happen at a terminal with the passphrase-sealed key, never via RPC:
-// the TUI previews, then points at `es approve`, `es trust`, `es factory
-// resume`. Only lspInstall still mutates via a preview token.
+// Server side of the TUI previews. Approvals complete in the TUI process
+// (masked dialog, in-process signing, ADR 0002); trust and resume sign at a
+// terminal with the passphrase-sealed key. The TUI previews, then either
+// signs itself or points at `es trust` / `es factory resume`. No approve,
+// trust or resume call ever crosses RPC: only lspInstall still mutates via
+// a preview token.
 import { randomBytes } from "node:crypto"
 import {
   type ApprovalStage,
@@ -227,6 +229,8 @@ export function createRpcHandlers(
           ],
           problems: [],
           token: issue(`approve:${stage}`, subject.subject),
+          // ADR 0002 I3: the TUI signs only this subject; approveStage refuses a mismatch.
+          subjectHash: hashJson(subject.subject),
         }
       } catch (error) {
         return {

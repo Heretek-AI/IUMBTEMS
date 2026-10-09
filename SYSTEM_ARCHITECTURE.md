@@ -108,8 +108,8 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
    (scrypt + AES-256-GCM; `es key seal` once, `es key status` shows the
    fingerprint), which signs the record; agents may request
    (`es_request_approval`) but never grant. The approve/trust/resume RPCs no
-   longer exist; per ADR 0002 (proposed) approvals complete in the TUI
-   (masked dialog, in-process signing, #119) as well as the CLI, while trust
+   longer exist; approvals complete in the TUI (masked dialog, in-process
+   signing, channel `tui`) as well as the CLI, while trust
    and resume preview in the TUI and sign at the terminal. v1
    HMAC records are refused and must be re-recorded.
 2. **Control files are deny-write for every agent**: gates, config, frontier,

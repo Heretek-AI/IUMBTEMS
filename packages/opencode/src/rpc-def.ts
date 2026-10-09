@@ -1,7 +1,9 @@
 // RPC contract between the server plugin and the TUI. Previews are shown in
-// the TUI; human-only mutations (approve, trust, resume) happen at a terminal
-// with the passphrase (`es approve`, `es trust`, `es factory resume`), never
-// through an agent tool or RPC. Only lspInstall still mutates via RPC.
+// the TUI; approvals complete there through the masked dialog and in-process
+// signing (ADR 0002), while trust and resume sign at a terminal with the
+// passphrase (`es trust`, `es factory resume`). No approve, trust or resume
+// call ever crosses RPC: there is no mutating approval RPC for an agent tool
+// or a stolen server password to call. Only lspInstall still mutates via RPC.
 import { Rpc } from "@opencode/plugin/rpc"
 
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
@@ -13,12 +15,18 @@ const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
 const str = { type: "string" }
 const strArray = { type: "array", items: str }
 
-const Preview = obj({ ok: { type: "boolean" }, title: str, lines: strArray, problems: strArray, token: str }, [
-  "ok",
-  "title",
-  "lines",
-  "problems",
-])
+const Preview = obj(
+  {
+    ok: { type: "boolean" },
+    title: str,
+    lines: strArray,
+    problems: strArray,
+    token: str,
+    /** ADR 0002 I3: hashJson of the previewed approval subject (present on approval previews). */
+    subjectHash: str,
+  },
+  ["ok", "title", "lines", "problems"],
+)
 
 export const EsRpc = Rpc.define({
   id: "epistemic-swarm",

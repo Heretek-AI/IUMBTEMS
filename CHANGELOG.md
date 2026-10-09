@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased (Phase 2 · Approvals everywhere)
+
+**Security.**
+- **#119: frontier and spec approvals complete in the OpenCode TUI.**
+  A masked passphrase dialog (plaintext only in a closure-scoped buffer,
+  zeroed on submit/cancel) unlocks the sealed human key and signs
+  in-process through the core `approveStage` service (`channel: "tui"`).
+  No passphrase and no approval cross RPC (no approve/trust/resume RPC
+  exists); previews bind the signed subject through a single-use ticket
+  (TTL ≤ 120 s); 5 wrong passphrases per 10 minutes lock the TUI surface
+  out with an audited lockout. Trust, waive, resume, key seal, config set
+  and export stay terminal-only (ADR 0002, proposed).
+
+**Behaviour changes.**
+- `ApprovalChannel` is now `cli | tui | web` (one shared `ChannelSchema`);
+  `schemas/approval-channel.schema.json` is replaced by
+  `schemas/channel.schema.json`.
+- Approval status messages name `/es-approve` first; the TUI pending panel
+  and the liveness lines point at the TUI with the terminal as the fallback.
+
 ## 1.2.0 — 2026-10-09
 
 Phase 1 epistemic layer: research, brainstorm and harvest work outside the

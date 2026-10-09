@@ -333,7 +333,8 @@ describe("a factory run end to end on the real host", () => {
     const preview = await rpc.previewApproval({ stage: "frontier" }, where(h))
     expect(preview.ok).toBe(true)
     expect(preview.lines.join("\n")).toContain("$5 USD")
-    // S4: approve/trust/resume RPCs removed — TUI previews, terminal signs with the sealed key.
+    // S4: approve/trust/resume RPCs removed — the TUI signs approvals
+    // in-process through the core service; trust/resume sign at a terminal.
     expect(typeof (rpc as any).approve).not.toBe("function")
     await approveStage(h.directory, { stage: "frontier", channel: "cli", signer, stateDir: state })
     expect((await rpc.status({}, where(h))).stage).toBe("RESEARCH")
