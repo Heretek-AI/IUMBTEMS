@@ -105,6 +105,26 @@ rather than silently assumed:
   identity the caller is `mcp`, which maps to no seat, so every seat-checked tool
   refuses. There is no MCP tool for approvals, trust, waivers or resume.
 
+## Upgrading from 0.7
+
+The 0.7-era plugin options `search_engine`, `max_iterations` and `mode` were
+removed in 1.0. A config that still carries them loads, but warns once:
+`Ignored unknown plugin options: …`. Delete those keys; a clean `plugins`
+entry only needs `models` per tier:
+
+```json
+{
+  "package": "@heretek-ai/epistemic-swarm",
+  "options": {
+    "models": {
+      "deep": "<provider>/<model>",
+      "balanced": "<provider>/<model>",
+      "fast": "<provider>/<model>"
+    }
+  }
+}
+```
+
 ## Development
 
 ```bash
