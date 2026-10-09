@@ -1,16 +1,17 @@
 {
-  "name": "@heretek-ai/es-core",
-  "version": "1.4.0",
-  "esRelease": {
-    "order": 1
-  },
-  "description": "Epistemic Swarm core: factory state machine, mechanical gates, audit log, trust, research, brainstorm, harvest, LSP and hook/agent compilers.",
+  "name": "@heretek-ai/es-fleet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Epistemic Swarm fleet daemon: concurrent task DAGs in isolated worktrees with per-task spend ceilings (human-only; ships from the repo only until its RPC is stable).",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Heretek-AI/IUMBTEMS.git",
-    "directory": "packages/core"
+    "directory": "packages/fleet"
+  },
+  "bin": {
+    "es-fleet": "./bin/es-fleet.js"
   },
   "exports": {
     ".": {
@@ -25,20 +26,20 @@
     }
   },
   "files": [
+    "bin",
     "src",
-    "dist",
-    "assets"
+    "dist"
   ],
   "scripts": {
     "build": "tsc -b",
-    "prepublishOnly": "bun run build",
     "test": "bun test"
   },
   "dependencies": {
-    "vscode-jsonrpc": "9.0.3",
-    "vscode-languageserver-protocol": "3.18.4",
-    "web-tree-sitter": "0.27.0",
+    "@heretek-ai/es-core": "workspace:*",
     "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@heretek-ai/es-testkit": "workspace:*"
   },
   "engines": {
     "node": ">=22"

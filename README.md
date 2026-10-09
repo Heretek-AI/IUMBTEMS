@@ -5,11 +5,10 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 1.3.0.** Phase 2 approvals everywhere: frontier/spec approvals
-> complete in the OpenCode TUI (masked dialog, in-process signing) as well
-> as the CLI through one core service (ADR 0002, proposed); the headless
-> runner streams versioned JSONL events with per-turn metrics (#116–#120).
-> Install from npm
+> **Status: 1.4.0.** Phase 3 fleet: concurrent task DAGs under a human-only
+> `es-fleet` daemon — deterministic scheduler, isolated worktrees with gated
+> landings, per-task spend ceilings, read-only telemetry bus and `watch`
+> (#122–#127). Install from npm
 > (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`, `@heretek-ai/es-cli`);
 > run `es key seal` once.
 
@@ -83,6 +82,7 @@
 | `packages/opencode` | The OpenCode v2 plugin (`server` and `tui` entrypoints). |
 | `packages/cli` | The `es` CLI and a coarse MCP server for non-OpenCode harnesses. |
 | `packages/testkit` | Real in-process host testing (`boot`, scripted fake model). |
+| `packages/fleet` | The `es-fleet` daemon (private): concurrent task DAGs in isolated worktrees. |
 | `scripts/` | `docs.ts` (generated contracts/docs) and `v2-head.sh` (nightly compatibility). |
 | `schemas/`, `docs/` | Generated: JSON Schemas, capability matrix, config and schema docs. |
 | `spikes/` | Recorded proofs from the M0/M6 spikes. |

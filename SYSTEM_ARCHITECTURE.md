@@ -158,7 +158,9 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
 - **Merge-blocking (deterministic):** six fire suites on the real in-process
   host — `grill-fires`, `factory-gate`, `darkharvest-fires`, `audit-fires`,
   `scout-fires`, `research-fires` (`packages/opencode/test/fires*.test.ts`),
-  plus the drift canary (`packages/core/test/drift.test.ts`).
+  plus the drift canary (`packages/core/test/drift.test.ts`), plus the fleet
+  integration suite (`packages/fleet/test/integration.test.ts`: a task DAG on
+  the real host with the fake model proving concurrency without interference).
 - **Nightly (model-backed, cost-capped):** `evals/cases/*.json` run against a
   real model with the same graders (`bun run evals`).
 - **Capability matrix:** every ENFORCED row names a test or spike that exists;
@@ -176,6 +178,7 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
 | `packages/opencode/src/` | plugin: agents, policy, tools, commands, panels |
 | `packages/cli/src/` | `es` CLI, human-only commands, headless jobs |
 | `packages/testkit/` | real-host `boot`, scripted fake model |
+| `packages/fleet/` | `es-fleet` daemon: task DAGs, isolated worktrees, per-task ceilings (private) |
 
 The queereye designer domain is `packages/core/src/queereye/`; the
 `.factory/design/` tree holds `interview.json`, `tokens.*`, `probes.json`,

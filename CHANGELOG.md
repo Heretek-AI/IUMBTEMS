@@ -1,5 +1,73 @@
 # Changelog
 
+## 1.4.0 — 2026-10-09
+
+Phase 3 fleet: concurrent task DAGs run on one machine under a human-only
+`es-fleet` daemon — a deterministic scheduler, isolated git worktrees per
+task with gated landings onto an integration branch, one headless run per
+task with per-task spend ceilings, and a read-only localhost telemetry bus
+with an `es-fleet watch` dashboard. `@heretek-ai/es-fleet` ships from the
+repo only (private) until its RPC is stable; the published trio
+(core/CLI/plugin) release in lockstep as 1.4.0.
+
+**Security.**
+- **#122: starting or stopping the fleet is human-only, by policy and in
+  the binary.** The policy's binary matcher knows `es-fleet`, and the whole
+  binary is human-only except `status`/`--help` (fail-closed flag
+  resolution); `start` additionally refuses agent sandboxes, requires a TTY
+  plus a typed confirmation, and takes a mandatory fleet-wide spend ceiling.
+  Fleet state lives under the sandbox-masked state dir.
+- **#124: task worktrees are isolated by policy.** `.fleet/` is deny-write
+  for every agent outside its own task worktree, and seats may not name
+  other tasks' `.fleet/` paths in the shell. The base branch is never
+  checked out, reset or merged — asserted in every worktree test.
+- **#126: the telemetry bus is read-only, localhost-only and
+  token-authenticated.** Host allowlist (DNS-rebinding defense), Origin
+  checks on WebSocket upgrades, strict schemas that reject extra fields,
+  and payload scrubbing (secret keys and known secret values never appear).
+
+**Behaviour changes.**
+- `es-fleet` refuses to start without a positive `--max-usd` ceiling, which
+  caps the summed task ceilings.
+- `es factory run --headless` takes no `--max-usd` (verified): workers
+  provision each task's ceiling into its run state, where the factory guard
+  enforces it.
+- A landing conflict reopens the task as `waiting-human` — the one
+  transition allowed out of `done` — and the daemon retries it after human
+  repair.
+
+**New.**
+- **#122: `packages/fleet` (`@heretek-ai/es-fleet`, private).** State
+  helpers, inode-bound socket guard, pidfile lifecycle with stale recovery,
+  `es-fleet start/stop/status`, boundaries in `scripts/deps.ts` and a
+  path-filtered CI job.
+- **#123: task model and deterministic DAG scheduler.** `all_success` /
+  `one_success` triggers, mandatory ceilings, `fail` / `retry(n)` /
+  `replan` policies, `waiting-human` capacity relief, pure `schedule()`
+  with a property test over random DAGs, `es-fleet task add/list/cancel`.
+- **#124: worktree coordinator and gated integration branch.**
+  Two-phase allocation, salvage refs, orphan `gc`, transactional landing
+  (gates first, `--no-ff` merge in a throwaway worktree, verified rollback
+  on conflict) onto `fleet/integration/<dag>`.
+- **#125: workers.** Argv-only headless runs, event folding with spend and
+  token tracking, no-double-start supervision with restart recovery,
+  StillDown + mass-death circuit breaker, and the daemon tick loop
+  (`schedule → allocate → launch → land → release`) with a SIGTERM kill
+  switch recording resumable cancellations.
+- **#126: telemetry bus and `es-fleet watch`.** Strict-schema RPC
+  (`fleet.status/task/pending/events` with monotonic backlog replay),
+  coalesced WebSocket stream, 0600 token, TTY dashboard.
+- **#127: merge-blocking fleet integration suite.** A→B+C on the real host
+  with the fake model proving ordering, overlap, output ownership (and no
+  `.factory/` leakage across branches), failure/retry/cancel, conflict
+  repair and stop/salvage/gc — plus break probes proving the suite bites.
+
+**Evals and CI.**
+- #127 runs in `bun run check` (~10 s, 5/5 deterministic locally).
+- Full `bun run test`: 8 failures are the pre-existing bwrap-overlay
+  sandbox failures of containers (identical set fails on the base; green in
+  CI where bwrap works).
+
 ## 1.3.0 — 2026-10-09
 
 Phase 2 approvals everywhere: frontier and spec approvals complete in the

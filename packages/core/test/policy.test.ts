@@ -71,6 +71,21 @@ describe("write policy", () => {
     }
   })
 
+  test("fleet isolation: .fleet/ is deny-write outside the seat's own task worktree (#124)", () => {
+    // Nobody — seats or the user's own agents — writes fleet state directly.
+    for (const agent of [undefined, "build", "factory", "es-programmer", "es-manager", "qa"]) {
+      for (const target of [".fleet/worktrees/task-b/src/x.ts", ".fleet/admin.lock", ".fleet"]) {
+        expect([agent, target, effect(evaluateWrite(ctx(), agent, target))]).toEqual([agent, target, "deny"])
+      }
+    }
+    // Inside its own task worktree, a worktree-scoped seat writes normally.
+    const taskCtx = () => ({ root, worktree: path.join(root, ".fleet/worktrees/task-a"), stateDir: state })
+    expect(effect(evaluateWrite(taskCtx(), "es-programmer", ".fleet/worktrees/task-a/src/x.ts"))).toBe("allow")
+    // ...but not a sibling task's worktree, and not .git inside its own.
+    expect(effect(evaluateWrite(taskCtx(), "es-programmer", ".fleet/worktrees/task-b/src/x.ts"))).toBe("deny")
+    expect(effect(evaluateWrite(taskCtx(), "es-programmer", ".fleet/worktrees/task-a/.git/config"))).toBe("deny")
+  })
+
   test("the project config is a control file for every agent, in the editor and the shell", () => {
     for (const agent of [undefined, "build", "factory", "es-manager", "harvester"])
       expect(effect(evaluateWrite(ctx(), agent, ".factory/config.json"))).toBe("deny")
@@ -306,6 +321,72 @@ describe("shell policy", () => {
     // Reads keep working with an inline boolean value.
     for (const command of ["es --json=1 status", "es --json=x config show", "es --json=1 audit verify"])
       expect([command, shell("build", command).effect]).toEqual([command, "allow"])
+  })
+
+  test("the fleet binary is human-only except status and --help (#122)", () => {
+    // Starting or stopping the fleet spends or kills money: never from an agent.
+    for (const command of [
+      "es-fleet start --max-usd 10",
+      "es-fleet stop",
+      "es-fleet task add --file dag.json",
+      "es-fleet task list",
+      "es-fleet task cancel t1",
+      "es-fleet watch",
+      "es-fleet gc",
+      "es-fleet",
+      "es-fleet --max-usd 10",
+      "es-fleet 'start' --max-usd 10",
+      "npx -y @heretek-ai/es-fleet start --max-usd 10",
+      "bunx @heretek-ai/es-fleet@0.1.0 stop",
+      "node ./node_modules/@heretek-ai/es-fleet/bin/es-fleet.js start --max-usd 10",
+      `bun -e "Bun.spawn(['es-fleet','stop'])"`,
+      "sh -c 'es-fleet start --max-usd 10'",
+    ])
+      for (const agent of ["build", "factory", "es-programmer", undefined])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // Flags (and `--`) before the verb still read as that verb (#88 shapes).
+    for (const command of [
+      "es-fleet --state-dir /tmp/s start --max-usd 10",
+      "es-fleet --state-dir=/tmp/s stop",
+      "es-fleet -- stop",
+      "es-fleet --max-usd 10 start",
+      "es-fleet --json task list",
+      "es-fleet --bogus-flag status --verbose",
+    ])
+      for (const agent of ["build", "es-programmer"])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // Status is a read: agents may poll it (and read --help) in any flag shape.
+    for (const command of [
+      "es-fleet status",
+      "es-fleet --state-dir /tmp/s status",
+      "es-fleet --state-dir=/tmp/s status",
+      "es-fleet --json status",
+      "es-fleet -- status",
+      "es-fleet status --json",
+      "es-fleet --help",
+      "es-fleet status --help",
+    ])
+      for (const agent of ["build", "factory", "es-programmer", undefined])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "allow"])
+  })
+
+  test("fleet isolation: seats may name only their own task worktree in the shell (#124)", () => {
+    const own = path.join(root, ".fleet/worktrees/task-a")
+    const ownCtx = { root, worktree: own, stateDir: state }
+    const ownShell = (agent: string | undefined, command: string) =>
+      evaluateShell(ownCtx, agent, command, { sandboxAvailable: true })
+    // Another task's paths are denied, however wrapped.
+    for (const command of [
+      "git -C .fleet/worktrees/task-b status",
+      "cat .fleet/worktrees/task-b/out.txt",
+      `cat ${path.join(root, ".fleet/worktrees/task-b/out.txt")}`,
+      "ls .fleet/worktrees",
+      "git worktree list",
+    ])
+      expect([command, ownShell("es-programmer", command).effect]).toEqual([command, "deny"])
+    // Its own worktree is fine.
+    for (const command of [`ls ${own}`, `cat ${path.join(own, "out.txt")}`, "git status"])
+      expect([command, ownShell("es-programmer", command).effect]).toEqual([command, "allow"])
   })
 
   test("a verb only mentioned in text is still denied, and the refusal points at passing the text by file (#86)", () => {
