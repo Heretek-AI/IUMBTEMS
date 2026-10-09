@@ -11,7 +11,8 @@ import { stateDir } from "@heretek-ai/es-core"
 import { FleetDaemon } from "./daemon.ts"
 import { assertHumanStart, FleetError, fleetStatus, startFleet, stopFleet } from "./lifecycle.ts"
 import { reportTask } from "./scheduler.ts"
-import { addTask, loadDag, saveDag, TERMINAL } from "./tasks.ts"
+import { fleetPaths } from "./state.ts"
+import { addTask, emptyDag, loadDag, saveDag, TERMINAL } from "./tasks.ts"
 import { ensureToken, readTelemetryEndpoint, TelemetryServer } from "./telemetry.ts"
 import { readFleetSnapshot, watchFleet } from "./watch.ts"
 import { mintWebTicket } from "./web.ts"
@@ -20,13 +21,154 @@ import { gcWorktrees } from "./worktree.ts"
 
 export const VERSION = "0.1.0"
 
+/**
+ * Start-gate decision (#122, repair-151 S5.2, pure and tested): the parent
+ * does `assertHumanStart`, the TTY check and the confirmation, then spawns
+ * the child with an IPC channel and a one-time start grant. A child without
+ * a TTY runs only with that grant — no env var or flag grants it.
+ */
+export type StartDecision =
+  | { readonly action: "run" }
+  | { readonly action: "daemonize" }
+  | { readonly action: "declined" }
+  | { readonly action: "refuse"; readonly reason: string }
+
+export function startDecision(input: {
+  readonly isTTY: boolean
+  readonly foreground: boolean
+  readonly grant: boolean
+  readonly confirm: boolean
+}): StartDecision {
+  if (!input.isTTY && !input.grant)
+    return {
+      action: "refuse",
+      reason:
+        "Refusing to start the fleet without an interactive terminal: run `es-fleet start` yourself; agents cannot start it.",
+    }
+  // `--foreground` also asks for the confirmation: spending money always does.
+  if (input.isTTY && !input.confirm) return { action: "declined" }
+  if (!input.foreground && input.isTTY) return { action: "daemonize" }
+  return { action: "run" }
+}
+
+/** IPC message type carrying the one-time parent-to-child start grant. */
+export const START_GRANT_TYPE = "es-fleet-start-grant" as const
+/** IPC message type carrying the child's pidfile-written report to the parent. */
+export const STARTED_TYPE = "es-fleet-started" as const
+/** How long a TTY-less child waits for the parent's grant. */
+export const START_GRANT_TIMEOUT_MS = 5_000
+/** How long the parent waits for the child's pidfile-written report. */
+export const STARTED_TIMEOUT_MS = 30_000
+
+/**
+ * Await the parent's one-time start grant over the IPC channel. Rejects
+ * immediately without an IPC channel, and after START_GRANT_TIMEOUT_MS
+ * without a grant. Nothing else (no env var, no flag) grants a start.
+ */
+export function awaitStartGrant(timeoutMs = START_GRANT_TIMEOUT_MS): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!process.connected)
+      return reject(
+        new FleetError(
+          "Refusing to start the fleet without an interactive terminal: run `es-fleet start` yourself; agents cannot start it.",
+        ),
+      )
+    const timer = setTimeout(() => {
+      process.removeListener("message", onMessage)
+      reject(new FleetError("Timed out waiting for the fleet start grant from the parent; refusing to start."))
+    }, timeoutMs)
+    const onMessage = (message: unknown) => {
+      if (
+        typeof message === "object" &&
+        message !== null &&
+        (message as { type?: unknown }).type === START_GRANT_TYPE
+      ) {
+        clearTimeout(timer)
+        process.removeListener("message", onMessage)
+        resolve()
+      }
+    }
+    process.on("message", onMessage)
+  })
+}
+
+/** True when the parent's one-time start grant arrives in time (never throws). */
+async function receiveGrant(): Promise<boolean> {
+  try {
+    await awaitStartGrant()
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Wait for the daemonized child's pidfile-written report (or its failure). */
+async function awaitChildStarted(
+  child: import("node:child_process").ChildProcess,
+  timeoutMs = STARTED_TIMEOUT_MS,
+): Promise<{ ok: true; pid: number } | { ok: false; reason: string }> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      cleanup()
+      resolve({ ok: false, reason: "timed out waiting for the daemon child to report it started" })
+    }, timeoutMs)
+    const cleanup = () => {
+      clearTimeout(timer)
+      child.removeListener("message", onMessage)
+      child.removeListener("error", onError)
+      child.removeListener("exit", onExit)
+    }
+    const onMessage = (message: unknown) => {
+      if (typeof message === "object" && message !== null && (message as { type?: unknown }).type === STARTED_TYPE) {
+        const pid = (message as { pid?: unknown }).pid
+        cleanup()
+        resolve({ ok: true, pid: typeof pid === "number" ? pid : (child.pid ?? -1) })
+      }
+    }
+    const onError = (error: Error) => {
+      cleanup()
+      resolve({ ok: false, reason: error.message })
+    }
+    const onExit = (code: number | null, signal: string | null) => {
+      cleanup()
+      resolve({
+        ok: false,
+        reason: `the daemon child exited (code ${code}, signal ${signal}) before reporting it started`,
+      })
+    }
+    child.on("message", onMessage)
+    child.on("error", onError)
+    child.on("exit", onExit)
+  })
+}
+
+/**
+ * Read the bus bearer token for `es-fleet status --token` (#126, S5.5).
+ * Human-only through the TTY gate: agents run without one, and the state
+ * dir is masked inside their sandboxes anyway.
+ */
+export async function readStatusToken(stateRoot: string, options: { isTTY: boolean }): Promise<string> {
+  if (!options.isTTY)
+    throw new FleetError(
+      "Refusing to print the fleet token without an interactive terminal: run `es-fleet status --token` yourself; agents cannot read it.",
+    )
+  let token = ""
+  try {
+    token = (await readFile(fleetPaths(stateRoot).token, "utf8")).trim()
+  } catch {
+    // Missing file: reported below.
+  }
+  if (token.length < 32) throw new FleetError("No fleet token yet: start the fleet first with `es-fleet start`.")
+  return token
+}
+
 const HELP = `es-fleet ${VERSION} — Epistemic Swarm fleet daemon (human-only, except status)
 
 Usage:
   es-fleet start --max-usd <n> [--concurrency <k>] [--foreground]   start the daemon (TTY + confirmation)
         [--repo <dir>] [--es-bin <path>] [--port <n>] [--interval-ms <ms>]
   es-fleet stop                                                     stop the daemon
-  es-fleet status [--json]                                          show daemon status (agent-safe)
+  es-fleet status [--json] [--token]                              show daemon status (agent-safe, except --token)
   es-fleet task add --file <task.json>                              add a task from a JSON file (human-only)
   es-fleet task list [--json]                                       list tasks
   es-fleet task cancel <id> [--reason <text>]                       cancel a task (human-only)
@@ -71,31 +213,44 @@ export async function main(argv: readonly string[]): Promise<number> {
     switch (command) {
       case "start": {
         assertHumanStart(process.env)
-        if (!process.stdin.isTTY || !process.stdout.isTTY)
-          throw new FleetError(
-            "Refusing to start the fleet without an interactive terminal: run `es-fleet start` yourself; agents cannot start it.",
-          )
+        const foreground = hasFlag(rest, "--foreground")
+        const isTTY = !!process.stdin.isTTY && !!process.stdout.isTTY
+        // A daemonized child carries no TTY: it runs only on the parent's
+        // one-time IPC grant (no env var or flag grants it).
+        const grant = isTTY ? false : await receiveGrant()
         const maxUsd = Number(valueFlag(rest, ["--max-usd"]))
         const concurrency = Number(valueFlag(rest, ["--concurrency"]) ?? "4")
-        if (!hasFlag(rest, "--foreground")) {
-          const answer = await confirm(
-            `Start the fleet daemon (ceiling $${valueFlag(rest, ["--max-usd"]) ?? "?"}, concurrency ${Number.isFinite(concurrency) ? concurrency : "?"} Workers run headless factory runs that spend real money. [y/N] `,
-          )
-          if (!answer) {
-            process.stdout.write("Not starting.\n")
-            return 1
-          }
-          // Daemonize: respawn detached and let the child own the pidfile.
+        // Spending money always asks: background and --foreground alike.
+        const confirmed = isTTY
+          ? await confirm(
+              `Start the fleet daemon (ceiling $${valueFlag(rest, ["--max-usd"]) ?? "?"}, concurrency ${Number.isFinite(concurrency) ? concurrency : "?"} Workers run headless factory runs that spend real money. [y/N] `,
+            )
+          : false
+        const decision = startDecision({ isTTY, foreground, grant, confirm: confirmed })
+        if (decision.action === "refuse") throw new FleetError(decision.reason)
+        if (decision.action === "declined") {
+          process.stdout.write("Not starting.\n")
+          return 1
+        }
+        if (decision.action === "daemonize") {
+          // Daemonize: respawn detached with an IPC channel, grant the one
+          // start, and wait for the child's pidfile-written report before
+          // claiming anything — the child's error is printed instead.
           const child = spawn(process.execPath, [process.argv[1]!, ...args, "--foreground"], {
             detached: true,
-            stdio: "ignore",
+            stdio: ["ignore", "ignore", "ignore", "ipc"],
             env: process.env,
           })
+          child.send({ type: START_GRANT_TYPE })
+          const started = await awaitChildStarted(child)
+          child.disconnect()
           child.unref()
-          process.stdout.write(`Fleet daemon starting (pid ${child.pid}).\n`)
+          if (!started.ok) throw new FleetError(`The fleet failed to start: ${started.reason}`)
+          process.stdout.write(`Fleet daemon started (pid ${started.pid}).\n`)
           return 0
         }
         const handle = await startFleet({ stateRoot: root, maxUsd, concurrency })
+        process.send?.({ type: STARTED_TYPE, pid: handle.pid, startedAt: handle.startedAt })
         process.stdout.write(
           `Fleet daemon running (pid ${handle.pid}, ceiling $${maxUsd}, started ${handle.startedAt}).\n`,
         )
@@ -152,6 +307,13 @@ export async function main(argv: readonly string[]): Promise<number> {
         return 0
       }
       case "status": {
+        if (hasFlag(rest, "--token")) {
+          const token = await readStatusToken(root, {
+            isTTY: !!process.stdin.isTTY && !!process.stdout.isTTY,
+          })
+          process.stdout.write(`${token}\n`)
+          return 0
+        }
         const status = await fleetStatus(root)
         if (hasFlag(rest, "--json")) process.stdout.write(`${JSON.stringify(status, null, 2)}\n`)
         else if (status.running)
@@ -183,7 +345,7 @@ export async function main(argv: readonly string[]): Promise<number> {
           if (!file) throw new FleetError("`es-fleet task add` needs --file <task.json>.")
           const raw = JSON.parse(await readFile(file, "utf8")) as unknown
           const inputs = Array.isArray(raw) ? raw : [raw]
-          let dag = (await loadDag(root)) ?? { v: 1 as const, tasks: {} }
+          let dag = (await loadDag(root)) ?? emptyDag()
           const now = new Date().toISOString()
           for (const input of inputs) dag = addTask(dag, input as Record<string, unknown>, now)
           await saveDag(root, dag)

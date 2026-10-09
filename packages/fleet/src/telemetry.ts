@@ -17,11 +17,13 @@ import {
   noteWrongPassphrase,
   pendingApprovals,
   unlockHumanKey,
+  withLock,
 } from "@heretek-ai/es-core"
 import { z } from "zod"
 import { ApproveTickets, CsrfTokens } from "./approve.ts"
 import { planConfigFile, readConfigView } from "./configview.ts"
 import { exportEvidence, readEvidenceClaim, readEvidenceClaims, readEvidenceSource } from "./evidence.ts"
+import { readTaskLiveness } from "./liveness.ts"
 import { fleetPaths } from "./state.ts"
 import {
   loopbackOriginOk,
@@ -161,22 +163,24 @@ export function scrubPayload(value: unknown, secrets: readonly string[]): unknow
 
 /** Bearer token for the bus: created once at 0600 in the masked state dir. */
 export async function ensureToken(stateRoot: string): Promise<string> {
-  const file = fleetPaths(stateRoot).token
-  try {
-    const current = (await readFile(file, "utf8")).trim()
-    if (current.length >= 32) return current
-  } catch {
-    // Missing: create below.
-  }
-  await mkdir(path.dirname(file), { recursive: true })
-  const handle = await open(file, "w", 0o600)
-  try {
-    const token = randomBytes(32).toString("hex")
-    await handle.writeFile(`${token}\n`)
-    return token
-  } finally {
-    await handle.close()
-  }
+  const paths = fleetPaths(stateRoot)
+  return withLock(paths.lock, async () => {
+    try {
+      const current = (await readFile(paths.token, "utf8")).trim()
+      if (current.length >= 32) return current
+    } catch {
+      // Missing: create below.
+    }
+    await mkdir(path.dirname(paths.token), { recursive: true })
+    const handle = await open(paths.token, "w", 0o600)
+    try {
+      const token = randomBytes(32).toString("hex")
+      await handle.writeFile(`${token}\n`)
+      return token
+    } finally {
+      await handle.close()
+    }
+  })
 }
 
 export interface SnapshotTask {
@@ -208,6 +212,8 @@ const StrictObject = (shape: Record<string, z.ZodTypeAny>) => z.strictObject(sha
 const RpcSchemas = {
   "fleet.status": StrictObject({}),
   "fleet.task": StrictObject({ id: z.string().min(1) }),
+  /** Per-task run liveness (#130, feeds the web dashboard): read-only. */
+  "fleet.task.liveness": StrictObject({ id: z.string().min(1) }),
   "fleet.pending": StrictObject({}),
   "fleet.events": StrictObject({ since: z.number().int().min(0).default(0) }),
   /** Read-only config preview (#132, preview-only): no apply method exists. */
@@ -251,8 +257,26 @@ export interface TelemetryOptions {
   readonly approveTicketTtlMs?: number
 }
 
+/**
+ * Parse request header lines into a Map keyed by lowercase name (CodeQL #84,
+ * repair-151 S5.4): remote names are never written as keys into a plain
+ * object, so a header named `__proto__` stays a plain entry and cannot land
+ * on the prototype. Names that are not RFC 9110 tokens are rejected.
+ */
+export function parseHeaders(lines: readonly string[]): Map<string, string> {
+  const headers = new Map<string, string>()
+  for (const line of lines) {
+    const at = line.indexOf(":")
+    if (at <= 0) continue
+    const name = line.slice(0, at).trim().toLowerCase()
+    if (!/^[!#$%&'*+\-.^_`|~0-9a-z]+$/.test(name)) continue
+    headers.set(name, line.slice(at + 1).trim())
+  }
+  return headers
+}
+
 /** Case-insensitive request header lookup (names with dashes need no literals at use sites). */
-const field = (headers: Record<string, string>, name: string): string | undefined => headers[name]
+export const field = (headers: Map<string, string>, name: string): string | undefined => headers.get(name.toLowerCase())
 
 interface HttpResponder {
   writeHead(code: number, headers: Record<string, string | number>): void
@@ -277,8 +301,10 @@ const contentLengthOf = (header: string): number => {
 }
 
 /**
- * The bus server. Bind, token, Host and Origin are all fail-closed; every
- * method is read-only (no state is written anywhere in request handling).
+ * The bus server. Bind, token, Host and Origin are all fail-closed. Every
+ * JSON-RPC method is read-only (no state is written anywhere in RPC
+ * handling); the browser approve endpoints are the deliberate exception —
+ * preview issues single-use tickets and submit writes approvals.
  */
 export class TelemetryServer {
   readonly log: EventLog
@@ -327,7 +353,9 @@ export class TelemetryServer {
     this.actualPort = (this.server.address() as { port: number }).port
     const paths = fleetPaths(this.options.stateRoot)
     await mkdir(paths.dir, { recursive: true })
-    await writeFile(path.join(paths.dir, "telemetry.json"), JSON.stringify({ port: this.actualPort }))
+    await withLock(paths.lock, () =>
+      writeFile(path.join(paths.dir, "telemetry.json"), JSON.stringify({ port: this.actualPort })),
+    )
   }
 
   async stop(): Promise<void> {
@@ -384,11 +412,7 @@ export class TelemetryServer {
   private async route(socket: Socket, header: string, rest: Buffer): Promise<void> {
     const [requestLine, ...headerLines] = header.split("\r\n")
     const [method, target] = (requestLine ?? "").split(" ")
-    const headers: Record<string, string> = {}
-    for (const line of headerLines) {
-      const at = line.indexOf(":")
-      if (at > 0) headers[line.slice(0, at).trim().toLowerCase()] = line.slice(at + 1).trim()
-    }
+    const headers = parseHeaders(headerLines)
     const res = {
       writeHead: (code: number, responseHeaders: Record<string, string | number>) => {
         const lines = [
@@ -467,7 +491,7 @@ export class TelemetryServer {
    * (CLI, watch, scripts) are unaffected. Fail-closed: no Origin, no cookie
    * access — browsers always send Origin on a POST fetch.
    */
-  private sessionRpcOk(headers: Record<string, string>): boolean {
+  private sessionRpcOk(headers: Map<string, string>): boolean {
     return (
       loopbackOriginOk(field(headers, "origin")) && this.sessions.valid(parseSessionCookie(field(headers, "cookie")))
     )
@@ -479,7 +503,7 @@ export class TelemetryServer {
    * Anonymous loads are 401, bad tickets 403, everything carries the strict
    * security headers. Without a configured `webRoot` every load 404s.
    */
-  private async serveWeb(target: string, headers: Record<string, string>, res: HttpResponder): Promise<void> {
+  private async serveWeb(target: string, headers: Map<string, string>, res: HttpResponder): Promise<void> {
     const deny = (code: 401 | 403): void => {
       res.writeHead(code, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
       res.end()
@@ -551,7 +575,7 @@ export class TelemetryServer {
    * Browser approval preview (#131, ADR 0002 I3/I6): a read — bearer or
    * session — returning the subject, its hash and a single-use ticket.
    */
-  private async approvePreview(headers: Record<string, string>, rest: Buffer, res: HttpResponder): Promise<void> {
+  private async approvePreview(headers: Map<string, string>, rest: Buffer, res: HttpResponder): Promise<void> {
     if (!this.bearerOk(field(headers, "authorization")) && !this.sessionRpcOk(headers)) {
       // Same convention as read-only RPC: a presented session cookie that
       // cannot authorize is a forbidden CSRF/origin failure (403).
@@ -610,7 +634,7 @@ export class TelemetryServer {
    * unlocks the sealed key in-process; the signer is destroyed in a
    * finally, and the passphrase is never stored, logged or returned.
    */
-  private async approveSubmit(headers: Record<string, string>, rest: Buffer, res: HttpResponder): Promise<void> {
+  private async approveSubmit(headers: Map<string, string>, rest: Buffer, res: HttpResponder): Promise<void> {
     const session = parseSessionCookie(field(headers, "cookie")) ?? ""
     if (!this.sessions.valid(session)) {
       res.writeHead(401, { "content-length": 0, connection: "close" })
@@ -698,7 +722,7 @@ export class TelemetryServer {
     }
   }
 
-  private readBody(headers: Record<string, string>, rest: Buffer): unknown {
+  private readBody(headers: Map<string, string>, rest: Buffer): unknown {
     const length = Number(field(headers, "content-length") ?? "0")
     if (!Number.isInteger(length) || length < 0 || length > 1_000_000) throw new Error("bad length")
     return JSON.parse(rest.subarray(0, length).toString("utf8"))
@@ -735,6 +759,10 @@ export class TelemetryServer {
         const task = snapshot.tasks.find((entry) => entry.id === id)
         if (!task) throw new Error(`unknown task ${JSON.stringify(id)}`)
         return { task }
+      }
+      case "fleet.task.liveness": {
+        const id = (params as { id: string }).id
+        return readTaskLiveness(await this.runDir(id), id)
       }
       case "fleet.events": {
         const since = (params as { since?: number }).since ?? 0
@@ -781,7 +809,7 @@ export class TelemetryServer {
     }
   }
 
-  private handleUpgrade(socket: Socket, headers: Record<string, string>, res: HttpResponder): void {
+  private handleUpgrade(socket: Socket, headers: Map<string, string>, res: HttpResponder): void {
     const cookieOk =
       loopbackOriginOk(field(headers, "origin")) && this.sessions.valid(parseSessionCookie(field(headers, "cookie")))
     if (

@@ -170,6 +170,29 @@ describe("gated landing", () => {
       await rm(state, { recursive: true, force: true })
     }
   })
+
+  test("a non-conflict merge failure returns its reason and skips --abort", async () => {
+    const { root, base, cleanup } = await fixture()
+    const state = await stateRoot()
+    try {
+      const record = await allocateWorktree(root, state, "task-a", { base })
+      await writeFile(path.join(record.dir, "work.txt"), "x\n")
+      await git(record.dir, "add", "-A")
+      await git(record.dir, "commit", "--no-verify", "-m", "x")
+      // Hermetic missing-identity: an empty repo-local identity makes the
+      // landing merge itself unable to commit (no global config is read for
+      // this: the empty local value wins over any global one).
+      await git(root, "config", "user.name", "")
+      await git(root, "config", "user.email", "")
+      const result = await landTask(root, state, "task-a", "dag-1", gatesOk)
+      expect(result).toMatchObject({ landed: false, conflict: false })
+      expect("reason" in result && result.reason).toMatch(/ident/i)
+      expect(await tip(root, "main")).toBe(base)
+    } finally {
+      await cleanup()
+      await rm(state, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("gc", () => {

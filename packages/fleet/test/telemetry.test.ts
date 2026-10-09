@@ -124,6 +124,7 @@ describe("read-only RPC", () => {
         for (const [method, params] of [
           ["fleet.status", {}],
           ["fleet.task", { id: "a" }],
+          ["fleet.task.liveness", { id: "a" }],
           ["fleet.pending", {}],
           ["fleet.events", { since: 0 }],
         ] as const) {
@@ -230,6 +231,54 @@ describe("events and coalescing", () => {
         // ...and the latest wins (drop to latest per key).
         if (changed.length > 0) expect(JSON.stringify(changed.at(-1))).toContain("tick-99")
         socket.destroy()
+      } finally {
+        await server.stop()
+      }
+    } finally {
+      await rm(state, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("remote header names (S5.4)", () => {
+  const rpcRaw = (port: number, extra: string): Promise<string> => {
+    const body = JSON.stringify({ method: "fleet.status", params: {} })
+    return rawRequest(
+      port,
+      `POST /fleet/rpc HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nAuthorization: Bearer ${TOKEN}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n${extra}Connection: close\r\n\r\n${body}`,
+    )
+  }
+
+  test("a __proto__ header is answered normally and pollutes nothing", async () => {
+    const state = await mkdtemp(path.join(tmpdir(), "es-fleet-bus-"))
+    try {
+      const server = await serverFor(state)
+      try {
+        const raw = await rpcRaw(server.port, "__proto__: polluted\r\n")
+        expect(Number(/HTTP\/1\.1 (\d+)/.exec(raw)?.[1] ?? 0)).toBe(200)
+        expect(raw).toContain('"result"')
+        expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined()
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+      } finally {
+        await server.stop()
+      }
+    } finally {
+      await rm(state, { recursive: true, force: true })
+    }
+  })
+
+  test("a mixed-case Host header still matches", async () => {
+    const state = await mkdtemp(path.join(tmpdir(), "es-fleet-bus-"))
+    try {
+      const server = await serverFor(state)
+      try {
+        const body = JSON.stringify({ method: "fleet.status", params: {} })
+        const raw = await rawRequest(
+          server.port,
+          `POST /fleet/rpc HTTP/1.1\r\nHoSt: 127.0.0.1:${server.port}\r\nAuthorization: Bearer ${TOKEN}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+        )
+        expect(Number(/HTTP\/1\.1 (\d+)/.exec(raw)?.[1] ?? 0)).toBe(200)
+        expect(raw).toContain('"result"')
       } finally {
         await server.stop()
       }
