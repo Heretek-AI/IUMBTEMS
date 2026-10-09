@@ -20,6 +20,8 @@ export interface FleetPaths {
   readonly tasks: string
   /** Worktree registry (JSON, #124). */
   readonly worktrees: string
+  /** Worker pid table (JSON, #125). */
+  readonly workers: string
   /** Daemon control socket. */
   readonly socket: string
   /** Bearer token for the read-only telemetry bus (#126). */
@@ -35,6 +37,7 @@ export function fleetPaths(stateRoot: string): FleetPaths {
     state: path.join(dir, "state.json"),
     tasks: path.join(dir, "tasks.json"),
     worktrees: path.join(dir, "worktrees.json"),
+    workers: path.join(dir, "workers.json"),
     socket: path.join(dir, "fleet.sock"),
     token: path.join(dir, "token"),
   }

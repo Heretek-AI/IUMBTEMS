@@ -64,3 +64,29 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
   its ref is stable across every operation.
 - Policy: `.fleet/` is deny-write for every agent outside its own task
   worktree, and seats may not name other tasks' `.fleet/` paths in the shell.
+
+## Workers (#125)
+
+- One headless run per task: `es factory run --headless --events jsonl
+  --cwd <worktree>`, spawned with argv only (never a shell). There is
+  deliberately no `--max-usd` on that argv — `factory run` has no such flag —
+  so the daemon provisions each task's ceiling into its run state beforehand
+  (`prepareTaskRun`, via core's `Factory.provisionRun` /
+  `beginResearchRun`), where the factory guard enforces it. `research-run`
+  tasks are refused until a headless research driver exists.
+- Headless events fold into task reports (`foldWorkerEvent`, pure):
+  `waiting` → `waiting-human`, `done` → `done`, `halted`/`stalled`/
+  `turn-cap`/`error` → `failed`, `cancelled` → `cancelled`; `turn-metrics`
+  accumulate spend and tokens without a report. A run that exits without a
+  final event reports `cancelled` on exit 130, else `failed`.
+- `WorkerSupervisor` never double-starts a tracked task; a daemon restart
+  reattaches to live pids (persisted in `workers.json`) and reports the dead
+  ones as failed for the failure policy. `es-fleet stop` SIGTERMs every
+  worker and records resumable cancellations.
+- The StillDown circuit breaker refuses restarts for tasks that keep
+  crashing, and pauses all launches on mass worker death; both recover after
+  the cooldown.
+- `FleetDaemon.tick` (idempotent) wires it together: schedule → allocate →
+  prepare → launch → fold reports → land done tasks → release; `stop` is the
+  kill switch. `es-fleet start --foreground` runs the loop (`--repo`,
+  `--es-bin`, `--interval-ms`).

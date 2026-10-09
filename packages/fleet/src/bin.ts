@@ -6,9 +6,11 @@ import { spawn } from "node:child_process"
 import { readFile } from "node:fs/promises"
 import { createInterface } from "node:readline"
 import { stateDir } from "@heretek-ai/es-core"
+import { FleetDaemon } from "./daemon.ts"
 import { assertHumanStart, FleetError, fleetStatus, startFleet, stopFleet } from "./lifecycle.ts"
 import { reportTask } from "./scheduler.ts"
 import { addTask, loadDag, saveDag, TERMINAL } from "./tasks.ts"
+import { defaultGateCheck } from "./worker.ts"
 import { gcWorktrees } from "./worktree.ts"
 
 export const VERSION = "0.1.0"
@@ -89,7 +91,26 @@ export async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write(
           `Fleet daemon running (pid ${handle.pid}, ceiling $${maxUsd}, started ${handle.startedAt}).\n`,
         )
+        // Own the task loop: recover workers, then tick until signalled.
+        const daemon = new FleetDaemon({
+          repoRoot: valueFlag(rest, ["--repo"]) ?? process.cwd(),
+          stateRoot: root,
+          esBin: valueFlag(rest, ["--es-bin"]) ?? "es",
+          ...(Number.isFinite(concurrency) ? { concurrency } : {}),
+          fleetCeilingUsd: maxUsd,
+          checkGates: defaultGateCheck(valueFlag(rest, ["--es-bin"]) ?? "es"),
+        })
+        await daemon.recover()
+        await daemon.tick()
+        const everyMs = Math.max(1_000, Number(valueFlag(rest, ["--interval-ms"]) ?? "5000"))
+        const timer = setInterval(
+          () => void daemon.tick().catch((error) => process.stderr.write(`${String(error)}\n`)),
+          everyMs,
+        )
+        timer.unref?.()
         const shutdown = async () => {
+          clearInterval(timer)
+          await daemon.shutdown()
           await handle.close()
           process.exit(0)
         }

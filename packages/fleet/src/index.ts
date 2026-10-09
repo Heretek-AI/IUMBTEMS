@@ -83,3 +83,24 @@ export {
   WorktreeStatusSchema,
   withRepoLock,
 } from "./worktree.ts"
+export {
+  CircuitBreaker,
+  buildWorkerArgv,
+  defaultGateCheck,
+  emptyAcc,
+  foldWorkerEvent,
+  loadWorkerPids,
+  prepareTaskRun,
+  saveWorkerPids,
+  Worker,
+  WorkerError,
+  WorkerSupervisor,
+  type BreakerOptions,
+  type FoldedEvent,
+  type SpendAcc,
+  type WorkerEnvelope,
+  type WorkerOptions,
+  type WorkerOutcome,
+  type WorkerSpec,
+} from "./worker.ts"
+export { FleetDaemon, type DaemonOptions, type TransitionEvent, type WorkerPort } from "./daemon.ts"
