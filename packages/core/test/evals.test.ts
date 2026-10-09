@@ -278,6 +278,75 @@ describe("eval cases (evals/cases)", () => {
     expect(state.audits.map((item) => [item.id, item.status])).toEqual([["audit-01", "open"]])
   })
 
+  test("the staged thesis state is a valid v2 run with audit-01 open on src (#139)", async () => {
+    const { FactoryStateSchema } = await import("../src/factory/state.ts")
+    const thesis = cases.find((item) => item.file === "auditor-thesis.json")!.body
+    const state = FactoryStateSchema.parse(JSON.parse(thesis.files[".factory/runtime/state.json"]))
+    expect(state.audits.map((item) => [item.id, item.status, item.target])).toEqual([
+      ["audit-01", "open", { kind: "path", path: "src" }],
+    ])
+    expect(thesis.checks.toolsUsed).toContain("es_audit_verdict")
+    expect(thesis.fire).toMatchObject({ kind: "audit", audit: "audit-01" })
+    expect(thesis.prompt).toContain("audit-01")
+  })
+
+  test("the staged thesis fixture admits a verdict graded deterministically (#139)", async () => {
+    const { mkdtemp, rm, mkdir, writeFile } = await import("node:fs/promises")
+    const { tmpdir } = await import("node:os")
+    const {
+      Factory,
+      codeAuditTools,
+      gateRunner,
+      gradeAuditFire,
+      readAuditRecords,
+    } = await import("../src/index.ts")
+    const { signEngineFile } = await import("../src/trust/sidecar.ts")
+    const thesis = cases.find((item) => item.file === "auditor-thesis.json")!.body
+    const root = await mkdtemp(path.join(tmpdir(), "es-thesis-fixture-"))
+    const state = await mkdtemp(path.join(tmpdir(), "es-thesis-fixture-state-"))
+    try {
+      for (const [file, content] of Object.entries(thesis.files as Record<string, string>)) {
+        const target = path.join(root, file)
+        await mkdir(path.dirname(target), { recursive: true })
+        await writeFile(target, content)
+      }
+      await signEngineFile(path.join(root, ".factory/runtime/state.json"), state)
+      const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+      const verdict = codeAuditTools({ root, factory, stateDir: state }).find(
+        (tool) => tool.name === "es_audit_verdict",
+      )!
+      const excerpt =
+        "const query = \"SELECT * FROM users WHERE name = '\" + username + \"' AND pass = '\" + password + \"'\""
+      const out = await verdict.execute(
+        {
+          audit: "audit-01",
+          verdict: "fail",
+          findings: [
+            {
+              kind: "vulnerability",
+              title: "SQL injection in login",
+              severity: "critical",
+              cwe: "CWE-89",
+              file: "src/login.ts",
+              lines: [2, 2],
+              excerpt,
+              detail: "username and password concatenate into the query",
+              remediation: "use parameterised queries",
+            },
+          ],
+          notes: "CWE-89 in src/login.ts",
+        },
+        { agent: "es-auditor-thesis" },
+      )
+      expect(out).toContain("Recorded fail for audit-01")
+      const grade = gradeAuditFire(await readAuditRecords(root, "audit-01"), thesis.fire.plants)
+      expect(grade).toMatchObject({ pass: true, caught: ["sql-injection"] })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(state, { recursive: true, force: true })
+    }
+  })
+
   test("the seeded programmer state is a valid v2 BUILD run with a worktree", async () => {
     const { FactoryStateSchema } = await import("../src/factory/state.ts")
     const prog = cases.find((item) => item.file === "programmer.json")!.body
