@@ -5,11 +5,12 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 1.1.5.** Phase 0 hardening: source-cache seals on every reader,
-> MCP caller identity is pinned, the CLI and the human-only rule share one
-> argv grammar, seat scoping is probed from the registry, and seat models
-> fail closed (#96–#103, #139). Install from npm (`@heretek-ai/epistemic-swarm`,
-> `@heretek-ai/es-core`, `@heretek-ai/es-cli`); run `es key seal` once.
+> **Status: 1.2.0.** Phase 1 epistemic layer: ordered research backends with
+> failover (Scraper-Swarm gateway leading), callable brainstorm and harvest,
+> research-only runs with a deep-research coordinator, dossier renders, and
+> domain-pack tier weights (#106–#114). Install from npm
+> (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`, `@heretek-ai/es-cli`);
+> run `es key seal` once.
 
 ## Naming
 

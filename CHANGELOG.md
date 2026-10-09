@@ -1,5 +1,60 @@
 # Changelog
 
+## 1.2.0 — 2026-10-09
+
+Phase 1 epistemic layer: research, brainstorm and harvest work outside the
+fixed factory flow. Backends fail over with the gateway leading, the grill
+and the factory fan out brainstorms and verdict-check harvest targets
+themselves, deep research runs thesis/antithesis/synthesis to a grounded
+report anywhere, dossiers render to Markdown and HTML, and domain-pack tiers
+weight the score. A merge-blocking research-fires suite pins the whole loop.
+
+**Security.**
+- **#106: provider API keys are masked in seat sandboxes.**
+  `BRAVE_API_KEY` and `FIRECRAWL_API_KEY` join `SECRET_ENV`, so agent shells
+  never see them; backends run in the plugin process.
+- **#107: the gateway token never leaves its header.** It comes only from
+  `ES_SCRAPER_SWARM_TOKEN`, is masked in sandboxes, and never reaches
+  `.factory/`, logs or error messages.
+
+**Behaviour changes.**
+- Research completion in research-mode runs ends at DONE (build runs still
+  move to SPEC); deferred frontier facts are required only in build runs.
+- `FETCHED` snapshots are capability-derived (fetch-capable backends count);
+  legacy `fetch`/`webfetch` entries still do.
+- Prior-art records are keyed per brainstorm run; legacy global records
+  satisfy any run.
+- Brainstorm and harvest artifacts live under `runs/<run>/` (the human's
+  flows stay the `default` run); legacy top-level files still read.
+
+**New.**
+- **#106: ordered source-backend failover** (`SourceBackend`,
+  `research.backends`, per-backend cooldowns with 429 Retry-After;
+  `blocked` safety refusals never fail over; `searchProvider` kept as an
+  alias).
+- **#107: Scraper-Swarm gateway backend** (JSON-RPC `web_search`/`fetch_page`
+  over `POST /mcp`, contract v1 with `content_sha256` verification, leading
+  the default order when configured; recorded-fixture contract tests).
+- **#108: callable brainstorm fan-out** (run-scoped store, grill/factory
+  callers at depth 1, shortlist JSON, lean budgets).
+- **#109: callable harvest target and shared prior art**
+  (`es_harvest_target` verdicts for grill/factory/scout/harvester,
+  run-scoped harvest plans, `PriorArtSearchSchema`).
+- **#110: research-only runs** (`beginResearchRun`, objective + ceiling, no
+  frontier/approvals/git needed).
+- **#111: deep-research coordinator** (`deep-researcher` + synthesizer seats,
+  human-only `es research deep`, interactive `/research deep`).
+- **#112: dossier renders** (deterministic Markdown + self-contained HTML,
+  XSS-tested; agent-safe `es research render`).
+- **#113: domain-pack tiers reach claims** (deterministic source
+  classification sealed in `SourceMeta`, `ClaimSchema.tier`, tier-weighted
+  scores; unknowns stay `__default__`).
+
+**Evals and CI.**
+- **#114: merge-blocking research-fires suite** (grounded quotes, failover,
+  sealing, degradation, renders; break-probe verified) plus a
+  reported-never-blocking `deep-research` eval case.
+
 ## 1.1.5 — 2026-10-09
 
 Phase 0 hardening: every trust boundary the 1.1.x series left soft is now
