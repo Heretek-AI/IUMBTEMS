@@ -74,6 +74,12 @@ export function createPolicyHooks(runtime: Runtime, seats?: SeatTracker) {
   const before = async (event: { tool: string; agent: string; id: string; sessionID?: string; input: unknown }) => {
     const seat = seatOf(event.agent)
     const input = (event.input ?? {}) as Record<string, any>
+    // Fail-closed models (#96): whoever launches a seat with an unusable
+    // model is refused, seat or user agent alike.
+    if (event.tool === "subagent" && typeof input.agent === "string") {
+      const problem = runtime.modelProblems?.get(input.agent)
+      if (problem) deny(problem.message)
+    }
     if (seat && event.tool === "subagent") guardSeatLaunch({ agent: event.agent, input }, seats)
     if (seat && event.sessionID) await seats?.onTool(event.sessionID, event.agent, event.tool)
     if (seat || event.tool.startsWith("es_")) {

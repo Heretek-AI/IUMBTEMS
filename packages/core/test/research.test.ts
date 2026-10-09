@@ -261,10 +261,15 @@ describe("the webcache gate (d66328c:skills/epistemic_search/scripts/webcache.py
     expect(second).toContain("Version 1 of the page")
     expect(calls).toBe(1)
     expect(
-      await fetchTool.execute({ url: "https://limits.test/api?a=1&b=2", refresh: true }, { agent: "x" }),
+      await fetchTool.execute(
+        { url: "https://limits.test/api?a=1&b=2", refresh: true },
+        { agent: "es-research-alpha" },
+      ),
     ).toContain("Version 2")
     now = new Date("2026-10-20T00:00:00Z")
-    expect(await fetchTool.execute({ url: "https://limits.test/api?a=1&b=2" }, { agent: "x" })).toContain("Version 3")
+    expect(
+      await fetchTool.execute({ url: "https://limits.test/api?a=1&b=2" }, { agent: "es-research-alpha" }),
+    ).toContain("Version 3")
     expect(calls).toBe(3)
     // A search result cached under the page's URL is a snippet, never served as the page.
     await new SourceCache(path.join(dir, ".factory/research/sources")).put({
@@ -272,6 +277,46 @@ describe("the webcache gate (d66328c:skills/epistemic_search/scripts/webcache.py
       text: "Snippet: limits are documented.",
       provider: "searxng",
     })
-    expect(await fetchTool.execute({ url: "https://limits.test/api?a=1&b=2" }, { agent: "x" })).toContain("Version 4")
+    expect(
+      await fetchTool.execute({ url: "https://limits.test/api?a=1&b=2" }, { agent: "es-research-alpha" }),
+    ).toContain("Version 4")
+  })
+})
+
+describe("research seat checks (#99: the registry grants, not the caller, decide)", () => {
+  const tools = () =>
+    researchTools({
+      root: dir,
+      env: {},
+      stateDir: state,
+      policy: async () => ({ root: dir }),
+    })
+  const tool = (name: string) => tools().find((item) => item.name === name)!
+
+  test("search and fetch refuse seats the registry never grants; granted seats pass the check", async () => {
+    const search = tool("es_research_search")
+    const fetch = tool("es_research_fetch")
+    // The factory seat may audit but never search or fetch.
+    await expect(search.execute({ query: "x" }, { agent: "factory" })).rejects.toThrow(
+      "Only the research and scout seats",
+    )
+    await expect(fetch.execute({ url: "https://x.test" }, { agent: "factory" })).rejects.toThrow(
+      "Only the research and scout seats",
+    )
+    await expect(fetch.execute({ url: "https://x.test" }, { agent: "es-programmer" })).rejects.toThrow(
+      "Only the research and scout seats",
+    )
+    // A granted seat passes the seat check (then fails on the missing provider, before any fetch).
+    await expect(search.execute({ query: "x" }, { agent: "es-research-alpha" })).rejects.toThrow("No search provider")
+    await expect(search.execute({ query: "x" }, { agent: "scout" })).rejects.toThrow("No search provider")
+  })
+
+  test("audit refuses seats the registry never grants; granted seats pass the check", async () => {
+    const audit = tool("es_research_audit")
+    await expect(audit.execute({}, { agent: "scout" })).rejects.toThrow("Only the research seats and factory")
+    await expect(audit.execute({}, { agent: "es-programmer" })).rejects.toThrow("Only the research seats and factory")
+    // A granted seat passes the seat check (then reports the missing report, not a refusal).
+    expect(await audit.execute({}, { agent: "factory" })).toContain("does not exist yet")
+    expect(await audit.execute({}, { agent: "es-research-beta" })).toContain("does not exist yet")
   })
 })

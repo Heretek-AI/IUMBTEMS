@@ -3,6 +3,7 @@
 import { userInfo } from "node:os"
 import {
   type ApprovalStage,
+  type Args,
   applyConfigSet,
   approvalSubject,
   ClaimStore,
@@ -13,6 +14,7 @@ import {
   engineSignedFiles,
   Factory,
   factoryLayout,
+  flag,
   gateRunner,
   HookEngine,
   isTrusted,
@@ -23,8 +25,7 @@ import {
   recordApproval,
   recordRetraction,
   recordWaiver,
-  researchSourcesDir,
-  SourceCache,
+  researchCache,
   signEngineFile,
   stateDir,
   trustProject,
@@ -32,7 +33,7 @@ import {
   verifyEngineFile,
   writeJson,
 } from "@heretek-ai/es-core"
-import { type Args, flag, parseExpiry } from "./args.ts"
+import { parseExpiry } from "./args.ts"
 import { type ConfirmIO, confirmHuman } from "./tty.ts"
 
 export interface HumanContext {
@@ -66,7 +67,6 @@ export async function approve(context: HumanContext, args: Args): Promise<number
     stage,
     channel: "cli",
     signer,
-    ...(context.stateDir ? { stateDir: context.stateDir } : {}),
   })
   const pending =
     (await readJson<Array<{ stage: string }>>(factoryLayout(context.root).pending).catch(() => undefined)) ?? []
@@ -317,7 +317,7 @@ export async function retract(context: HumanContext, args: Args): Promise<number
   }
   const store = await ClaimStore.load(context.root)
   const affected = store.citing(source)
-  const cached = await new SourceCache(researchSourcesDir(context.root)).get(source)
+  const cached = await researchCache(context.root, context.stateDir ?? stateDir()).get(source)
   const to = event === "RETRACTED" ? "STALE" : "SUSPECT"
   const lines = [
     `Source:  ${source}`,

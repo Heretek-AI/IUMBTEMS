@@ -2,8 +2,10 @@
 // and audit (verify tags and quotes, optionally prune).
 import { readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { seatMayUse } from "../agents/registry.ts"
 import { stateDir as defaultStateDir, factoryLayout } from "../layout.ts"
 import type { EsToolDef } from "../ops/tools.ts"
+import { ToolRefusal } from "../ops/tools.ts"
 import type { EsConfig } from "../schema/config.ts"
 import { evaluateWrite, type PolicyContext } from "../trust/policy.ts"
 import { auditMarkdown, formatCoverage, pruneClaims } from "./auditor.ts"
@@ -60,6 +62,9 @@ export function researchCache(root: string, stateDir: string = defaultStateDir()
   return new SourceCache(researchSourcesDir(root), stateDir)
 }
 
+/** The CLI operator runs research tools as "human" (no registry seat); seats keep the registry check. */
+const mayResearch = (agent: string | undefined, tool: string): boolean => agent === "human" || seatMayUse(agent, tool)
+
 export function researchTools(context: ResearchOpsContext): EsToolDef[] {
   const cache = researchCache(context.root, context.stateDir ?? defaultStateDir())
   const env = context.searxngUrl ? { ...(context.env ?? process.env), SEARXNG_URL: context.searxngUrl } : context.env
@@ -78,6 +83,8 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
         "Search the web with the configured provider. Results are cached; fetch a result with es_research_fetch before quoting it.",
       input: object({ query: { type: "string" }, limit: { type: "number" } }, ["query"]),
       execute: async ({ query, limit }, toolContext) => {
+        if (!mayResearch(toolContext.agent, "es_research_search"))
+          throw new ToolRefusal("Only the research and scout seats may search the web.")
         const chosen = provider()
         const signals = [
           ...(toolContext.signal ? [toolContext.signal] : []),
@@ -122,6 +129,8 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
         ["url"],
       ),
       execute: async ({ url, offset, refresh }, toolContext) => {
+        if (!mayResearch(toolContext.agent, "es_research_fetch"))
+          throw new ToolRefusal("Only the research and scout seats may fetch a page.")
         // The webcache gate: a fresh full-page snapshot of the same canonical URL
         // is served from the cache. Search results cached under a page's URL are
         // snippets, not the page, so only fetched snapshots count.
@@ -179,6 +188,8 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
         prune: { type: "boolean" },
       }),
       execute: async ({ path: target, prune }, toolContext) => {
+        if (!mayResearch(toolContext.agent, "es_research_audit"))
+          throw new ToolRefusal("Only the research seats and factory may audit a research artifact.")
         const file = path.resolve(
           context.root,
           target ?? path.relative(context.root, factoryLayout(context.root).researchReport),

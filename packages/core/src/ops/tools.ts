@@ -112,8 +112,8 @@ export function esTools(ops: OpsContext): EsToolDef[] {
       input: object({ stage: { type: "string", enum: ["frontier", "spec"] }, note: { type: "string" } }, ["stage"]),
       execute: async ({ stage, note }, context) => {
         const seat = seatOf(context.agent)
-        if (!seat || !["factory", "grill", "manager"].includes(seat))
-          throw new ToolRefusal("Only the factory, grill or manager seat may request approvals.")
+        if (!seat || !["factory", "grill"].includes(seat))
+          throw new ToolRefusal("Only the factory or grill seat may request approvals.")
         const subject = await approvalSubject(root, stage).catch((error: Error) => {
           const missing =
             /missing artifact.*frontier|not settled yet|frontier/i.test(error.message) && stage === "frontier"

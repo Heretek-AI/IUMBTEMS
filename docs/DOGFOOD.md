@@ -133,6 +133,10 @@ ignored).
 
 - Provider keys come from the environment or the harness store; they are never
   written into `.factory/`.
+- Upgrading from 0.7: the plugin options `search_engine`, `max_iterations`
+  and `mode` were removed in 1.0 — a config that still carries them warns
+  once (`Ignored unknown plugin options: …`) and otherwise loads. Delete
+  those keys; only `models` per tier is needed (see §1).
 - Budgets use host-reported usage where exposed; estimates are labelled
   "estimated".
 - A failed run is evidence: fix the harness, re-grill if the design changed,

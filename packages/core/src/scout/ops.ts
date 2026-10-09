@@ -8,9 +8,10 @@ import { buildDossier, writeDossier } from "../claims/dossier.ts"
 import { witnessClaim } from "../claims/witness.ts"
 import { assertSourceAllowed, candidateId, parseSource, scanSource } from "../harvest/scan.ts"
 import { discoverRepos, repoLine } from "../harvest/sources.ts"
+import { stateDir as defaultStateDir } from "../layout.ts"
 import type { EsToolDef } from "../ops/tools.ts"
 import { ToolRefusal } from "../ops/tools.ts"
-import { researchSourcesDir, SourceCache } from "../research/cache.ts"
+import { researchCache } from "../research/ops.ts"
 import { OSV_ECOSYSTEMS, type OsvEcosystem, queryOsv } from "../research/osv.ts"
 import type { Claim } from "../schema/claims.ts"
 import { DEFAULT_LICENSE_WHITELIST, type HarvestProfile } from "../schema/harvest.ts"
@@ -39,7 +40,8 @@ export interface ScoutOpsContext {
   readonly clone?: (url: string, dir: string) => Promise<unknown>
   /** SPDX ids that may be adopted (config licenseWhitelist); a plan may only narrow it. */
   readonly whitelist?: readonly string[]
-  /** The user-global state dir agents may never scan (default: stateDir()). */
+  /** The user-global state dir agents may never scan (default: stateDir()).
+   *  It also holds the engine key that seals the source cache (#98). */
   readonly stateDir?: string
   /** The reason the factory run is halted, if it is (STOP is enforced by the host). */
   readonly halted?: () => Promise<string | undefined>
@@ -83,7 +85,7 @@ export function advisoryClaims(name: string, advisories: readonly ScoutAdvisory[
 
 export function scoutTools(context: ScoutOpsContext): EsToolDef[] {
   const { root } = context
-  const cache = new SourceCache(researchSourcesDir(root))
+  const cache = researchCache(root, context.stateDir ?? defaultStateDir())
   const sourcePolicy = { ...(context.stateDir ? { stateDir: context.stateDir } : {}) }
   const api = () => ({
     ...(context.fetch ? { fetch: context.fetch } : {}),

@@ -7,9 +7,12 @@ import {
   evaluateRead,
   evaluateShell,
   evaluateWrite,
+  HUMAN_VERBS,
+  invokesHumanOnly,
   rebaseline,
   verifyControl,
 } from "../src/trust/index.ts"
+import { BOOLEAN_FLAGS, parseArgs } from "../src/util/args.ts"
 
 let root: string
 let state: string
@@ -260,6 +263,24 @@ describe("shell policy", () => {
       expect([command, shell("build", command).effect]).toEqual([command, "allow"])
   })
 
+  test("a boolean flag with an inline value still reads as that verb (--bool=value, #97)", () => {
+    for (const command of [
+      "es --json=1 config set models.deep x/y",
+      "es --json=x approve frontier",
+      "es --json=1 trust",
+      "es --json=x waive lint/check --reason y",
+      "es --json=1 audit src --max-usd 5",
+      'es --json=1 scout "a parser"',
+      "es --json=1 reseal --sign",
+      "es --cwd=. --json=x approve frontier",
+    ])
+      for (const agent of ["build", "es-programmer"])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // Reads keep working with an inline boolean value.
+    for (const command of ["es --json=1 status", "es --json=x config show", "es --json=1 audit verify"])
+      expect([command, shell("build", command).effect]).toEqual([command, "allow"])
+  })
+
   test("a verb only mentioned in text is still denied, and the refusal points at passing the text by file (#86)", () => {
     const hint = /--body-file/
     const reason = (decision: ReturnType<typeof shell>) => (decision.effect === "deny" ? decision.reason : "")
@@ -391,4 +412,113 @@ describe("control baseline", () => {
     await writeFile(path.join(root, ".factory/config.json"), '{"afterEdit":"fast"}')
     expect((await verifyControl(root)).violations.join("\n")).toContain(".factory/config.json changed")
   })
+})
+
+// ------------------------------------------------------------------ argv parity (#97)
+//
+// One grammar for the CLI and the human-only rule. The CLI dispatches on
+// parseArgs(argv, BOOLEAN_FLAGS).positionals; the shell policy reads the same
+// words quote-blind. This property pins the denial direction: whatever argv
+// the CLI would dispatch to a human-only verb, the policy must deny.
+
+/** Deterministic PRNG (mulberry32): the seed prints on failure, no dependency. */
+const mulberry32 = (seed: number) => () => {
+  seed |= 0
+  seed = (seed + 0x6d2b79f5) | 0
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+}
+
+const BINARIES: readonly string[][] = [
+  ["es"],
+  ["epistemic-swarm"],
+  ["npx", "@heretek-ai/es-cli"],
+  ["bunx", "@heretek-ai/es-cli@1.1.4"],
+  ["node", "./bin/es.js"],
+]
+const GLOBAL_FLAGS: readonly string[][] = [
+  ["--cwd", "."],
+  ["--run", "r1"],
+  ["--json"],
+  ["--json=1"],
+  ["--json=x"],
+  ["--full=yes"],
+  ["--x=y"],
+  ["--"],
+  ["--cwd=."],
+  ["--verbose"],
+  ["--tag", "v1"],
+]
+const TRAILING: readonly string[] = [
+  "x",
+  "frontier",
+  "spec",
+  "--max-usd",
+  "5",
+  "models.deep",
+  "lint/check",
+  "audit-01",
+  "--reason",
+  "why",
+  "extra",
+  "--force",
+]
+/** Sub-verbs per HUMAN_VERBS entry: [satisfying..., failing...]. */
+const SUBS: Readonly<Record<string, readonly [readonly string[], readonly string[]]>> = {
+  factory: [
+    ["resume", "pr"],
+    ["begin", "run", "stop", "status"],
+  ],
+  gates: [["install-git"], ["run"]],
+  lsp: [["install"], ["status", "diagnostics"]],
+  config: [["set"], ["show"]],
+  research: [
+    ["retract", "export"],
+    ["search", "fetch", "audit", "verify-brief"],
+  ],
+  audit: [
+    ["src", "dismiss", "./src", "audit-01"],
+    ["verify", "show"],
+  ],
+  scout: [["leftpad"], ["show"]],
+}
+
+describe("argv parity: the policy denies whatever the CLI would run as human-only (#97)", () => {
+  for (const seed of [20261008, 97, 881]) {
+    test(`seed ${seed}: 2,000 generated argv, zero missed denials`, () => {
+      const rand = mulberry32(seed)
+      const pick = <T>(items: readonly T[]): T => items[Math.floor(rand() * items.length)]!
+      const missed: string[] = []
+      for (let i = 0; i < 2000; i++) {
+        const binary = pick(BINARIES)
+        const pre = Array.from({ length: Math.floor(rand() * 4) }, () => pick(GLOBAL_FLAGS)).flat()
+        const [verb] = pick(HUMAN_VERBS)
+        const subs = SUBS[verb!]
+        // Bare verbs, satisfying and failing sub-verbs all occur; flags may
+        // sit between the verb and its sub-verb (the #88 shape).
+        const mid = Array.from({ length: Math.floor(rand() * 3) }, () => pick(GLOBAL_FLAGS)).flat()
+        const roll = rand()
+        const sub =
+          subs === undefined
+            ? roll < 0.5
+              ? [pick(TRAILING)]
+              : []
+            : roll < 0.4
+              ? [pick(subs[0])]
+              : roll < 0.7
+                ? [pick(subs[1])]
+                : []
+        const trailing = Array.from({ length: Math.floor(rand() * 4) }, () => pick(TRAILING))
+        const rest = [...pre, verb!, ...mid, ...sub, ...trailing]
+        const [command, next] = parseArgs(rest, BOOLEAN_FLAGS).positionals
+        const rule = HUMAN_VERBS.find(([name]) => name === command)
+        const humanOnly = rule !== undefined && (rule[1] === undefined || rule[1](next))
+        if (humanOnly && !invokesHumanOnly([...binary, ...rest].join(" ")))
+          missed.push(`case ${i}: ${[...binary, ...rest].join(" ")}`)
+        if (missed.length > 4) break
+      }
+      expect(missed).toEqual([])
+    })
+  }
 })

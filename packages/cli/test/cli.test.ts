@@ -7,14 +7,16 @@ import {
   Factory,
   factoryLayout,
   gateRunner,
+  HUMAN_VERBS,
+  parseArgs,
   readApproval,
   researchSourcesDir,
   SourceCache,
   sealHumanKey,
 } from "@heretek-ai/es-core"
-import { parseArgs, parseExpiry } from "../src/args.ts"
+import { parseExpiry } from "../src/args.ts"
 import { type HarnessDriver, type HeadlessEvent, presentEvent, runHeadless } from "../src/headless.ts"
-import { main } from "../src/main.ts"
+import { commandHelp, main } from "../src/main.ts"
 import { createMcpServer } from "../src/mcp.ts"
 import { type ConfirmIO, confirmHuman, NotInteractive } from "../src/tty.ts"
 import { VERSION } from "../src/version.ts"
@@ -88,6 +90,62 @@ describe("args", () => {
     const now = new Date("2026-10-06T00:00:00Z")
     expect(parseExpiry("7d", now).toISOString()).toBe("2026-10-13T00:00:00.000Z")
     expect(() => parseExpiry("soon")).toThrow()
+  })
+})
+
+describe("HELP human-only markers match HUMAN_VERBS (#97)", () => {
+  // Every human-only command line carries an explicit [human, TTY] (or
+  // [human]) marker; section headers do not count. Placeholders (<…>, […],
+  // "…") are not literal sub-verbs and are skipped.
+  const literal = (word: string | undefined): string | undefined =>
+    word !== undefined && /^[A-Za-z][\w.-]*$/.test(word) ? word : undefined
+  const commands = () => {
+    const help = commandHelp("no-such-command")
+    const rows: Array<{ verb: string; sub: string | undefined; marked: boolean; line: string }> = []
+    for (const line of help.split("\n")) {
+      const match = /^ {2}(\S+)(?:\s+(\S+))?/.exec(line)
+      if (!match) continue
+      rows.push({
+        verb: match[1]!,
+        sub: literal(match[2]),
+        marked: /\[human[^\]]*\]/.test(line),
+        line: line.trim(),
+      })
+    }
+    return rows
+  }
+
+  test("every marked verb is human-only, and every human-only verb is marked", () => {
+    const rows = commands()
+    expect(rows.length).toBeGreaterThan(20)
+    const names = new Set(HUMAN_VERBS.map(([name]) => name))
+    for (const row of rows.filter((item) => item.marked)) {
+      expect([row.line, names.has(row.verb)]).toEqual([row.line, true])
+      const [, predicate] = HUMAN_VERBS.find(([name]) => name === row.verb)!
+      if (row.sub !== undefined && predicate !== undefined)
+        expect([row.line, predicate(row.sub)]).toEqual([row.line, true])
+    }
+    // Bare "resume" has no top-level CLI command (only factory resume); the
+    // rule stays as over-approximation for other binaries. Every verb HELP
+    // documents as a command must show a marker.
+    for (const [name] of HUMAN_VERBS)
+      if (name !== "resume" && rows.some((row) => row.verb === name))
+        expect([name, rows.some((row) => row.marked && row.verb === name)]).toEqual([name, true])
+  })
+
+  test("a literal sub-verb the rule calls human-only is never left unmarked", () => {
+    const rows = commands()
+    const unmarked: string[] = []
+    for (const [name, predicate] of HUMAN_VERBS) {
+      if (predicate === undefined) continue
+      const literalSubs = new Set(
+        rows.filter((row) => row.verb === name && row.sub !== undefined).map((row) => row.sub!),
+      )
+      for (const sub of literalSubs)
+        if (predicate(sub) && !rows.some((row) => row.verb === name && row.sub === sub && row.marked))
+          unmarked.push(`${name} ${sub}`)
+    }
+    expect(unmarked).toEqual([])
   })
 })
 
@@ -468,6 +526,28 @@ describe("mcp", () => {
       .map((line) => JSON.parse(line))
     expect(lines.map((line) => line.id)).toEqual([1, 2])
     expect(lines[0].result.serverInfo.name).toBe("epistemic-swarm")
+  })
+
+  test("H1: a piped agent argument cannot claim a seat; identity is pinned to the adapter environment", async () => {
+    const call = (server: ReturnType<typeof createMcpServer>, args: Record<string, unknown>) =>
+      server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "complete", arguments: args } })
+    // No adapter identity: the caller is "mcp", which holds no seat, so even
+    // agent:"factory" is refused as mcp at the tool's own seat check.
+    const bare = createMcpServer({ root, stateDir: state, env: {} })
+    const spoofed = await call(bare, { agent: "factory" })
+    expect(spoofed?.result.isError).toBe(true)
+    expect(spoofed?.result.content[0].text).toContain("called by mcp")
+    // The adapter pins one identity per server in its environment: that identity
+    // reaches the tool (here refused as factory at the programmer-only check).
+    const pinned = createMcpServer({ root, stateDir: state, env: { ES_MCP_AGENT: "factory" } })
+    const admitted = await call(pinned, {})
+    expect(admitted?.result.isError).toBe(true)
+    expect(admitted?.result.content[0].text).toContain("called by factory")
+    // The per-call argument is ignored: claiming factory under a QA pin stays refused as QA.
+    const qaPinned = createMcpServer({ root, stateDir: state, env: { ES_MCP_AGENT: "es-qa-functional" } })
+    const ignored = await call(qaPinned, { agent: "factory" })
+    expect(ignored?.result.isError).toBe(true)
+    expect(ignored?.result.content[0].text).toContain("called by es-qa-functional")
   })
 })
 

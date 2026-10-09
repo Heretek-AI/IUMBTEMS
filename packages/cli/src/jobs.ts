@@ -5,10 +5,12 @@
 import { userInfo } from "node:os"
 import path from "node:path"
 import {
+  type Args,
   allAudits,
   describeTarget,
   Factory,
   factoryLayout,
+  flag,
   gateRunner,
   parseAuditTarget,
   readAssessments,
@@ -16,7 +18,6 @@ import {
   readScoutResult,
   scoutPaths,
 } from "@heretek-ai/es-core"
-import { type Args, flag } from "./args.ts"
 import {
   DRIVERS,
   driveHeadless,

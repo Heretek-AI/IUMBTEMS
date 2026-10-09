@@ -5,17 +5,11 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 1.1.4.** A security fix: a flag before the verb
-> (`es --cwd . <verb>`) no longer slips past the human-only shell rule
-> (#88). 1.1.3 added live-run visibility and seat discipline. Every status
-> view leads with whether the run is working, waiting, stuck or done:
-> `es status`, `es watch`, `es runs`, the factory dashboard and a TUI footer
-> indicator. Factory seats run in the foreground, with one writer per
-> research file. 1.1.2 added `audit.phase`, pipeline A and
-> signed run state; 1.1.1 was the security release (bubblewrap for every agent
-> shell, the passphrase-sealed Ed25519 human key, terminal-only approvals).
-> Install from npm (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`,
-> `@heretek-ai/es-cli`); run `es key seal` once.
+> **Status: 1.1.5.** Phase 0 hardening: source-cache seals on every reader,
+> MCP caller identity is pinned, the CLI and the human-only rule share one
+> argv grammar, seat scoping is probed from the registry, and seat models
+> fail closed (#96–#103, #139). Install from npm (`@heretek-ai/epistemic-swarm`,
+> `@heretek-ai/es-core`, `@heretek-ai/es-cli`); run `es key seal` once.
 
 ## Naming
 
@@ -98,10 +92,32 @@ rather than silently assumed:
   (bounded by `ES_EVAL_MAX_STEPS`) or once the run's spend, read from the
   stream's `step_finish` cost, passes `ES_EVAL_MAX_USD`. A model with no
   configured price reports $0, so for it only the step caps bound spend.
-- **MCP caller identity.** Over the stdio MCP server the calling agent's
-  identity is a model-supplied `agent` argument (or `ES_AGENT`), so it is
-  ADVISORY: the harness adapter, not the protocol, establishes it. There is no
-  MCP tool for approvals, trust, waivers or resume.
+- **MCP caller identity is pinned.** Over the stdio MCP server the calling agent's
+  identity comes from the adapter's environment (`ES_MCP_AGENT`, else the legacy
+  `ES_AGENT` default) — one server per agent, set in the human-written adapter
+  config — and the model-supplied `agent` argument is ignored. Without an adapter
+  identity the caller is `mcp`, which maps to no seat, so every seat-checked tool
+  refuses. There is no MCP tool for approvals, trust, waivers or resume.
+
+## Upgrading from 0.7
+
+The 0.7-era plugin options `search_engine`, `max_iterations` and `mode` were
+removed in 1.0. A config that still carries them loads, but warns once:
+`Ignored unknown plugin options: …`. Delete those keys; a clean `plugins`
+entry only needs `models` per tier:
+
+```json
+{
+  "package": "@heretek-ai/epistemic-swarm",
+  "options": {
+    "models": {
+      "deep": "<provider>/<model>",
+      "balanced": "<provider>/<model>",
+      "fast": "<provider>/<model>"
+    }
+  }
+}
+```
 
 ## Development
 

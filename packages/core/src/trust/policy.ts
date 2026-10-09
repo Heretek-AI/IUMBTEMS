@@ -5,6 +5,7 @@
 // handlers and the Antigravity PreToolUse hook.
 import { agentSpec, type WriteScope } from "../agents/registry.ts"
 import { stateDir } from "../layout.ts"
+import { BOOLEAN_FLAGS } from "../util/args.ts"
 import { matchAny } from "../util/glob.ts"
 import { controlClass } from "./control.ts"
 import { canonicalPath, isInside, relativeTo, resolveTarget } from "./paths.ts"
@@ -120,11 +121,13 @@ export type ShellDecision =
 /** The command with shell quoting and escapes removed, so `es 'approve'` and `.fac""tory` read plainly. */
 export const unquoteShell = (command: string) => command.replaceAll(/['"\\]/g, "")
 
-const words = (command: string) => command.split(/[^\w@./-]+/).filter(Boolean)
+const words = (command: string) => command.split(/[^\w@./=:-]+/).filter(Boolean)
 
 const ES_BINARY = /^(es|epistemic-swarm|es\.js|es-cli|@heretek-ai\/es-cli(@[\w.-]+)?)$|\/(es|es\.js|epistemic-swarm)$/
-/** Human-only verbs: the next word(s) after the es binary. */
-const HUMAN_VERBS: ReadonlyArray<readonly [string, ((next: string | undefined) => boolean)?]> = [
+/** Human-only verbs: the next word(s) after the es binary. Exported for the
+ *  argv-parity property test (#97): the CLI grammar lives in core. */
+export type HumanVerbRule = readonly [string, ((next: string | undefined) => boolean)?]
+export const HUMAN_VERBS: ReadonlyArray<HumanVerbRule> = [
   ["approve"],
   ["trust"],
   ["waive"],
@@ -166,10 +169,12 @@ interface Cursor {
 /**
  * Where the CLI parser's next positional could be, scanning from `from` (an
  * index past the end means there is none). The parser takes flags anywhere
- * (#88): `--` makes the rest positional, and `--flag value` consumes the
- * value unless the flag is boolean. The boolean list is the CLI's, so a bare
- * `--flag` counts both ways; `--flag=value` is two words here (`words` splits
- * at `=`) and reads the same.
+ * (#88): `--` makes the rest positional, `--flag value` consumes the value
+ * unless the flag is boolean, and `--flag=value` never consumes the next word
+ * (the value is inline, as in the CLI's parseArgs, #97). A KNOWN boolean (the
+ * CLI's BOOLEAN_FLAGS, #97) never consumes, so only the next word is a
+ * candidate; an unknown `--flag` counts both ways, since the next word may be
+ * its value or the verb.
  */
 function nextPositionals(tokens: readonly string[], from: Cursor): Cursor[] {
   const found: Cursor[] = []
@@ -183,7 +188,12 @@ function nextPositionals(tokens: readonly string[], from: Cursor): Cursor[] {
     const token = tokens[cursor.at]
     if (token === undefined || cursor.literal || !token.startsWith("--")) found.push(cursor)
     else if (token === "--") stack.push({ at: cursor.at + 1, literal: true })
-    else stack.push({ at: cursor.at + 1, literal: false }, { at: cursor.at + 2, literal: false })
+    else {
+      const name = token.slice(2).split("=", 1)[0]!
+      const inline = token.includes("=")
+      stack.push({ at: cursor.at + 1, literal: false })
+      if (!inline && !BOOLEAN_FLAGS.includes(name)) stack.push({ at: cursor.at + 2, literal: false })
+    }
   }
   return found
 }

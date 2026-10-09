@@ -6,6 +6,7 @@
 import { readdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import { CORE_DEPENDENCY_ALLOWLIST, checkDependencies } from "../packages/core/src/gates/minimal-deps.ts"
+import { workspacePackages } from "./packages.ts"
 
 const root = path.resolve(import.meta.dir, "..")
 const pkg = JSON.parse(await readFile(path.join(root, "packages/core/package.json"), "utf8")) as {
@@ -28,14 +29,41 @@ if (!check.ok) {
 // Package boundaries (docs/adr/0001-monorepo.md): core stays harness-neutral,
 // so it may not import the CLI or the plugin, and the CLI may not import the
 // plugin. Both bare specifiers and relative paths into another package count.
+// Package boundaries (docs/adr/0001-monorepo.md): core stays harness-neutral,
+// so it may not import the CLI or the plugin, and the CLI may not import the
+// plugin. Both bare specifiers and relative paths into another package count.
+// Every workspace package needs an entry: a new surface fails the gate until
+// it declares which packages it may not import, and core and cli may never
+// import a new surface (their entries must ban it).
 const BOUNDARIES = [
-  { pkg: "core", banned: ["cli", "opencode"] },
-  { pkg: "cli", banned: ["opencode"] },
+  { pkg: "core", banned: ["cli", "opencode", "testkit"] },
+  { pkg: "cli", banned: ["opencode", "testkit"] },
+  { pkg: "opencode", banned: [] as string[] },
+  { pkg: "testkit", banned: [] as string[] },
 ] as const
-const NPM_NAME: Record<string, string> = { cli: "@heretek-ai/es-cli", opencode: "@heretek-ai/epistemic-swarm" }
+const NPM_NAME: Record<string, string> = {
+  cli: "@heretek-ai/es-cli",
+  opencode: "@heretek-ai/epistemic-swarm",
+  testkit: "@heretek-ai/es-testkit",
+}
 const SPECIFIER = /\b(?:from|import)\s*\(?\s*["']([^"']+)["']/g
 
 const crossings: string[] = []
+
+// The workspace is the universe: a package with no BOUNDARIES entry fails
+// until it declares its bans, and core/cli entries must ban every other
+// surface, so a new package cannot be silently imported by (or silently
+// importable from) the harness-neutral layers.
+const universe = (await workspacePackages(root)).map((pkg) => pkg.dir)
+for (const pkg of universe)
+  if (!BOUNDARIES.some((entry) => entry.pkg === pkg))
+    crossings.push(`packages/${pkg} has no BOUNDARIES entry: declare which packages ${pkg} may not import`)
+for (const outer of ["core", "cli"] as const) {
+  const bans = BOUNDARIES.find((entry) => entry.pkg === outer)?.banned ?? []
+  for (const pkg of universe)
+    if (pkg !== outer && pkg !== "core" && pkg !== "cli" && !(bans as readonly string[]).includes(pkg))
+      crossings.push(`packages/${outer} may import packages/${pkg}: new surfaces stay out of core and the CLI`)
+}
 for (const { pkg, banned } of BOUNDARIES) {
   const src = path.join(root, "packages", pkg, "src")
   const files = (await readdir(src, { recursive: true })).filter((file) => /\.tsx?$/.test(file))

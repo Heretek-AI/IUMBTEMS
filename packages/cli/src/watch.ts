@@ -2,8 +2,7 @@
 // terminal, for following a run without the TUI (a headless run, another
 // project). q or ctrl+c quits. It needs a terminal: an agent shell has none,
 // so an agent can never hang on it.
-import type { Args } from "./args.ts"
-import { flag } from "./args.ts"
+import { type Args, flag } from "@heretek-ai/es-core"
 import { type StatusContext, statusSnapshot } from "./status.ts"
 
 export interface WatchIO {

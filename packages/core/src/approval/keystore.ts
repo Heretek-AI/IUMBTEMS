@@ -200,10 +200,3 @@ export async function signatureProblem(
   if (!(await hasHumanKey(dir))) return `${what} cannot be verified: ${NO_KEY}`
   return `${what} is not signed by this machine's human key (forged, tampered or foreign)`
 }
-
-/** A short code a human must type back to confirm a non-signing action (CLI/TUI). */
-export function confirmationCode(): string {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-  const bytes = randomBytes(6)
-  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("")
-}

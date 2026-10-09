@@ -125,6 +125,26 @@ const capabilitiesDoc = [
 ].join("\n")
 
 // ------------------------------------------------- config doc
+// Nested models.* keys (#96): the generated JSON Schema carries them under
+// properties.models.properties, so document them in their own table.
+function nestedConfigDoc(configJson: {
+  properties?: Record<string, { description?: string; properties?: Record<string, { description?: string }> }>
+}): string[] {
+  const nested = configJson.properties?.models?.properties ?? {}
+  const names = Object.keys(nested)
+  if (names.length === 0) return []
+  return [
+    "Nested `models.*` keys (fail-closed: malformed refs and unknown agent ids are rejected at load; a",
+    "configured model missing on the host refuses that seat at launch):",
+    "",
+    "| field | description |",
+    "| --- | --- |",
+    ...names.map(
+      (name) => `| \`models.${name}\` | ${(nested[name]?.description ?? "").replaceAll("\\", "\\\\").replaceAll("|", "\\|")} |`,
+    ),
+    "",
+  ]
+}
 const configSchema = outputs.find((output) => output.file === "schemas/es-config.schema.json")
 if (!configSchema) throw new Error("docs: schemas/es-config.schema.json missing; is EsConfigSchema exported?")
 const configJson = JSON.parse(configSchema.content) as {
@@ -146,6 +166,7 @@ const configDoc = [
     return `| \`${name}\` | ${type}${property.enum ? ` (${property.enum.join(", ")})` : ""} | ${fallback} | ${(property.description ?? "").replaceAll("\\", "\\\\").replaceAll("|", "\\|")} |`
   }),
   "",
+  ...nestedConfigDoc(configJson),
   "`es config show` and `/config` print the effective config and which files contributed.",
   "",
 ].join("\n")

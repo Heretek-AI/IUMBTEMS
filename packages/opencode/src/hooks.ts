@@ -15,6 +15,7 @@ import {
   bwrapAvailable,
   fromOpenCode,
   HookEngine,
+  parseModelRef,
   permissionActionTool,
   shellQuote,
   toOpenCodeInput,
@@ -100,8 +101,7 @@ export async function createHookBridge(
     root: runtime.root,
     stateDir: runtime.stateDir,
     generate: async (prompt, model) => {
-      const slash = model?.indexOf("/") ?? -1
-      const ref = model && slash > 0 ? { providerID: model.slice(0, slash), id: model.slice(slash + 1) } : undefined
+      const ref = model ? parseModelRef(model) : undefined
       return (await ctx.generate.text({ prompt, ...(ref ? { model: ref } : {}) })).text
     },
   })

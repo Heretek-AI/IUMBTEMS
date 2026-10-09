@@ -1,5 +1,67 @@
 # Changelog
 
+## 1.1.5 — 2026-10-09
+
+Phase 0 hardening: every trust boundary the 1.1.x series left soft is now
+sealed, pinned or tested — source-cache seals on every reader, MCP caller
+identity, CLI/policy argv parity, a registry-generated scoping suite,
+fail-closed seat models, and consistency cleanup. No human-only verb changed.
+
+**Security.**
+- **#98: every source-cache reader verifies seals.** Scout advisories,
+  brief export, retract and audit dossiers went through unsealed caches, so
+  planted entries read as evidence. All constructions now go through the
+  sealed constructor, planted entries are refused, and a misuse-guard test
+  fails any new unsealed construction.
+- **#99: MCP caller identity is pinned, research tools gain core seat
+  checks.** A piped `agent` argument could claim any seat over `es mcp`;
+  identity now comes from the adapter environment (`ES_MCP_AGENT`, else
+  legacy `ES_AGENT`), defaulting to seat-less `mcp`. `es_research_search`,
+  `es_research_fetch` and `es_research_audit` enforce the registry grants in
+  core. The research tools are not on the MCP surface at all.
+
+**Behaviour changes.**
+- **#96: seat models fail closed.** Malformed refs and unknown
+  `models.agents` keys are rejected at config load; a configured model
+  missing on the host refuses that seat at launch with remediation (naming
+  the key and `es config set`) and shows in `es_status`. Unset tiers still
+  inherit the session default, explicitly.
+- **#101: `es_request_approval` admits factory and grill only.** The manager
+  seat was accepted against the registry's grants.
+- **#97 precision:** known boolean flags read single-way in the human-only
+  rule, cutting false denials with zero lost denials (property-gated).
+
+**New.**
+- **#100: registry-generated permission matrix and bypass probes**
+  (`packages/opencode/test/scoping.test.ts`). OpenCode's
+  `Permission.evaluate` + `Wildcard.match` (MIT) are vendored into the
+  testkit; every seat's compiled rules are asserted against its registry
+  spec, and each restriction class is probed on the real host, including the
+  post-#99 MCP pin.
+- **#102: one workspace package list** (`bun scripts/packages.ts`):
+  the typecheck loop, `pack-smoke.sh`, `publish.yml` and `deps.ts` read it;
+  new packages declare `esRelease.order` and `BOUNDARIES`.
+
+**Fixes.**
+- **#101 registry consistency:** factory tool union equals `ALL_ES_TOOLS`
+  with single registration (tested both halves); `confirmationCode` and the
+  ignored `recordApproval` `stateDir` removed; waivers comment corrected to
+  Ed25519; subagent `spawns` stay empty (depth 1, tested).
+- **#139: the `auditor-thesis` eval stages an open audit run**, graded
+  deterministically on the verdict record instead of narration luck.
+- **#103 hygiene:** `.claude/CLAUDE.md` is a pointer to AGENTS.md (dead
+  `runner/` paths gone); README and DOGFOOD gain the 0.7 options note.
+
+**Evals and CI.**
+- Seeded argv-parity property (3 × 2,000 cases) plus HELP-marker parity,
+  both with recorded break probes (#97).
+- `docs/CONFIG.md` documents the nested `models.*` keys (#96).
+- CI pattern for future packages documented in ADR 0001 (path-filtered
+  workflows; `check` stays unfiltered) (#102).
+
+**Dependencies.** `@opentui/core` + `@opentui/solid` 0.5.14 → 0.5.17: the
+nested `@babel/core` 7.28.0 pin is gone (7.29.7).
+
 ## 1.1.4 — 2026-10-08
 
 A security fix for the human-only shell rule, plus the E2E feedback fixes

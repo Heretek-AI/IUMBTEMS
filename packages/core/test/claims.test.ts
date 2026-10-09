@@ -47,7 +47,7 @@ beforeEach(async () => {
   state = await mkdtemp(path.join(tmpdir(), "es-claims-state-"))
   await sealHumanKey(PASSPHRASE, state)
   signer = await unlockHumanKey(PASSPHRASE, state)
-  cache = new SourceCache(researchSourcesDir(root))
+  cache = new SourceCache(researchSourcesDir(root), state)
 })
 afterEach(async () => {
   await rm(root, { recursive: true, force: true })
@@ -644,7 +644,7 @@ describe("proof-carrying research brief (d66328c:runner/tests/test_pcrb.py)", ()
       buildDossier({ mode: "research", subject: "benchmarks", claims, now: at }),
       { cache, now },
     )
-    const { brief, file } = await exportBrief(root, { signer, now })
+    const { brief, file } = await exportBrief(root, { signer, stateDir: state, now })
     return { brief, file, sources }
   }
 

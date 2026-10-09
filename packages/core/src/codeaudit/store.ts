@@ -5,8 +5,8 @@ import { normalizeClaim } from "../claims/claim.ts"
 import { buildDossier, writeDossier } from "../claims/dossier.ts"
 import { explainDossierRank, rankDossiers } from "../claims/rank.ts"
 import { type Audit, describeTarget } from "../factory/state.ts"
-import { factoryLayout } from "../layout.ts"
-import { researchSourcesDir, SourceCache } from "../research/cache.ts"
+import { stateDir as defaultStateDir, factoryLayout } from "../layout.ts"
+import { researchCache } from "../research/ops.ts"
 import type { Dossier } from "../schema/claims.ts"
 import { type AuditFinding, type AuditRecord, AuditRecordSchema } from "../schema/codeaudit.ts"
 import { atomicWrite, readJson, withLock, writeJson } from "../util/fs.ts"
@@ -47,6 +47,8 @@ export async function writeAuditArtifacts(
   audit: Audit,
   round: number,
   tree: { root: string },
+  /** Engine-key dir for the sealed source cache (#98); defaults to the global state dir. */
+  stateDir?: string,
 ): Promise<{ dossier: Dossier; report: string }> {
   const layout = factoryLayout(root)
   const records = roundRecords(await readAuditRecords(root, audit.id), round)
@@ -73,7 +75,7 @@ export async function writeAuditArtifacts(
         notes: record.notes,
       })),
     }),
-    { cache: new SourceCache(researchSourcesDir(root)), root: tree.root },
+    { cache: researchCache(root, stateDir ?? defaultStateDir()), root: tree.root },
   )
   const report = renderAuditReport(audit, round, records)
   await atomicWrite(layout.auditReport(audit.id), report)

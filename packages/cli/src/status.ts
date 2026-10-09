@@ -1,6 +1,8 @@
 // `es status` and `es runs` (1.1.3, #58/#61): which run, in which project,
 // is it working, waiting, stuck or done. The human view leads with one plain
 // sentence; `--json` gives the same liveness to scripts and monitors.
+
+import type { Args } from "@heretek-ai/es-core"
 import {
   ago,
   Factory,
@@ -13,7 +15,6 @@ import {
   type RunIndexEntry,
   readLiveness,
 } from "@heretek-ai/es-core"
-import type { Args } from "./args.ts"
 
 export interface StatusContext {
   readonly root: string
