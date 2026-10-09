@@ -146,6 +146,9 @@ describe("sandboxArgv", () => {
       expect([kind, args.join(" ")]).toEqual([kind, expect.stringContaining("--tmpfs /h/.local/state/es")])
       expect(args.join(" ")).toContain("--ro-bind /dev/null /h/.config/opencode/service.json")
       expect(args.join(" ")).toContain("--unsetenv OPENCODE_SERVER_PASSWORD")
+      // Provider and gateway API keys never reach a seat shell (#106, #107).
+      for (const secret of ["BRAVE_API_KEY", "FIRECRAWL_API_KEY", "ES_SCRAPER_SWARM_TOKEN"])
+        expect([kind, secret, args.join(" ")]).toEqual([kind, secret, expect.stringContaining(`--unsetenv ${secret}`)])
       expect([kind, args.includes("SSH_AUTH_SOCK")]).toEqual([kind, kind !== "user"])
     }
   })

@@ -10,7 +10,7 @@ import {
   runFetchChain,
   runSearchChain,
   type SourceBackend,
-} from "../src/research/backends.ts"
+} from "../src/research/backends/index.ts"
 import { SourceCache } from "../src/research/cache.ts"
 import { researchTools } from "../src/research/ops.ts"
 
@@ -156,10 +156,10 @@ describe("ordered failover", () => {
 })
 
 describe("backend order resolution", () => {
-  test("explicit research.backends wins; searchProvider is a one-element alias; default keeps today's order", () => {
+  test("explicit research.backends wins; searchProvider is a one-element alias; default leads with the gateway", () => {
     expect(resolveBackendOrder({ backends: ["searxng", "brave", "direct"] })).toEqual(["searxng", "brave", "direct"])
     expect(resolveBackendOrder({ provider: "brave" })).toEqual(["brave", "direct"])
-    expect(resolveBackendOrder({})).toEqual(["brave", "firecrawl", "searxng", "direct"])
+    expect(resolveBackendOrder({})).toEqual(["scraper-swarm", "brave", "firecrawl", "searxng", "direct"])
   })
 })
 

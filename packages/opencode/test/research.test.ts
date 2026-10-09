@@ -1,6 +1,7 @@
 // Research stack on the real host: the configured provider is the host's
 // websearch (results cached), research seats fetch and audit cited evidence.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -169,5 +170,112 @@ describe("research on the real host", () => {
       if (saved === undefined) delete process.env.BRAVE_API_KEY
       else process.env.BRAVE_API_KEY = saved
     }
+  }, 60_000)
+})
+
+describe("#107: the gateway backend on the real host", () => {
+  // Vendored golden fixtures replayed by a fake gateway (no stack runs here).
+  const gatewayFixture = (area: string, name: string) =>
+    JSON.parse(
+      readFileSync(
+        path.resolve(import.meta.dir, "../../core/test/fixtures/scraper-swarm/v1", area, `${name}.json`),
+        "utf8",
+      ),
+    ) as { response_body: unknown }
+  const searchError = gatewayFixture("web-search", "upstream-error").response_body
+  const fetchOk = gatewayFixture("fetch-page", "md-success").response_body
+  const ssrfDenied = gatewayFixture("fetch-page", "ssrf-denied").response_body
+
+  let gateway: ReturnType<typeof Bun.serve>
+  let mode = "mixed"
+  let gatewayCalls: string[] = []
+  const auths: Array<string | null> = []
+
+  beforeAll(async () => {
+    gateway = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const body = (await req.json().catch(() => undefined)) as
+          | { method?: string; params?: { name?: string } }
+          | undefined
+        auths.push(req.headers.get("authorization"))
+        const name = body?.params?.name ?? ""
+        gatewayCalls.push(name)
+        const toolBody = name === "web_search" ? searchError : mode === "ssrf" ? ssrfDenied : fetchOk
+        return Response.json(toolBody, { headers: { "x-swarm-contract": "1" } })
+      },
+    })
+  })
+
+  afterAll(() => gateway?.stop(true))
+
+  const withGateway = async (work: (harness: Harness) => Promise<void>) => {
+    const savedUrl = process.env.ES_SCRAPER_SWARM_URL
+    const savedToken = process.env.ES_SCRAPER_SWARM_TOKEN
+    process.env.ES_SCRAPER_SWARM_URL = `http://127.0.0.1:${gateway.port}`
+    process.env.ES_SCRAPER_SWARM_TOKEN = "test-token"
+    const harness = await boot({
+      git: true,
+      script: directiveScript,
+      plugins: [{ path: pluginDir, options: { stateDir: state, pr: "off" } }],
+      files: { "README.md": "# swarm\n" },
+    })
+    try {
+      await work(harness)
+    } finally {
+      await harness.close()
+      if (savedUrl === undefined) delete process.env.ES_SCRAPER_SWARM_URL
+      else process.env.ES_SCRAPER_SWARM_URL = savedUrl
+      if (savedToken === undefined) delete process.env.ES_SCRAPER_SWARM_TOKEN
+      else process.env.ES_SCRAPER_SWARM_TOKEN = savedToken
+    }
+  }
+
+  test("gateway search fails over to the next backend", async () => {
+    mode = "mixed"
+    gatewayCalls = []
+    await withGateway(async (swarm) => {
+      const searched = await swarm.run(call("es_research_search", { query: "factory gates" }), {
+        agent: "es-research-alpha",
+      })
+      expect(searched.tools[0]?.status).toBe("completed")
+      // The gateway errored, so the local SearXNG instance served instead.
+      expect(searched.tools[0]?.text).toContain("searxng results for")
+      expect(gatewayCalls).toContain("web_search")
+    })
+  }, 60_000)
+
+  test("gateway fetch caches sealed under provider scraper-swarm", async () => {
+    mode = "mixed"
+    gatewayCalls = []
+    auths.length = 0
+    await withGateway(async (swarm) => {
+      const fetched = await swarm.run(call("es_research_fetch", { url: "https://example.com/recorded" }), {
+        agent: "es-research-alpha",
+      })
+      expect(fetched.tools[0]?.status).toBe("completed")
+      expect(fetched.tools[0]?.text).toContain("Cached https://example.com/recorded")
+      expect(fetched.tools[0]?.text).toContain(
+        "sha256:0cb130bc2c0a6fe07c14366f51c96b2cae6b12a12777767524aa49e199c6876f",
+      )
+      expect(gatewayCalls).toContain("fetch_page")
+      // The token authenticates every call and never anything else.
+      expect(auths.length).toBeGreaterThan(0)
+      for (const auth of auths) expect(auth).toBe("Bearer test-token")
+    })
+  }, 60_000)
+
+  test("a gateway SSRF denial stops the chain: direct fetch is never attempted", async () => {
+    mode = "ssrf"
+    await withGateway(async (swarm) => {
+      const { tools } = await swarm.run(call("es_research_fetch", { url: "http://169.254.169.254/" }), {
+        agent: "es-research-alpha",
+      })
+      expect(tools[0]?.status).toBe("error")
+      // The gateway's refusal surfaces, not a direct-fetch error: nothing failed over.
+      expect(tools[0]?.text).toContain("SSRF denied")
+    })
+    mode = "mixed"
   }, 60_000)
 })

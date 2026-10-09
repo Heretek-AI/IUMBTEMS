@@ -12,7 +12,8 @@ import {
   type SearchProvider,
   type SearchResult,
   searxngProvider,
-} from "./providers.ts"
+} from "../providers.ts"
+import { scraperSwarmBackend } from "./scraper-swarm.ts"
 
 export type BackendErrorKind = "unavailable" | "auth" | "rate_limited" | "blocked" | "upstream" | "timeout"
 
@@ -46,6 +47,7 @@ export interface BackendSearchOptions {
 export interface BackendFetchOptions {
   readonly signal?: AbortSignal
   readonly fetch?: typeof fetch
+  readonly env?: NodeJS.ProcessEnv
 }
 
 export interface SourceBackend {
@@ -75,20 +77,27 @@ export const directBackend: SourceBackend = {
   fetch: (url, options) => fetchPage(url, options),
 }
 
-const BUILTINS: Record<string, SourceBackend> = {
-  brave: braveBackend,
-  firecrawl: firecrawlBackend,
-  searxng: searxngBackend,
-  direct: directBackend,
+/**
+ * The built-in registry, built lazily: scraper-swarm.ts imports this module
+ * for its errors, so no registry entry may be read at evaluation time.
+ */
+function builtinBackends(): Record<string, SourceBackend> {
+  return {
+    brave: braveBackend,
+    firecrawl: firecrawlBackend,
+    searxng: searxngBackend,
+    direct: directBackend,
+    "scraper-swarm": scraperSwarmBackend,
+  }
 }
 
-/** Look up one backend by id; `extra` (tests, and #107's gateway) adds ids. */
+/** Look up one backend by id; `extra` (tests, custom gateways) adds ids. */
 export function getBackend(id: string, extra?: readonly SourceBackend[]): SourceBackend | undefined {
-  return extra?.find((backend) => backend.id === id) ?? BUILTINS[id]
+  return extra?.find((backend) => backend.id === id) ?? builtinBackends()[id]
 }
 
-/** Today's selection order, with direct fetch last. */
-export const DEFAULT_BACKEND_ORDER: readonly string[] = ["brave", "firecrawl", "searxng", "direct"]
+/** Today's selection order: the self-hosted gateway first when configured, then today's providers. */
+export const DEFAULT_BACKEND_ORDER: readonly string[] = ["scraper-swarm", "brave", "firecrawl", "searxng", "direct"]
 
 /**
  * Resolve the backend order: explicit `research.backends` wins, a legacy
@@ -243,7 +252,7 @@ export async function runFetchChain(
   const result = await runChain(
     backends.filter((backend) => backend.available(env)),
     "fetch",
-    (backend) => backend.fetch!(url, fetchOptions),
+    (backend) => backend.fetch!(url, { ...fetchOptions, ...(env ? { env } : {}) }),
     { now, cooldowns },
   )
   return { ...result, attempts: [...unavailable, ...result.attempts] }

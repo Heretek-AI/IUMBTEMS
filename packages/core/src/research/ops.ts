@@ -17,7 +17,7 @@ import {
   runFetchChain,
   runSearchChain,
   type SourceBackend,
-} from "./backends.ts"
+} from "./backends/index.ts"
 import { researchSourcesDir, SourceCache } from "./cache.ts"
 import { isFresh } from "./url.ts"
 

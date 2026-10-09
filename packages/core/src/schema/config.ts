@@ -103,7 +103,7 @@ export const EsConfigSchema = z
           .describe("SearXNG instance (else SEARXNG_URL). Global config or plugin options only.")
           .optional(),
         backends: z
-          .array(z.enum(["brave", "firecrawl", "searxng", "direct"]))
+          .array(z.enum(["scraper-swarm", "brave", "firecrawl", "searxng", "direct"]))
           .min(1)
           .describe(
             "Ordered source backends for search and fetch failover (a safety refusal never fails over); unset keeps the searchProvider behaviour.",

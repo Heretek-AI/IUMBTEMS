@@ -34,9 +34,13 @@
   findings and signed, expiring waivers.
 - **Evidence-first research.** Content-addressed source cache, a pure verbatim
   quote verifier, and an epistemic auditor that downgrades ungrounded claims.
-  Web sources come through an ordered backend chain (Brave, Firecrawl, SearXNG,
-  direct fetch) with per-backend cooldowns: one provider's outage or rate
-  limit fails over to the next, while a safety refusal never does.
+  Web sources come through an ordered backend chain (Scraper-Swarm gateway,
+  Brave, Firecrawl, SearXNG, direct fetch) with per-backend cooldowns: one
+  provider's outage or rate limit fails over to the next, while a safety
+  refusal never does. To use the self-hosted gateway, mint a key with scopes
+  `search` and `scrape` (`POST /agents/keys` on the panel API) and set
+  `ES_SCRAPER_SWARM_URL` and `ES_SCRAPER_SWARM_TOKEN`; the token never leaves
+  its `Authorization` header and is masked in seat sandboxes.
 - **Lateral work.** Brainstorm fans out eight divergent lenses into a
   deduplicated, rubric-scored shortlist with a forced outlier — callable by
   the grill and the factory at depth 1, with the shortlist back as JSON; darkharvest
