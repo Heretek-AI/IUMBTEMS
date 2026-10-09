@@ -37,6 +37,7 @@ spike as proof).
 - `scripts/v2-head.sh [tests…]` — real-host suite against OpenCode `v2` HEAD
   (repoints node_modules symlinks; `bun install` restores them)
 - `es <status|runs|watch|approve|trust|waive|gates|factory|research|brainstorm|harvest|design|config|lsp|hooks|audit|scout|mcp>`
+- `es factory run --headless [--driver opencode] [--max-turns N] [--log-level quiet|info|debug] [--events jsonl] [--events-file <path>] [--turn-timeout S] [--cwd <dir>]` (SIGINT/SIGTERM cancel, exit 130; detached HEADs and other runs' seat worktrees refused; `docs/HEADLESS.md`)
 - `es mcp` pins caller identity to the adapter environment (`ES_MCP_AGENT`, else legacy `ES_AGENT`): the per-call `agent` argument is ignored; without either the caller is `mcp` (no seat)
 - The CLI grammar lives in core (`packages/core/src/util/args.ts`): `parseArgs`, `flag`, `Args`, `BOOLEAN_FLAGS` — the human-only policy reads the same grammar (argv parity, #97)
 - One package list (`bun scripts/packages.ts [--release] [--tsconfig]`): the typecheck loop, `pack-smoke.sh`, `publish.yml` and `deps.ts` all read it; new packages declare `esRelease.order` and `BOUNDARIES` (#102)
@@ -45,7 +46,7 @@ spike as proof).
 ## Contract invariants (do not break)
 | Invariant | Where |
 | :--- | :--- |
-| Approvals, waivers, trust and resume are human-only: terminal passphrase confirmation unlocks the sealed Ed25519 human key (signed, hash-bound); the approve/trust/resume RPCs no longer exist and the TUI only previews, then points at the terminal command; agents may request, never grant | `approval/`, `gates/waivers.ts` |
+| Approvals are human-only; trust, waivers and resume stay terminal-only: passphrase confirmation (terminal echo-off, TUI masked dialog, or loopback browser input per ADR 0002, proposed) unlocks the sealed Ed25519 human key (signed, hash-bound) and the TUI signs approvals in-process with channel `tui`; the approve/trust/resume RPCs no longer exist; agents may request, never grant | `approval/`, `gates/waivers.ts` |
 | Control files are deny-write for all agents: `.factory/{gates.json,config.json,frontier.json,waivers,approvals,runtime}`, the evidence (`.factory/research/{sources,coverage.json,dossier.json,brief.pcrb.json}`, `.factory/claims/`), `.git/config` and git hooks. The pinned ones (gates, config, frontier, approvals, waivers) are also hash-checked at every gate run; cached sources are engine-sealed (HMAC) and content-addressed | `trust/control.ts` |
 | Per-seat path scopes: manager writes factory docs, programmer writes its worktree, QA and the auditor pair write nothing, research alpha/beta write only their own notes (`.factory/research/alpha.md` / `beta.md`) and only the factory writes `research/REPORT.md`, brainstorm/harvest/design/scout write only their `.factory/<x>/notes/`; research, scout and auditor seats are `web: "cached"` (host websearch/webfetch denied, web facts only through the cached `es_research_*` tools) and run `--unshare-net` sandboxed, while user agents keep host web tools | `trust/policy.ts`, `agents/registry.ts` |
 | Factory seats launch seats in the foreground only: `subagent` with `background: true` from any seat is refused, and so is launching a seat that is still running; seat state and last activity are recorded in `.factory/runtime/seats.json` (advisory) | `opencode/src/policy.ts`, `opencode/src/seats.ts` |

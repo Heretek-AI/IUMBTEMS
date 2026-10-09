@@ -32,6 +32,12 @@ const SCRYPT = { N: 2 ** 16, r: 8, p: 1, maxmem: 128 * 1024 * 1024 } as const
 
 export class HumanKeyError extends Error {}
 
+/** Zero a code-point array in place (best effort in JS: overwrite + detach). */
+export function zeroCodepoints(codepoints: string[]): void {
+  for (let i = 0; i < codepoints.length; i++) codepoints[i] = ""
+  codepoints.length = 0
+}
+
 /** A signature on a human record. */
 export interface RecordSignature {
   readonly alg: "ed25519"
@@ -43,6 +49,13 @@ export interface RecordSignature {
 export interface HumanSigner {
   readonly keyId: string
   sign(record: Record<string, unknown>): RecordSignature
+  /**
+   * Best-effort end of use: zeroes the retained private-key bytes and makes
+   * further sign calls throw, so a finished flow cannot sign again. The JS
+   * engine may keep copies (the passphrase string, OpenSSL internals) until
+   * GC; callers still drop every reference they hold.
+   */
+  destroy(): void
 }
 
 interface SealedKey {
@@ -156,22 +169,31 @@ export async function unlockHumanKey(passphrase: string, dir = stateDir()): Prom
   if (!pub || keyIdOf(pub) !== sealed.keyId)
     throw new HumanKeyError(`${PUBLIC_FILE} does not match the sealed key (tampered or partial); re-seal by hand`)
   let privateKey: KeyObject
+  let der: Buffer
   try {
     const key = await derive(passphrase, Buffer.from(sealed.kdf.salt, "base64"), sealed.kdf)
     const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(sealed.cipher.iv, "base64"))
     decipher.setAuthTag(Buffer.from(sealed.cipher.tag, "base64"))
-    const der = Buffer.concat([decipher.update(Buffer.from(sealed.data, "base64")), decipher.final()])
+    der = Buffer.concat([decipher.update(Buffer.from(sealed.data, "base64")), decipher.final()])
     privateKey = createPrivateKey({ key: der, format: "der", type: "pkcs8" })
   } catch {
     throw new HumanKeyError("wrong passphrase")
   }
+  let destroyed = false
   return {
     keyId: sealed.keyId,
-    sign: (record) => ({
-      alg: "ed25519",
-      keyId: sealed.keyId,
-      sig: sign(null, signedBody(record), privateKey).toString("base64"),
-    }),
+    sign: (record) => {
+      if (destroyed) throw new HumanKeyError("the human key was destroyed after use; unlock it again")
+      return {
+        alg: "ed25519",
+        keyId: sealed.keyId,
+        sig: sign(null, signedBody(record), privateKey).toString("base64"),
+      }
+    },
+    destroy: () => {
+      destroyed = true
+      der.fill(0)
+    },
   }
 }
 
@@ -196,7 +218,7 @@ export async function signatureProblem(
 ): Promise<string | undefined> {
   if (await verifyRecordSignature(record, dir)) return undefined
   if (typeof record.mac === "string" && record.signature === undefined)
-    return `${what} was signed by the pre-1.1.1 approval key, which agents could read; record it again (a human, at a terminal, with the passphrase)`
+    return `${what} was signed by the pre-1.1.1 approval key, which agents could read; approve it again with /es-approve (or \`es approve\` in a terminal)`
   if (!(await hasHumanKey(dir))) return `${what} cannot be verified: ${NO_KEY}`
   return `${what} is not signed by this machine's human key (forged, tampered or foreign)`
 }

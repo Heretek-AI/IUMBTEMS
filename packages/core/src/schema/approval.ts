@@ -4,8 +4,8 @@ import { z } from "zod"
 export const ApprovalStageSchema = z.enum(["frontier", "spec"])
 export type ApprovalStage = z.infer<typeof ApprovalStageSchema>
 
-export const ApprovalChannelSchema = z.enum(["cli", "tui"])
-export type ApprovalChannel = z.infer<typeof ApprovalChannelSchema>
+export const ChannelSchema = z.enum(["cli", "tui", "web"])
+export type Channel = z.infer<typeof ChannelSchema>
 
 /** An Ed25519 signature by the human key (approval/keystore.ts) over the canonical record minus `signature`. */
 export const RecordSignatureSchema = z.object({
@@ -28,7 +28,7 @@ export const ApprovalSchema = z.object({
   approvedBy: z.string().min(1),
   host: z.string().min(1),
   approvedAt: z.string().datetime(),
-  channel: ApprovalChannelSchema,
+  channel: ChannelSchema,
   /** Audit-log head at approval time; anchors the log against truncation. */
   auditHead: z.object({ seq: z.number().int().nonnegative(), hash: z.string().length(64) }).nullable(),
   spendCeilingUSD: z.number().positive().optional(),

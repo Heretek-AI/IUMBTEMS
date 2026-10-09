@@ -21,3 +21,6 @@ evals/results/
 audit.md
 *.pyc
 __pycache__/
+
+# Tier-1 phase worktrees (one checkout per ticket, merged into integration/*)
+.worktrees/

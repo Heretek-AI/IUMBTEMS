@@ -127,8 +127,8 @@ const FactoryPanel = (props: PanelProps) => {
             </Show>
             <Show when={data().pending.length}>
               <text>
-                Waiting on you: approve {data().pending.join(", ")}: run `es approve {data().pending[0]}` in a terminal
-                (/es-approve previews it)
+                Waiting on you: approve {data().pending.join(", ")} with /es-approve (or `es approve {data().pending[0]}
+                `)
               </text>
             </Show>
             <Show when={data().seats.length}>

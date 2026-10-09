@@ -10,7 +10,7 @@
 //    with either and must not throw with neither (commands keep working).
 
 import { expect, test } from "bun:test"
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { copyFileSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -28,6 +28,13 @@ async function loadPackedTui(): Promise<any> {
   mkdirSync(destDir, { recursive: true })
   copyFileSync(built, path.join(destDir, "tui.js"))
   writeFileSync(path.join(pluginDir, "package.json"), '{"type":"module"}')
+  // A real install ships the plugin's dependencies beside it: tui.js keeps
+  // @heretek-ai/es-core external (the host may rewrite it; otherwise normal
+  // resolution finds the installed copy), so the fixture links it the way
+  // npm would install it.
+  const vendor = path.join(fixture, "node_modules", "@heretek-ai")
+  mkdirSync(vendor, { recursive: true })
+  symlinkSync(path.resolve(import.meta.dir, "..", "..", "core"), path.join(vendor, "es-core"), "dir")
   return (await import(pathToFileURL(path.join(destDir, "tui.js")).href)).default
 }
 

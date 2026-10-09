@@ -5,10 +5,11 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 1.2.0.** Phase 1 epistemic layer: ordered research backends with
-> failover (Scraper-Swarm gateway leading), callable brainstorm and harvest,
-> research-only runs with a deep-research coordinator, dossier renders, and
-> domain-pack tier weights (#106–#114). Install from npm
+> **Status: 1.3.0.** Phase 2 approvals everywhere: frontier/spec approvals
+> complete in the OpenCode TUI (masked dialog, in-process signing) as well
+> as the CLI through one core service (ADR 0002, proposed); the headless
+> runner streams versioned JSONL events with per-turn metrics (#116–#120).
+> Install from npm
 > (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`, `@heretek-ai/es-cli`);
 > run `es key seal` once.
 
@@ -23,11 +24,13 @@
 
 - **Factory stages, enforced by code.** Grill → Research → Spec → Build ⇄ QA →
   Release runs through a state machine; every `es_*` tool refuses an
-  out-of-order step. Approvals (frontier, spec), waivers and trust are human-only,
-  signed with the passphrase-sealed Ed25519 human key at a terminal
-  (`es key seal` once, then `es approve` / `es trust` / `es waive`); agents
+  out-of-order step. Approvals (frontier, spec) are human-only and complete
+  in the TUI (masked passphrase dialog, in-process signing) or at a terminal
+  (`es approve`); waivers and trust stay terminal-only (`es waive`,
+  `es trust`), all signed with the passphrase-sealed Ed25519 human key
+  (`es key seal` once); agents
   may request, never grant. The approve/trust/resume RPCs no longer exist:
-  the TUI previews, then points at the terminal command.
+  the TUI signs approvals itself and previews trust/resume for the terminal.
 - **Mechanical gates.** Format, lint and typecheck on touched files, affected
   tests from a tree-sitter import graph (runner-native fallback), secret
   scanning, OSV, budgets (diff size, file length, complexity, dependency

@@ -53,7 +53,8 @@
       "type": "string",
       "enum": [
         "cli",
-        "tui"
+        "tui",
+        "web"
       ]
     },
     "auditHead": {

@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.3.0 — 2026-10-09
+
+Phase 2 approvals everywhere: frontier and spec approvals complete in the
+OpenCode TUI as well as the CLI, through one shared core service, under
+the threat model and invariants of ADR 0002. The headless runner gains
+the fleet entrypoint: a versioned JSONL event stream with per-turn
+metrics, graceful cancellation and turn timeouts, and worktree validation.
+
+**Security.**
+- **#116: ADR 0002 (proposed) puts approvals on every surface.**
+  Threat model (5 actors), normative invariants I1–I8, a 25-row inventory
+  of terminal-only enforcement points, and the adversarial-review checklist
+  gating the TUI (#119) and browser (#131) builds. Trust, waive, resume,
+  key seal, config set and export stay terminal-only.
+- **#119: frontier and spec approvals complete in the OpenCode TUI.**
+  A masked passphrase dialog (plaintext only in a closure-scoped buffer,
+  zeroed on submit/cancel) unlocks the sealed human key and signs
+  in-process through the core `approveStage` service (`channel: "tui"`).
+  No passphrase and no approval cross RPC (no approve/trust/resume RPC
+  exists); previews bind the signed subject through a single-use ticket
+  (TTL ≤ 120 s); 5 wrong passphrases per 10 minutes lock the TUI surface
+  out with an audited lockout. The masked-input spike (#118) verdict is GO
+  with headless-renderer evidence.
+- **#117: one approval code path in core.** `approveStage` re-derives the
+  subject with a preview-hash check, signs, clears pending and begins
+  research under its locks; re-approval of an unchanged subject is a
+  side-effect-ensuring no-op. `HumanSigner.destroy()` ends signing.
+  `ChannelSchema` is now `cli | tui | web`, shared by approvals and waivers.
+
+**Behaviour changes.**
+- Approval status messages name `/es-approve` first; the TUI pending panel
+  and the liveness lines point at the TUI with the terminal as the fallback.
+- `schemas/approval-channel.schema.json` is replaced by
+  `schemas/channel.schema.json` (same shape, plus `web`).
+- Headless runs without the new flags print as before, plus a
+  `turn-metrics` line per turn at info level and above.
+
+**New.**
+- **#120: fleet-ready headless runner.** `--events jsonl` (versioned
+  envelope per line: `JsonlEnvelope`/`HeadlessJsonlSchema` exported from
+  the CLI; `--events-file` redirects to a file), per-turn `turn-metrics`
+  (sealed spend delta, tool activity, opportunistic tokens),
+  SIGINT/SIGTERM cancellation (exit 130, resumable), `--turn-timeout`,
+  and `--cwd` validation (other runs' seat worktrees and detached HEADs
+  refused; the root is indexed). See `docs/HEADLESS.md`.
+
 ## 1.2.0 — 2026-10-09
 
 Phase 1 epistemic layer: research, brainstorm and harvest work outside the

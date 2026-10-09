@@ -1,13 +1,24 @@
-// Epistemic Swarm TUI plugin: previews for the human-only actions. Approvals,
-// trust and resume are previewed here, then recorded at a terminal with the
-// passphrase-sealed human key (`es approve`, `es trust`, `es factory resume`),
-// never through an agent tool or RPC. Only lspInstall still mutates via RPC.
+// Epistemic Swarm TUI plugin: human-only actions. Approvals complete here,
+// through a masked passphrase dialog and in-process signing with the
+// passphrase-sealed human key (`channel: "tui"`); trust and resume are
+// previewed here, then recorded at a terminal with the same key
+// (`es trust`, `es factory resume`), never through an agent tool or RPC.
+// Only lspInstall still mutates via RPC.
 import { userInfo } from "node:os"
 import { Plugin } from "@opencode/plugin/tui"
+import { approveInTui } from "./approve-tui.ts"
+import { readMaskedPassphrase } from "./masked-input.tsx"
 import { registerPanels } from "./panels.tsx"
 import { EsRpc } from "./rpc-def.ts"
 
-type Preview = { ok: boolean; title: string; lines: string[]; problems: string[]; token?: string }
+type Preview = {
+  ok: boolean
+  title: string
+  lines: string[]
+  problems: string[]
+  token?: string
+  subjectHash?: string
+}
 
 export default Plugin.define({
   id: "epistemic-swarm.tui",
@@ -67,10 +78,44 @@ export default Plugin.define({
       const preview: Preview = await call("previewApproval", { stage })
       const token = await confirm(preview, "Approve")
       if (!token) return
-      await context.ui.dialog.alert({
-        title: preview.title,
-        message: `${preview.lines.join("\n")}\n\nRun \`es approve ${stage}\` at a terminal with your passphrase (1.1.1: approvals need the sealed human key).`,
+      // Approvals complete inside the TUI (ADR 0002): masked passphrase
+      // dialog, in-process signing through the core service, channel "tui".
+      // No passphrase and no approval cross RPC. Trust and resume keep the
+      // terminal alert below.
+      const terminalAlert = () =>
+        context.ui.dialog.alert({
+          title: preview.title,
+          message: `${preview.lines.join("\n")}\n\nRun \`es approve ${stage}\` at a terminal with your passphrase (1.1.1: approvals need the sealed human key).`,
+        })
+      if (!preview.subjectHash) {
+        await terminalAlert()
+        return
+      }
+      const outcome = await approveInTui({
+        root: location().directory,
+        stage,
+        expectedSubjectHash: preview.subjectHash,
+        approvedBy: user,
+        readPassphrase: (title) => readMaskedPassphrase(context.ui.dialog, title),
       })
+      if (outcome.ok) {
+        toast(
+          `Approved ${stage} as ${outcome.record.approvedBy} (${outcome.record.subject.length} artifact(s)).`,
+          "success",
+        )
+        return
+      }
+      if ("fallback" in outcome) {
+        await terminalAlert()
+        return
+      }
+      if ("locked" in outcome) {
+        await context.ui.dialog.alert({
+          title: preview.title,
+          message: `Too many wrong passphrases. Try again in ${outcome.retryAfterSec}s (the lockout is audited).`,
+        })
+        return
+      }
     })
 
     const trust = guarded(async () => {

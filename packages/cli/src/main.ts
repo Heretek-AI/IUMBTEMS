@@ -2,7 +2,7 @@
 // resume, git hooks) require an interactive terminal and the human passphrase,
 // which unlocks the passphrase-sealed human key; agent shells are denied
 // these commands by policy as well.
-import { readFile, writeFile } from "node:fs/promises"
+import { appendFile, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import {
   type Args,
@@ -64,7 +64,16 @@ import {
   writeProfile,
 } from "@heretek-ai/es-core"
 import { gatesRun, installGitHooks } from "./gates.ts"
-import { DRIVERS, LOG_LEVELS, logLevel, presentEvent, runHeadless } from "./headless.ts"
+import {
+  checkCwd,
+  DRIVERS,
+  headlessExitCode,
+  LOG_LEVELS,
+  logLevel,
+  presentEvent,
+  runHeadless,
+  toJsonl,
+} from "./headless.ts"
 import {
   approve,
   configSet,
@@ -98,6 +107,7 @@ Factory
   factory begin                 Start a run (normally done by /grill)
   factory run --headless        Drive the factory through a harness CLI, emitting JSON lines
         [--driver opencode] [--max-turns N] [--log-level quiet|info|debug]
+        [--events jsonl] [--events-file <path>] [--turn-timeout S]
   factory stop [reason]         Create .factory/STOP (kill switch)
   factory resume                Clear a halt            [human, TTY]
         [--accept-drift] [--raise-ceiling USD] [--extend-runtime]
@@ -743,16 +753,55 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
             io.print(`Unknown --log-level. Use one of: ${LOG_LEVELS.join(", ")} (default info).`)
             return 2
           }
+          const stream = flag(args, "events")
+          if (stream !== undefined && stream !== "jsonl") {
+            io.print(`Unknown --events. Use: jsonl (a versioned event per line).`)
+            return 2
+          }
+          const eventsFile = flag(args, "events-file")
+          const timeoutRaw = flag(args, "turn-timeout")
+          const timeoutSec = timeoutRaw === undefined ? undefined : Number(timeoutRaw)
+          if (timeoutSec !== undefined && !(Number.isFinite(timeoutSec) && timeoutSec > 0)) {
+            io.print(`Bad --turn-timeout. Use seconds, e.g. --turn-timeout 600.`)
+            return 2
+          }
+          const refusal = await checkCwd(root)
+          if (refusal !== undefined) {
+            io.print(refusal)
+            return 2
+          }
+          // SIGINT/SIGTERM cancel the current turn but leave the run
+          // resumable: the driver sees the abort, the loop emits `cancelled`
+          // (exit 130), and no halt is written.
+          const stop = new AbortController()
+          const onSignal = () => stop.abort()
+          process.once("SIGINT", onSignal)
+          process.once("SIGTERM", onSignal)
           let code = 0
-          for await (const event of runHeadless({
-            root,
-            driver,
-            ...(flag(args, "max-turns") ? { maxTurns: Number(flag(args, "max-turns")) } : {}),
-            ...(io.stateDir ? { stateDir: io.stateDir } : {}),
-          })) {
-            const shown = presentEvent(event, level)
-            if (shown !== undefined) io.print(JSON.stringify(shown))
-            if (["error", "halted", "stalled", "turn-cap"].includes(event.type)) code = 1
+          let runId = "none"
+          try {
+            for await (const event of runHeadless({
+              root,
+              driver,
+              ...(flag(args, "max-turns") ? { maxTurns: Number(flag(args, "max-turns")) } : {}),
+              ...(io.stateDir ? { stateDir: io.stateDir } : {}),
+              signal: stop.signal,
+              ...(timeoutSec === undefined ? {} : { turnTimeoutMs: Math.round(timeoutSec * 1000) }),
+            })) {
+              if (event.type === "start") runId = event.runId
+              if (stream === "jsonl") {
+                const line = JSON.stringify(toJsonl(runId, event))
+                if (eventsFile) await appendFile(eventsFile, `${line}\n`)
+                else io.print(line)
+              } else {
+                const shown = presentEvent(event, level)
+                if (shown !== undefined) io.print(JSON.stringify(shown))
+              }
+              code = Math.max(code, headlessExitCode(event.type))
+            }
+          } finally {
+            process.removeListener("SIGINT", onSignal)
+            process.removeListener("SIGTERM", onSignal)
           }
           return code
         }
