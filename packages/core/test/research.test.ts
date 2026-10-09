@@ -10,6 +10,7 @@ import {
   directBackend,
   fetchPage,
   firecrawlProvider,
+  type HostResolver,
   htmlToText,
   isFresh,
   locateQuote,
@@ -39,6 +40,18 @@ afterEach(() => Promise.all([rm(dir, { recursive: true, force: true }), rm(state
 
 const SOURCE =
   "Bun is a fast all-in-one JavaScript runtime.\nIt ships a test runner, a bundler, and a package manager — all built in."
+
+/**
+ * Direct fetcher with DNS pinned to public answers. The SSRF guard fails
+ * closed on real lookups, so fake-host tests stay hermetic through this
+ * chain entry instead of the default direct backend.
+ */
+const hermeticDirect = (resolveHost: HostResolver = async () => ["93.184.216.34"]): SourceBackend => ({
+  id: "direct",
+  capabilities: { search: false, fetch: true },
+  available: () => true,
+  fetch: (url, options) => fetchPage(url, { ...options, resolveHost }),
+})
 
 describe("verbatim quotes", () => {
   test("exact after whitespace and typography normalisation; ellipsis fragments in order", () => {
@@ -243,6 +256,7 @@ describe("providers", () => {
       stateDir: state,
       policy: async () => ({ root: dir }),
       fetch: (async () => new Response(html, { headers: { "content-type": "text/html" } })) as unknown as typeof fetch,
+      chain: [hermeticDirect()],
     })
     const fetchTool = tools.find((tool) => tool.name === "es_research_fetch")!
     const text = await fetchTool.execute({ url: "https://zod.test" }, { agent: "es-research-alpha" })
@@ -295,6 +309,7 @@ describe("the webcache gate (d66328c:skills/epistemic_search/scripts/webcache.py
           headers: { "content-type": "text/html" },
         })
       }) as unknown as typeof fetch,
+      chain: [hermeticDirect()],
     })
     const fetchTool = tools.find((tool) => tool.name === "es_research_fetch")!
     const first = await fetchTool.execute({ url: "https://Limits.test/api?b=2&a=1" }, { agent: "es-research-alpha" })
@@ -464,7 +479,10 @@ describe("direct-backend SSRF guard (fail closed, never cached)", () => {
         headers: { location: "http://169.254.169.254/latest/meta-data/", "content-type": "text/html" },
       })
     }) as unknown as typeof fetch
-    const failure = await fetchPage("https://example.com/out", { fetch }).then(
+    const failure = await fetchPage("https://example.com/out", {
+      fetch,
+      resolveHost: async () => ["93.184.216.34"],
+    }).then(
       () => "no-throw",
       (error: unknown) => error,
     )
@@ -491,5 +509,181 @@ describe("direct-backend SSRF guard (fail closed, never cached)", () => {
         "http://169.254.169.254/latest/meta-data/",
       ),
     ).toBeUndefined()
+  })
+})
+
+describe("DNS-resolving SSRF guard (S4.1: names, not just literal IPs)", () => {
+  const page = (text: string) =>
+    new Response(`<p>${text}</p>`, { headers: { "content-type": "text/html" } })
+  const countingFetch = (respond: (url: string) => Response, calls: { count: number }) =>
+    (async (url: string) => {
+      calls.count++
+      return respond(String(url))
+    }) as unknown as typeof fetch
+  const refused = (error: unknown) => (error as { code?: string })?.code === "blocked"
+
+  test("a name resolving to link-local is refused before any fetch", async () => {
+    const calls = { count: 0 }
+    const failure = await fetchPage("http://metadata.test/latest/meta-data/", {
+      fetch: countingFetch(() => page("metadata"), calls),
+      resolveHost: async () => ["169.254.169.254"],
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(refused(failure)).toBe(true)
+    expect(calls.count).toBe(0)
+  })
+
+  test("a name with any blocked address is refused, even beside a public one", async () => {
+    const calls = { count: 0 }
+    const failure = await fetchPage("http://mixed.test/", {
+      fetch: countingFetch(() => page("mixed"), calls),
+      resolveHost: async () => ["93.184.216.34", "10.0.0.1"],
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(refused(failure)).toBe(true)
+    expect(calls.count).toBe(0)
+  })
+
+  test("a redirect onto a name resolving to RFC1918 is refused and never fetched", async () => {
+    const seen: string[] = []
+    const fetch = (async (url: string) => {
+      seen.push(String(url))
+      if (String(url) === "https://outer.test/out")
+        return new Response("<p>go inward</p>", {
+          status: 302,
+          headers: { location: "http://inner.test/secret", "content-type": "text/html" },
+        })
+      return page("inner")
+    }) as unknown as typeof fetch
+    const failure = await fetchPage("https://outer.test/out", {
+      fetch,
+      resolveHost: async (host: string) => (host === "inner.test" ? ["10.1.2.3"] : ["93.184.216.34"]),
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(refused(failure)).toBe(true)
+    expect(seen).toEqual(["https://outer.test/out"])
+  })
+
+  test("a public-only name is allowed", async () => {
+    const calls = { count: 0 }
+    const fetched = await fetchPage("https://public.test/page", {
+      fetch: countingFetch(() => page("public page body"), calls),
+      resolveHost: async () => ["93.184.216.34"],
+    })
+    expect(fetched.text).toContain("public page body")
+    expect(calls.count).toBe(1)
+  })
+
+  test("a failed lookup fails closed without fetching", async () => {
+    const calls = { count: 0 }
+    const failure = await fetchPage("https://ghost.test/", {
+      fetch: countingFetch(() => page("ghost"), calls),
+      resolveHost: async () => {
+        throw new Error("ENOTFOUND ghost.test")
+      },
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(refused(failure)).toBe(true)
+    expect(calls.count).toBe(0)
+  })
+
+  test("the loopback allowance admits only loopback names", async () => {
+    const allow = { ES_RESEARCH_ALLOW_LOOPBACK: "1" }
+    const ok = { count: 0 }
+    const loopback = await fetchPage("http://loop.test/a", {
+      fetch: countingFetch(() => page("loopback fixture"), ok),
+      env: allow,
+      resolveHost: async () => ["127.0.0.1"],
+    })
+    expect(loopback.text).toContain("loopback fixture")
+    expect(ok.count).toBe(1)
+    // RFC1918 stays refused with the allowance on; loopback is refused without it.
+    const lan = { count: 0 }
+    const lanFailure = await fetchPage("http://lan.test/a", {
+      fetch: countingFetch(() => page("lan"), lan),
+      env: allow,
+      resolveHost: async () => ["10.0.0.1"],
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(refused(lanFailure)).toBe(true)
+    expect(lan.count).toBe(0)
+    const plain = { count: 0 }
+    const plainFailure = await fetchPage("http://loop.test/a", {
+      fetch: countingFetch(() => page("loopback fixture"), plain),
+      env: {},
+      resolveHost: async () => ["127.0.0.1"],
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(refused(plainFailure)).toBe(true)
+    expect(plain.count).toBe(0)
+  })
+})
+
+describe("per-hop fetch budgets (S4.2: one timeout no longer spans every hop)", () => {
+  const delayed = (ms: number, respond: (url: string) => Response) =>
+    (async (url: string, init?: RequestInit) => {
+      const signal = init?.signal
+      if (signal?.aborted) throw new DOMException("the operation was aborted", "AbortError")
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, ms)
+        signal?.addEventListener("abort", () => {
+          clearTimeout(timer)
+          reject(new DOMException("the operation was aborted", "AbortError"))
+        }, { once: true })
+      })
+      if (signal?.aborted) throw new DOMException("the operation was aborted", "AbortError")
+      return respond(String(url))
+    }) as unknown as typeof fetch
+  const text = (body: string) => new Response(body, { headers: { "content-type": "text/plain" } })
+
+  test("a hop that exceeds its own budget aborts instead of borrowing the next hop's", async () => {
+    const fetch = delayed(200, () => text("slow page with enough text"))
+    await expect(
+      fetchPage("https://slow.test/page", {
+        fetch,
+        timeoutMs: 50,
+        resolveHost: async () => ["93.184.216.34"],
+      }),
+    ).rejects.toThrow(/abort|timeout/i)
+  })
+
+  test("a slow first hop doesn't starve the next hop's budget", async () => {
+    const fetch = (async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith("/second")) return delayed(60, () => text("second hop page body"))(url, init)
+      return delayed(60, () =>
+        new Response("go on", { status: 302, headers: { location: "https://slow.test/second" } }),
+      )(url, init)
+    }) as unknown as typeof fetch
+    // 60 ms + 60 ms exceeds a single 100 ms budget; each hop gets its own.
+    const fetched = await fetchPage("https://slow.test/first", {
+      fetch,
+      timeoutMs: 100,
+      resolveHost: async () => ["93.184.216.34"],
+    })
+    expect(fetched.text).toContain("second hop page body")
+  })
+
+  test("a caller abort still aborts the fetch", async () => {
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      fetchPage("https://public.test/page", {
+        fetch: delayed(10, () => text("never served")),
+        signal: controller.signal,
+        resolveHost: async () => ["93.184.216.34"],
+      }),
+    ).rejects.toThrow(/abort/i)
   })
 })

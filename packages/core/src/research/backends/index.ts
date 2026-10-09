@@ -9,6 +9,7 @@ import {
   type FetchedPage,
   fetchPage,
   firecrawlProvider,
+  type HostResolver,
   type SearchProvider,
   type SearchResult,
   searxngProvider,
@@ -48,6 +49,8 @@ export interface BackendFetchOptions {
   readonly signal?: AbortSignal
   readonly fetch?: typeof fetch
   readonly env?: NodeJS.ProcessEnv
+  /** DNS resolver for fetchPage's SSRF guard (tests inject a fake); default resolves for real. */
+  readonly resolveHost?: HostResolver
 }
 
 export interface SourceBackend {
