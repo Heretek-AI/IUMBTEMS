@@ -14,6 +14,8 @@ export type Seat =
   | "qa-adversarial"
   | "research-alpha"
   | "research-beta"
+  | "deep-researcher"
+  | "research-synthesizer"
   | "brainstormer"
   | "brainstorm-lens"
   | "brainstorm-critic"
@@ -28,6 +30,8 @@ export type WriteScope =
   | "factory-docs"
   | "research-alpha"
   | "research-beta"
+  | "deep-research"
+  | "research-report"
   | "brainstorm"
   | "harvest"
   | "design"
@@ -368,6 +372,40 @@ export const AGENTS: readonly AgentSpec[] = [
     tools: ["es_status", "es_research_search", "es_research_fetch", "es_research_audit"],
     spawns: [],
     writes: ["research-beta"],
+    readonlyShell: true,
+    skills: [],
+    mcp: [],
+    lsp: "none",
+    web: "cached",
+  },
+  {
+    id: "deep-researcher",
+    seat: "deep-researcher",
+    mode: "primary",
+    hidden: false,
+    tier: "deep",
+    description: "Runs a research-only run adversarially: thesis, antithesis, then a synthesized report.",
+    prompt: "deep-researcher",
+    tools: ["es_status", "es_research_search", "es_research_fetch", "es_research_audit", "es_research_complete"],
+    spawns: ["es-research-alpha", "es-research-beta", "es-research-synthesizer"],
+    writes: ["deep-research"],
+    readonlyShell: true,
+    skills: [],
+    mcp: [],
+    lsp: "none",
+    web: "cached",
+  },
+  {
+    id: "es-research-synthesizer",
+    seat: "research-synthesizer",
+    mode: "subagent",
+    hidden: true,
+    tier: "deep",
+    description: "Research synthesizer: resolves alpha/beta disputes into the grounded report.",
+    prompt: "research-synthesizer",
+    tools: ["es_status", "es_research_fetch", "es_research_audit"],
+    spawns: [],
+    writes: ["research-report"],
     readonlyShell: true,
     skills: [],
     mcp: [],

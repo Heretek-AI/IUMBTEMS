@@ -470,12 +470,15 @@ export class Factory {
   // ------------------------------------------------------------ research → spec
 
   async completeResearch(agentId: string | undefined): Promise<FactoryState> {
-    // The research coordinator (#111) completes research runs; until it
-    // lands, the factory seat completes both modes.
-    this.requireSeat(agentId, "factory")
+    // Build runs complete through the factory; research runs complete through
+    // the deep-researcher coordinator (#111). The factory seat stays admitted
+    // in research mode for tests and human-driven completion.
+    this.requireSeat(agentId, "factory", "deep-researcher")
     return this.mutate(`agent:${agentId}`, async (state) => {
       this.requireStage(state, "RESEARCH")
       this.requireAuditsClear(state)
+      if (state.mode !== "research" && seatOf(agentId) !== "factory")
+        throw new FactoryError("Only the factory seat may complete a build run.")
       const researchMode = state.mode === "research"
       const report = await readFile(this.layout.researchReport, "utf8").catch(() => undefined)
       if (report === undefined)

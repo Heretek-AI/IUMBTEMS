@@ -137,7 +137,8 @@ export function esTools(ops: OpsContext): EsToolDef[] {
     },
     {
       name: "es_research_complete",
-      description: "Factory only: finish RESEARCH once .factory/research/REPORT.md is written; moves to SPEC.",
+      description:
+        "Factory or deep-researcher: finish RESEARCH once .factory/research/REPORT.md is written; a build run moves to SPEC, a research run to DONE.",
       input: object(),
       execute: async (_input, context) => factorySummary(await factory.completeResearch(context.agent)),
     },

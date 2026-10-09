@@ -40,7 +40,10 @@
   refusal never does. To use the self-hosted gateway, mint a key with scopes
   `search` and `scrape` (`POST /agents/keys` on the panel API) and set
   `ES_SCRAPER_SWARM_URL` and `ES_SCRAPER_SWARM_TOKEN`; the token never leaves
-  its `Authorization` header and is masked in seat sandboxes.
+  its `Authorization` header and is masked in seat sandboxes. Deep research
+  runs a question adversarially outside the factory flow — thesis, antithesis,
+  synthesis to a grounded report (`es research deep "<question>" --output
+  <dir> --max-usd N`, or `/research deep` in the TUI).
 - **Lateral work.** Brainstorm fans out eight divergent lenses into a
   deduplicated, rubric-scored shortlist with a forced outlier — callable by
   the grill and the factory at depth 1, with the shortlist back as JSON; darkharvest

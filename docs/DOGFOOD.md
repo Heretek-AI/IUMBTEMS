@@ -129,6 +129,16 @@ the run exposed (those are M6 bugs to fix, not waivers). The run's artifacts
 live under `.factory/` (specs and roadmap tracked; runtime, runs and worktrees
 ignored).
 
+## 7. Deep research (no build)
+
+For a question with no code to build, skip the factory: `es research deep
+"<question>" --output <dir> --max-usd N` (or `/research deep <question>
+--max-usd N` in the TUI) starts a research-only run and drives the
+deep-researcher headlessly. Watch it with `es status` in the output dir:
+thesis (`alpha.md`), antithesis (`beta.md`), then the synthesizer's
+`REPORT.md`, completing at DONE. Same ceiling/STOP/halt discipline, same
+sealed evidence.
+
 ## Notes
 
 - Provider keys come from the environment or the harness store; they are never

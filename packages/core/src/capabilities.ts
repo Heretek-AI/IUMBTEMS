@@ -108,7 +108,7 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     research: {
       support: "enforced",
       detail:
-        "Engine-sealed cache (#52), fragment-level quote verifier (every ellipsis fragment >= 12 chars; code excerpts one contiguous span of at most 60 lines), auditor, providers and the websearch bridge.",
+        "Engine-sealed cache (#52), fragment-level quote verifier (every ellipsis fragment >= 12 chars; code excerpts one contiguous span of at most 60 lines), auditor, providers and the websearch bridge. Research-only runs complete through the deep-researcher (thesis/antithesis/synthesis at depth 1) at DONE.",
       test: "packages/core/test/research.test.ts",
     },
     brainstorm: {

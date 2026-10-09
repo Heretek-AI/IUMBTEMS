@@ -76,7 +76,7 @@ import {
   trust,
   waive,
 } from "./human.ts"
-import { auditCommand, auditDismiss, auditShow, scoutCommand, scoutShow } from "./jobs.ts"
+import { auditCommand, auditDismiss, auditShow, researchDeepCommand, scoutCommand, scoutShow } from "./jobs.ts"
 import { keySeal, keyStatus } from "./key.ts"
 import { serveStdio } from "./mcp.ts"
 import { runsCommand, statusCommand } from "./status.ts"
@@ -123,6 +123,7 @@ Other
   research export [--out <file>]   Signed research brief (.factory/research/brief.pcrb.json)   [human, TTY]
   research verify-brief <file> [--allow-unverifiable]  Check a brief's sources, manifest, signature, quotes
   research retract <sha256> --event retracted|revised [--note "…"]   Degrade claims citing a source   [human, TTY]
+  research deep "<question>" --output <dir> --max-usd N   Adversarial deep research to DONE   [human, TTY]
   brainstorm plan "<idea>"      Freeze a lens fan-out plan (.factory/brainstorm)
         [--lenses a,b] [--ideas N] [--shortlist N] [--force]
   brainstorm show [--json]      Show the plan/progress or the finished shortlist
@@ -250,6 +251,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         return 2
       }
       case "research": {
+        if (sub === "deep") return await researchDeepCommand(context, subArgs(2))
         if (sub === "retract") return await retract(context, subArgs(2))
         if (sub === "export") {
           const out = flag(args, "out")
@@ -337,7 +339,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           return /Audit passed/.test(text) || /Pruned/.test(text) ? 0 : 1
         }
         io.print(
-          "Usage: es research search <query> | fetch <url> | audit [file] [--prune] | export [--out <file>] | verify-brief <file> | retract <sha256> --event retracted|revised",
+          'Usage: es research search <query> | fetch <url> | audit [file] [--prune] | export [--out <file>] | verify-brief <file> | retract <sha256> --event retracted|revised | deep "<question>" --output <dir> --max-usd N',
         )
         return 2
       }

@@ -294,3 +294,78 @@ describe("#107: the gateway backend on the real host", () => {
     mode = "mixed"
   }, 60_000)
 })
+
+describe("#111: the deep-research coordinator on the real host", () => {
+  const child = (name: string, args: Record<string, unknown> = {}) => `@@CHILD ${name} ${JSON.stringify(args)}@@`
+  const delegate = (agent: string, prompt: string) => call("subagent", { agent, description: `${agent} step`, prompt })
+
+  test("plan, alpha+beta in one message, synthesizer writes the report, complete reaches DONE", async () => {
+    const deep = await boot({
+      git: true,
+      script: directiveScript,
+      plugins: [{ path: pluginDir, options: { stateDir: state, pr: "off" } }],
+      files: { "README.md": "# deep\n" },
+    })
+    try {
+      const { Factory } = await import("@heretek-ai/es-core")
+      const factory = new Factory(deep.directory, {
+        gates: async () => ({ passed: true, findings: [], summary: "stub" }),
+        stateDir: state,
+      })
+      await factory.beginResearchRun({ objective: "Do gates keep agents honest?", ceilingUSD: 5 })
+
+      // The coordinator is advertised its tools; the synthesizer stays hidden but callable.
+      await deep.run("hello", { agent: "deep-researcher" })
+      const { lastAgentRequest } = await import("@heretek-ai/es-testkit")
+      const advertised = (lastAgentRequest(deep.llm.requests)?.tools ?? []).map((tool) => tool.function.name)
+      for (const tool of ["es_research_search", "es_research_fetch", "es_research_audit", "es_research_complete"])
+        expect(advertised).toContain(tool)
+
+      // Thesis gathers citable evidence first, so the notes can quote a hash.
+      const gathered = await deep.run(call("es_research_fetch", { url: `http://127.0.0.1:${server.port}/page` }), {
+        agent: "deep-researcher",
+      })
+      expect(gathered.tools[0]?.status).toBe("completed")
+      const sha = /sha256:([0-9a-f]{64})/.exec(gathered.tools[0]?.text ?? "")?.[1]
+      expect(sha).toBeDefined()
+      const line = `- Mechanical gates catch regressions before review [VERIFIED: sha256:${sha} "catch regressions before review"]`
+
+      // Fan-out: alpha and beta launched in one message, in the foreground.
+      const fanout = await deep.run(
+        `@@PARALLEL@@ ${delegate("es-research-alpha", `Gather the thesis ${child("write", { path: ".factory/research/alpha.md", content: `# Alpha\n\n${line}\n` })} done`)} ${delegate("es-research-beta", `Attack it ${child("write", { path: ".factory/research/beta.md", content: `# Beta\n\n- No counter-evidence cached [NEGATIVE_KNOWLEDGE: searched for gate failures]\n` })} done`)}`,
+        { agent: "deep-researcher" },
+      )
+      expect(fanout.tools.map((tool) => `${tool.name}:${tool.status}`)).toEqual([
+        "subagent:completed",
+        "subagent:completed",
+      ])
+      expect(await Bun.file(path.join(deep.directory, ".factory/research/alpha.md")).text()).toContain(sha!)
+      expect(await Bun.file(path.join(deep.directory, ".factory/research/beta.md")).text()).toContain(
+        "NEGATIVE_KNOWLEDGE",
+      )
+
+      // The synthesizer resolves into the report; the coordinator cannot write it.
+      const synthesized = await deep.run(
+        delegate(
+          "es-research-synthesizer",
+          `Resolve the dispute ${child("write", { path: ".factory/research/REPORT.md", content: `# Report\n\n${line}\n` })} done`,
+        ),
+        { agent: "deep-researcher" },
+      )
+      expect(synthesized.tools[0]?.status).toBe("completed")
+      const refused = await deep.run(call("write", { path: ".factory/research/REPORT.md", content: "forged" }), {
+        agent: "deep-researcher",
+      })
+      expect(refused.tools[0]?.status).toBe("error")
+
+      const completed = await deep.run(call("es_research_complete"), { agent: "deep-researcher" })
+      expect(completed.tools[0]?.status).toBe("completed")
+      expect((await factory.read())?.stage).toBe("DONE")
+      expect(await Bun.file(path.join(deep.directory, ".factory/research/REPORT.md")).text()).toContain(
+        "catch regressions before review",
+      )
+    } finally {
+      await deep.close()
+    }
+  }, 120_000)
+})
