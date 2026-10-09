@@ -44,7 +44,7 @@ spike as proof).
 - `bun run docs:gen` / `bun run docs:check` (drift; CI runs the check)
 - `scripts/v2-head.sh [tests…]` — real-host suite against OpenCode `v2` HEAD
   (repoints node_modules symlinks; `bun install` restores them)
-- `es <status|runs|watch|approve|trust|waive|gates|factory|research|brainstorm|harvest|design|config|lsp|hooks|audit|scout|mcp>`
+- `es <status|runs|watch|approve|trust|waive|gates|factory|research|brainstorm|harvest|design|config|lsp|hooks|audit|scout|mcp|improve>`
 - `es factory run --headless [--driver opencode] [--max-turns N] [--log-level quiet|info|debug] [--events jsonl] [--events-file <path>] [--turn-timeout S] [--cwd <dir>]` (SIGINT/SIGTERM cancel, exit 130; detached HEADs and other runs' seat worktrees refused; `docs/HEADLESS.md`)
 - `es mcp` pins caller identity to the adapter environment (`ES_MCP_AGENT`, else legacy `ES_AGENT`): the per-call `agent` argument is ignored; without either the caller is `mcp` (no seat)
 - The CLI grammar lives in core (`packages/core/src/util/args.ts`): `parseArgs`, `flag`, `Args`, `BOOLEAN_FLAGS` — the human-only policy reads the same grammar (argv parity, #97)

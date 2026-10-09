@@ -1,0 +1,28 @@
+{
+  "passed": false,
+  "findings": [
+    {
+      "file": "src/x.ts",
+      "line": 3,
+      "rule": "lint/no-unused-vars",
+      "severity": "error",
+      "message": "unused",
+      "check": "lint"
+    },
+    {
+      "file": "src/y.ts",
+      "line": 9,
+      "rule": "lint/no-unused-vars",
+      "severity": "error",
+      "message": "unused",
+      "check": "lint"
+    }
+  ],
+  "totalFindings": 2,
+  "waived": 0,
+  "checks": [],
+  "summary": "lint red",
+  "failedTests": [],
+  "testsFailed": false,
+  "logDir": "x"
+}

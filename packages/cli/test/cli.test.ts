@@ -600,6 +600,42 @@ describe("gates and audit", () => {
   })
 })
 
+describe("es improve harvest (#135)", () => {
+  const improveFixtures = path.join(import.meta.dir, "..", "..", "core", "test", "fixtures", "improve")
+
+  test("harvests fixture runs and evals to --out without touching them", async () => {
+    const out = path.join(root, "telemetry.json")
+    const result = await run([
+      "improve",
+      "harvest",
+      "--runs",
+      `${path.join(improveFixtures, "run-clean")},${path.join(improveFixtures, "run-replan")}`,
+      "--evals",
+      path.join(improveFixtures, "evals"),
+      "--out",
+      out,
+    ])
+    expect(result.code).toBe(0)
+    expect(result.out).toContain("2 run(s) and 2 eval(s)")
+    const parsed = JSON.parse(await readFile(out, "utf8"))
+    expect(parsed.version).toBe(1)
+    expect(parsed.runs.map((run: { id: string }) => run.id)).toEqual(["run-clean", "run-replan"])
+    expect(parsed.evals.map((item: { case: string }) => item.case)).toEqual(["grill", "programmer"])
+  })
+
+  test("needs at least one input dir", async () => {
+    const result = await run(["improve", "harvest", "--out", "telemetry.json"])
+    expect(result.code).toBe(2)
+    expect(result.out).toContain("Usage: es improve harvest")
+  })
+
+  test("unknown sub-verbs print usage", async () => {
+    const result = await run(["improve", "frobnicate"])
+    expect(result.code).toBe(2)
+    expect(result.out).toContain("Usage: es improve harvest")
+  })
+})
+
 describe("mcp", () => {
   test("lists coarse tools without any human-only tool and calls them with an advisory agent", async () => {
     const server = createMcpServer({ root, stateDir: state })

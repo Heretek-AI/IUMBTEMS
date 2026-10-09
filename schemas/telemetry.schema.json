@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "const": 1
+    },
+    "harvestedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mode": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "halt": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "from"
+            ],
+            "additionalProperties": false
+          },
+          "spend": {
+            "type": "object",
+            "properties": {
+              "usd": {
+                "type": "number",
+                "minimum": 0
+              },
+              "estimated": {
+                "type": "boolean"
+              },
+              "events": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "usd",
+              "estimated",
+              "events"
+            ],
+            "additionalProperties": false
+          },
+          "phases": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "status": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "failures": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "replanned": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "status",
+                "failures",
+                "replanned"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "gateRejections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rule": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "count": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "rule",
+                "count"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "auditFindings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "severity": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "count": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "kind",
+                "severity",
+                "count"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "auditChain": {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "valid": {
+                "type": "boolean"
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entries",
+              "valid"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "stage",
+          "spend",
+          "phases",
+          "gateRejections",
+          "auditFindings",
+          "auditChain"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "evals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "case": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pass": {
+            "type": "boolean"
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "steps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "model": {
+            "type": "string"
+          },
+          "modelLimited": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "case",
+          "pass",
+          "failures",
+          "steps"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "version",
+    "harvestedAt",
+    "runs",
+    "evals"
+  ],
+  "additionalProperties": false
+}

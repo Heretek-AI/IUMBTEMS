@@ -86,6 +86,7 @@ import {
   trust,
   waive,
 } from "./human.ts"
+import { improveHarvest } from "./improve.ts"
 import { auditCommand, auditDismiss, auditShow, researchDeepCommand, scoutCommand, scoutShow } from "./jobs.ts"
 import { keySeal, keyStatus } from "./key.ts"
 import { serveStdio } from "./mcp.ts"
@@ -142,6 +143,7 @@ Other
   brainstorm lenses             List the built-in divergent lenses
   harvest show [--json]         Show the teardown plan/progress or the report
   harvest scan <source>         Scan one source (local path, git URL, github:owner/repo, npm:name)
+  improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file>   Harvest read-only telemetry from runs and evals
   design [status]               Design interview progress (resumes from .factory/design)
   design render                 Re-render tokens.css + STYLE_GUIDE.md from tokens.json
   design check                  Fail on render drift, invalid tokens or one-off mints
@@ -671,6 +673,11 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         } finally {
           await manager.stopAll()
         }
+      }
+      case "improve": {
+        if (sub === "harvest") return await improveHarvest(subArgs(2), { print: io.print, cwd: io.cwd })
+        io.print("Usage: es improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file>")
+        return 2
       }
       case "hooks": {
         const engine = await HookEngine.create({

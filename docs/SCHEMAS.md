@@ -9,7 +9,9 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | approval-stage | `schemas/approval-stage.schema.json` |
 | approval-subject | `schemas/approval-subject.schema.json` |
 | approval | `schemas/approval.schema.json` |
+| audit-chain-telemetry | `schemas/audit-chain-telemetry.schema.json` |
 | audit-entry | `schemas/audit-entry.schema.json` |
+| audit-finding-count | `schemas/audit-finding-count.schema.json` |
 | audit-finding | `schemas/audit-finding.schema.json` |
 | audit-record | `schemas/audit-record.schema.json` |
 | audit-severity | `schemas/audit-severity.schema.json` |
@@ -35,10 +37,12 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | dossier-verdict | `schemas/dossier-verdict.schema.json` |
 | dossier | `schemas/dossier.schema.json` |
 | es-config | `schemas/es-config.schema.json` |
+| eval-telemetry | `schemas/eval-telemetry.schema.json` |
 | frontier-node | `schemas/frontier-node.schema.json` |
 | frontier | `schemas/frontier.schema.json` |
 | gate-budgets | `schemas/gate-budgets.schema.json` |
 | gate-finding | `schemas/gate-finding.schema.json` |
+| gate-rejection | `schemas/gate-rejection.schema.json` |
 | gate-security | `schemas/gate-security.schema.json` |
 | gates-config | `schemas/gates-config.schema.json` |
 | goal-frontmatter | `schemas/goal-frontmatter.schema.json` |
@@ -63,6 +67,8 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | retraction | `schemas/retraction.schema.json` |
 | roadmap-phase | `schemas/roadmap-phase.schema.json` |
 | roadmap | `schemas/roadmap.schema.json` |
+| run-phase-telemetry | `schemas/run-phase-telemetry.schema.json` |
+| run-telemetry | `schemas/run-telemetry.schema.json` |
 | scout-advisory | `schemas/scout-advisory.schema.json` |
 | scout-assessment | `schemas/scout-assessment.schema.json` |
 | scout-plan | `schemas/scout-plan.schema.json` |
@@ -70,5 +76,6 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | scout-result | `schemas/scout-result.schema.json` |
 | scout-verdict | `schemas/scout-verdict.schema.json` |
 | spend-ceiling | `schemas/spend-ceiling.schema.json` |
+| telemetry | `schemas/telemetry.schema.json` |
 | waiver | `schemas/waiver.schema.json` |
 | witness | `schemas/witness.schema.json` |
