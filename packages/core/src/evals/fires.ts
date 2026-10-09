@@ -148,7 +148,7 @@ async function completedHarvestRuns(root: string): Promise<string[]> {
     if (!entry.isDirectory() || !RUN_ID.test(entry.name) || entry.name === "default") continue
     if (await readHarvestResult(root, entry.name).catch(() => undefined)) done.push(entry.name)
   }
-  return done.sort()
+  return done.sort((a, b) => a.localeCompare(b, "en"))
 }
 
 /** Grade a fire from what the seats left in the workspace (records, scout result, harvest result). */

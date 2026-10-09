@@ -290,6 +290,7 @@ describe("fire graders", () => {
       const ambiguous = await gradeFireCase({ kind: "harvest", expected: want }, root)
       expect(ambiguous.pass).toBe(false)
       expect(ambiguous.failures.join("; ")).toContain("harvest")
+      expect(ambiguous.failures.join("; ")).toContain("several harvest runs completed (default, harvest)")
     } finally {
       await rm(root, { recursive: true, force: true })
     }
