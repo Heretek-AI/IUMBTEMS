@@ -134,12 +134,17 @@ describe("layered config", () => {
 describe("model refs fail closed (#96)", () => {
   test("ModelRefSchema accepts provider/model and rejects malformed refs", () => {
     expect(ModelRefSchema.safeParse("opencode/some-model").success).toBe(true)
-    for (const bad of ["x", "/x", "x/", "a b/c", "", " /x", "x/ "])
+    expect(ModelRefSchema.safeParse("openrouter/anthropic/claude-3.5-sonnet").success).toBe(true)
+    for (const bad of ["x", "/x", "x/", "a b/c", "", " /x", "x/ ", "a/b c/d"])
       expect([bad, ModelRefSchema.safeParse(bad).success]).toEqual([bad, false])
   })
 
   test("parseModelRef splits on the first slash", () => {
     expect(parseModelRef("opencode/some-model")).toEqual({ providerID: "opencode", id: "some-model" })
+    expect(parseModelRef("openrouter/anthropic/claude-3.5-sonnet")).toEqual({
+      providerID: "openrouter",
+      id: "anthropic/claude-3.5-sonnet",
+    })
     expect(parseModelRef("x")).toBeUndefined()
   })
 

@@ -121,7 +121,7 @@ export type ShellDecision =
 /** The command with shell quoting and escapes removed, so `es 'approve'` and `.fac""tory` read plainly. */
 export const unquoteShell = (command: string) => command.replaceAll(/['"\\]/g, "")
 
-const words = (command: string) => command.split(/[^\w@./-]+/).filter(Boolean)
+const words = (command: string) => command.split(/[^\w@./=:-]+/).filter(Boolean)
 
 const ES_BINARY = /^(es|epistemic-swarm|es\.js|es-cli|@heretek-ai\/es-cli(@[\w.-]+)?)$|\/(es|es\.js|epistemic-swarm)$/
 /** Human-only verbs: the next word(s) after the es binary. Exported for the
@@ -169,12 +169,12 @@ interface Cursor {
 /**
  * Where the CLI parser's next positional could be, scanning from `from` (an
  * index past the end means there is none). The parser takes flags anywhere
- * (#88): `--` makes the rest positional, and `--flag value` consumes the
- * value unless the flag is boolean. A KNOWN boolean (the CLI's
- * BOOLEAN_FLAGS, #97) never consumes, so only the next word is a candidate;
- * an unknown `--flag` counts both ways, since the next word may be its value
- * or the verb. `--flag=value` is two words here (`words` splits at `=`) and
- * reads the same.
+ * (#88): `--` makes the rest positional, `--flag value` consumes the value
+ * unless the flag is boolean, and `--flag=value` never consumes the next word
+ * (the value is inline, as in the CLI's parseArgs, #97). A KNOWN boolean (the
+ * CLI's BOOLEAN_FLAGS, #97) never consumes, so only the next word is a
+ * candidate; an unknown `--flag` counts both ways, since the next word may be
+ * its value or the verb.
  */
 function nextPositionals(tokens: readonly string[], from: Cursor): Cursor[] {
   const found: Cursor[] = []
@@ -189,8 +189,10 @@ function nextPositionals(tokens: readonly string[], from: Cursor): Cursor[] {
     if (token === undefined || cursor.literal || !token.startsWith("--")) found.push(cursor)
     else if (token === "--") stack.push({ at: cursor.at + 1, literal: true })
     else {
+      const name = token.slice(2).split("=", 1)[0]!
+      const inline = token.includes("=")
       stack.push({ at: cursor.at + 1, literal: false })
-      if (!BOOLEAN_FLAGS.includes(token.slice(2).split("=", 1)[0]!)) stack.push({ at: cursor.at + 2, literal: false })
+      if (!inline && !BOOLEAN_FLAGS.includes(name)) stack.push({ at: cursor.at + 2, literal: false })
     }
   }
   return found

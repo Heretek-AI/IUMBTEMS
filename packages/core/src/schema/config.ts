@@ -7,7 +7,7 @@ import { DEFAULT_LICENSE_WHITELIST } from "./harvest.ts"
 /** A concrete model: "provider/model", both parts non-empty, no whitespace (#96). */
 export const ModelRefSchema = z
   .string()
-  .regex(/^[^\s/]+\/[^\s/]+$/, 'expected "provider/model" (both parts non-empty, no spaces)')
+  .regex(/^[^\s/]+\/\S+$/, 'expected "provider/model" (both parts non-empty, no spaces)')
 
 /** Split a model ref on the first slash; undefined when malformed (#96). */
 export function parseModelRef(ref: string): { providerID: string; id: string } | undefined {

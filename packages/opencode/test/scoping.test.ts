@@ -192,23 +192,25 @@ describe("bypass probes on the real host (fake model)", () => {
 
   test("an offline seat shell has no network", async () => {
     if (!bwrapAvailable()) {
-      const { tools } = await h.run(`net ${call("shell", { command: "ls /sys/class/net" })}`, {
+      const { tools } = await h.run(`net ${call("shell", { command: "cat /proc/net/dev" })}`, {
         agent: "es-research-alpha",
       })
       expect(tools.map((tool) => `${tool.name}:${tool.status}`)).toEqual(["shell:error"])
       expect(tools[0]?.text).toContain("bubblewrap")
       return
     }
-    const { tools } = await h.run(`net ${call("shell", { command: "ls /sys/class/net" })}`, {
+    // /proc/net/dev is net-namespace aware (only lo: under --unshare-net);
+    // /sys/class/net leaks host interfaces through the --ro-bind / / (#100).
+    const { tools } = await h.run(`net ${call("shell", { command: "cat /proc/net/dev" })}`, {
       agent: "es-research-alpha",
     })
     expect(tools.map((tool) => `${tool.name}:${tool.status}`)).toEqual(["shell:completed"])
-    if (tools[0]?.text.includes("bwrap:")) {
-      // Fail-closed container (no working overlay): the shell never ran, so
-      // no egress was possible; CI with a working bwrap arbitrates the strict case.
-      return
-    }
-    expect(tools[0]?.text.trim().split(/\s+/)).toEqual(["lo"])
+    const ifaces = tools[0]?.text
+      .split("\n")
+      .filter((line) => line.includes(":"))
+      .map((line) => line.split(":")[0]?.trim() ?? "")
+      .filter(Boolean)
+    expect(ifaces).toEqual(["lo"])
   })
 
   test("a seat cannot launch a seat outside its spawns", async () => {

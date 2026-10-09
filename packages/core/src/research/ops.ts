@@ -62,6 +62,9 @@ export function researchCache(root: string, stateDir: string = defaultStateDir()
   return new SourceCache(researchSourcesDir(root), stateDir)
 }
 
+/** The CLI operator runs research tools as "human" (no registry seat); seats keep the registry check. */
+const mayResearch = (agent: string | undefined, tool: string): boolean => agent === "human" || seatMayUse(agent, tool)
+
 export function researchTools(context: ResearchOpsContext): EsToolDef[] {
   const cache = researchCache(context.root, context.stateDir ?? defaultStateDir())
   const env = context.searxngUrl ? { ...(context.env ?? process.env), SEARXNG_URL: context.searxngUrl } : context.env
@@ -80,7 +83,7 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
         "Search the web with the configured provider. Results are cached; fetch a result with es_research_fetch before quoting it.",
       input: object({ query: { type: "string" }, limit: { type: "number" } }, ["query"]),
       execute: async ({ query, limit }, toolContext) => {
-        if (!seatMayUse(toolContext.agent, "es_research_search"))
+        if (!mayResearch(toolContext.agent, "es_research_search"))
           throw new ToolRefusal("Only the research and scout seats may search the web.")
         const chosen = provider()
         const signals = [
@@ -126,7 +129,7 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
         ["url"],
       ),
       execute: async ({ url, offset, refresh }, toolContext) => {
-        if (!seatMayUse(toolContext.agent, "es_research_fetch"))
+        if (!mayResearch(toolContext.agent, "es_research_fetch"))
           throw new ToolRefusal("Only the research and scout seats may fetch a page.")
         // The webcache gate: a fresh full-page snapshot of the same canonical URL
         // is served from the cache. Search results cached under a page's URL are
@@ -185,7 +188,7 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
         prune: { type: "boolean" },
       }),
       execute: async ({ path: target, prune }, toolContext) => {
-        if (!seatMayUse(toolContext.agent, "es_research_audit"))
+        if (!mayResearch(toolContext.agent, "es_research_audit"))
           throw new ToolRefusal("Only the research seats and factory may audit a research artifact.")
         const file = path.resolve(
           context.root,

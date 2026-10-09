@@ -263,6 +263,24 @@ describe("shell policy", () => {
       expect([command, shell("build", command).effect]).toEqual([command, "allow"])
   })
 
+  test("a boolean flag with an inline value still reads as that verb (--bool=value, #97)", () => {
+    for (const command of [
+      "es --json=1 config set models.deep x/y",
+      "es --json=x approve frontier",
+      "es --json=1 trust",
+      "es --json=x waive lint/check --reason y",
+      "es --json=1 audit src --max-usd 5",
+      'es --json=1 scout "a parser"',
+      "es --json=1 reseal --sign",
+      "es --cwd=. --json=x approve frontier",
+    ])
+      for (const agent of ["build", "es-programmer"])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // Reads keep working with an inline boolean value.
+    for (const command of ["es --json=1 status", "es --json=x config show", "es --json=1 audit verify"])
+      expect([command, shell("build", command).effect]).toEqual([command, "allow"])
+  })
+
   test("a verb only mentioned in text is still denied, and the refusal points at passing the text by file (#86)", () => {
     const hint = /--body-file/
     const reason = (decision: ReturnType<typeof shell>) => (decision.effect === "deny" ? decision.reason : "")
@@ -423,6 +441,9 @@ const GLOBAL_FLAGS: readonly string[][] = [
   ["--cwd", "."],
   ["--run", "r1"],
   ["--json"],
+  ["--json=1"],
+  ["--json=x"],
+  ["--full=yes"],
   ["--x=y"],
   ["--"],
   ["--cwd=."],
