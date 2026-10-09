@@ -2,12 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import {
-  renderEvalPrompt,
-  resolveServePath,
-  startServeFixtures,
-  usesFixtureServer,
-} from "../src/evals/serve.ts"
+import { renderEvalPrompt, resolveServePath, startServeFixtures, usesFixtureServer } from "../src/evals/serve.ts"
 
 describe("eval fixture server", () => {
   let dir = ""
