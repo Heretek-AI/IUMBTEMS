@@ -37,6 +37,7 @@ spike as proof).
 - `scripts/v2-head.sh [tests…]` — real-host suite against OpenCode `v2` HEAD
   (repoints node_modules symlinks; `bun install` restores them)
 - `es <status|runs|watch|approve|trust|waive|gates|factory|research|brainstorm|harvest|design|config|lsp|hooks|audit|scout|mcp>`
+- `es mcp` pins caller identity to the adapter environment (`ES_MCP_AGENT`, else legacy `ES_AGENT`): the per-call `agent` argument is ignored; without either the caller is `mcp` (no seat)
 - OpenCode slash commands: `/grill /factory /audit /scout /brainstorm /harvest /design /research /gates /status /lsp /hooks /config` plus `es-*` TUI palette commands (panels: `/es-factory`, `/es-lsp-panel`, `/es-hooks`, `/es-brainstorm`; `/es-close`).
 
 ## Contract invariants (do not break)

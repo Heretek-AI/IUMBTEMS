@@ -469,6 +469,28 @@ describe("mcp", () => {
     expect(lines.map((line) => line.id)).toEqual([1, 2])
     expect(lines[0].result.serverInfo.name).toBe("epistemic-swarm")
   })
+
+  test("H1: a piped agent argument cannot claim a seat; identity is pinned to the adapter environment", async () => {
+    const call = (server: ReturnType<typeof createMcpServer>, args: Record<string, unknown>) =>
+      server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "complete", arguments: args } })
+    // No adapter identity: the caller is "mcp", which holds no seat, so even
+    // agent:"factory" is refused as mcp at the tool's own seat check.
+    const bare = createMcpServer({ root, stateDir: state, env: {} })
+    const spoofed = await call(bare, { agent: "factory" })
+    expect(spoofed?.result.isError).toBe(true)
+    expect(spoofed?.result.content[0].text).toContain("called by mcp")
+    // The adapter pins one identity per server in its environment: that identity
+    // reaches the tool (here refused as factory at the programmer-only check).
+    const pinned = createMcpServer({ root, stateDir: state, env: { ES_MCP_AGENT: "factory" } })
+    const admitted = await call(pinned, {})
+    expect(admitted?.result.isError).toBe(true)
+    expect(admitted?.result.content[0].text).toContain("called by factory")
+    // The per-call argument is ignored: claiming factory under a QA pin stays refused as QA.
+    const qaPinned = createMcpServer({ root, stateDir: state, env: { ES_MCP_AGENT: "es-qa-functional" } })
+    const ignored = await call(qaPinned, { agent: "factory" })
+    expect(ignored?.result.isError).toBe(true)
+    expect(ignored?.result.content[0].text).toContain("called by es-qa-functional")
+  })
 })
 
 describe("opencode driver", () => {

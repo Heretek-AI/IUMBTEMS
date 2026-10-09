@@ -98,10 +98,12 @@ rather than silently assumed:
   (bounded by `ES_EVAL_MAX_STEPS`) or once the run's spend, read from the
   stream's `step_finish` cost, passes `ES_EVAL_MAX_USD`. A model with no
   configured price reports $0, so for it only the step caps bound spend.
-- **MCP caller identity.** Over the stdio MCP server the calling agent's
-  identity is a model-supplied `agent` argument (or `ES_AGENT`), so it is
-  ADVISORY: the harness adapter, not the protocol, establishes it. There is no
-  MCP tool for approvals, trust, waivers or resume.
+- **MCP caller identity is pinned.** Over the stdio MCP server the calling agent's
+  identity comes from the adapter's environment (`ES_MCP_AGENT`, else the legacy
+  `ES_AGENT` default) — one server per agent, set in the human-written adapter
+  config — and the model-supplied `agent` argument is ignored. Without an adapter
+  identity the caller is `mcp`, which maps to no seat, so every seat-checked tool
+  refuses. There is no MCP tool for approvals, trust, waivers or resume.
 
 ## Development
 
