@@ -13,9 +13,18 @@ export type Child = Node | string | number | boolean | null | undefined | (() =>
 
 const SVG_NS = "http://www.w3.org/2000/svg"
 
+export type Attrs = Record<string, string | (() => string) | ((event: Event) => void)>
+
 const setAttr = (node: Element, name: string, value: string): void => {
   if (name === "className") node.setAttribute("class", value)
   else node.setAttribute(name, value)
+}
+
+const wireAttr = (node: Element, name: string, value: Attrs[string]): void => {
+  if (typeof value === "function") {
+    if (name.startsWith("on")) node.addEventListener(name.slice(2), value as EventListener)
+    else createEffect(() => setAttr(node, name, (value as () => string)()))
+  } else setAttr(node, name, value)
 }
 
 /**
@@ -50,20 +59,14 @@ const append = (node: Element, kid: Child): void => {
   } else insert(node, kid as never)
 }
 
-/** An element with static or reactive attributes and inserted children. */
+/** An element with static, reactive or listener attributes and inserted children. */
 export function h<K extends keyof HTMLElementTagNameMap>(
   tag: K,
-  attrs: Record<string, string | (() => string)> | null,
+  attrs: Attrs | null,
   ...kids: readonly Child[]
 ): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag)
-  if (attrs)
-    for (const [name, value] of Object.entries(attrs)) {
-      if (typeof value === "function") {
-        const read = value
-        createEffect(() => setAttr(node, name, read()))
-      } else setAttr(node, name, value)
-    }
+  if (attrs) for (const [name, value] of Object.entries(attrs)) wireAttr(node, name, value)
   for (const kid of kids) append(node, kid)
   return node
 }

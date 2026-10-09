@@ -153,6 +153,30 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
   templates — no JSX transform exists for bun's runner), against fixture
   data plus a real TelemetryServer for the WS integration test.
 
+## Config editor, preview-only (#132)
+
+- Hash-routed (`#/config`), two tabs: project config
+  (`.factory/config.json`) and gates (`.factory/gates.json`). The page
+  shows the current layers with their file hashes and the drift state, an
+  editor, and — after Preview — strict-schema errors inline or the exact
+  diff (old hash → new hash, changed keys) plus the exact terminal commands
+  (`es config set <key> <json>` per changed config key; save +
+  `es rebaseline` for gates).
+- Two read-only bus methods back it: `fleet.config.get {}` (current
+  layers, hashes, drift, forbidden keys) and `fleet.config.plan {file,
+  content}` (validates with the same `EsConfigSchema`/`GatesConfigSchema`
+  the terminal path uses; the previewed hash is the sha256 of the exact
+  bytes `writeJson` would emit). Both leave every file untouched (hashed
+  around the calls in tests).
+- Preview-only is enforced, not promised: the bus has no
+  `fleet.config.apply` (unknown-method), the UI has no apply button, and
+  the editor says so on the page. Browser apply stays terminal-only per
+  ADR 0002 I7 until the user explicitly extends it (after #131) — tracked
+  as a follow-up issue, not this ticket.
+- Note: `docs/CONFIG.md` is generated from the config schema, so the
+  editor is documented here instead of there (hand-editing generated docs
+  fails `docs:check`).
+
 ## Integration suite (#127)
 
 `packages/fleet/test/integration.test.ts` is merge-blocking (runs in

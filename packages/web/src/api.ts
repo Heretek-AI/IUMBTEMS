@@ -108,3 +108,82 @@ export async function fetchTask(id: string, base = ""): Promise<FleetSnapshot["t
   if (!task) throw new RpcError(-32603, `the daemon returned no task ${id}`)
   return task
 }
+
+export interface ConfigDrift {
+  readonly clean: boolean
+  readonly violations: readonly string[]
+  readonly hasBaseline: boolean
+}
+
+export interface ConfigView {
+  readonly config: Record<string, unknown> | null
+  readonly configHash: string | null
+  readonly gates: Record<string, unknown> | null
+  readonly gatesHash: string | null
+  readonly drift: ConfigDrift
+  readonly forbidden: readonly string[]
+}
+
+export interface ConfigPlan {
+  readonly ok: boolean
+  readonly errors: readonly string[]
+  readonly oldHash: string | null
+  readonly newHash: string | null
+  readonly changedKeys: readonly string[]
+  readonly commands: readonly string[]
+}
+
+const isRecord = (raw: unknown): raw is Record<string, unknown> =>
+  typeof raw === "object" && raw !== null && !Array.isArray(raw)
+
+const malformed = (): never => {
+  throw new RpcError(-32603, "the daemon returned a malformed config view")
+}
+
+const strings = (raw: unknown): string[] => {
+  if (Array.isArray(raw) && raw.every((entry) => typeof entry === "string")) return [...raw]
+  return malformed()
+}
+
+const recordOrNull = (raw: unknown): Record<string, unknown> | null => {
+  if (raw === null) return null
+  if (isRecord(raw)) return raw
+  return malformed()
+}
+
+const hashOrNull = (raw: unknown): string | null => {
+  if (raw === null || typeof raw === "string") return raw
+  return malformed()
+}
+
+/** Current project config, gates, hashes and drift (#132, preview-only). */
+export async function fetchConfigView(base = ""): Promise<ConfigView> {
+  const result = await rpc<unknown>("fleet.config.get", {}, base)
+  if (!isRecord(result)) throw new RpcError(-32603, "the daemon returned a malformed config view")
+  const drift = result.drift
+  if (!isRecord(drift) || typeof drift.clean !== "boolean" || typeof drift.hasBaseline !== "boolean")
+    throw new RpcError(-32603, "the daemon returned a malformed config view")
+  return {
+    config: recordOrNull(result.config),
+    configHash: hashOrNull(result.configHash),
+    gates: recordOrNull(result.gates),
+    gatesHash: hashOrNull(result.gatesHash),
+    drift: { clean: drift.clean, violations: strings(drift.violations), hasBaseline: drift.hasBaseline },
+    forbidden: strings(result.forbidden),
+  }
+}
+
+/** Validate proposed file content and preview the exact diff (#132). */
+export async function previewConfigPlan(file: "config" | "gates", content: unknown, base = ""): Promise<ConfigPlan> {
+  const result = await rpc<unknown>("fleet.config.plan", { file, content }, base)
+  if (!isRecord(result) || typeof result.ok !== "boolean")
+    throw new RpcError(-32603, "the daemon returned no config plan")
+  return {
+    ok: result.ok,
+    errors: strings(result.errors),
+    oldHash: typeof result.oldHash === "string" || result.oldHash === null ? result.oldHash : null,
+    newHash: typeof result.newHash === "string" || result.newHash === null ? result.newHash : null,
+    changedKeys: strings(result.changedKeys),
+    commands: strings(result.commands),
+  }
+}

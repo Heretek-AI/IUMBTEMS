@@ -9,6 +9,7 @@ import { appendFile, mkdir, open, readFile, writeFile } from "node:fs/promises"
 import { createServer, type Server, type Socket } from "node:net"
 import path from "node:path"
 import { z } from "zod"
+import { planConfigFile, readConfigView } from "./configview.ts"
 import { fleetPaths } from "./state.ts"
 import {
   loopbackOriginOk,
@@ -195,6 +196,9 @@ const RpcSchemas = {
   "fleet.task": StrictObject({ id: z.string().min(1) }),
   "fleet.pending": StrictObject({}),
   "fleet.events": StrictObject({ since: z.number().int().min(0).default(0) }),
+  /** Read-only config preview (#132, preview-only): no apply method exists. */
+  "fleet.config.get": StrictObject({}),
+  "fleet.config.plan": StrictObject({ file: z.enum(["config", "gates"]), content: z.unknown() }),
 } as const
 
 type RpcMethod = keyof typeof RpcSchemas
@@ -211,6 +215,11 @@ export interface TelemetryOptions {
    * behind the single-use ticket exchange; when unset, web loads 404.
    */
   readonly webRoot?: string
+  /**
+   * Repo root the read-only config preview reads (#132). When unset,
+   * `fleet.config.*` reports that no repo is configured.
+   */
+  readonly configRoot?: string
 }
 
 /** Case-insensitive request header lookup (names with dashes need no literals at use sites). */
@@ -518,6 +527,15 @@ export class TelemetryServer {
       case "fleet.events": {
         const since = (params as { since?: number }).since ?? 0
         return { events: this.events.filter((event) => event.seq > since), now: this.events.at(-1)?.seq ?? 0 }
+      }
+      case "fleet.config.get": {
+        if (!this.options.configRoot) throw new Error("no repo is configured for the config preview")
+        return readConfigView(this.options.configRoot)
+      }
+      case "fleet.config.plan": {
+        if (!this.options.configRoot) throw new Error("no repo is configured for the config preview")
+        const input = params as { file: "config" | "gates"; content: unknown }
+        return planConfigFile(this.options.configRoot, { file: input.file, content: input.content })
       }
     }
   }

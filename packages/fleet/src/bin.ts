@@ -110,6 +110,7 @@ export async function main(argv: readonly string[]): Promise<number> {
           token,
           getSnapshot: () => readFleetSnapshot(root),
           webRoot,
+          configRoot: repoRoot,
         })
         const daemon = new FleetDaemon({
           repoRoot,

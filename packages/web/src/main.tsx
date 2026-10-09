@@ -1,21 +1,24 @@
-// Dashboard app (#130): hash-routed fleet overview and task pages over the
-// read-only bus. No mutation paths exist in this ticket's code: the only
-// requests are `fleet.status` / `fleet.task` and the WS subscribe.
-// Approving (pending items link to their task page) arrives with #131;
-// editing config with #132.
+// Dashboard app (#130) with the preview-only config editor (#132):
+// hash-routed fleet overview, task and config pages over the read-only
+// bus. No mutation paths exist in this ticket's code: the only requests
+// are `fleet.status` / `fleet.task` / `fleet.config.get` /
+// `fleet.config.plan` and the WS subscribe. Approving (pending items link
+// to their task page) arrives with #131.
 
 import type { BusEvent, FleetSnapshot } from "@heretek-ai/es-fleet"
 import { createSignal, onCleanup } from "solid-js"
 import { render } from "solid-js/web"
-import { fetchStatus, fetchTask, RpcError } from "./api.ts"
+import { type ConfigView, fetchConfigView, fetchStatus, fetchTask, previewConfigPlan, RpcError } from "./api.ts"
 import { connectBus } from "./bus.ts"
 import { Overview, TaskDetail } from "./components.ts"
+import { ConfigEditor } from "./config.ts"
 import { h } from "./dom.ts"
 import { createFleetStore } from "./store.ts"
 
-type Route = { name: "overview" } | { name: "task"; id: string }
+type Route = { name: "overview" } | { name: "task"; id: string } | { name: "config" }
 
 const routeOf = (hash: string): Route => {
+  if (hash === "#/config") return { name: "config" }
   const task = /^#\/task\/([^/]+)$/.exec(hash)
   return task?.[1] ? { name: "task", id: decodeURIComponent(task[1]) } : { name: "overview" }
 }
@@ -24,6 +27,8 @@ function App(): Element {
   const store = createFleetStore()
   const [route, setRoute] = createSignal<Route>(routeOf(window.location.hash))
   const [task, setTask] = createSignal<FleetSnapshot["tasks"][number] | undefined>(undefined)
+  const [configView, setConfigView] = createSignal<ConfigView | undefined>(undefined)
+  const [configError, setConfigError] = createSignal<string | undefined>(undefined)
   const [error, setError] = createSignal<string | undefined>(undefined)
   const [tick, setTick] = createSignal(0)
 
@@ -38,6 +43,14 @@ function App(): Element {
           setTask(await fetchTask(current.id))
         } catch {
           setTask(undefined)
+        }
+      }
+      if (current.name === "config") {
+        try {
+          setConfigView(await fetchConfigView())
+          setConfigError(undefined)
+        } catch (failure) {
+          setConfigError(failure instanceof RpcError ? failure.message : String(failure))
         }
       }
     } catch (failure) {
@@ -72,12 +85,21 @@ function App(): Element {
 
   void refresh()
 
-  return h("div", null, () => {
+  const nav = h("nav", null, h("a", { href: "#/" }, "Fleet"), " · ", h("a", { href: "#/config" }, "Config"))
+
+  return h("div", null, nav, () => {
     const current = route()
     if (current.name === "task") {
       return TaskDetail({
         task: () => (route().name === "task" ? task() : undefined),
         events: () => store.state.events,
+      })
+    }
+    if (current.name === "config") {
+      return ConfigEditor({
+        view: () => configView(),
+        error: () => configError(),
+        preview: (file, content) => previewConfigPlan(file, content),
       })
     }
     return Overview({

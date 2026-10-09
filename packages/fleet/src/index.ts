@@ -1,6 +1,14 @@
 // Fleet package entrypoint (#122): daemon lifecycle, state, and (from later
 // tickets) the scheduler, worktree coordinator, workers and telemetry bus.
 export { VERSION } from "./bin.ts"
+export {
+  type ConfigDrift,
+  type ConfigPlan,
+  type ConfigPlanInput,
+  type ConfigView,
+  planConfigFile,
+  readConfigView,
+} from "./configview.ts"
 export { type DaemonOptions, FleetDaemon, type TransitionEvent, type WorkerPort } from "./daemon.ts"
 export {
   assertHumanStart,

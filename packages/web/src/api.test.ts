@@ -1,7 +1,7 @@
 // Bus client (#129): strict response parsing, auth failure mapping. The
 // fetch transport is stubbed per test; no DOM is touched.
 import { afterEach, describe, expect, test } from "bun:test"
-import { fetchStatus, fetchTask, parseStatus, RpcError, rpc } from "./api.ts"
+import { fetchConfigView, fetchStatus, fetchTask, parseStatus, previewConfigPlan, RpcError, rpc } from "./api.ts"
 
 const realFetch = globalThis.fetch
 
@@ -80,5 +80,32 @@ describe("rpc", () => {
     expect((await fetchTask("a")).title).toBe("Alpha")
     stubFetch(200, { error: { code: -32603, message: "unknown task" } })
     await expect(fetchTask("a")).rejects.toThrow(RpcError)
+  })
+
+  test("fetchConfigView parses the view and rejects malformed payloads", async () => {
+    stubFetch(200, {
+      result: {
+        config: { licenseWhitelist: ["MIT"] },
+        configHash: "abc",
+        gates: { topN: 5 },
+        gatesHash: null,
+        drift: { clean: true, violations: [], hasBaseline: false },
+        forbidden: ["embeddings"],
+      },
+    })
+    const seen = await fetchConfigView()
+    expect(seen.config).toEqual({ licenseWhitelist: ["MIT"] })
+    expect(seen.gatesHash).toBeNull()
+    stubFetch(200, { result: { config: {}, drift: {} } })
+    await expect(fetchConfigView()).rejects.toThrow(RpcError)
+  })
+
+  test("previewConfigPlan returns the plan", async () => {
+    stubFetch(200, {
+      result: { ok: true, errors: [], oldHash: "a", newHash: "b", changedKeys: ["topN"], commands: ["x"] },
+    })
+    const plan = await previewConfigPlan("gates", { topN: 3 })
+    expect(plan.ok).toBe(true)
+    expect(plan.changedKeys).toEqual(["topN"])
   })
 })
