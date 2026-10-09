@@ -10,20 +10,56 @@
       "type": "string",
       "minLength": 1
     },
-    "failures": {
+    "attempts": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
-    "replanned": {
-      "type": "boolean"
+    "replans": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "seat": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rule": {
+            "type": "string",
+            "minLength": 1
+          },
+          "category": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "kind",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [
     "id",
     "status",
-    "failures",
-    "replanned"
+    "attempts",
+    "replans",
+    "failures"
   ],
   "additionalProperties": false
 }

@@ -2,33 +2,30 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "seat": {
+      "type": "string",
+      "minLength": 1
+    },
     "kind": {
       "type": "string",
       "minLength": 1
     },
-    "severity": {
+    "rule": {
       "type": "string",
       "minLength": 1
     },
-    "count": {
-      "type": "integer",
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991
+    "category": {
+      "type": "string",
+      "minLength": 1
     },
-    "sources": {
-      "default": [],
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
-      }
+    "reason": {
+      "type": "string",
+      "minLength": 1
     }
   },
   "required": [
     "kind",
-    "severity",
-    "count",
-    "sources"
+    "reason"
   ],
   "additionalProperties": false
 }

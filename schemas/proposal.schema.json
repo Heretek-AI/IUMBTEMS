@@ -26,10 +26,16 @@
           "enum": [
             "gate",
             "audit",
+            "qa",
+            "replan",
             "eval"
           ]
         },
         "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seat": {
           "type": "string",
           "minLength": 1
         },

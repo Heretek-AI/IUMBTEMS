@@ -4,6 +4,8 @@
   "enum": [
     "gate",
     "audit",
+    "qa",
+    "replan",
     "eval"
   ]
 }
