@@ -42,6 +42,11 @@ let gateway: ReturnType<typeof Bun.serve>
 
 beforeAll(async () => {
   state = await mkdtemp(path.join(tmpdir(), "es-fires-research-"))
+  // The direct backend refuses loopback by default (SSRF guard); the
+  // loopback-only fixture servers below need the explicit test allowance.
+  // Nothing leaves the machine. Test 2b still proves a gateway blocked
+  // refusal halts the chain: the gateway denies before direct is reached.
+  process.env.ES_RESEARCH_ALLOW_LOOPBACK = "1"
   pages = Bun.serve({
     port: PAGES_PORT,
     hostname: "127.0.0.1",
@@ -109,6 +114,7 @@ afterAll(async () => {
   pages?.stop(true)
   searxng?.stop(true)
   gateway?.stop(true)
+  delete process.env.ES_RESEARCH_ALLOW_LOOPBACK
   await rm(state, { recursive: true, force: true })
 })
 

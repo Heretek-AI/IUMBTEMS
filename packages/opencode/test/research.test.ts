@@ -16,6 +16,7 @@ let state: string
 let h: Harness
 let server: ReturnType<typeof Bun.serve>
 let previous: string | undefined
+let previousLoopback: string | undefined
 
 beforeAll(async () => {
   state = await mkdtemp(path.join(tmpdir(), "es-research-host-"))
@@ -40,6 +41,10 @@ beforeAll(async () => {
   })
   previous = process.env.SEARXNG_URL
   process.env.SEARXNG_URL = `http://127.0.0.1:${server.port}`
+  // The direct backend refuses loopback by default (SSRF guard); the
+  // loopback-only fixture server above needs the explicit test allowance.
+  previousLoopback = process.env.ES_RESEARCH_ALLOW_LOOPBACK
+  process.env.ES_RESEARCH_ALLOW_LOOPBACK = "1"
   h = await boot({
     git: true,
     script: directiveScript,
@@ -53,6 +58,8 @@ afterAll(async () => {
   server?.stop(true)
   if (previous === undefined) delete process.env.SEARXNG_URL
   else process.env.SEARXNG_URL = previous
+  if (previousLoopback === undefined) delete process.env.ES_RESEARCH_ALLOW_LOOPBACK
+  else process.env.ES_RESEARCH_ALLOW_LOOPBACK = previousLoopback
   await rm(state, { recursive: true, force: true })
 })
 

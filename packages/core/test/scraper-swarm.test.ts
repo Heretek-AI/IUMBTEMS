@@ -1,6 +1,6 @@
 // #107: Scraper-Swarm gateway contract tests. Every test replays a
 // vendored golden fixture (test/fixtures/scraper-swarm/v1/, from
-// scraper-swarm@e1b2955) through a stub fetch: no gateway runs here.
+// scraper-swarm@74909b9) through a stub fetch: no gateway runs here.
 import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
