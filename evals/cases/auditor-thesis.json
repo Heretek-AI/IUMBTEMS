@@ -1,11 +1,27 @@
 {
   "id": "auditor-thesis",
-  "description": "The thesis auditor maps a login helper, names its exploitable defect with the CWE and the file:line range.",
+  "description": "The thesis auditor maps a login helper, names its exploitable defect with the CWE and the file:line range, and records a fail verdict.",
   "agent": "es-auditor-thesis",
-  "prompt": "Map the invariants of src/login.ts. Report any exploitable defect with its CWE id and the file:line range it sits on. Inspect the file with the read tool, never the shell; do not run gates. This run is headless: never call the question tool. Make independent tool calls in the same block.",
+  "prompt": "Code audit audit-01 is open on path src. Map the invariants of src/login.ts. Report any exploitable defect with its CWE id and the file:line range it sits on, then record one fail verdict with es_audit_verdict: each finding with its CWE, exact lines and a verbatim excerpt. Inspect the file with the read tool, never the shell; do not run gates. This run is headless: never call the question tool. Make independent tool calls in the same block.",
   "maxSteps": 14,
   "files": {
-    "src/login.ts": "export async function login(db: any, username: string, password: string) {\n  const query = \"SELECT * FROM users WHERE name = '\" + username + \"' AND pass = '\" + password + \"'\"\n  return db.query(query)\n}\n"
+    "src/login.ts": "export async function login(db: any, username: string, password: string) {\n  const query = \"SELECT * FROM users WHERE name = '\" + username + \"' AND pass = '\" + password + \"'\"\n  return db.query(query)\n}\n",
+    ".factory/runtime/state.json": "{\n  \"version\": 2,\n  \"runId\": \"run-20261007-000000-thesis\",\n  \"stage\": \"GRILL\",\n  \"createdAt\": \"2026-10-07T00:00:00.000Z\",\n  \"updatedAt\": \"2026-10-07T00:00:00.000Z\",\n  \"spendCeilingUSD\": 2,\n  \"spend\": {\n    \"usd\": 0,\n    \"estimated\": false,\n    \"events\": 0\n  },\n  \"phases\": [],\n  \"audits\": [\n    {\n      \"id\": \"audit-01\",\n      \"target\": {\n        \"kind\": \"path\",\n        \"path\": \"src\"\n      },\n      \"round\": 1,\n      \"status\": \"open\",\n      \"openedAt\": \"2026-10-07T00:00:00.000Z\",\n      \"openedBy\": \"human:eval\"\n    }\n  ]\n}\n"
   },
-  "checks": { "contains": ["CWE-89", "src/login.ts"] }
+  "checks": {
+    "contains": ["CWE-89", "src/login.ts"],
+    "toolsUsed": ["es_audit_verdict"]
+  },
+  "fire": {
+    "kind": "audit",
+    "audit": "audit-01",
+    "plants": [
+      {
+        "id": "sql-injection",
+        "file": "src/login.ts",
+        "lines": [2, 2],
+        "cwe": ["CWE-89"]
+      }
+    ]
+  }
 }
