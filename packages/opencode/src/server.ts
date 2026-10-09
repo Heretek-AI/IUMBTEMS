@@ -7,10 +7,13 @@ import {
   describeTarget,
   ensureEngineKey,
   factoryLayout,
+  flag,
   formatReport,
   git,
   livenessLines,
+  loadPrompt,
   loadSkills,
+  parseArgs,
   parseAuditTarget,
   readJson,
   readLiveness,
@@ -32,6 +35,19 @@ import { registerTools } from "./tools.ts"
 
 export const PLUGIN_ID = "epistemic-swarm"
 
+/** `/research deep <question> --max-usd N`, split with the core CLI grammar (no command-local regex). */
+export type DeepResearchArgs = { query: string; ceiling: string } | { error: "usage" | "ceiling" }
+
+export function parseDeepResearchArgs(text: string): DeepResearchArgs {
+  const argv = parseArgs(text.split(/\s+/).filter(Boolean))
+  const [head, ...rest] = argv.positionals
+  const query = rest.join(" ").trim()
+  if (head?.toLowerCase() !== "deep" || query === "") return { error: "usage" }
+  const ceiling = flag(argv, "max-usd")
+  if (ceiling === undefined || !(Number(ceiling) > 0)) return { error: "ceiling" }
+  return { query, ceiling }
+}
+
 export default Plugin.define({
   id: PLUGIN_ID,
   async setup(ctx) {
@@ -48,8 +64,9 @@ export default Plugin.define({
     )
     const agents = await compileAgents(runtime.options, servers)
     // Fail-closed models (#96): every configured ref is checked against the
-    // host model list here, once. A missing model refuses that seat at launch
-    // (guardSeatLaunch) and shows in es_status; healthy seats are unaffected.
+    // host model list here, once. A missing model refuses every tool call by
+    // that seat (the policy before-hook) and shows in es_status; healthy
+    // seats are unaffected.
     await ctx.model.transform((editor) => {
       for (const problem of modelProblems(
         runtime.options,
@@ -248,16 +265,16 @@ export default Plugin.define({
             await ctx.session.synthetic({ sessionID, text } as any)
           }
           const text = prompt.text?.trim() ?? ""
-          const query = text.replace(/^deep\s+/i, "").trim()
-          const ceiling = /--max-usd\s+([\d.]+)/.exec(text)?.[1]
-          if (!/^deep(\s|$)/i.test(text) || !query.replace(/--max-usd\s+[\d.]+/, "").trim()) {
+          const parsed = parseDeepResearchArgs(text)
+          if ("error" in parsed && parsed.error === "usage") {
             return say("Usage: /research deep <question> --max-usd N")
           }
-          if (ceiling === undefined || !(Number(ceiling) > 0)) {
+          if ("error" in parsed) {
             return say(
               "Deep research needs a spend ceiling you set: /research deep <question> --max-usd N. Seats halt when the spend reaches it.",
             )
           }
+          const { query, ceiling } = parsed
           const existing = await runtime.factory.read().catch(() => undefined)
           if (existing && existing.mode !== "research") {
             return say(
@@ -277,10 +294,7 @@ export default Plugin.define({
           if (!existing) {
             try {
               // The human typed /research deep: beginning the run is their action.
-              await runtime.factory.beginResearchRun(
-                { objective: query.replace(/--max-usd\s+[\d.]+/, "").trim(), ceilingUSD: Number(ceiling) },
-                "human:tui",
-              )
+              await runtime.factory.beginResearchRun({ objective: query, ceilingUSD: Number(ceiling) }, "human:tui")
             } catch (error) {
               return say(`Could not start the research run: ${error instanceof Error ? error.message : String(error)}`)
             }
@@ -289,7 +303,9 @@ export default Plugin.define({
           await ctx.session.prompt({
             ...prompt,
             sessionID,
-            text: `${await runtime.factory.summary()}\nDeep research runs adversarially: write the plan note, launch es-research-alpha and es-research-beta in parallel (both subagent calls in one message, in the foreground), then es-research-synthesizer with the disputes, then es_research_audit and es_research_complete. No human will answer questions mid-flow.`,
+            // The coordinator flow is single-sourced from the seat's prompt in
+            // core; this only adds the run state.
+            text: `${await runtime.factory.summary()}\nDeep research runs adversarially, with no human answering questions mid-flow:\n\n${(await loadPrompt("deep-researcher")).body}`,
             delivery,
           } as any)
         },

@@ -22,6 +22,7 @@ import {
   pendingApprovals,
   progressPrint,
   readLiveness,
+  seatOf,
 } from "@heretek-ai/es-core"
 import { z } from "zod"
 
@@ -46,7 +47,7 @@ export type HeadlessEvent =
       /** Opportunistic per-turn tokens from the child's events, when the driver reports them. */
       tokensIn?: number
       tokensOut?: number
-      tools: Array<{ name: string; ok: boolean; ms?: number }>
+      tools: Array<{ name: string; ok: boolean; ms?: number; seat?: string }>
     }
   | { type: "waiting"; reason: string; stages?: string[] }
   | { type: "halted"; reason: string }
@@ -75,13 +76,42 @@ export interface JsonlEnvelope {
   readonly event: HeadlessEvent
 }
 
-export const HeadlessJsonlSchema = z.object({
-  v: z.literal(1),
-  at: z.string().datetime(),
-  runId: z.string().min(1),
-  kind: z.string().min(1),
-  event: z.record(z.string(), z.unknown()),
+/** One tool call in a `turn-metrics` payload: duration and seat when the driver reports them. */
+export const TurnMetricsToolSchema = z.object({
+  name: z.string().min(1),
+  ok: z.boolean(),
+  ms: z.number().nonnegative().optional(),
+  seat: z.string().min(1).optional(),
 })
+
+/** A `turn-metrics` payload: validated on its own, not just as an envelope. */
+export const TurnMetricsEventSchema = z.object({
+  type: z.literal("turn-metrics"),
+  turn: z.number().int().positive(),
+  costUSD: z.number(),
+  tokensIn: z.number().optional(),
+  tokensOut: z.number().optional(),
+  tools: z.array(TurnMetricsToolSchema),
+})
+
+export const HeadlessJsonlSchema = z
+  .object({
+    v: z.literal(1),
+    at: z.string().datetime(),
+    runId: z.string().min(1),
+    kind: z.string().min(1),
+    event: z.record(z.string(), z.unknown()),
+  })
+  .superRefine((envelope, ctx) => {
+    if (envelope.kind !== "turn-metrics") return
+    const payload = TurnMetricsEventSchema.safeParse(envelope.event)
+    if (!payload.success)
+      ctx.addIssue({
+        code: "custom",
+        message: `invalid turn-metrics payload: ${payload.error.issues.map((issue) => issue.message).join("; ")}`,
+        path: ["event"],
+      })
+  })
 export type HeadlessJsonl = z.infer<typeof HeadlessJsonlSchema>
 
 /** Wrap one headless event in its versioned JSONL envelope. */
@@ -270,10 +300,32 @@ export async function checkCwd(root: string): Promise<string | undefined> {
 }
 
 /** Tool activity in one harness event, using the same shape as the log presenter. */
-function toolActivity(raw: unknown): { name: string; ok: boolean } | undefined {
-  const event = raw as { type?: string; part?: { tool?: string; state?: { status?: string } } }
-  if (event?.type === "tool_use" && typeof event.part?.tool === "string")
-    return { name: event.part.tool, ok: event.part.state?.status === "completed" }
+function toolActivity(raw: unknown): { name: string; ok: boolean; ms?: number; seat?: string } | undefined {
+  const event = raw as {
+    type?: string
+    agent?: unknown
+    part?: { tool?: string; state?: { status?: string; time?: { start?: unknown; end?: unknown } } }
+  }
+  if (event?.type === "tool_use" && typeof event.part?.tool === "string") {
+    const activity: { name: string; ok: boolean; ms?: number; seat?: string } = {
+      name: event.part.tool,
+      ok: event.part.state?.status === "completed",
+    }
+    const { start, end } = event.part.state?.time ?? {}
+    if (
+      typeof start === "number" &&
+      typeof end === "number" &&
+      Number.isFinite(start) &&
+      Number.isFinite(end) &&
+      end >= start
+    )
+      activity.ms = end - start
+    if (typeof event.agent === "string") {
+      const seat = seatOf(event.agent)
+      if (seat !== undefined) activity.seat = seat
+    }
+    return activity
+  }
   return undefined
 }
 
@@ -375,7 +427,7 @@ export async function* driveHeadless(options: HeadlessOptions, job: HeadlessJob)
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.model ? { model: options.model } : {}),
     })
-    const tools: Array<{ name: string; ok: boolean }> = []
+    const tools: Array<{ name: string; ok: boolean; ms?: number; seat?: string }> = []
     let tokensIn: number | undefined
     let tokensOut: number | undefined
     const deadline = options.turnTimeoutMs === undefined ? undefined : Date.now() + options.turnTimeoutMs
@@ -550,12 +602,13 @@ function summarizeDriverEvent(raw: unknown): Record<string, unknown> | undefined
 
 /**
  * What to print for one headless event at a log level. `quiet`: lifecycle and
- * progress only (per-turn metrics go to `--events jsonl`, never here).
- * `info` (default): plus one compact line per tool call and
- * the assistant's text. `debug`: the raw harness events, long strings clipped.
+ * progress only. `info` (default): plus one compact line per tool call and
+ * the assistant's text. `debug`: the raw harness events, long strings
+ * clipped, and the per-turn metrics. Per-turn metrics otherwise go only to
+ * the `--events jsonl` stream, so the default output is unchanged by them.
  */
 export function presentEvent(event: HeadlessEvent, level: LogLevel): unknown {
-  if (event.type === "turn-metrics") return level === "quiet" ? undefined : event
+  if (event.type === "turn-metrics") return level === "debug" ? event : undefined
   if (event.type !== "driver") return event
   if (level === "quiet") return undefined
   if (level === "debug") return { type: "driver", event: clipStrings(event.event, DEBUG_STRING_MAX) }
