@@ -3,8 +3,10 @@
 // with a known answer: planted defects the audit pair must catch at the right
 // lines, and license fixtures whose scout verdicts core must get right. The
 // same graders run on scripted transcripts in CI and on real-model runs nightly.
+import { readdir } from "node:fs/promises"
 import { readAuditRecords } from "../codeaudit/store.ts"
 import { readHarvestResult } from "../harvest/store.ts"
+import { factoryLayout } from "../layout.ts"
 import type { AuditRecord } from "../schema/codeaudit.ts"
 import type { HarvestMatrix } from "../schema/harvest.ts"
 import type { ScoutResult } from "../schema/scout.ts"
@@ -123,13 +125,65 @@ export function gradeHarvestFire(
 export type FireSpec =
   | { readonly kind: "audit"; readonly audit: string; readonly plants: readonly PlantedDefect[] }
   | { readonly kind: "scout"; readonly expected: ReadonlyArray<{ name: string; verdict: string }> }
-  | { readonly kind: "harvest"; readonly expected: ReadonlyArray<{ candidate: string; verdict: string }> }
+  | {
+      readonly kind: "harvest"
+      readonly expected: ReadonlyArray<{ candidate: string; verdict: string }>
+      /** Which harvest run to grade (the harvester completes run "harvest" in evals). */
+      readonly run?: string
+    }
+
+/** Harvest run ids are path segments: kebab-case, like the brainstorm runs. */
+const RUN_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
+
+/**
+ * Every harvest run with a completed result on disk. Harvest went
+ * run-scoped in #109, so the default run is not the only place a result can
+ * land; the legacy top-level files still read as the default run.
+ */
+async function completedHarvestRuns(root: string): Promise<string[]> {
+  const done: string[] = []
+  if (await readHarvestResult(root).catch(() => undefined)) done.push("default")
+  const entries = await readdir(factoryLayout(root).harvestRuns, { withFileTypes: true }).catch(() => [])
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !RUN_ID.test(entry.name) || entry.name === "default") continue
+    if (await readHarvestResult(root, entry.name).catch(() => undefined)) done.push(entry.name)
+  }
+  return done.sort()
+}
 
 /** Grade a fire from what the seats left in the workspace (records, scout result, harvest result). */
 export async function gradeFireCase(spec: FireSpec, root: string): Promise<FireGrade> {
   if (spec.kind === "audit") return gradeAuditFire(await readAuditRecords(root, spec.audit), spec.plants)
   if (spec.kind === "harvest") {
-    const result = await readHarvestResult(root).catch(() => undefined)
+    if (spec.run !== undefined) {
+      if (!RUN_ID.test(spec.run))
+        return {
+          pass: false,
+          caught: [],
+          failures: [`invalid harvest run id "${spec.run}": use lowercase letters, digits and dashes`],
+        }
+      const named = await readHarvestResult(root, spec.run).catch(() => undefined)
+      if (!named)
+        return {
+          pass: false,
+          caught: [],
+          failures: [`run "${spec.run}" never completed (no .factory/harvest/runs/${spec.run}/harvest.json)`],
+        }
+      return gradeHarvestFire(named.matrix, spec.expected)
+    }
+    // No named run: grade the run the case actually produced. Exactly one
+    // completed run grades; zero or several fail explicitly — never a silent
+    // default that grades the wrong run.
+    const done = await completedHarvestRuns(root)
+    if (done.length === 0)
+      return { pass: false, caught: [], failures: ["the harvest never completed (no .factory/harvest/harvest.json)"] }
+    if (done.length > 1)
+      return {
+        pass: false,
+        caught: [],
+        failures: [`several harvest runs completed (${done.join(", ")}): set the fire's run`],
+      }
+    const result = await readHarvestResult(root, done[0]!).catch(() => undefined)
     if (!result)
       return { pass: false, caught: [], failures: ["the harvest never completed (no .factory/harvest/harvest.json)"] }
     return gradeHarvestFire(result.matrix, spec.expected)
