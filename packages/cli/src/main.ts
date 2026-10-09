@@ -30,11 +30,13 @@ import {
   installServer,
   LENSES,
   LspManager,
+  listBrainstormRuns,
   listRuns,
   loadEsConfig,
   loadHooks,
   loadInterview,
   parseArgs,
+  parseRunId,
   parseSource,
   readIdeas as readBrainstormIdeas,
   readPlan as readBrainstormPlan,
@@ -391,19 +393,26 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           return 0
         }
         if (sub === "show" || sub === undefined) {
-          const result = await readBrainstormResult(root).catch(() => undefined)
+          let run: string
+          try {
+            run = parseRunId(rest[0])
+          } catch (error) {
+            io.print(error instanceof Error ? error.message : String(error))
+            return 2
+          }
+          const result = await readBrainstormResult(root, run).catch(() => undefined)
           if (result) {
             io.print(args.flags.json === true ? JSON.stringify(result, null, 2) : renderBrainstorm(result))
             return 0
           }
-          const plan = await readBrainstormPlan(root).catch(() => undefined)
+          const plan = await readBrainstormPlan(root, run).catch(() => undefined)
           if (plan) {
-            const ideas = await readBrainstormIdeas(root).catch(() => [])
-            const scores = await readBrainstormScores(root).catch(() => [])
+            const ideas = await readBrainstormIdeas(root, run).catch(() => [])
+            const scores = await readBrainstormScores(root, run).catch(() => [])
             const survivors = ideas.filter((idea) => !idea.duplicateOf)
             io.print(
               [
-                `Brainstorm in progress: "${plan.brief.idea}"`,
+                `Brainstorm in progress (run "${run}"): "${plan.brief.idea}"`,
                 `Lenses: ${plan.lenses.join(", ")}`,
                 `Ideas: ${survivors.length} surviving (${ideas.length - survivors.length} duplicate(s)) · scored ${scores.length}/${survivors.length}`,
                 `Coverage: ${plan.lenses.map((lens) => `${lens} ${survivors.filter((idea) => idea.lens === lens).length}`).join(" · ")}`,
@@ -411,12 +420,15 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
             )
             return 0
           }
+          const runs = await listBrainstormRuns(root).catch(() => [] as string[])
           io.print(
-            `No brainstorm in ${paths.dir}. Start one with /brainstorm in OpenCode, or \`es brainstorm plan "<idea>"\`.`,
+            runs.length
+              ? `No brainstorm run "${run}" in ${paths.dir}. Runs: ${runs.join(", ")}.`
+              : `No brainstorm in ${paths.dir}. Start one with /brainstorm in OpenCode, or \`es brainstorm plan "<idea>"\`.`,
           )
           return 1
         }
-        io.print('Usage: es brainstorm plan "<idea>" | show [--json] | lenses')
+        io.print('Usage: es brainstorm plan "<idea>" | show [run] [--json] | lenses')
         return 2
       }
       case "harvest": {

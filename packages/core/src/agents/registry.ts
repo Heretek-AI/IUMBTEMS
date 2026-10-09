@@ -97,6 +97,17 @@ const LENS_SPECS: AgentSpec[] = LENSES.map((lens) => ({
   web: "host",
 }))
 
+/**
+ * Seats a callable brainstorm fans out at depth 1 (#108): the critic scores,
+ * the lenses diverge. The calling primary seat (brainstormer, grill or
+ * factory) launches them itself, in the foreground, all lens calls in one
+ * message — subagents never nest.
+ */
+export const BRAINSTORM_FANOUT_SPAWNS: readonly string[] = [
+  "es-brainstorm-critic",
+  ...LENSES.map((lens) => lensAgentId(lens.id)),
+]
+
 export const AGENTS: readonly AgentSpec[] = [
   {
     id: "factory",
@@ -116,8 +127,11 @@ export const AGENTS: readonly AgentSpec[] = [
       "es_build_start",
       "es_release",
       "es_audit_open",
+      "es_brainstorm_plan",
+      "es_brainstorm_record",
+      "es_brainstorm_complete",
     ],
-    spawns: SEATS_SPAWNED_BY_FACTORY,
+    spawns: [...SEATS_SPAWNED_BY_FACTORY, ...BRAINSTORM_FANOUT_SPAWNS],
     writes: ["factory-docs"],
     readonlyShell: true,
     skills: ["factory"],
@@ -133,8 +147,15 @@ export const AGENTS: readonly AgentSpec[] = [
     tier: "deep",
     description: "Interviews you about an idea until the design tree is settled and the spend ceiling is set.",
     prompt: "grill",
-    tools: ["es_status", "es_frontier_write", "es_request_approval"],
-    spawns: [],
+    tools: [
+      "es_status",
+      "es_frontier_write",
+      "es_request_approval",
+      "es_brainstorm_plan",
+      "es_brainstorm_record",
+      "es_brainstorm_complete",
+    ],
+    spawns: [...BRAINSTORM_FANOUT_SPAWNS],
     writes: [],
     readonlyShell: true,
     skills: ["grill"],
@@ -151,7 +172,7 @@ export const AGENTS: readonly AgentSpec[] = [
     description: "Fans out divergent lenses on an idea and returns a diversified shortlist.",
     prompt: "brainstormer",
     tools: ["es_status", "es_brainstorm_plan", "es_brainstorm_record", "es_brainstorm_complete"],
-    spawns: ["es-brainstorm-critic", ...LENSES.map((lens) => lensAgentId(lens.id))],
+    spawns: [...BRAINSTORM_FANOUT_SPAWNS],
     writes: ["brainstorm"],
     readonlyShell: true,
     skills: ["brainstorm"],

@@ -68,10 +68,6 @@ describe("item 2: in-tool seat lists equal the registry grants", () => {
   test("single-seat tools admit exactly their one registry seat", async () => {
     const probes: Array<{ tool: string; args: Record<string, unknown> }> = [
       {
-        tool: "es_brainstorm_plan",
-        args: { idea: "x" },
-      },
-      {
         tool: "es_harvest_plan",
         args: { objective: "x", candidates: [] },
       },
@@ -87,6 +83,20 @@ describe("item 2: in-tool seat lists equal the registry grants", () => {
     await expect(scoutPlan.execute({ objective: "x", candidates: [] }, { agent: "harvester" } as any)).rejects.toThrow(
       "Only the scout seat",
     )
+  })
+
+  test("callable brainstorm tools admit exactly their registry seats (#108)", async () => {
+    for (const tool of ["es_brainstorm_plan", "es_brainstorm_record", "es_brainstorm_complete"])
+      expect([tool, grantedSeats(tool).sort()]).toEqual([tool, ["brainstormer", "factory", "grill"]])
+    const def = allFactoryTools().find((item) => item.name === "es_brainstorm_plan")!
+    await expect(def.execute({ idea: "x" }, { agent: "es-programmer" } as any)).rejects.toThrow(
+      "Only the brainstormer seat",
+    )
+    // Granted seats pass the seat gate (the plan lands in the default run).
+    for (const agent of ["grill", "factory"])
+      await expect(def.execute({ idea: `from ${agent}`, force: true }, { agent } as any)).resolves.toContain(
+        'run "default"',
+      )
   })
 })
 

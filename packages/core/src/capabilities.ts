@@ -113,7 +113,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     brainstorm: {
       support: "enforced",
-      detail: "Lens fan-out, record/score/complete tools, dedupe, rubric, shortlist with a forced outlier.",
+      detail:
+        "Lens fan-out, record/score/complete tools, dedupe, rubric, shortlist with a forced outlier. Runs are id-scoped (the human's /brainstorm is the default run); the grill and the factory run callable brainstorms at depth 1 and get the shortlist as JSON.",
       test: "packages/opencode/test/brainstorm.test.ts",
     },
     harvest: {

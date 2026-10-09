@@ -87,6 +87,9 @@ describe("write policy", () => {
       ".factory/harvest/clean-room/widget-search.md",
       ".factory/brainstorm/scores.json",
       ".factory/brainstorm/ideas.json",
+      ".factory/brainstorm/runs/grill-1/plan.json",
+      ".factory/brainstorm/runs/grill-1/ideas.json",
+      ".factory/brainstorm/runs/grill-1/BRAINSTORM.md",
       ".factory/design/tokens.json",
       ".factory/design/STYLE_GUIDE.md",
     ]

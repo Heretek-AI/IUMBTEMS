@@ -20,3 +20,4 @@ description: Socratic grilling technique for settling a design before building i
 - Record the tree after every round, once the human has answered it. The first turn only asks: never record before the first answers arrive. Revisit earlier nodes when a later answer contradicts them.
 - Freeze only when the frontier is empty and the human confirms: summarise the settled constraints first.
 - The factory needs an explicit USD spend ceiling before any autonomous work.
+- Options, not questions: when a design question has several viable options, run a callable brainstorm yourself — `es_brainstorm_plan` (own `run`), all `es-lens-*` in one foreground message, `es_brainstorm_record` per lens, `es-brainstorm-critic` to score, `es_brainstorm_complete` for the shortlist JSON. Write what you keep into the frontier yourself.

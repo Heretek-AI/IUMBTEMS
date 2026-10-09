@@ -38,7 +38,8 @@
   direct fetch) with per-backend cooldowns: one provider's outage or rate
   limit fails over to the next, while a safety refusal never does.
 - **Lateral work.** Brainstorm fans out eight divergent lenses into a
-  deduplicated, rubric-scored shortlist with a forced outlier; darkharvest
+  deduplicated, rubric-scored shortlist with a forced outlier — callable by
+  the grill and the factory at depth 1, with the shortlist back as JSON; darkharvest
   tears down competitor projects with fail-closed SPDX detection, per-field
   provenance and clean-room specs; queereye interviews you into a
   contrast-gated DTCG token system with a generated style guide.
