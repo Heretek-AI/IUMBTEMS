@@ -112,6 +112,11 @@ long ago it acted.
     - `quiet`: lifecycle and progress only;
     - `info`: one line per tool call;
     - `debug`: raw harness events with long strings clipped.
+  - `--events jsonl` replaces the human lines with a versioned envelope per
+    line (`turn-metrics` after every turn: spend delta + tool activity);
+    `--events-file <path>` writes the envelopes to a file instead.
+    SIGINT/SIGTERM cancel the run (exit 130, resumable);
+    `--turn-timeout S` aborts a hung turn. See `docs/HEADLESS.md`.
 
 `es status` from an agent's shell cannot verify the run (the private state
 dir is masked there); agents call the `es_status` tool, which shows the same

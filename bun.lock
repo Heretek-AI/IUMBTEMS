@@ -16,11 +16,12 @@
       "name": "@heretek-ai/es-cli",
       "version": "1.2.0",
       "bin": {
-        "es-factory": "./dist/bin.js",
-        "iumbtems": "./dist/bin.js",
+        "es": "./bin/es.js",
+        "epistemic-swarm": "./bin/es.js",
       },
       "dependencies": {
         "@heretek-ai/es-core": "workspace:*",
+        "zod": "4.6.5",
       },
     },
     "packages/core": {

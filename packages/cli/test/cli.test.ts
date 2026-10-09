@@ -1109,3 +1109,221 @@ describe("status and runs (1.1.3)", () => {
     expect(JSON.parse((await run(["runs", "--json"])).out)[0].runId).toBe(begun.runId)
   })
 })
+
+describe("headless fleet (#120)", () => {
+  const toolDriver = (onTurn?: () => Promise<void>): HarnessDriver => ({
+    id: "fake",
+    available: async () => true,
+    async *turn() {
+      yield { type: "tool_use", part: { tool: "read", state: { status: "completed", input: { path: "src/a.ts" } } } }
+      yield { type: "tool_use", part: { tool: "edit", state: { status: "failed", input: {}, error: "nope" } } }
+      yield { type: "text", part: { text: "working" } }
+      await onTurn?.()
+      return "ses_fake"
+    },
+  })
+
+  test("the JSONL stream is versioned and schema-validated for every event kind", async () => {
+    const { HeadlessJsonlSchema, toJsonl } = await import("../src/headless.ts")
+    const samples: HeadlessEvent[] = [
+      { type: "start", runId: "run-1", stage: "RESEARCH", driver: "fake", monitor: "m" },
+      { type: "turn", n: 1, stage: "RESEARCH" },
+      { type: "driver", event: { text: "x" } },
+      { type: "progress", headline: "h", seats: [] },
+      { type: "turn-metrics", turn: 1, costUSD: 0, tools: [] },
+      { type: "waiting", reason: "r" },
+      { type: "halted", reason: "r" },
+      { type: "stalled", turns: 3, headline: "h", seats: [] },
+      { type: "turn-cap", turns: 4 },
+      { type: "cancelled", reason: "r" },
+      { type: "done" },
+      { type: "error", message: "m" },
+    ]
+    for (const event of samples) {
+      const envelope = toJsonl("run-1", event)
+      expect(envelope.v).toBe(1)
+      expect(envelope.kind).toBe(event.type)
+      expect(HeadlessJsonlSchema.safeParse(envelope).success).toBe(true)
+    }
+    expect(
+      HeadlessJsonlSchema.safeParse({ v: 2, at: new Date().toISOString(), runId: "r", kind: "x", event: {} }).success,
+    ).toBe(false)
+  })
+
+  test("each turn emits turn-metrics with tool activity and the sealed spend delta", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+    let n = 0
+    const events: HeadlessEvent[] = []
+    for await (const event of runHeadless({
+      root,
+      driver: toolDriver(async () => {
+        n++
+        if (n === 1) await factory.recordSpend(0.05, false)
+      }),
+      maxTurns: 2,
+      stallTurns: 99,
+      stateDir: state,
+      progressMs: 60_000,
+    }))
+      events.push(event)
+    const metrics = events.filter((event) => event.type === "turn-metrics")
+    expect(metrics).toHaveLength(2)
+    expect(metrics[0]).toMatchObject({
+      type: "turn-metrics",
+      turn: 1,
+      tools: [
+        { name: "read", ok: true },
+        { name: "edit", ok: false },
+      ],
+    })
+    expect((metrics[0] as any).costUSD).toBeCloseTo(0.05, 5)
+    expect(metrics[1]).toMatchObject({ type: "turn-metrics", turn: 2, costUSD: 0 })
+  })
+
+  test("an aborted run emits cancelled, writes no halt, and resumes", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const hanging: HarnessDriver = {
+      id: "hang",
+      available: async () => true,
+      async *turn() {
+        // A handle-free hang: no timer, so abandoning the turn ends the test.
+        await new Promise<never>(() => {})
+        yield { text: "never" }
+        return undefined
+      },
+    }
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 100)
+    const events: HeadlessEvent[] = []
+    for await (const event of runHeadless({
+      root,
+      driver: hanging,
+      maxTurns: 5,
+      stateDir: state,
+      signal: controller.signal,
+      progressMs: 60_000,
+    }))
+      events.push(event)
+    expect(events.at(-1)).toMatchObject({ type: "cancelled" })
+    expect(events.some((event) => event.type === "error")).toBe(false)
+    // No halt written, no STOP file: the run is resumable.
+    const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+    expect((await factory.read())?.stage).toBe("RESEARCH")
+    expect(await exists(factoryLayout(root).stop)).toBe(false)
+    const resumed: HeadlessEvent[] = []
+    for await (const event of runHeadless({
+      root,
+      driver: toolDriver(),
+      maxTurns: 1,
+      stallTurns: 99,
+      stateDir: state,
+      progressMs: 60_000,
+    }))
+      resumed.push(event)
+    expect(resumed[0]).toMatchObject({ type: "start" })
+  })
+
+  test("a turn past --turn-timeout ends as a turn-timeout error", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const hanging: HarnessDriver = {
+      id: "hang",
+      available: async () => true,
+      async *turn() {
+        // A handle-free hang: no timer, so abandoning the turn ends the test.
+        await new Promise<never>(() => {})
+        yield { text: "never" }
+        return undefined
+      },
+    }
+    const events: HeadlessEvent[] = []
+    for await (const event of runHeadless({
+      root,
+      driver: hanging,
+      maxTurns: 5,
+      stateDir: state,
+      turnTimeoutMs: 120,
+      progressMs: 60_000,
+    }))
+      events.push(event)
+    expect(events.at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("turn-timeout") })
+  })
+
+  test("headless exit codes: cancelled is 130, failures stay 1, the rest 0", async () => {
+    const { headlessExitCode } = await import("../src/headless.ts")
+    expect(headlessExitCode("cancelled")).toBe(130)
+    for (const type of ["error", "halted", "stalled", "turn-cap"] as const) expect(headlessExitCode(type)).toBe(1)
+    for (const type of ["start", "turn", "driver", "progress", "turn-metrics", "waiting", "done"] as const)
+      expect(headlessExitCode(type)).toBe(0)
+  })
+
+  test("--cwd refuses seat worktrees of active runs and detached HEADs", async () => {
+    const { checkCwd } = await import("../src/headless.ts")
+    // A plain project root is fine (and so is a non-repo dir).
+    expect(await checkCwd(root)).toBeUndefined()
+    // Inside another active run's .factory/worktrees: refused.
+    const proj = await mkdtemp(path.join(tmpdir(), "es-cwd-proj-"))
+    try {
+      await mkdir(path.join(proj, ".factory", "worktrees", "seat-1"), { recursive: true })
+      await mkdir(path.join(proj, ".factory", "runtime"), { recursive: true })
+      await writeFile(path.join(proj, ".factory", "runtime", "state.json"), "{}")
+      const refusal = await checkCwd(path.join(proj, ".factory", "worktrees", "seat-1"))
+      expect(refusal).toContain(".factory/worktrees")
+      // Without a run state it is not an active run: allowed.
+      await rm(path.join(proj, ".factory", "runtime", "state.json"))
+      expect(await checkCwd(path.join(proj, ".factory", "worktrees", "seat-1"))).toBeUndefined()
+    } finally {
+      await rm(proj, { recursive: true, force: true })
+    }
+    // A detached-HEAD worktree is refused; attached is fine.
+    const wt = await mkdtemp(path.join(tmpdir(), "es-cwd-wt-"))
+    try {
+      const proc = Bun.spawn(["git", "worktree", "add", "--detach", wt], { cwd: root, stdout: "pipe", stderr: "pipe" })
+      await proc.exited
+      expect(await checkCwd(wt)).toContain("branch")
+      const proc2 = Bun.spawn(["git", "-C", wt, "checkout", "-q", "-b", "wt-branch"], {
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      await proc2.exited
+      expect(await checkCwd(wt)).toBeUndefined()
+    } finally {
+      const proc = Bun.spawn(["git", "worktree", "remove", "--force", wt], {
+        cwd: root,
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      await proc.exited
+      await rm(wt, { recursive: true, force: true })
+    }
+  })
+
+  test("--events jsonl prints one envelope per line; --events-file redirects it", async () => {
+    const { HeadlessJsonlSchema } = await import("../src/headless.ts")
+    // No run here: a single error envelope on stdout.
+    const streamed = await run(["factory", "run", "--headless", "--events", "jsonl"])
+    expect(streamed.code).toBe(1)
+    const lines = streamed.out.split("\n").filter((line) => line.trim())
+    expect(lines).toHaveLength(1)
+    const parsed = HeadlessJsonlSchema.safeParse(JSON.parse(lines[0]!))
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.kind).toBe("error")
+    expect(await run(["factory", "run", "--headless", "--events", "yaml"])).toMatchObject({ code: 2 })
+    // --events-file: the envelope goes to the file, stdout keeps human lines.
+    const file = path.join(root, "events.jsonl")
+    const filed = await run(["factory", "run", "--headless", "--events", "jsonl", "--events-file", file])
+    expect(filed.code).toBe(1)
+    expect(filed.out.trim()).not.toStartWith("{")
+    const saved = (await readFile(file, "utf8")).split("\n").filter((line) => line.trim())
+    expect(saved).toHaveLength(1)
+    expect(HeadlessJsonlSchema.safeParse(JSON.parse(saved[0]!)).success).toBe(true)
+  })
+
+  test("--turn-timeout validates its value before anything runs", async () => {
+    expect((await run(["factory", "run", "--headless", "--turn-timeout", "soon"])).code).toBe(2)
+    expect((await run(["factory", "run", "--headless", "--turn-timeout", "0"])).code).toBe(2)
+  })
+})
