@@ -19,6 +19,13 @@ export interface PolicyContext {
   readonly worktree?: string
   /** Override for the user-global state dir (tests). */
   readonly stateDir?: string
+  /**
+   * The sealed run state's mode (#111): in build runs only `factory-docs`
+   * writes `.factory/research/REPORT.md`, in research runs only
+   * `research-report` does. Absent (no run, or an unreadable state): both
+   * are denied. Producers read it from the sealed run state.
+   */
+  readonly runMode?: "build" | "research"
 }
 
 const allow: Decision = { effect: "allow" }
@@ -95,6 +102,23 @@ export function evaluateWrite(context: PolicyContext, agentId: string | undefine
   if (!spec) return allow
   if (relative === undefined) return deny(`Factory seat "${spec.id}" may not write outside the project: ${absolute}`)
 
+  // REPORT.md has one writer per run mode (#111): the synthesizer is the
+  // only writer in research runs, the factory in build runs (AGENTS.md).
+  // The mode comes from the sealed run state; when it cannot be read both
+  // writers are denied (fail closed).
+  if (relative === ".factory/research/REPORT.md") {
+    const mode = context.runMode
+    const writer = mode === "build" ? "factory-docs" : mode === "research" ? "research-report" : undefined
+    if (writer !== undefined && spec.writes.includes(writer)) return allow
+    const who =
+      mode === "build"
+        ? "only the factory writes it in a build run"
+        : mode === "research"
+          ? "only the research synthesizer writes it in a research run"
+          : "the run mode cannot be read, so no seat writes it"
+    return deny(`Seat "${spec.id}" may not write "${relative}": ${who}.`)
+  }
+
   for (const scope of spec.writes) {
     if (scope === "worktree") {
       if (!context.worktree) continue
@@ -149,7 +173,7 @@ const ES_BINARY = /^(es|epistemic-swarm|es\.js|es-cli|@heretek-ai\/es-cli(@[\w.-
 /**
  * The fleet daemon binary (#122). It has its own verbs (`start`, `stop`,
  * `status`, `task`, `watch`, `gc`), so it is matched separately: the whole
- * binary is human-only except `status` and `--help`, because a running fleet
+ * binary is human-only except a token-less `status` and `--help`, because a running fleet
  * spends money.
  */
 const FLEET_BINARY = /^(es-fleet|es-fleet\.js|@heretek-ai\/es-fleet(@[\w.-]+)?)$|\/es-fleet(\.js)?$/
@@ -164,7 +188,7 @@ export const HUMAN_VERBS: ReadonlyArray<HumanVerbRule> = [
   ["rebaseline"],
   ["key"],
   ["reseal"],
-  ["factory", (next) => next === "resume" || next === "pr" || next === "init"],
+  ["factory", (next) => next === "resume" || next === "pr" || next === "init" || next === "run"],
   ["gates", (next) => next === "install-git"],
   ["lsp", (next) => next === "install"],
   ["config", (next) => next === "set"],
@@ -229,13 +253,16 @@ function nextPositionals(tokens: readonly string[], from: Cursor): Cursor[] {
 
 /**
  * Whether the fleet binary at `tokens[binary]` runs a human-only verb: every
- * verb except `status` (#122). Resolution is single-path and fail-closed:
+ * verb except a token-less `status` (#122, #126). Resolution is single-path and fail-closed:
  * known booleans (the CLI's BOOLEAN_FLAGS, #97) never consume a word, while
  * every other `--flag` is assumed to take a value, so an unknown flag swallows
  * the next word and the command stays human-only. `--` makes the rest
  * positional, and `--flag=value` never consumes.
  */
 function fleetHumanOnlyAfter(tokens: readonly string[], binary: number): boolean {
+  // `status --token` prints the bus bearer token (#126): like every other
+  // fleet verb it is human-only, wherever the flag sits in the argv.
+  if (tokens.slice(binary + 1).some((token) => token === "--token" || token.startsWith("--token="))) return true
   let i = binary + 1
   let literal = false
   while (i < tokens.length) {

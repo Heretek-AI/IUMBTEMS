@@ -45,6 +45,13 @@ export interface ResearchOpsContext {
    */
   readonly chain?: readonly SourceBackend[]
   readonly now?: () => Date
+  /**
+   * Explicit human operator (#99): only the CLI sets `operator: "human"`
+   * when it builds the tools. The per-call `agent` is never trusted for
+   * this (in the plugin it is the host agent's name, so any agent named
+   * "human" would pass a name check), and the plugin never sets it.
+   */
+  readonly operator?: "human"
 }
 
 /** The research-tool options a loaded config sets. */
@@ -80,10 +87,11 @@ export function researchCache(root: string, stateDir: string = defaultStateDir()
   return new SourceCache(researchSourcesDir(root), stateDir)
 }
 
-/** The CLI operator runs research tools as "human" (no registry seat); seats keep the registry check. */
-const mayResearch = (agent: string | undefined, tool: string): boolean => agent === "human" || seatMayUse(agent, tool)
-
+/** The CLI operator runs research tools as an explicit human operator; seats keep the registry check. */
 export function researchTools(context: ResearchOpsContext): EsToolDef[] {
+  const humanOperator = context.operator === "human"
+  /** Seats keep the registry check; the CLI's explicit operator bypasses it. Never the per-call agent name. */
+  const mayResearch = (agent: string | undefined, tool: string): boolean => humanOperator || seatMayUse(agent, tool)
   const cache = researchCache(context.root, context.stateDir ?? defaultStateDir())
   const env = context.searxngUrl ? { ...(context.env ?? process.env), SEARXNG_URL: context.searxngUrl } : context.env
   const order = resolveBackendOrder({
