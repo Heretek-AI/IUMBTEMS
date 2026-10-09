@@ -53,11 +53,11 @@ const sandboxOf = (env: NodeJS.ProcessEnv | undefined): string | undefined =>
   env?.ES_SANDBOX && env.ES_SANDBOX.length > 0 ? env.ES_SANDBOX : undefined
 
 /** Human-only gate for starting the fleet: agents run with ES_SANDBOX set. */
-export function assertHumanStart(env: NodeJS.ProcessEnv | undefined): void {
+export function assertHumanStart(env: NodeJS.ProcessEnv | undefined, what = "start the fleet"): void {
   const sandbox = sandboxOf(env ?? process.env)
   if (sandbox !== undefined)
     throw new FleetError(
-      `Refusing to start the fleet inside an agent sandbox (ES_SANDBOX=${sandbox}): starting the fleet spends money, so only a human may do it from an interactive terminal.`,
+      `Refusing to ${what} inside an agent sandbox (ES_SANDBOX=${sandbox}): the fleet spends money, so only a human may do it from an interactive terminal.`,
     )
 }
 

@@ -12,6 +12,15 @@ export {
   startFleet,
   stopFleet,
 } from "./lifecycle.ts"
+export {
+  applyDecision,
+  type CancelEntry,
+  type Capacity,
+  type Decision,
+  reportTask,
+  schedule,
+  type TaskReport,
+} from "./scheduler.ts"
 export { acquireSocket, SocketBusyError, type SocketGuard } from "./socket-guard.ts"
 export {
   FLEET_STATE_VERSION,
@@ -25,3 +34,26 @@ export {
   stoppedState,
   writeFleetState,
 } from "./state.ts"
+export {
+  addTask,
+  DAG_VERSION,
+  type DagState,
+  DagStateSchema,
+  emptyDag,
+  type FailurePolicy,
+  FailurePolicySchema,
+  loadDag,
+  saveDag,
+  type Task,
+  type TaskInput,
+  TaskInputSchema,
+  type TaskResult,
+  TaskResultSchema,
+  TaskSchema,
+  type TaskStatus,
+  TaskStatusSchema,
+  TERMINAL,
+  type Trigger,
+  TriggerSchema,
+  validateDag,
+} from "./tasks.ts"

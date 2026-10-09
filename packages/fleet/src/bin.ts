@@ -3,9 +3,12 @@
 // interactive terminal plus an explicit confirmation, because a running
 // fleet spends money. `status` is read-only and agent-safe.
 import { spawn } from "node:child_process"
+import { readFile } from "node:fs/promises"
 import { createInterface } from "node:readline"
 import { stateDir } from "@heretek-ai/es-core"
 import { assertHumanStart, FleetError, fleetStatus, startFleet, stopFleet } from "./lifecycle.ts"
+import { reportTask } from "./scheduler.ts"
+import { addTask, loadDag, saveDag, TERMINAL } from "./tasks.ts"
 
 export const VERSION = "0.1.0"
 
@@ -15,6 +18,9 @@ Usage:
   es-fleet start --max-usd <n> [--concurrency <k>] [--foreground]   start the daemon (TTY + confirmation)
   es-fleet stop                                                     stop the daemon
   es-fleet status [--json]                                          show daemon status (agent-safe)
+  es-fleet task add --file <task.json>                              add a task from a JSON file (human-only)
+  es-fleet task list [--json]                                       list tasks
+  es-fleet task cancel <id> [--reason <text>]                       cancel a task (human-only)
 
 Options:
   --state-dir <dir>   override the user state dir (default: es state dir)
@@ -106,6 +112,50 @@ export async function main(argv: readonly string[]): Promise<number> {
           )
         else process.stdout.write("Fleet stopped.\n")
         return 0
+      }
+      case "task": {
+        const [sub, ...taskArgs] = rest
+        if (sub === "list") {
+          const dag = await loadDag(root)
+          const tasks = dag ? Object.values(dag.tasks).sort((a, b) => (a.id < b.id ? -1 : 1)) : []
+          if (hasFlag(taskArgs, "--json")) process.stdout.write(`${JSON.stringify(tasks, null, 2)}\n`)
+          else if (tasks.length === 0) process.stdout.write("No tasks.\n")
+          else
+            for (const task of tasks)
+              process.stdout.write(
+                `${task.id}\t${task.status}\tdeps=[${task.deps.join(",")}]\t$${task.ceilingUSD}\t${task.title}\n`,
+              )
+          return 0
+        }
+        // Mutating task commands are human-only: the policy denies agents,
+        // and the binary refuses sandboxes too.
+        assertHumanStart(process.env, "change fleet tasks")
+        if (sub === "add") {
+          const file = valueFlag(taskArgs, ["--file"])
+          if (!file) throw new FleetError("`es-fleet task add` needs --file <task.json>.")
+          const raw = JSON.parse(await readFile(file, "utf8")) as unknown
+          const inputs = Array.isArray(raw) ? raw : [raw]
+          let dag = (await loadDag(root)) ?? { v: 1 as const, tasks: {} }
+          const now = new Date().toISOString()
+          for (const input of inputs) dag = addTask(dag, input as Record<string, unknown>, now)
+          await saveDag(root, dag)
+          process.stdout.write(`Added ${inputs.length} task(s).\n`)
+          return 0
+        }
+        if (sub === "cancel") {
+          const id = taskArgs[0]
+          if (!id) throw new FleetError("`es-fleet task cancel` needs a task id.")
+          const dag = await loadDag(root)
+          const task = dag?.tasks[id]
+          if (!task) throw new FleetError(`Unknown task ${JSON.stringify(id)}.`)
+          if (TERMINAL.has(task.status)) throw new FleetError(`Task ${id} is already ${task.status}.`)
+          const reason = valueFlag(taskArgs, ["--reason"]) ?? "cancelled by human"
+          const next = reportTask(dag!, id, { outcome: "cancelled", reason }, new Date().toISOString())
+          await saveDag(root, next.dag)
+          process.stdout.write(`Cancelled ${id}.\n`)
+          return 0
+        }
+        throw new FleetError(`Unknown task subcommand ${JSON.stringify(sub ?? "")}: want add, list or cancel.`)
       }
       default:
         process.stderr.write(`Unknown command ${JSON.stringify(command ?? "")}.\n\n${HELP}`)

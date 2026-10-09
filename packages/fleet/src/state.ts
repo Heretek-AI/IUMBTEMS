@@ -16,6 +16,8 @@ export interface FleetPaths {
   readonly lock: string
   /** Persisted daemon status (JSON). */
   readonly state: string
+  /** Persisted task DAG (JSON, #123). */
+  readonly tasks: string
   /** Daemon control socket. */
   readonly socket: string
   /** Bearer token for the read-only telemetry bus (#126). */
@@ -29,6 +31,7 @@ export function fleetPaths(stateRoot: string): FleetPaths {
     pid: path.join(dir, "daemon.pid"),
     lock: path.join(dir, "fleet.lock"),
     state: path.join(dir, "state.json"),
+    tasks: path.join(dir, "tasks.json"),
     socket: path.join(dir, "fleet.sock"),
     token: path.join(dir, "token"),
   }
