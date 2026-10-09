@@ -50,6 +50,7 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | harvest-row | `schemas/harvest-row.schema.json` |
 | harvest-verdict | `schemas/harvest-verdict.schema.json` |
 | license-finding | `schemas/license-finding.schema.json` |
+| model-ref | `schemas/model-ref.schema.json` |
 | parser-id | `schemas/parser-id.schema.json` |
 | probe-row | `schemas/probe-row.schema.json` |
 | provenance | `schemas/provenance.schema.json` |

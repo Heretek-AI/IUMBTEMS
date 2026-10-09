@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { EsConfigSchema, loadEsConfig, mergeConfig } from "../src/index.ts"
+import { EsConfigSchema, loadEsConfig, ModelRefSchema, mergeConfig, parseModelRef } from "../src/index.ts"
 
 let root: string
 let env: NodeJS.ProcessEnv
@@ -128,5 +128,32 @@ describe("layered config", () => {
     const parsed = EsConfigSchema.parse({})
     expect(parsed.afterEdit).toBe("fast")
     expect(parsed.licenseWhitelist).toEqual(EsConfigSchema.parse({}).licenseWhitelist)
+  })
+})
+
+describe("model refs fail closed (#96)", () => {
+  test("ModelRefSchema accepts provider/model and rejects malformed refs", () => {
+    expect(ModelRefSchema.safeParse("opencode/some-model").success).toBe(true)
+    for (const bad of ["x", "/x", "x/", "a b/c", "", " /x", "x/ "])
+      expect([bad, ModelRefSchema.safeParse(bad).success]).toEqual([bad, false])
+  })
+
+  test("parseModelRef splits on the first slash", () => {
+    expect(parseModelRef("opencode/some-model")).toEqual({ providerID: "opencode", id: "some-model" })
+    expect(parseModelRef("x")).toBeUndefined()
+  })
+
+  test("models.agents rejects an unknown seat id, naming the key", () => {
+    const parsed = EsConfigSchema.safeParse({ models: { agents: { "es-ghost": "a/b" } } })
+    expect(parsed.success).toBe(false)
+    if (!parsed.success)
+      expect(parsed.error.issues.map((issue) => issue.path.join("."))).toContain("models.agents.es-ghost")
+    expect(EsConfigSchema.safeParse({ models: { agents: { factory: "a/b" } } }).success).toBe(true)
+  })
+
+  test("malformed tier refs fail parsing, naming the key", () => {
+    const parsed = EsConfigSchema.safeParse({ models: { deep: "noslash" } })
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) expect(parsed.error.issues[0]?.path).toEqual(["models", "deep"])
   })
 })

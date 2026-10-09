@@ -2,7 +2,7 @@
 // we add our own agents and never edit built-ins, default_agent or models.
 // Per-agent tool/skill/MCP scoping is expressed as wildcard-deny permission
 // rules (proven in M0: denied tools, MCP tools and skills are not advertised).
-import { AGENTS, type AgentSpec, ALL_ES_TOOLS, loadPrompt } from "@heretek-ai/es-core"
+import { AGENTS, type AgentSpec, ALL_ES_TOOLS, loadPrompt, parseModelRef } from "@heretek-ai/es-core"
 import type { PluginOptions } from "./runtime.ts"
 
 export interface CompiledAgent {
@@ -47,11 +47,61 @@ export function permissionRules(spec: AgentSpec, mcpServers: readonly string[]):
   return rules
 }
 
-function modelFor(spec: AgentSpec, options: PluginOptions) {
+export function modelFor(spec: AgentSpec, options: PluginOptions) {
   const ref = options.models?.agents?.[spec.id] ?? options.models?.[spec.tier]
-  const slash = ref?.indexOf("/") ?? -1
-  if (!ref || slash <= 0) return undefined
-  return { providerID: ref.slice(0, slash), id: ref.slice(slash + 1) }
+  if (!ref) return undefined
+  return parseModelRef(ref)
+}
+
+/** A configured model ref the host does not have: the seat is refused at launch (#96). */
+export interface ModelProblem {
+  readonly agent: string
+  /** The config key to fix: models.<tier> or models.agents.<id>. */
+  readonly key: string
+  readonly ref: string
+  /** Remediation for the user (es config set is human-only). */
+  readonly message: string
+}
+
+/** Remediation text for an unusable seat model (es config set is human-only). */
+export function modelProblemMessage(agent: string, key: string, ref: string, wellFormed: boolean): string {
+  return (
+    `Seat "${agent}" cannot launch: its model "${ref}" (${key}) is ` +
+    (wellFormed ? "not on this host." : 'malformed (want "provider/model").') +
+    ` Set ${key} to "provider/model" from the host model list with \`es config set\`, or unset it to use the session default.`
+  )
+}
+
+/** Every configured ref, per seat, that `exists` cannot find on the host. */
+export function modelProblems(
+  options: PluginOptions,
+  specs: readonly AgentSpec[],
+  exists: (providerID: string, modelID: string) => boolean,
+): ModelProblem[] {
+  const problems: ModelProblem[] = []
+  for (const spec of specs) {
+    const ref = options.models?.agents?.[spec.id] ?? options.models?.[spec.tier]
+    if (ref === undefined) continue
+    const key = options.models?.agents?.[spec.id] !== undefined ? `models.agents.${spec.id}` : `models.${spec.tier}`
+    const parsed = parseModelRef(ref)
+    if (parsed === undefined || !exists(parsed.providerID, parsed.id))
+      problems.push({
+        agent: spec.id,
+        key,
+        ref,
+        message: modelProblemMessage(spec.id, key, ref, parsed !== undefined),
+      })
+  }
+  return problems
+}
+
+/** es_status lines for the runtime's model problems (empty when healthy). */
+export function modelProblemLines(problems: ReadonlyMap<string, ModelProblem>): string[] {
+  if (problems.size === 0) return []
+  return [
+    `Model problems (${problems.size}): configured models missing on this host — those seats refuse to launch.`,
+    ...[...problems.values()].map((problem) => `- ${problem.message}`),
+  ]
 }
 
 export async function compileAgents(options: PluginOptions, mcpServers: readonly string[]): Promise<CompiledAgent[]> {
