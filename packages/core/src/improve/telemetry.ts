@@ -9,17 +9,24 @@ import path from "node:path"
 import { verifyAuditChain } from "../audit/chain.ts"
 import { type FactoryState, FactoryStateSchema } from "../factory/state.ts"
 import { stateDir as defaultStateDir, factoryLayout } from "../layout.ts"
+import type { AuditEntry } from "../schema/audit.ts"
 import { AuditRecordSchema } from "../schema/codeaudit.ts"
 import {
   type AuditFindingCount,
+  type ChainTrailEntry,
   type EvalTelemetry,
+  type FailureEntry,
   type GateRejection,
+  type RunStateSeal,
   type RunTelemetry,
   TELEMETRY_VERSION,
   type Telemetry,
   TelemetrySchema,
 } from "../schema/improve.ts"
+import type { SidecarProblem } from "../trust/sidecar.ts"
+import { verifyEngineFile } from "../trust/sidecar.ts"
 import { compareStrings } from "../util/compare.ts"
+import { exists } from "../util/fs.ts"
 
 /** A harvested run root plus its evals dir: everything here is read-only. */
 export interface HarvestInput {
@@ -73,75 +80,247 @@ async function gateSummaries(dir: string): Promise<string[]> {
   return found
 }
 
-const rulesFromSummary = (parsed: unknown): string[] => {
+interface GateFinding {
+  readonly rule: string
+  readonly message?: string
+  readonly file?: string
+  readonly line?: number
+}
+
+/** Every finding with a rule in one gate summary, in file order. */
+const findingsFromSummary = (parsed: unknown): GateFinding[] => {
   if (typeof parsed !== "object" || parsed === null) return []
   const findings = (parsed as { findings?: unknown }).findings
   if (!Array.isArray(findings)) return []
-  const rules: string[] = []
+  const out: GateFinding[] = []
   for (const finding of findings) {
     if (typeof finding !== "object" || finding === null) continue
-    const rule = (finding as { rule?: unknown }).rule
-    if (typeof rule === "string" && rule) rules.push(rule)
+    const record = finding as { rule?: unknown; message?: unknown; file?: unknown; line?: unknown }
+    if (typeof record.rule !== "string" || !record.rule) continue
+    const entry: { rule: string; message?: string; file?: string; line?: number } = { rule: record.rule }
+    if (typeof record.message === "string" && record.message) entry.message = record.message
+    if (typeof record.file === "string" && record.file) entry.file = record.file
+    if (typeof record.line === "number" && Number.isInteger(record.line)) entry.line = record.line
+    out.push(entry)
   }
-  return rules
+  return out
+}
+
+/** Human reason for a gate finding: its message plus the file location. */
+const gateReason = (finding: GateFinding): string => {
+  const where = finding.file ? ` (${finding.file}${finding.line !== undefined ? `:${finding.line}` : ""})` : ""
+  return `${finding.message ?? finding.rule}${where}`
 }
 
 /** Gate findings across every gate summary under `.factory/runs/`, counted by rule. */
-async function harvestGateRejections(root: string): Promise<GateRejection[]> {
+async function harvestGateRejections(root: string): Promise<{ rejections: GateRejection[]; findings: GateFinding[] }> {
   const summaries = await gateSummaries(factoryLayout(root).runs)
   const parsed = await Promise.all(summaries.map((file) => readJson(file)))
-  const rules: string[] = []
-  for (const summary of parsed) rules.push(...rulesFromSummary(summary))
-  return countBy(rules).map(({ key, count }) => ({ rule: key, count }))
+  const counts = new Map<string, { count: number; logs: Set<string> }>()
+  const findings: GateFinding[] = []
+  for (let index = 0; index < summaries.length; index++) {
+    const rel = path.relative(root, summaries[index]!)
+    for (const finding of findingsFromSummary(parsed[index])) {
+      findings.push(finding)
+      let entry = counts.get(finding.rule)
+      if (!entry) {
+        entry = { count: 0, logs: new Set() }
+        counts.set(finding.rule, entry)
+      }
+      entry.count += 1
+      entry.logs.add(rel)
+    }
+  }
+  return {
+    rejections: countBy([...counts.keys()]).map(({ key }) => {
+      const entry = counts.get(key)!
+      const logs = [...entry.logs]
+      logs.sort(compareStrings)
+      return { rule: key, count: entry.count, logs }
+    }),
+    findings,
+  }
 }
 
-/** Finding keys (`kind/severity`) from one audit records file. */
-function keysFromRecords(raw: unknown): string[] {
+interface HarvestedAuditFinding {
+  readonly seat: string
+  readonly kind: string
+  readonly severity: string
+  readonly reason: string
+}
+
+/** Every witnessed finding in one audit records file, with its seat. */
+function findingsFromRecords(raw: unknown): HarvestedAuditFinding[] {
   if (!Array.isArray(raw)) return []
-  const keys: string[] = []
+  const out: HarvestedAuditFinding[] = []
   for (const entry of raw) {
     const parsed = AuditRecordSchema.safeParse(entry)
     if (!parsed.success) continue
-    for (const finding of parsed.data.findings) keys.push(`${finding.kind}/${finding.severity}`)
+    for (const finding of parsed.data.findings)
+      out.push({
+        seat: parsed.data.seat,
+        kind: finding.kind,
+        severity: finding.severity,
+        reason: finding.detail || finding.excerpt || finding.title,
+      })
   }
-  return keys
+  return out
 }
 
 /** Code-audit records under `.factory/audits/`, counted by finding kind and severity. */
-async function harvestAuditFindings(root: string): Promise<AuditFindingCount[]> {
+async function harvestAuditFindings(
+  root: string,
+): Promise<{ counts: AuditFindingCount[]; findings: HarvestedAuditFinding[] }> {
   const auditsDir = factoryLayout(root).audits
   let ids: string[]
   try {
     ids = await readdir(auditsDir)
   } catch {
-    return []
+    return { counts: [], findings: [] }
   }
   const ordered = [...ids]
   ordered.sort(compareStrings)
   const raws = await Promise.all(ordered.map((id) => readJson(path.join(auditsDir, id, "records.json"))))
-  const keys: string[] = []
-  for (const raw of raws) keys.push(...keysFromRecords(raw))
-  return countBy(keys).map(({ key, count }) => {
+  const sources = new Map<string, Set<string>>()
+  const findings: HarvestedAuditFinding[] = []
+  for (let index = 0; index < ordered.length; index++) {
+    const rel = path.relative(root, path.join(auditsDir, ordered[index]!, "records.json"))
+    for (const finding of findingsFromRecords(raws[index])) {
+      findings.push(finding)
+      const key = `${finding.kind}/${finding.severity}`
+      let set = sources.get(key)
+      if (!set) {
+        set = new Set()
+        sources.set(key, set)
+      }
+      set.add(rel)
+    }
+  }
+  const tallies = new Map<string, number>()
+  for (const finding of findings) {
+    const key = `${finding.kind}/${finding.severity}`
+    tallies.set(key, (tallies.get(key) ?? 0) + 1)
+  }
+  const orderedKeys = [...tallies.keys()]
+  orderedKeys.sort(compareStrings)
+  const counts = orderedKeys.map((key) => {
     const slash = key.indexOf("/")
-    return { kind: key.slice(0, slash), severity: key.slice(slash + 1), count }
+    const list = [...sources.get(key)!]
+    list.sort(compareStrings)
+    return { kind: key.slice(0, slash), severity: key.slice(slash + 1), count: tallies.get(key)!, sources: list }
   })
+  return { counts, findings }
 }
 
-/** The run state when it parses, tolerating missing or half-written runs. */
-async function readRunState(root: string): Promise<FactoryState | undefined> {
-  const raw = await readJson(factoryLayout(root).state)
-  if (raw === undefined) return undefined
+/** Why the run-state seal does not hold, in the machine's words (short form). */
+const sealMessage = (problem: SidecarProblem): string =>
+  problem === "missing sidecar"
+    ? "run state has no sidecar seal: it was not written by this engine; a human re-signs it with `es reseal --sign` after review"
+    : problem === "signature mismatch"
+      ? "run state sidecar mismatch: edited outside the engine; a human re-signs it with `es reseal --sign` after review"
+      : "engine key unavailable here: the run state seal cannot be verified from this shell"
+
+/**
+ * The run state through the same sealed reader the factory machine uses
+ * (S3.2, #135): a missing or forged seal is reported, and the run's
+ * state-derived content is not trusted. Gate summaries, audit records and
+ * the audit chain are harvested independently (they are not engine-sealed).
+ */
+async function readRunState(
+  root: string,
+  stateDir?: string,
+): Promise<{ state: FactoryState | undefined; seal: RunStateSeal }> {
+  const file = factoryLayout(root).state
+  const raw = await readJson(file)
+  if (raw === undefined) {
+    if (!(await exists(file)))
+      return { state: undefined, seal: { valid: false, error: "missing state file: no run was recorded here" } }
+    const problem = await verifyEngineFile(file, stateDir ?? defaultStateDir())
+    if (problem) return { state: undefined, seal: { valid: false, error: sealMessage(problem) } }
+    return { state: undefined, seal: { valid: true } }
+  }
+  const problem = await verifyEngineFile(file, stateDir ?? defaultStateDir())
+  if (problem) return { state: undefined, seal: { valid: false, error: sealMessage(problem) } }
   const parsed = FactoryStateSchema.safeParse(raw)
-  if (!parsed.success) return undefined
-  return parsed.data
+  if (!parsed.success) return { state: undefined, seal: { valid: true } }
+  return { state: parsed.data, seal: { valid: true } }
 }
 
-const phaseTelemetry = (state: FactoryState | undefined) => {
-  const phases = (state?.phases ?? []).map((phase) => ({
+/** The audit-chain trail: sequence, hash and action per entry, for evidence links. */
+const trailOf = (entries: readonly AuditEntry[]): ChainTrailEntry[] =>
+  entries.map((entry) => {
+    const phase = typeof entry.payload.phase === "string" && entry.payload.phase ? entry.payload.phase : undefined
+    const reason = typeof entry.payload.reason === "string" && entry.payload.reason ? entry.payload.reason : undefined
+    return {
+      seq: entry.seq,
+      hash: entry.hash,
+      action: entry.action,
+      ...(phase ? { phase } : {}),
+      ...(reason ? { reason } : {}),
+    }
+  })
+
+/** A chain actor (`agent:<seat>`, `system`, …) as a seat name. */
+const actorSeat = (actor: string): string => (actor.startsWith("agent:") ? actor.slice("agent:".length) : actor)
+
+/**
+ * Per-phase failure entries (S3.4): chain `qa.fail` / `phase.replan` events
+ * land on their named phase; run-level gate and audit findings land on every
+ * failed, replanning or replanned phase (a green run's warnings are not
+ * failures). Deterministic: chain order, then summary order, then records.
+ */
+function phaseFailures(
+  state: FactoryState,
+  entries: readonly AuditEntry[],
+  gate: readonly GateFinding[],
+  audit: readonly HarvestedAuditFinding[],
+): Map<string, FailureEntry[]> {
+  const byPhase = new Map<string, FailureEntry[]>(state.phases.map((phase) => [phase.id, []]))
+  for (const entry of entries) {
+    const payload = entry.payload
+    const phase = typeof payload.phase === "string" ? payload.phase : undefined
+    if (!phase || !byPhase.has(phase)) continue
+    if (entry.action === "qa.fail") {
+      const reason = typeof payload.reason === "string" && payload.reason ? payload.reason : "qa failed"
+      byPhase.get(phase)!.push({ seat: actorSeat(entry.actor), kind: "qa", reason })
+    } else if (entry.action === "phase.replan") {
+      const attempt = typeof payload.attempt === "number" ? `replan attempt ${payload.attempt}` : "replanned"
+      const reason = typeof payload.reason === "string" && payload.reason ? payload.reason : attempt
+      byPhase.get(phase)!.push({ seat: actorSeat(entry.actor), kind: "replan", reason })
+    }
+  }
+  const failed = state.phases
+    .filter((phase) => phase.status === "failed" || phase.status === "replanning" || phase.replanned)
+    .map((phase) => phase.id)
+  if (failed.length > 0) {
+    for (const finding of gate)
+      for (const id of failed) byPhase.get(id)!.push({ kind: "gate", rule: finding.rule, reason: gateReason(finding) })
+    for (const finding of audit)
+      for (const id of failed)
+        byPhase.get(id)!.push({
+          seat: finding.seat,
+          kind: "audit",
+          category: `${finding.kind}/${finding.severity}`,
+          reason: finding.reason,
+        })
+  }
+  return byPhase
+}
+
+const phaseTelemetry = (
+  state: FactoryState | undefined,
+  entries: readonly AuditEntry[],
+  gate: readonly GateFinding[],
+  audit: readonly HarvestedAuditFinding[],
+) => {
+  if (!state) return []
+  const failures = phaseFailures(state, entries, gate, audit)
+  const phases = state.phases.map((phase) => ({
     id: phase.id,
     status: phase.status,
-    failures: phase.failures,
-    replanned: phase.replanned,
+    attempts: phase.status === "pending" ? 0 : phase.failures + 1,
+    replans: (phase.replanned ? 1 : 0) + phase.history.filter((event) => event.event.includes("replan")).length,
+    failures: failures.get(phase.id) ?? [],
   }))
   phases.sort((a, b) => compareStrings(a.id, b.id))
   return phases
@@ -149,13 +328,15 @@ const phaseTelemetry = (state: FactoryState | undefined) => {
 
 /**
  * Harvest one run root. Missing state is tolerated (an empty phase list, zero
- * spend, stage "unknown") so half-written runs still produce a record; a
+ * spend, stage "unknown") so half-written runs still produce a record; an
+ * unsealed state is reported in `seal` and its content is not trusted; a
  * broken audit chain is reported, never repaired.
  */
-export async function harvestRun(root: string): Promise<RunTelemetry> {
-  const state = await readRunState(root)
+export async function harvestRun(root: string, options: { stateDir?: string } = {}): Promise<RunTelemetry> {
+  const { state, seal } = await readRunState(root, options.stateDir)
   const chain = await verifyAuditChain(root)
-  const [gateRejections, auditFindings] = await Promise.all([harvestGateRejections(root), harvestAuditFindings(root)])
+  const [{ rejections: gateRejections, findings: gateFindings }, { counts: auditFindings, findings: harvestedAudit }] =
+    await Promise.all([harvestGateRejections(root), harvestAuditFindings(root)])
   const halt = state?.halt
   return {
     id: path.basename(path.resolve(root)),
@@ -167,14 +348,16 @@ export async function harvestRun(root: string): Promise<RunTelemetry> {
       estimated: state?.spend.estimated ?? false,
       events: state?.spend.events ?? 0,
     },
-    phases: phaseTelemetry(state),
+    phases: phaseTelemetry(state, chain.entries, gateFindings, harvestedAudit),
     gateRejections,
     auditFindings,
     auditChain: {
       entries: chain.entries.length,
       valid: chain.valid,
       ...(chain.valid ? {} : { error: chain.error ?? "audit chain invalid" }),
+      trail: trailOf(chain.entries),
     },
+    seal,
   }
 }
 
@@ -196,7 +379,7 @@ const failuresOf = (entry: Record<string, unknown>): string[] => {
 }
 
 /** One eval aggregate entry, or undefined when it is not a result row. */
-function toEvalEntry(result: unknown, model: string | undefined): EvalTelemetry | undefined {
+function toEvalEntry(result: unknown, model: string | undefined, source: string): EvalTelemetry | undefined {
   if (typeof result !== "object" || result === null) return undefined
   const entry = result as Record<string, unknown>
   if (typeof entry.id !== "string") return undefined
@@ -206,6 +389,7 @@ function toEvalEntry(result: unknown, model: string | undefined): EvalTelemetry 
     pass: entry.pass,
     failures: failuresOf(entry),
     steps: stepsOf(entry),
+    source,
   }
   const resolved = modelOf(entry, model)
   if (resolved !== undefined) telemetry.model = resolved
@@ -214,13 +398,13 @@ function toEvalEntry(result: unknown, model: string | undefined): EvalTelemetry 
 }
 
 /** One eval aggregate file (`{results: [{id, pass, failures, steps, ...}]}`), as `scripts/evals.ts` writes. */
-function evalsFromAggregate(raw: unknown, model: string | undefined): EvalTelemetry[] {
+function evalsFromAggregate(raw: unknown, model: string | undefined, source: string): EvalTelemetry[] {
   if (typeof raw !== "object" || raw === null) return []
   const results = (raw as { results?: unknown }).results
   if (!Array.isArray(results)) return []
   const out: EvalTelemetry[] = []
   for (const result of results) {
-    const entry = toEvalEntry(result, model)
+    const entry = toEvalEntry(result, model, source)
     if (entry !== undefined) out.push(entry)
   }
   return out
@@ -246,9 +430,10 @@ export async function harvestEvals(dir: string): Promise<EvalTelemetry[]> {
   const files = ordered.filter((name) => name.endsWith(".json"))
   const raws = await Promise.all(files.map((name) => readJson(path.join(dir, name))))
   const out: EvalTelemetry[] = []
-  for (const raw of raws) {
+  for (let index = 0; index < files.length; index++) {
+    const raw = raws[index]
     if (raw === undefined) continue
-    out.push(...evalsFromAggregate(raw, aggregateModel(raw)))
+    out.push(...evalsFromAggregate(raw, aggregateModel(raw), files[index]!))
   }
   out.sort((a, b) => compareStrings(a.case, b.case))
   return out
@@ -264,10 +449,38 @@ const SECRET_KEY =
   /(token|secret|passwd|password|api[-_]?key|auth|credential|private[-_]?key|passphrase|session[-_]?key)/i
 const SCRUBBED = "[redacted]"
 
+/**
+ * `NAME=value` / `NAME: value` whose NAME matches SECRET_KEY: only the value
+ * is replaced, so `GITHUB_TOKEN=ghp_abc` keeps its shape as
+ * `GITHUB_TOKEN=[redacted]` (S3.1, #135).
+ */
+const SECRET_PAIR = new RegExp(
+  `([A-Za-z0-9_.-]*${SECRET_KEY.source}[A-Za-z0-9_.-]*\\s*[:=]\\s*)(['"]?)([^\\s'";,]+)`,
+  "gi",
+)
+
+/** `Bearer <token>`: the scheme stays, the credential goes. */
+const BEARER_TOKEN = /\b([Bb][Ee][Aa][Rr][Ee][Rr]\s+)[A-Za-z0-9\-._~+/=]+/g
+
+/** Known token shapes standing bare in prose. */
+const TOKEN_SHAPE =
+  /\b(?:github_pat_[A-Za-z0-9_]+|sk-ant-[A-Za-z0-9_-]+|gho_[A-Za-z0-9]+|ghs_[A-Za-z0-9_]+|ghp_[A-Za-z0-9]+|sk-[A-Za-z0-9]+|xox[abprs]-[A-Za-z0-9-]+|AKIA[0-9A-Z]{16})\b/g
+
+/** PEM private-key blocks, whole. */
+const PEM_BLOCK = /-----BEGIN [^-]*PRIVATE KEY[^-]*-----[\s\S]*?-----END [^-]*PRIVATE KEY[^-]*-----/g
+
 /** Replace secret-looking values and private-state-dir paths, preserving shape. */
 export function scrubSecrets<T>(value: T, options: { stateDir?: string } = {}): T {
   const dir = options.stateDir ?? defaultStateDir()
-  const scrubString = (text: string): string => (dir && text.includes(dir) ? text.split(dir).join("<state-dir>") : text)
+  const scrubString = (text: string): string => {
+    // Bearer first: `Authorization: Bearer <tok>` would otherwise match the
+    // pair rule on `Authorization` and leave the credential behind.
+    let out = text.replace(PEM_BLOCK, SCRUBBED)
+    out = out.replace(BEARER_TOKEN, `$1${SCRUBBED}`)
+    out = out.replace(SECRET_PAIR, `$1$2${SCRUBBED}`)
+    out = out.replace(TOKEN_SHAPE, SCRUBBED)
+    return dir && out.includes(dir) ? out.split(dir).join("<state-dir>") : out
+  }
   const walk = (node: unknown, key?: string): unknown => {
     if (typeof node === "string") {
       if (key !== undefined && SECRET_KEY.test(key)) return SCRUBBED
@@ -289,7 +502,9 @@ export async function harvestTelemetry(
   input: HarvestInput,
   options: { stateDir?: string; harvestedAt?: string } = {},
 ): Promise<Telemetry> {
-  const harvested = await Promise.all(input.runs.map((root) => harvestRun(root)))
+  const harvested = await Promise.all(
+    input.runs.map((root) => harvestRun(root, { ...(options.stateDir ? { stateDir: options.stateDir } : {}) })),
+  )
   harvested.sort((a, b) => compareStrings(a.id, b.id))
   const evalGroups = await Promise.all(input.evals.map((dir) => harvestEvals(dir)))
   const evals: EvalTelemetry[] = []

@@ -1,17 +1,19 @@
 // Deterministic distillation of telemetry into reviewable proposals (#136).
-// Clustering keys on (kind, label): the same gate rule, audit category or
-// eval failure across runs. Each surviving cluster becomes exactly one
-// proposal — prompt guidance (a version-bumped patch), gate tuning (an
-// explanation only: gates.json is a control file a human applies with
-// rebaseline) or a domain-pack candidate (validated against
+// Clustering keys on (seat, failure kind, rule or category): the same gate
+// rule, audit category or QA failure reason across runs, with the seat the
+// S3.4 failure data names and never a defaulted one. Each surviving cluster
+// becomes exactly one proposal — prompt guidance (a version-bumped patch),
+// gate tuning (an explanation only: gates.json is a control file a human
+// applies with rebaseline) or a domain-pack candidate (validated against
 // DomainPackSchema). Proposals are only written under the output dir; nothing
-// is ever applied automatically.
+// is ever applied automatically. A proposal the gate drops is reported with
+// its reasons (never silently) in the command output and `dropped.json`.
 //
 // The "code disposes" gate (clean-room): a proposal is disposed unless every
 // evidence quote appears verbatim in the source telemetry and every model
 // numeral it names is a model the telemetry actually records. Hallucinated
 // counts and model names cannot become reviewable proposals.
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import { loadPrompt } from "../agents/assets.ts"
 import { DomainPackSchema } from "../schema/domain.ts"
@@ -19,6 +21,7 @@ import {
   type Cluster,
   type ClusterKind,
   type EvalTelemetry,
+  type FailureEntry,
   type Proposal,
   type ProposalKind,
   ProposalSchema,
@@ -26,6 +29,7 @@ import {
   type Telemetry,
 } from "../schema/improve.ts"
 import { compareStrings } from "../util/compare.ts"
+import { atomicWrite, withLock } from "../util/fs.ts"
 import { shortHash } from "../util/hash.ts"
 
 export interface DistillThresholds {
@@ -38,46 +42,124 @@ export interface DistillThresholds {
 export const DEFAULT_THRESHOLDS = { minOccurrences: 3, minRuns: 2 } as const
 
 interface Signal {
+  readonly seat?: string
   readonly kind: ClusterKind
-  readonly label: string
+  /** The rule, category or failure text the cluster keys on. */
+  readonly facet: string
   readonly runId: string
   readonly evidence: string
 }
 
-/** One signal per counted occurrence (a count-2 rejection is two signals). */
-function repeat(count: number, signal: Signal): Signal[] {
+/** Failure kinds that cluster into proposals (anything else is not clusterable). */
+const CLUSTERABLE: ReadonlySet<string> = new Set(["gate", "audit", "qa", "replan", "eval"])
+
+/** The cluster key: (seat, kind, facet), with no defaulted seat. */
+const signalKey = (seat: string | undefined, kind: ClusterKind, facet: string): string =>
+  seat ? `${seat}:${kind}:${facet}` : `${kind}:${facet}`
+
+/** Round-robin evidence across contributing logs (occurrence `index` of `count`). */
+const gateEvidence = (run: RunTelemetry, rule: string, index: number): string => {
+  const rejection = run.gateRejections.find((entry) => entry.rule === rule)
+  const logs = rejection?.logs ?? []
+  if (logs.length === 0) return `run ${run.id}: gate rejection ${rule}`
+  const log = logs[index % logs.length]!
+  return `run ${run.id} gate-log ${log}: ${rule}`
+}
+
+/** Round-robin evidence across contributing audit records. */
+const auditEvidence = (run: RunTelemetry, category: string, index: number): string => {
+  const slash = category.indexOf("/")
+  const found = run.auditFindings.find(
+    (entry) => entry.kind === category.slice(0, slash) && entry.severity === category.slice(slash + 1),
+  )
+  const sources = found?.sources ?? []
+  if (sources.length === 0) return `run ${run.id}: audit finding ${category}`
+  const source = sources[index % sources.length]!
+  return `run ${run.id} audit ${source}: ${category}`
+}
+
+/** Evidence for a chain-backed failure: the chain entry's hash, or a plain quote. */
+const chainEvidence = (run: RunTelemetry, action: string, phase: string | undefined, reason: string): string => {
+  const hit = run.auditChain.trail.find(
+    (entry) => entry.action === action && (entry.phase ?? "") === (phase ?? "") && (entry.reason ?? reason) === reason,
+  )
+  if (!hit) return `run ${run.id}: ${action}${phase ? ` ${phase}` : ""} ${reason}`
+  return (
+    `run ${run.id} audit-chain #${hit.seq} ${hit.hash}: ${hit.action}` +
+    `${hit.phase ? ` ${hit.phase}` : ""}${hit.reason ? ` ${hit.reason}` : ""}`
+  )
+}
+
+/** Evidence for one S3.4 failure entry, resolved against the run's links. */
+function failureEvidence(run: RunTelemetry, phaseId: string, failure: FailureEntry, index: number): string {
+  if (failure.kind === "gate" && failure.rule) return gateEvidence(run, failure.rule, index)
+  if (failure.kind === "audit" && failure.category) return auditEvidence(run, failure.category, index)
+  if (failure.kind === "qa") return chainEvidence(run, "qa.fail", phaseId, failure.reason)
+  if (failure.kind === "replan") return chainEvidence(run, "phase.replan", phaseId, failure.reason)
+  return `run ${run.id}: ${failure.kind} ${failure.reason}`
+}
+
+/**
+ * Signals from one run's S3.4 phase failures: the seat the data names (never
+ * a default), keyed on (seat, kind, rule or category). QA clusters on the
+ * failure reason itself, so the same QA failure reason clusters (#136).
+ */
+function phaseFailureSignals(run: RunTelemetry): Signal[] {
   const out: Signal[] = []
-  for (let i = 0; i < count; i++) out.push(signal)
+  const seen = new Map<string, number>()
+  for (const phase of run.phases) {
+    for (const failure of phase.failures) {
+      if (!CLUSTERABLE.has(failure.kind)) continue
+      const kind = failure.kind as ClusterKind
+      const facet = failure.rule ?? failure.category ?? (kind === "qa" ? failure.reason : kind)
+      const seenKey = `${kind}:${facet}`
+      const index = seen.get(seenKey) ?? 0
+      seen.set(seenKey, index + 1)
+      out.push({
+        ...(failure.seat ? { seat: failure.seat } : {}),
+        kind,
+        facet,
+        runId: run.id,
+        evidence: failureEvidence(run, phase.id, failure, index),
+      })
+    }
+  }
   return out
 }
 
+/** Halt evidence: the chain's halt entry hash when the trail records it. */
+const haltEvidence = (run: RunTelemetry): string => {
+  const halt = run.halt!
+  const hit = [...run.auditChain.trail].reverse().find((entry) => entry.action === "stage.halted")
+  if (hit) return `run ${run.id} audit-chain #${hit.seq} ${hit.hash}: stage.halted ${halt.reason}`
+  return `run ${run.id}: halt from ${halt.from}: ${halt.reason}`
+}
+
 function runSignals(run: RunTelemetry): Signal[] {
+  // Trusted phases carry the seat-attributed S3.4 failures; the aggregates
+  // below are their fallback for unsealed or phaseless runs, keyed the same
+  // way so sealed and unsealed harvests of one run cluster alike.
+  if (run.phases.length > 0) {
+    const halted = run.halt
+      ? [{ kind: "eval" as const, facet: `halt/${run.halt.from}`, runId: run.id, evidence: haltEvidence(run) }]
+      : []
+    return [...phaseFailureSignals(run), ...halted]
+  }
   const out: Signal[] = []
   for (const rejection of run.gateRejections)
-    out.push(
-      ...repeat(rejection.count, {
+    for (let index = 0; index < rejection.count; index++)
+      out.push({
         kind: "gate",
-        label: rejection.rule,
+        facet: rejection.rule,
         runId: run.id,
-        evidence: `run ${run.id}: gate rejection ${rejection.rule}`,
-      }),
-    )
-  for (const finding of run.auditFindings)
-    out.push(
-      ...repeat(finding.count, {
-        kind: "audit",
-        label: `${finding.kind}/${finding.severity}`,
-        runId: run.id,
-        evidence: `run ${run.id}: audit finding ${finding.kind}/${finding.severity}`,
-      }),
-    )
-  if (run.halt)
-    out.push({
-      kind: "eval",
-      label: `halt/${run.halt.from}`,
-      runId: run.id,
-      evidence: `run ${run.id}: halt from ${run.halt.from}: ${run.halt.reason}`,
-    })
+        evidence: gateEvidence(run, rejection.rule, index),
+      })
+  for (const finding of run.auditFindings) {
+    const category = `${finding.kind}/${finding.severity}`
+    for (let index = 0; index < finding.count; index++)
+      out.push({ kind: "audit", facet: category, runId: run.id, evidence: auditEvidence(run, category, index) })
+  }
+  if (run.halt) out.push({ kind: "eval", facet: `halt/${run.halt.from}`, runId: run.id, evidence: haltEvidence(run) })
   return out
 }
 
@@ -87,10 +169,10 @@ function evalSignals(evalCase: EvalTelemetry): Signal[] {
   return failures.map((failure) => ({
     kind: "eval" as const,
     // Key on the failure text itself: the same reason across cases is
-    // one cluster; the case stays in the evidence and the run id.
-    label: failure,
+    // one cluster; the case and its aggregate file stay in the evidence.
+    facet: failure,
     runId: `eval/${evalCase.case}`,
-    evidence: `eval ${evalCase.case}: ${failure}`,
+    evidence: `eval ${evalCase.case} (${evalCase.source}): ${failure}`,
   }))
 }
 
@@ -102,10 +184,10 @@ function signals(telemetry: Telemetry): Signal[] {
 }
 
 /**
- * Every verbatim evidence string the telemetry yields (the harvester's own
- * signal phrases, sorted). The "code disposes" gate checks proposal quotes
- * against exactly this set: a quote counts as verbatim only when the
- * harvester said it.
+ * Every verbatim evidence string the telemetry yields (audit-chain hashes,
+ * gate-log and audit-record paths, eval aggregate files — never synthesized
+ * phrases, sorted). The "code disposes" gate checks proposal quotes against
+ * exactly this set: a quote counts as verbatim only when the harvester said it.
  */
 export function signalEvidence(telemetry: Telemetry): string[] {
   const evidence = [...new Set(signals(telemetry).map((signal) => signal.evidence))]
@@ -115,7 +197,8 @@ export function signalEvidence(telemetry: Telemetry): string[] {
 
 interface ClusterGroup {
   kind: ClusterKind
-  label: string
+  facet: string
+  seat?: string
   runIds: Set<string>
   evidence: string[]
 }
@@ -125,11 +208,19 @@ const toCluster = (key: string, group: ClusterGroup): Cluster => {
   runIds.sort(compareStrings)
   const evidence = [...new Set(group.evidence)]
   evidence.sort(compareStrings)
-  return { key, kind: group.kind, label: group.label, occurrences: group.evidence.length, runIds, evidence }
+  return {
+    key,
+    kind: group.kind,
+    label: group.facet,
+    ...(group.seat ? { seat: group.seat } : {}),
+    occurrences: group.evidence.length,
+    runIds,
+    evidence,
+  }
 }
 
 /**
- * Deterministic clustering: group signals by (kind, label), count
+ * Deterministic clustering: group signals by (seat, kind, facet), count
  * occurrences, collect distinct run ids and verbatim evidence. Sorted by key.
  */
 export function clusterTelemetry(telemetry: Telemetry, thresholds: DistillThresholds = {}): Cluster[] {
@@ -137,10 +228,16 @@ export function clusterTelemetry(telemetry: Telemetry, thresholds: DistillThresh
   const minRuns = thresholds.minRuns ?? DEFAULT_THRESHOLDS.minRuns
   const groups = new Map<string, ClusterGroup>()
   for (const signal of signals(telemetry)) {
-    const key = `${signal.kind}:${signal.label}`
+    const key = signalKey(signal.seat, signal.kind, signal.facet)
     let group = groups.get(key)
     if (!group) {
-      group = { kind: signal.kind, label: signal.label, runIds: new Set(), evidence: [] }
+      group = {
+        kind: signal.kind,
+        facet: signal.facet,
+        ...(signal.seat ? { seat: signal.seat } : {}),
+        runIds: new Set(),
+        evidence: [],
+      }
       groups.set(key, group)
     }
     group.runIds.add(signal.runId)
@@ -160,6 +257,8 @@ export function clusterTelemetry(telemetry: Telemetry, thresholds: DistillThresh
 const KIND_FOR_CLUSTER: Record<ClusterKind, ProposalKind> = {
   gate: "gate-tuning",
   audit: "prompt-guidance",
+  qa: "prompt-guidance",
+  replan: "prompt-guidance",
   eval: "domain-pack",
 }
 
@@ -176,9 +275,24 @@ const slug = (text: string): string => {
 export const proposalId = (kind: ProposalKind, cluster: Pick<Cluster, "key">): string =>
   `${kind}-${slug(cluster.key)}-${shortHash(cluster.key)}`
 
-const seatForAudit = (label: string): string => {
-  if (label.startsWith("invariant/")) return "auditor-thesis"
-  return "programmer"
+/**
+ * Prompt asset for a prompt-guidance cluster: the failure's own seat when it
+ * names a real prompt, else the asset for the failure kind. The old seat
+ * guess (`programmer` for everything non-invariant) is gone: QA failures
+ * guide the QA prompt, replans guide the manager prompt, and audit findings
+ * guide their auditor seat's prompt.
+ */
+async function promptAssetFor(cluster: Cluster): Promise<{ id: string; version: number; body: string }> {
+  const fallback = cluster.kind === "qa" ? "qa-functional" : cluster.kind === "replan" ? "manager" : "auditor-thesis"
+  for (const id of [...new Set([cluster.seat, fallback])].filter((entry): entry is string => !!entry)) {
+    try {
+      const asset = await loadPrompt(id)
+      return { id, version: asset.meta.version, body: asset.body }
+    } catch {
+      // Not a prompt seat (e.g. the chain actor `qa`): try the kind fallback.
+    }
+  }
+  throw new Error(`no prompt asset for cluster ${cluster.key}`)
 }
 
 const promptFor = (promptId: string): string => `packages/core/assets/prompts/${promptId}.md`
@@ -248,19 +362,17 @@ function appendHunk(lines: readonly string[], newLine: string): string[] {
 
 async function renderPromptGuidance(cluster: Cluster): Promise<RenderedProposal> {
   const kind = "prompt-guidance" as const
-  const promptId = seatForAudit(cluster.label)
-  const asset = await loadPrompt(promptId)
-  const next = asset.meta.version + 1
+  const { id: promptId, version, body } = await promptAssetFor(cluster)
+  const next = version + 1
   const pitfall = `Known pitfall (distilled from ${cluster.occurrences} occurrence(s) of ${cluster.label}): re-read the evidence above before recording a verdict.`
   const source = await readFile(promptFor(promptId), "utf8").catch(() => undefined)
-  const lines = (source ?? `${asset.body}\n`).replace(/\n$/, "").split("\n")
+  const lines = (source ?? `${body}\n`).replace(/\n$/, "").split("\n")
   const versionLine = lines.findIndex((line) => /^version:\s*\d+\s*$/.test(line))
   const hunks: string[] = []
-  if (versionLine > 0)
-    hunks.push(...replaceHunk(lines, versionLine, `version: ${asset.meta.version}`, `version: ${next}`))
+  if (versionLine > 0) hunks.push(...replaceHunk(lines, versionLine, `version: ${version}`, `version: ${next}`))
   hunks.push(...appendHunk(lines, pitfall))
   const rationale =
-    `Audit signal "${cluster.label}" recurred ${cluster.occurrences} time(s) across ${cluster.runIds.length} run(s). ` +
+    `Failure signal "${cluster.label}" (${cluster.kind}) recurred ${cluster.occurrences} time(s) across ${cluster.runIds.length} run(s). ` +
     `This patch adds one known-pitfall line to the ${promptId} prompt and bumps its frontmatter to v${next}, ` +
     `so the assets drift check stays green when a human applies it. Review the evidence before applying.`
   return {
@@ -408,10 +520,14 @@ export interface WrittenProposal extends Proposal {
 
 async function writeOne(out: string, proposal: Proposal, files: Record<string, string>): Promise<WrittenProposal> {
   const dir = path.join(out, proposal.id)
-  await mkdir(dir, { recursive: true })
-  await writeFile(path.join(dir, "proposal.json"), `${JSON.stringify(proposal, null, 2)}\n`)
-  await Promise.all(Object.entries(files).map(([name, content]) => writeFile(path.join(dir, name), content)))
-  return { ...proposal, dir }
+  // Atomic files under the proposal dir's lock (S3.3): a crashed or
+  // concurrent distill never leaves a torn proposal.json behind.
+  return withLock(dir, async () => {
+    await mkdir(dir, { recursive: true })
+    await atomicWrite(path.join(dir, "proposal.json"), `${JSON.stringify(proposal, null, 2)}\n`)
+    await Promise.all(Object.entries(files).map(([name, content]) => atomicWrite(path.join(dir, name), content)))
+    return { ...proposal, dir }
+  })
 }
 
 /**
@@ -429,4 +545,48 @@ export async function writeProposals(
   )
   written.sort((a, b) => compareStrings(a.id, b.id))
   return written
+}
+
+// ------------------------------------------------- dropped proposals (never silent)
+
+/** A proposal the "code disposes" gate dropped, with every reason. */
+export interface DroppedProposal {
+  readonly id: string
+  readonly kind: ProposalKind
+  readonly key: string
+  readonly reasons: readonly string[]
+}
+
+/** Every disposed proposal with its reasons, sorted by id (deterministic). */
+export function disposedWithReasons(
+  proposals: Proposal[],
+  telemetry: Telemetry,
+): Array<{ proposal: Proposal; reasons: string[] }> {
+  const out = proposals
+    .map((proposal) => ({ proposal, reasons: disposeReason(proposal, telemetry) }))
+    .filter((entry) => entry.reasons.length > 0)
+  out.sort((a, b) => compareStrings(a.proposal.id, b.proposal.id))
+  return out
+}
+
+/**
+ * Write `<out>/dropped.json` (every disposed proposal with its reason)
+ * atomically under a lock, so a rerun is byte-identical. Nothing the gate
+ * drops is ever silent.
+ */
+export async function writeDropped(
+  out: string,
+  dropped: ReadonlyArray<{ proposal: Proposal; reasons: readonly string[] }>,
+): Promise<string> {
+  const file = path.join(out, "dropped.json")
+  const entries: DroppedProposal[] = dropped.map((entry) => ({
+    id: entry.proposal.id,
+    kind: entry.proposal.kind,
+    key: entry.proposal.cluster.key,
+    reasons: [...entry.reasons],
+  }))
+  entries.sort((a, b) => compareStrings(a.id, b.id))
+  const body = `${JSON.stringify(entries, null, 2)}\n`
+  await withLock(file, () => atomicWrite(file, body))
+  return file
 }
