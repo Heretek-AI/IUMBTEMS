@@ -1,4 +1,5 @@
 export * from "./auditor.ts"
+export * from "./backends.ts"
 export * from "./cache.ts"
 export * from "./html.ts"
 export * from "./ops.ts"

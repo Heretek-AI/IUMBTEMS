@@ -81,6 +81,12 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
   HMAC-SHA256 seal from a key kept in the masked private state dir
   (`engine.key`), so a planted entry an agent drops into
   `.factory/research/sources/` is refused on read.
+- Sources arrive through an ordered backend chain (`research.backends`,
+  default Brave → Firecrawl → SearXNG → direct; `searchProvider` still works
+  as a one-element alias). Failures classify as unavailable, auth,
+  rate-limited (429 Retry-After sets the cooldown), upstream or timeout and
+  fail over to the next backend, which is recorded in `SourceMeta.provider`;
+  a `blocked` safety refusal stops the chain instead of routing around it.
 - The design tree (`frontier.json`) is the same shape for humans: nodes are
   decisions or deferred facts, saves are diff-checked (no deletions, no silent
   edits, no round regress), and the tree is the single source for the idea.

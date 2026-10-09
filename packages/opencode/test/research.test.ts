@@ -145,4 +145,29 @@ describe("research on the real host", () => {
     const { tools } = await h.run(call("es_research_fetch", { url: "http://127.0.0.1/" }))
     expect(tools[0]?.status).toBe("error")
   })
+
+  test("#106: search fails over from a failing backend to the next one in order", async () => {
+    // Brave looks configured but its key is invalid, so the chain must move
+    // on to the local SearXNG instance and report its id.
+    const saved = process.env.BRAVE_API_KEY
+    process.env.BRAVE_API_KEY = "test-invalid-key"
+    const failover = await boot({
+      git: true,
+      script: directiveScript,
+      plugins: [{ path: pluginDir, options: { stateDir: state, pr: "off" } }],
+      files: { "README.md": "# failover\n" },
+    })
+    try {
+      const { tools } = await failover.run(call("es_research_search", { query: "factory gates" }), {
+        agent: "es-research-alpha",
+      })
+      expect(tools[0]?.status).toBe("completed")
+      expect(tools[0]?.text).toContain("searxng results for")
+      expect(tools[0]?.text).toContain("gates keep agents honest")
+    } finally {
+      await failover.close()
+      if (saved === undefined) delete process.env.BRAVE_API_KEY
+      else process.env.BRAVE_API_KEY = saved
+    }
+  }, 60_000)
 })

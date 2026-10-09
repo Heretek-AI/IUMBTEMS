@@ -34,6 +34,9 @@
   findings and signed, expiring waivers.
 - **Evidence-first research.** Content-addressed source cache, a pure verbatim
   quote verifier, and an epistemic auditor that downgrades ungrounded claims.
+  Web sources come through an ordered backend chain (Brave, Firecrawl, SearXNG,
+  direct fetch) with per-backend cooldowns: one provider's outage or rate
+  limit fails over to the next, while a safety refusal never does.
 - **Lateral work.** Brainstorm fans out eight divergent lenses into a
   deduplicated, rubric-scored shortlist with a forced outlier; darkharvest
   tears down competitor projects with fail-closed SPDX detection, per-field

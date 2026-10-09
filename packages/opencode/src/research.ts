@@ -4,7 +4,7 @@
 // .factory/ directory: the user's own agents get plain results, and no
 // project gains a .factory/ because someone searched the web.
 import { stat } from "node:fs/promises"
-import { factoryLayout, researchCache, seatOf, selectProvider } from "@heretek-ai/es-core"
+import { factoryLayout, researchCache, SEARCH_PROVIDERS, seatOf, selectProvider } from "@heretek-ai/es-core"
 import type { Runtime } from "./runtime.ts"
 
 interface SearchHit {
@@ -52,7 +52,14 @@ export function registerWebsearch(
 ) {
   const searxng = runtime.config.research?.searxngUrl
   const env = searxng ? { ...process.env, SEARXNG_URL: searxng } : process.env
-  const provider = selectProvider(runtime.options.searchProvider, env)
+  // A legacy searchProvider pin keeps its exact behaviour; otherwise the
+  // first configured backend with a host search provider wins (#106).
+  const ordered = runtime.config.research?.backends
+    ?.map((id) => SEARCH_PROVIDERS.find((provider) => provider.id === id))
+    .find((provider) => provider?.available(env))
+  const provider = runtime.options.searchProvider
+    ? selectProvider(runtime.options.searchProvider, env)
+    : (ordered ?? selectProvider(undefined, env))
   if (!provider) return
   editor.add({
     id: "epistemic-swarm",

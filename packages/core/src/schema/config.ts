@@ -102,6 +102,13 @@ export const EsConfigSchema = z
           .regex(/^https?:\/\/[^\s/]+\S*$/, "expected an http(s) URL")
           .describe("SearXNG instance (else SEARXNG_URL). Global config or plugin options only.")
           .optional(),
+        backends: z
+          .array(z.enum(["brave", "firecrawl", "searxng", "direct"]))
+          .min(1)
+          .describe(
+            "Ordered source backends for search and fetch failover (a safety refusal never fails over); unset keeps the searchProvider behaviour.",
+          )
+          .optional(),
       })
       .strict()
       .describe("Research-stage tunables (ported from the 0.7 configure tool).")

@@ -21,7 +21,26 @@ export interface SearchProvider {
 }
 
 async function json(response: Response, provider: string) {
-  if (!response.ok) throw new Error(`${provider} search failed: HTTP ${response.status}`)
+  if (!response.ok) {
+    // Machine-readable details for the backend chain (#106): the HTTP status
+    // classifies the failure, and a 429 Retry-After sets the cooldown.
+    const error = new Error(`${provider} search failed: HTTP ${response.status}`) as Error & {
+      status?: number
+      retryAfterMs?: number
+    }
+    error.status = response.status
+    if (response.status === 429) {
+      const retryAfter = response.headers.get("retry-after")
+      if (retryAfter !== null) {
+        if (/^\d+$/.test(retryAfter.trim())) error.retryAfterMs = Number(retryAfter.trim()) * 1000
+        else {
+          const at = Date.parse(retryAfter)
+          if (!Number.isNaN(at)) error.retryAfterMs = Math.max(0, at - Date.now())
+        }
+      }
+    }
+    throw error
+  }
   return response.json() as Promise<any>
 }
 
@@ -104,12 +123,19 @@ export interface FetchedPage {
 
 const MAX_FETCH_BYTES = 3_000_000
 
+/** A fetchPage refusal on safety grounds (SSRF/policy): the chain must never route around it (#106). */
+const blocked = (message: string) => {
+  const error = new Error(message) as Error & { code?: string }
+  error.code = "blocked"
+  return error
+}
+
 /** Fetch a page and convert it to text. Only http(s); HTML is converted, text formats are kept. */
 export async function fetchPage(
   url: string,
   options: { signal?: AbortSignal; fetch?: typeof fetch } = {},
 ): Promise<FetchedPage> {
-  if (!/^https?:\/\//i.test(url)) throw new Error("Only http(s) URLs can be fetched")
+  if (!/^https?:\/\//i.test(url)) throw blocked("Only http(s) URLs can be fetched")
   const response = await (options.fetch ?? fetch)(url, {
     headers: {
       "User-Agent": "epistemic-swarm/1.0 (+research cache)",
@@ -121,7 +147,7 @@ export async function fetchPage(
   if (!response.ok) throw new Error(`Fetching ${url} failed: HTTP ${response.status}`)
   const contentType = response.headers.get("content-type") ?? "text/plain"
   if (/pdf|octet-stream|image\/|video\/|audio\//.test(contentType))
-    throw new Error(`Cannot cache ${contentType} content as text`)
+    throw blocked(`Cannot cache ${contentType} content as text`)
   const buffer = await response.arrayBuffer()
   const raw = new TextDecoder().decode(buffer.byteLength > MAX_FETCH_BYTES ? buffer.slice(0, MAX_FETCH_BYTES) : buffer)
   if (/html|xml/.test(contentType)) {
