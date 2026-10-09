@@ -12,9 +12,12 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 out="${1:-$(mktemp -d)}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
+# The release packages and their tarball slugs, in publish order, from the
+# single source of truth (scripts/packages.ts reads packages/*/package.json).
+release="$(bun "$root/scripts/packages.ts" --release)"
 # Drop tarballs from previous runs: a stale same-name version would shadow the
 # fresh pack when npm resolves the workspace dependencies between tarballs.
-rm -f "$out"/heretek-ai-es-core-*.tgz "$out"/heretek-ai-es-cli-*.tgz "$out"/heretek-ai-epistemic-swarm-*.tgz
+while read -r pkg slug; do rm -f "$out"/${slug}-*.tgz; done <<< "$release"
 
 (cd "$root/packages/core" && rm -rf dist tsconfig.tsbuildinfo && bunx tsc -b)
 (cd "$root/packages/cli" && rm -rf dist && bun run build >/dev/null)
@@ -22,16 +25,16 @@ rm -f "$out"/heretek-ai-es-core-*.tgz "$out"/heretek-ai-es-cli-*.tgz "$out"/here
 # node_modules, where npm-installed plugins live, so raw .tsx would fall back
 # to react-jsx and fail on 'react' at load.
 (cd "$root/packages/opencode" && rm -rf dist && bun run build >/dev/null)
-for pkg in core cli opencode; do
+while read -r pkg slug; do
   (cd "$root/packages/$pkg" && bun pm pack --destination "$out" >/dev/null)
-done
+done <<< "$release"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 cd "$work"
 npm init -y >/dev/null
 npm install --ignore-scripts --no-audit --no-fund \
-  "$out"/heretek-ai-es-core-*.tgz "$out"/heretek-ai-es-cli-*.tgz "$out"/heretek-ai-epistemic-swarm-*.tgz >/dev/null
+  $(while read -r pkg slug; do echo "$out"/${slug}-*.tgz; done <<< "$release") >/dev/null
 
 if grep -l '"workspace:' node_modules/@heretek-ai/*/package.json; then
   echo "pack-smoke: a workspace: protocol leaked into a packed manifest" >&2
