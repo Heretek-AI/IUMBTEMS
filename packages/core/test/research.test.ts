@@ -513,8 +513,7 @@ describe("direct-backend SSRF guard (fail closed, never cached)", () => {
 })
 
 describe("DNS-resolving SSRF guard (S4.1: names, not just literal IPs)", () => {
-  const page = (text: string) =>
-    new Response(`<p>${text}</p>`, { headers: { "content-type": "text/html" } })
+  const page = (text: string) => new Response(`<p>${text}</p>`, { headers: { "content-type": "text/html" } })
   const countingFetch = (respond: (url: string) => Response, calls: { count: number }) =>
     (async (url: string) => {
       calls.count++
@@ -638,10 +637,14 @@ describe("per-hop fetch budgets (S4.2: one timeout no longer spans every hop)", 
       if (signal?.aborted) throw new DOMException("the operation was aborted", "AbortError")
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, ms)
-        signal?.addEventListener("abort", () => {
-          clearTimeout(timer)
-          reject(new DOMException("the operation was aborted", "AbortError"))
-        }, { once: true })
+        signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer)
+            reject(new DOMException("the operation was aborted", "AbortError"))
+          },
+          { once: true },
+        )
       })
       if (signal?.aborted) throw new DOMException("the operation was aborted", "AbortError")
       return respond(String(url))
@@ -662,8 +665,9 @@ describe("per-hop fetch budgets (S4.2: one timeout no longer spans every hop)", 
   test("a slow first hop doesn't starve the next hop's budget", async () => {
     const fetch = (async (url: string, init?: RequestInit) => {
       if (String(url).endsWith("/second")) return delayed(60, () => text("second hop page body"))(url, init)
-      return delayed(60, () =>
-        new Response("go on", { status: 302, headers: { location: "https://slow.test/second" } }),
+      return delayed(
+        60,
+        () => new Response("go on", { status: 302, headers: { location: "https://slow.test/second" } }),
       )(url, init)
     }) as unknown as typeof fetch
     // 60 ms + 60 ms exceeds a single 100 ms budget; each hop gets its own.

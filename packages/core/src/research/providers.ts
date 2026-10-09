@@ -211,11 +211,7 @@ const loopbackAllowed = (env: NodeJS.ProcessEnv | undefined): boolean =>
   /^(1|true|yes)$/i.test(env?.ES_RESEARCH_ALLOW_LOOPBACK ?? "")
 
 /** Parse an http(s) fetch target and refuse non-routable hosts before any fetch. */
-const assertRoutable = async (
-  raw: string,
-  allowLoopback: boolean,
-  resolveHost: HostResolver,
-): Promise<URL> => {
+const assertRoutable = async (raw: string, allowLoopback: boolean, resolveHost: HostResolver): Promise<URL> => {
   let parsed: URL
   try {
     parsed = new URL(raw)
@@ -247,9 +243,7 @@ const assertRoutable = async (
       throw blocked(`Refusing to fetch ${parsed.hostname}: it resolves to no address (SSRF guard, fail closed)`)
     for (const address of addresses)
       if (isIP(address) === 0 || blockedHost(address, allowLoopback))
-        throw blocked(
-          `Refusing to fetch ${parsed.hostname}: it resolves to a non-routable address (SSRF guard)`,
-        )
+        throw blocked(`Refusing to fetch ${parsed.hostname}: it resolves to a non-routable address (SSRF guard)`)
   }
   return parsed
 }

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { workspacePackages } from "../../../scripts/packages.ts"
 import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import { exportBrief } from "../src/claims/brief.ts"
 import { normalizeClaim } from "../src/claims/claim.ts"
@@ -14,7 +15,6 @@ import { normalizeSourceText, researchSourcesDir, SourceCache } from "../src/res
 import { scoutTools } from "../src/scout/ops.ts"
 import { atomicWrite } from "../src/util/fs.ts"
 import { sha256 } from "../src/util/hash.ts"
-import { workspacePackages } from "../../../scripts/packages.ts"
 
 let root: string
 let state: string
