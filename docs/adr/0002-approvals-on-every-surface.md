@@ -1,6 +1,6 @@
 # ADR 0002: Approvals on every surface (TUI, CLI, browser)
 
-- **Status:** Accepted (I8 option (b) confirmed 2026-10-09 via the Stage-3 cascade rebase authorization; see "To accept").
+- **Status:** Proposed (acceptance needs the user's I8 confirmation; see "To accept").
 - **Date:** 2026-10-09
 - **Epic:** #92 · **Milestone:** Phase 2 · Approvals everywhere · 1.3.0
 - **Ticket:** #116 (threat model and checklist included; no separate file)
@@ -223,10 +223,7 @@ I8 choice; quote the confirmation here and flip the status to Accepted.**
 Until then, #117 and #118 proceed (they need only I1–I7), while #119 and
 #131 must not merge.
 
-**Acceptance record (2026-10-09):** I8 option (b) — browser approvals via
-loopback fleet tickets, sealed key never leaving the machine state dir —
-confirmed via the Stage-3 cascade rebase authorization, which records the
-user's confirmation. PROVENANCE CAVEAT: no verbatim user quote was found in
-the repo or in PR #142 / issue #116 comments at rebase time; the merging
-human must append the verbatim quote here, or revert this status to
-Proposed if confirmation did not occur.
+**Status note (2026-10-09):** a Stage-3 cascade step briefly marked this
+ADR Accepted without the required user I8 confirmation; reverted to
+Proposed. The merging human flips to Accepted only after quoting the
+user's verbatim I8 option-(b) confirmation here.
