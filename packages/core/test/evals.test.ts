@@ -293,13 +293,7 @@ describe("eval cases (evals/cases)", () => {
   test("the staged thesis fixture admits a verdict graded deterministically (#139)", async () => {
     const { mkdtemp, rm, mkdir, writeFile } = await import("node:fs/promises")
     const { tmpdir } = await import("node:os")
-    const {
-      Factory,
-      codeAuditTools,
-      gateRunner,
-      gradeAuditFire,
-      readAuditRecords,
-    } = await import("../src/index.ts")
+    const { Factory, codeAuditTools, gateRunner, gradeAuditFire, readAuditRecords } = await import("../src/index.ts")
     const { signEngineFile } = await import("../src/trust/sidecar.ts")
     const thesis = cases.find((item) => item.file === "auditor-thesis.json")!.body
     const root = await mkdtemp(path.join(tmpdir(), "es-thesis-fixture-"))
@@ -316,7 +310,7 @@ describe("eval cases (evals/cases)", () => {
         (tool) => tool.name === "es_audit_verdict",
       )!
       const excerpt =
-        "const query = \"SELECT * FROM users WHERE name = '\" + username + \"' AND pass = '\" + password + \"'\""
+        'const query = "SELECT * FROM users WHERE name = \'" + username + "\' AND pass = \'" + password + "\'"'
       const out = await verdict.execute(
         {
           audit: "audit-01",
