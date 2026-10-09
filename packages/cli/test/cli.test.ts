@@ -365,7 +365,11 @@ describe("es research deep (headless deep research)", () => {
     }
     try {
       // No TTY: the ceiling confirmation refuses before anything is created.
-      expect((await run(["research", "deep", "what queue", "--output", "out", "--max-usd", "5"])).code).toBe(3)
+      // The fake driver pins the driver check, so this reads the same with
+      // or without a harness binary installed.
+      expect(
+        (await run(["research", "deep", "what queue", "--output", "out", "--max-usd", "5", "--driver", "fake"])).code,
+      ).toBe(3)
       expect(await exists(path.join(root, "out", ".factory"))).toBe(false)
     } finally {
       delete DRIVERS.fake
