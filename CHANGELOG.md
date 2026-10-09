@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.6.0 — 2026-10-09
+
+Phase 5 self-improvement: runs already leave rich records (audit chain,
+QA failures, gate rejections, findings, spend, evals) and now the factory
+learns from them. `es improve harvest` aggregates runs and evals into one
+versioned, secret-scrubbed telemetry dataset; `es improve distill` clusters
+recurring failures into reviewable proposals a human applies; the
+`self-dogfood` preset builds this repo from an issue into a draft PR.
+The published trio (core/CLI/plugin) releases in lockstep as 1.6.0.
+
+**New.**
+- **#135: telemetry harvester over runs and evals.** Read-only
+  `es improve harvest --runs <dir>... --evals <dir>... --out <file>`
+  (agent-safe) producing the versioned `TelemetrySchema` dataset: phases
+  with replans and failure counts, halts with reasons, spend, gate
+  rejections by rule, audit findings by kind/severity, eval results with
+  `modelLimited`, and the audit-chain verification. A broken chain is
+  reported, never repaired; env-like values are scrubbed and state-dir
+  paths collapsed. Schemas render to `schemas/` and `docs/SCHEMAS.md`.
+- **#136: distillation into reviewable proposals.** Deterministic
+  clustering keyed on (kind, label) with defaults of 3 occurrences across
+  2 runs; each surviving cluster becomes one proposal under
+  `.factory/improve/proposals/<id>/` — `prompt-guidance` (a version-bumped
+  patch that passes `git apply --check` and the assets drift check),
+  `gate-tuning` (an explanation only; `gates.json` stays a human-applied
+  control file) or `domain-pack` (validated against `DomainPackSchema`).
+  The "code disposes" gate drops proposals whose evidence is not a
+  verbatim harvester quote or whose model numerals the telemetry never
+  recorded. `es improve distill --telemetry <file> --out <dir>` is
+  agent-safe; `--open-pr` is human-run (refused without a terminal) and
+  drafts from a topic branch without pushing the base.
+- **#137: self-dogfood preset.** `es factory init --preset self-dogfood
+  --issue <n>` (human-only) seeds `.factory/` from versioned preset
+  assets — project config (`audit.phase: required`), the real merge gate
+  (`bun install --frozen-lockfile`, `bun run check`, `bun run docs:check`),
+  a roadmap seed pinning `baseBranch: rewrite`, and the issue as the idea
+  note — then reminds about `es trust`, the $15 spend ceiling and the
+  frontier/spec approvals. `docs/SELF-DOGFOOD.md` is the runbook
+  (prerequisites, flow, review, abort); one human-run validation session
+  to a draft PR is tracked on #137.
+- **#138: release 1.6.0.** Version bump, changelog and status line; draft
+  release PR from `integration/phase-5` to `rewrite`.
+
 ## 1.5.0 — 2026-10-09
 
 Phase 4 web control plane: the fleet daemon serves a browser UI on

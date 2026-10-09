@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "runId": "run-replan",
+  "stage": "HALTED",
+  "mode": "build",
+  "createdAt": "2026-10-02T00:00:00.000Z",
+  "updatedAt": "2026-10-02T03:00:00.000Z",
+  "spend": {
+    "usd": 4.5,
+    "estimated": true,
+    "events": 40
+  },
+  "phases": [
+    {
+      "id": "p1",
+      "title": "rocky phase",
+      "status": "failed",
+      "goalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "failures": 5,
+      "replanned": true,
+      "history": []
+    }
+  ],
+  "halt": {
+    "reason": "phase p1 failed 5 times",
+    "at": "2026-10-02T03:00:00.000Z",
+    "from": "QA"
+  }
+}

@@ -77,6 +77,7 @@ import {
 import {
   approve,
   configSet,
+  factoryInit,
   type HumanContext,
   rebaselineControl,
   recordPr,
@@ -86,6 +87,7 @@ import {
   trust,
   waive,
 } from "./human.ts"
+import { improveDistill, improveHarvest } from "./improve.ts"
 import { auditCommand, auditDismiss, auditShow, researchDeepCommand, scoutCommand, scoutShow } from "./jobs.ts"
 import { keySeal, keyStatus } from "./key.ts"
 import { serveStdio } from "./mcp.ts"
@@ -105,6 +107,7 @@ Factory
   runs [--all] [--json]         Recent runs across your projects (* marks this one)
   watch [--interval S]          es status, redrawn every S seconds (default 2); q quits   [terminal]
   factory begin                 Start a run (normally done by /grill)
+  factory init --preset <name> --issue <n>   Seed a preset run from a GitHub issue   [human, TTY]
   factory run --headless        Drive the factory through a harness CLI, emitting JSON lines
         [--driver opencode] [--max-turns N] [--log-level quiet|info|debug]
         [--events jsonl] [--events-file <path>] [--turn-timeout S]
@@ -142,6 +145,9 @@ Other
   brainstorm lenses             List the built-in divergent lenses
   harvest show [--json]         Show the teardown plan/progress or the report
   harvest scan <source>         Scan one source (local path, git URL, github:owner/repo, npm:name)
+  improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file>   Harvest read-only telemetry from runs and evals
+  improve distill --telemetry <file> --out <dir> [--open-pr]   Cluster telemetry into reviewable proposals
+        [--open-pr opens a draft PR from a topic branch; human-run, refused without a terminal]
   design [status]               Design interview progress (resumes from .factory/design)
   design render                 Re-render tokens.css + STYLE_GUIDE.md from tokens.json
   design check                  Fail on render drift, invalid tokens or one-off mints
@@ -672,6 +678,15 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           await manager.stopAll()
         }
       }
+      case "improve": {
+        if (sub === "harvest") return await improveHarvest(subArgs(2), { print: io.print, cwd: io.cwd })
+        if (sub === "distill")
+          return await improveDistill(subArgs(2), { print: io.print, cwd: io.cwd, confirm: io.confirm }, root)
+        io.print(
+          "Usage: es improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file> | distill --telemetry <file> --out <dir> [--open-pr]",
+        )
+        return 2
+      }
       case "hooks": {
         const engine = await HookEngine.create({
           root,
@@ -729,6 +744,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         if (sub === "status") return await statusCommand({ root, stateDir: userState, print: io.print }, args)
         if (sub === "resume") return await resume(context, subArgs(2))
         if (sub === "pr") return await recordPr(context, subArgs(2))
+        if (sub === "init") return await factoryInit(context, subArgs(2))
         if (sub === "stop") {
           await atomicWrite(factoryLayout(root).stop, `${rest.join(" ") || "stopped from the CLI"}\n`)
           io.print(

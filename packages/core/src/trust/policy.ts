@@ -164,7 +164,7 @@ export const HUMAN_VERBS: ReadonlyArray<HumanVerbRule> = [
   ["rebaseline"],
   ["key"],
   ["reseal"],
-  ["factory", (next) => next === "resume" || next === "pr"],
+  ["factory", (next) => next === "resume" || next === "pr" || next === "init"],
   ["gates", (next) => next === "install-git"],
   ["lsp", (next) => next === "install"],
   ["config", (next) => next === "set"],

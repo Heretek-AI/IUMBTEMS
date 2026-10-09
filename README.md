@@ -5,10 +5,11 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 1.5.0.** Phase 4 web control plane: the fleet daemon serves a
-> browser UI on loopback behind a one-time URL — fleet dashboard, browser
-> approvals, preview-only config editor and evidence explorer
-> (#129–#133, #145 follows for browser-apply). Install from npm
+> **Status: 1.6.0.** Phase 5 self-improvement: telemetry harvest
+> (`es improve harvest`), distillation into reviewable proposals
+> (`es improve distill`), and the self-dogfood factory preset
+> (`docs/SELF-DOGFOOD.md`) — runs learn from runs, and the factory builds
+> this repo into draft PRs a human reviews (#135–#138). Install from npm
 > (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`, `@heretek-ai/es-cli`);
 > run `es key seal` once.
 
@@ -64,6 +65,18 @@
   provenance and clean-room specs, plus a callable verdict check for the
   grill, the factory and the scout; queereye interviews you into a
   contrast-gated DTCG token system with a generated style guide.
+- **Self-improvement.** `es improve harvest` aggregates runs and evals into
+  one versioned, secret-scrubbed telemetry dataset (read-only; a broken
+  audit chain is reported, never repaired), and `es improve distill`
+  clusters recurring failures into reviewable proposals — prompt guidance
+  (a version-bumped patch), gate tuning (an explanation only; gates.json
+  stays a human-applied control file) and domain-pack candidates
+  (schema-validated). A "code disposes" gate drops proposals whose
+  evidence is not verbatim or whose model numerals the telemetry never
+  recorded; nothing is applied automatically, and `--open-pr` (human-run)
+  puts the proposals on a topic branch as a draft PR. The `self-dogfood`
+  factory preset builds this repo from an issue into a draft PR against
+  `rewrite` (see `docs/SELF-DOGFOOD.md`).
 - **Live-run visibility.** `es status`, `es watch` and the factory dashboard
   lead with one plain sentence (working, waiting on you, possibly stuck,
   halted or done), then each seat's state and last activity and the research

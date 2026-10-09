@@ -1,0 +1,29 @@
+{
+  "at": "2026-10-03T00-00-00-000Z",
+  "model": "test/model",
+  "stepCeiling": 24,
+  "spentUSD": 0.5,
+  "results": [
+    {
+      "id": "grill",
+      "agent": "grill",
+      "description": "grill case",
+      "pass": true,
+      "maxSteps": 24,
+      "steps": 5,
+      "failures": []
+    },
+    {
+      "id": "programmer",
+      "agent": "programmer",
+      "description": "programmer case",
+      "pass": false,
+      "maxSteps": 24,
+      "steps": 12,
+      "failures": [
+        "gate lint red"
+      ],
+      "modelLimited": true
+    }
+  ]
+}

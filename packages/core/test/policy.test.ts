@@ -575,7 +575,7 @@ const TRAILING: readonly string[] = [
 /** Sub-verbs per HUMAN_VERBS entry: [satisfying..., failing...]. */
 const SUBS: Readonly<Record<string, readonly [readonly string[], readonly string[]]>> = {
   factory: [
-    ["resume", "pr"],
+    ["resume", "pr", "init"],
     ["begin", "run", "stop", "status"],
   ],
   gates: [["install-git"], ["run"]],

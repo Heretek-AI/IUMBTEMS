@@ -1,6 +1,6 @@
 # ADR 0002: Approvals on every surface (TUI, CLI, browser)
 
-- **Status:** Proposed (acceptance needs the user's I8 confirmation; see "To accept").
+- **Status:** Accepted (2026-10-09)
 - **Date:** 2026-10-09
 - **Epic:** #92 · **Milestone:** Phase 2 · Approvals everywhere · 1.3.0
 - **Ticket:** #116 (threat model and checklist included; no separate file)
@@ -47,8 +47,7 @@ surface copies the record → clear-pending → begin-research sequence.
 
 Browser key handling follows option (b): the sealed key never leaves the
 machine's state dir; the passphrase travels only over loopback to the local
-server. This is a recommendation (I8) awaiting user confirmation before this
-ADR is marked accepted.
+server (confirmed by user 2026-10-09).
 
 ## Options considered
 
@@ -131,7 +130,7 @@ prompt-injected agent acting through a seat or user-agent shell.
   terminal-only.
 - **I8** Browser key handling follows option (b): the sealed key never leaves
   the machine's state dir; the passphrase travels only over loopback to the
-  local server. **Recommended (b); awaiting user confirmation.**
+  local server. **Confirmed by user (2026-10-09).**
 
 ## Inventory of terminal-only enforcement points
 

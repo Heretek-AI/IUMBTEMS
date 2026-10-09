@@ -16,6 +16,7 @@ import {
 } from "@heretek-ai/es-core"
 import { parseExpiry } from "../src/args.ts"
 import { type HarnessDriver, type HeadlessEvent, presentEvent, runHeadless } from "../src/headless.ts"
+import { openProposalsPr } from "../src/improve.ts"
 import { commandHelp, main } from "../src/main.ts"
 import { createMcpServer } from "../src/mcp.ts"
 import { type ConfirmIO, confirmHuman, NotInteractive } from "../src/tty.ts"
@@ -597,6 +598,259 @@ describe("gates and audit", () => {
   test("factory stop writes the kill switch", async () => {
     await run(["factory", "stop", "lunch"])
     expect(await Bun.file(factoryLayout(root).stop).text()).toContain("lunch")
+  })
+})
+
+describe("es improve harvest (#135)", () => {
+  const improveFixtures = path.join(import.meta.dir, "..", "..", "core", "test", "fixtures", "improve")
+
+  test("harvests fixture runs and evals to --out without touching them", async () => {
+    const out = path.join(root, "telemetry.json")
+    const result = await run([
+      "improve",
+      "harvest",
+      "--runs",
+      `${path.join(improveFixtures, "run-clean")},${path.join(improveFixtures, "run-replan")}`,
+      "--evals",
+      path.join(improveFixtures, "evals"),
+      "--out",
+      out,
+    ])
+    expect(result.code).toBe(0)
+    expect(result.out).toContain("2 run(s) and 2 eval(s)")
+    const parsed = JSON.parse(await readFile(out, "utf8"))
+    expect(parsed.version).toBe(1)
+    expect(parsed.runs.map((run: { id: string }) => run.id)).toEqual(["run-clean", "run-replan"])
+    expect(parsed.evals.map((item: { case: string }) => item.case)).toEqual(["grill", "programmer"])
+  })
+
+  test("needs at least one input dir", async () => {
+    const result = await run(["improve", "harvest", "--out", "telemetry.json"])
+    expect(result.code).toBe(2)
+    expect(result.out).toContain("Usage: es improve harvest")
+  })
+
+  test("unknown sub-verbs print usage", async () => {
+    const result = await run(["improve", "frobnicate"])
+    expect(result.code).toBe(2)
+    expect(result.out).toContain("Usage: es improve harvest")
+  })
+})
+
+describe("es improve distill (#136)", () => {
+  const improveFixtures = path.join(import.meta.dir, "..", "..", "core", "test", "fixtures", "improve")
+
+  async function telemetryFile(): Promise<string> {
+    const out = path.join(root, "telemetry.json")
+    const harvested = await run([
+      "improve",
+      "harvest",
+      "--runs",
+      `${path.join(improveFixtures, "run-clean")},${path.join(improveFixtures, "run-replan")}`,
+      "--evals",
+      path.join(improveFixtures, "evals"),
+      "--out",
+      out,
+    ])
+    expect(harvested.code).toBe(0)
+    return out
+  }
+
+  test("distills all three kinds from fixture telemetry at low thresholds; nothing applied", async () => {
+    const telemetry = await telemetryFile()
+    const out = path.join(root, "proposals")
+    const result = await run([
+      "improve",
+      "distill",
+      "--telemetry",
+      telemetry,
+      "--out",
+      out,
+      "--min-occurrences",
+      "1",
+      "--min-runs",
+      "1",
+    ])
+    expect(result.code).toBe(0)
+    expect(result.out).toContain("Nothing was applied")
+    expect(result.out).toContain("prompt-guidance")
+    expect(result.out).toContain("gate-tuning")
+    expect(result.out).toContain("domain-pack")
+  })
+
+  test("default thresholds stay silent on single occurrences", async () => {
+    const telemetry = await telemetryFile()
+    const result = await run(["improve", "distill", "--telemetry", telemetry, "--out", path.join(root, "p")])
+    expect(result.code).toBe(0)
+    expect(result.out).toContain("0 proposal(s)")
+  })
+
+  test("invalid telemetry and bad thresholds fail cleanly", async () => {
+    const bad = path.join(root, "bad.json")
+    await writeFile(bad, JSON.stringify({ version: 999 }))
+    const invalid = await run(["improve", "distill", "--telemetry", bad, "--out", path.join(root, "p")])
+    expect(invalid.code).toBe(1)
+    expect(invalid.out).toContain("Invalid telemetry")
+    const telemetry = await telemetryFile()
+    const thresholds = await run([
+      "improve",
+      "distill",
+      "--telemetry",
+      telemetry,
+      "--out",
+      path.join(root, "p"),
+      "--min-occurrences",
+      "0",
+    ])
+    expect(thresholds.code).toBe(2)
+    expect(thresholds.out).toContain("Bad --min-occurrences")
+    const missing = await run(["improve", "distill", "--out", path.join(root, "p")])
+    expect(missing.code).toBe(2)
+    expect(missing.out).toContain("Usage: es improve distill")
+  })
+
+  test("--open-pr without a terminal refuses (human-run)", async () => {
+    const telemetry = await telemetryFile()
+    const result = await run([
+      "improve",
+      "distill",
+      "--telemetry",
+      telemetry,
+      "--out",
+      path.join(root, "p"),
+      "--open-pr",
+    ])
+    expect(result.code).toBe(3)
+  })
+
+  test("--open-pr stages only proposals, pushes the topic branch, and drafts against the base", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "es-open-pr-"))
+    const bare = await mkdtemp(path.join(tmpdir(), "es-open-pr-bare-"))
+    const seen: string[][] = []
+    try {
+      const sh = async (args: string[], cwd: string = repo) => {
+        const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" })
+        await proc.exited
+      }
+      await sh(["init", "-q", "-b", "rewrite"], bare)
+      await sh(["init", "-q", "-b", "rewrite"])
+      await sh(["config", "user.email", "t@t"])
+      await sh(["config", "user.name", "t"])
+      await sh(["remote", "add", "origin", bare])
+      await writeFile(path.join(repo, "base.txt"), "base\n")
+      await sh(["add", "base.txt"])
+      await sh(["commit", "-q", "-m", "init"])
+      const proposalDir = path.join(repo, "proposals", "p1")
+      await mkdir(proposalDir, { recursive: true })
+      await writeFile(path.join(proposalDir, "proposal.json"), "{}\n")
+      await writeFile(path.join(repo, "unrelated.txt"), "do not stage me\n")
+      const stub = async (argv: readonly string[]) => {
+        seen.push([...argv])
+        if (argv[1] === "auth") return { code: 0, stdout: "ok", stderr: "" }
+        return { code: 0, stdout: "https://example.test/pr/1\n", stderr: "" }
+      }
+      const { branch, url, staged } = await openProposalsPr(repo, [proposalDir], { run: stub, date: "2026-10-09" })
+      expect(branch).toBe("improve/20261009")
+      expect(url).toBe("https://example.test/pr/1")
+      expect(staged).toEqual([proposalDir])
+      const prCall = seen.find((argv) => argv[1] === "pr")!
+      expect(prCall).toContain("--draft")
+      expect(prCall).toContain("improve/20261009")
+      expect(prCall.slice(prCall.indexOf("--base") + 1, prCall.indexOf("--base") + 2)).toEqual(["rewrite"])
+      // Only the proposal files were committed; the unrelated file stays dirty.
+      const show = Bun.spawn(["git", "show", "--name-only", "--format=", "HEAD"], { cwd: repo, stdout: "pipe" })
+      const names = (await new Response(show.stdout).text()).split("\n").filter(Boolean)
+      expect(names).toEqual(["proposals/p1/proposal.json"])
+      const status = Bun.spawn(["git", "status", "--short"], { cwd: repo, stdout: "pipe" })
+      expect(await new Response(status.stdout).text()).toContain("unrelated.txt")
+    } finally {
+      await rm(repo, { recursive: true, force: true })
+      await rm(bare, { recursive: true, force: true })
+    }
+  })
+
+  test("--open-pr without gh auth fails cleanly", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "es-open-pr-"))
+    try {
+      const proc = Bun.spawn(["git", "init", "-q", "-b", "rewrite"], { cwd: repo, stdout: "pipe" })
+      await proc.exited
+      await expect(
+        openProposalsPr(repo, [path.join(repo, "p")], {
+          run: async () => ({ code: 1, stdout: "", stderr: "no auth" }),
+        }),
+      ).rejects.toThrow("gh is not authenticated")
+    } finally {
+      await rm(repo, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("es factory init --preset self-dogfood (#137)", () => {
+  const realPath = process.env.PATH
+
+  async function stubGh(): Promise<string> {
+    const bin = await mkdtemp(path.join(tmpdir(), "es-gh-"))
+    await writeFile(path.join(bin, "gh"), `#!/bin/sh\necho '{"title":"Stub issue","body":"Stub body."}'\n`, {
+      mode: 0o755,
+    })
+    process.env.PATH = `${bin}:${realPath}`
+    return bin
+  }
+
+  afterEach(async () => {
+    process.env.PATH = realPath
+  })
+
+  test("usage errors write nothing", async () => {
+    for (const argv of [
+      ["factory", "init"],
+      ["factory", "init", "--preset", "nope", "--issue", "137"],
+      ["factory", "init", "--preset", "self-dogfood", "--issue", "0"],
+    ]) {
+      const result = await run(argv)
+      expect(result.code).toBe(2)
+      expect(result.out).toContain("Usage: es factory init")
+    }
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
+  })
+
+  test("without a terminal it refuses before writing (human-only)", async () => {
+    const bin = await stubGh()
+    try {
+      const result = await run(["factory", "init", "--preset", "self-dogfood", "--issue", "137"])
+      expect(result.code).toBe(3)
+      expect(await exists(factoryLayout(root).dir)).toBe(false)
+    } finally {
+      await rm(bin, { recursive: true, force: true })
+    }
+  })
+
+  test("a wrong passphrase cancels with nothing written", async () => {
+    const bin = await stubGh()
+    try {
+      const result = await run(["factory", "init", "--preset", "self-dogfood", "--issue", "137"], human("nope"))
+      expect(result.code).toBe(1)
+      expect(await exists(factoryLayout(root).dir)).toBe(false)
+    } finally {
+      await rm(bin, { recursive: true, force: true })
+    }
+  })
+
+  test("at a terminal it seeds the run and reminds about trust, ceiling and approvals", async () => {
+    const bin = await stubGh()
+    try {
+      const result = await run(["factory", "init", "--preset", "self-dogfood", "--issue", "137"], human())
+      expect(result.code).toBe(0)
+      expect(result.out).toContain(".factory/roadmap.json")
+      expect(result.out).toContain("es trust")
+      expect(result.out).toContain("$15")
+      expect(result.out).toContain("rewrite")
+      const roadmap = JSON.parse(await readFile(factoryLayout(root).roadmap, "utf8"))
+      expect(roadmap.baseBranch).toBe("rewrite")
+      expect(await readFile(path.join(root, ".factory/notes/idea-137.md"), "utf8")).toContain("Stub issue")
+    } finally {
+      await rm(bin, { recursive: true, force: true })
+    }
   })
 })
 

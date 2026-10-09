@@ -178,7 +178,11 @@ const blockedHost = (host: string, allowLoopback: boolean): boolean => {
   const name = host.toLowerCase().replace(/\.+$/, "")
   if (name === "localhost" || name.endsWith(".localhost")) return !allowLoopback
   const bare = name.startsWith("[") && name.endsWith("]") ? name.slice(1, -1) : name
-  const quad = /(?:^|:|^.*:)(\d+\.\d+\.\d+\.\d+)$/.exec(bare)?.[1]
+  // The suffix after the last colon is the only place a dotted quad can
+  // hide (plain "1.2.3.4", "::1.2.3.4", "fe80::1.2.3.4"). A linear tail
+  // test replaces the old (?:^|:|^.*:) alternation (Sonar S8786).
+  const tail = bare.includes(":") ? bare.slice(bare.lastIndexOf(":") + 1) : bare
+  const quad = /^\d+\.\d+\.\d+\.\d+$/.test(tail) ? tail : undefined
   if (quad) return blockedIPv4(quad, allowLoopback)
   if (bare.includes(":")) return blockedIPv6(bare, allowLoopback)
   return false
@@ -208,6 +212,51 @@ const assertRoutable = (raw: string, allowLoopback: boolean): URL => {
   return parsed
 }
 
+/** One manual-redirect fetch hop with the research user-agent. */
+async function fetchOnce(current: string, doFetch: typeof fetch, signal: AbortSignal): Promise<Response> {
+  return doFetch(current, {
+    headers: {
+      "User-Agent": "epistemic-swarm/1.0 (+research cache)",
+      Accept: "text/html,text/plain,text/markdown,application/json;q=0.9,*/*;q=0.5",
+    },
+    redirect: "manual",
+    signal,
+  })
+}
+
+/** Resolve one redirect target, re-checking routability; undefined stops the chain. */
+function followRedirect(
+  location: string | null | undefined,
+  current: string,
+  url: string,
+  hop: number,
+  allowLoopback: boolean,
+): string | undefined {
+  if (!location) return undefined
+  if (hop >= MAX_FETCH_REDIRECTS) throw new Error(`Fetching ${url} failed: too many redirects`)
+  let next: URL
+  try {
+    next = new URL(location, current)
+  } catch {
+    return undefined
+  }
+  return assertRoutable(next.toString(), allowLoopback).toString()
+}
+
+/** Decode a fetched response body to text, refusing binary content. */
+async function readBody(response: Response): Promise<{ text: string; contentType: string; title?: string }> {
+  const contentType = response.headers.get("content-type") ?? "text/plain"
+  if (/pdf|octet-stream|image\/|video\/|audio\//.test(contentType))
+    throw blocked(`Cannot cache ${contentType} content as text`)
+  const buffer = await response.arrayBuffer()
+  const raw = new TextDecoder().decode(buffer.byteLength > MAX_FETCH_BYTES ? buffer.slice(0, MAX_FETCH_BYTES) : buffer)
+  if (/html|xml/.test(contentType)) {
+    const page = htmlToText(raw)
+    return { text: page.text, contentType, ...(page.title ? { title: page.title } : {}) }
+  }
+  return { text: raw, contentType }
+}
+
 /** Fetch a page and convert it to text. Only http(s); HTML is converted, text formats are kept. */
 export async function fetchPage(
   url: string,
@@ -222,37 +271,22 @@ export async function fetchPage(
   // before); redirect targets use the normalised absolute form.
   let current = url
   assertRoutable(current, allowLoopback)
+  const signal = options.signal ?? AbortSignal.timeout(30_000)
   let response: Response | undefined
   for (let hop = 0; ; hop++) {
-    response = await doFetch(current, {
-      headers: {
-        "User-Agent": "epistemic-swarm/1.0 (+research cache)",
-        Accept: "text/html,text/plain,text/markdown,application/json;q=0.9,*/*;q=0.5",
-      },
-      redirect: "manual",
-      signal: options.signal ?? AbortSignal.timeout(30_000),
-    })
-    const location = response.status >= 300 && response.status < 400 ? response.headers.get("location") : undefined
-    if (!location) break
-    if (hop >= MAX_FETCH_REDIRECTS) throw new Error(`Fetching ${url} failed: too many redirects`)
-    let next: URL
-    try {
-      next = new URL(location, current)
-    } catch {
-      break
-    }
-    current = assertRoutable(next.toString(), allowLoopback).toString()
+    response = await fetchOnce(current, doFetch, signal)
+    const next = followRedirect(
+      response.status >= 300 && response.status < 400 ? response.headers.get("location") : undefined,
+      current,
+      url,
+      hop,
+      allowLoopback,
+    )
+    if (next === undefined) break
+    current = next
   }
   if (response === undefined) throw new Error(`Fetching ${url} failed: no response`)
   if (!response.ok) throw new Error(`Fetching ${url} failed: HTTP ${response.status}`)
-  const contentType = response.headers.get("content-type") ?? "text/plain"
-  if (/pdf|octet-stream|image\/|video\/|audio\//.test(contentType))
-    throw blocked(`Cannot cache ${contentType} content as text`)
-  const buffer = await response.arrayBuffer()
-  const raw = new TextDecoder().decode(buffer.byteLength > MAX_FETCH_BYTES ? buffer.slice(0, MAX_FETCH_BYTES) : buffer)
-  if (/html|xml/.test(contentType)) {
-    const page = htmlToText(raw)
-    return { url: response.url || current, ...(page.title ? { title: page.title } : {}), text: page.text, contentType }
-  }
-  return { url: response.url || current, text: raw, contentType }
+  const { text, contentType, title } = await readBody(response)
+  return { url: response.url || current, ...(title ? { title } : {}), text, contentType }
 }
