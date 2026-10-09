@@ -48,8 +48,9 @@ export default Plugin.define({
     )
     const agents = await compileAgents(runtime.options, servers)
     // Fail-closed models (#96): every configured ref is checked against the
-    // host model list here, once. A missing model refuses that seat at launch
-    // (guardSeatLaunch) and shows in es_status; healthy seats are unaffected.
+    // host model list here, once. A missing model refuses every tool call by
+    // that seat (the policy before-hook) and shows in es_status; healthy
+    // seats are unaffected.
     await ctx.model.transform((editor) => {
       for (const problem of modelProblems(
         runtime.options,

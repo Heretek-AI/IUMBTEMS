@@ -58,6 +58,21 @@ describe("model mapping units", () => {
     expect(deep.length).toBeGreaterThan(0)
     for (const agent of deep) expect(agent.model).toEqual({ providerID: "fake", id: "scripted" })
   })
+
+  test("a seat with a model problem is refused on any tool call, not just at launch", async () => {
+    const { createPolicyHooks } = await import("../src/policy.ts")
+    const { modelProblemMessage } = await import("../src/agents.ts")
+    const message = modelProblemMessage("deep-researcher", "models.deep", "fake/ghost", true)
+    const hooks = createPolicyHooks({
+      modelProblems: new Map([
+        ["deep-researcher", { agent: "deep-researcher", key: "models.deep", ref: "fake/ghost", message }],
+      ]),
+    } as any)
+    for (const tool of ["es_status", "es_research_search", "read"])
+      await expect(
+        hooks.before({ tool, agent: "deep-researcher", id: "t1", input: tool === "read" ? { path: "x" } : {} }),
+      ).rejects.toThrow("fake/ghost")
+  })
 })
 
 describe("model mapping on the real host (fake provider: fake/scripted)", () => {
@@ -110,5 +125,36 @@ describe("model mapping on the real host (fake provider: fake/scripted)", () => 
       { agent: "factory" },
     )
     expect(tools.map((tool) => `${tool.name}:${tool.status}`)).toEqual(["subagent:completed"])
+  })
+})
+
+describe("a primary seat with a missing model is refused on any tool call (#96)", () => {
+  let primary: Harness
+  let primaryState: string
+  beforeAll(async () => {
+    primaryState = await mkdtemp(path.join(tmpdir(), "es-models-primary-state-"))
+    primary = await boot({
+      git: true,
+      script: directiveScript,
+      plugins: [
+        {
+          path: pluginDir,
+          options: { stateDir: primaryState, pr: "off", models: { deep: "fake/ghost-deep" } },
+        },
+      ],
+      files: { "README.md": "# models primary\n" },
+    })
+  }, 120_000)
+  afterAll(async () => {
+    await primary?.close()
+    await rm(primaryState, { recursive: true, force: true })
+  })
+
+  test("its first tool call is refused with remediation, never run on the default model", async () => {
+    const { tools } = await primary.run(`status ${call("es_status", {})}`, { agent: "factory" })
+    expect(tools.map((tool) => `${tool.name}:${tool.status}`)).toEqual(["es_status:error"])
+    expect(tools[0]?.text).toContain("fake/ghost-deep")
+    expect(tools[0]?.text).toContain("models.deep")
+    expect(tools[0]?.text).toContain("es config set")
   })
 })
