@@ -45,3 +45,11 @@ export async function startServeFixtures(dir: string): Promise<ServeFixtures> {
 /** Substitute the fixture server URL into a case prompt (no-op without one). */
 export const renderEvalPrompt = (prompt: string, serveUrl: string): string =>
   prompt.replaceAll("{{SERVE_URL}}", serveUrl)
+
+/**
+ * Whether a case fetches from the loopback fixture server. Only those cases'
+ * seat environment gets ES_RESEARCH_ALLOW_LOOPBACK=1 (the fetch SSRF guard
+ * refuses loopback by default); every other case runs with the caller's
+ * environment untouched, never a global allowance.
+ */
+export const usesFixtureServer = (prompt: string): boolean => prompt.includes("{{SERVE_URL}}")
