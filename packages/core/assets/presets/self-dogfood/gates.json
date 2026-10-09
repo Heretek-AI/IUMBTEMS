@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "commands": [
+    {
+      "id": "install",
+      "kind": "test",
+      "command": "bun install --frozen-lockfile",
+      "parser": "generic",
+      "timeoutMs": 300000
+    },
+    {
+      "id": "check",
+      "kind": "test",
+      "command": "bun run check",
+      "parser": "generic",
+      "timeoutMs": 600000
+    },
+    {
+      "id": "docs-check",
+      "kind": "test",
+      "command": "bun run docs:check",
+      "parser": "generic",
+      "timeoutMs": 300000
+    }
+  ]
+}

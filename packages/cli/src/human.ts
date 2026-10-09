@@ -17,6 +17,7 @@ import {
   flag,
   gateRunner,
   HookEngine,
+  initFromPreset,
   isTrusted,
   loadGatesConfig,
   planConfigSet,
@@ -24,6 +25,9 @@ import {
   recordRetraction,
   recordWaiver,
   researchCache,
+  run,
+  SELF_DOGFOOD_BASE_BRANCH,
+  SELF_DOGFOOD_SPEND_CEILING_USD,
   signEngineFile,
   stateDir,
   trustProject,
@@ -286,6 +290,49 @@ export async function recordPr(context: HumanContext, args: Args): Promise<numbe
   if (!(await confirmHuman(context.io, "Record the release PR", [url], context.stateDir))) return 1
   const state = await factoryFor(context).recordPr(user(), url)
   context.print(`Recorded ${url}; factory is ${state.stage}.`)
+  return 0
+}
+
+/**
+ * Seed a self-dogfood run from a preset and a GitHub issue (human-only: it
+ * writes factory control files). Pulls the issue body as the idea, writes
+ * `.factory/` from the preset, and reminds the human about trust, the
+ * spend ceiling and the frontier/spec approvals.
+ */
+export async function factoryInit(context: HumanContext, args: Args): Promise<number> {
+  const preset = flag(args, "preset")
+  const issueRaw = flag(args, "issue")
+  const issue = issueRaw !== undefined ? Number(issueRaw) : NaN
+  if (preset !== "self-dogfood" || !Number.isInteger(issue) || issue <= 0) {
+    context.print("Usage: es factory init --preset self-dogfood --issue <n>")
+    return 2
+  }
+  const fetched = await run(["gh", "issue", "view", String(issue), "--json", "title,body"], {
+    cwd: context.root,
+    timeoutMs: 30_000,
+  }).catch(() => undefined)
+  if (fetched?.code !== 0) {
+    context.print(`Cannot read issue #${issue} (gh issue view failed; is gh authenticated?).`)
+    return 1
+  }
+  const { title, body } = JSON.parse(fetched.stdout) as { title: string; body: string }
+  const lines = [
+    `Preset: self-dogfood (release base ${SELF_DOGFOOD_BASE_BRANCH}, gates: bun run check + docs:check)`,
+    `Issue #${issue}: ${title}`,
+    "Writes: .factory/config.json, .factory/gates.json, .factory/roadmap.json, .factory/notes/idea-<n>.md",
+  ]
+  if (!(await confirmHuman(context.io, `Start a self-dogfood run from #${issue}`, lines, context.stateDir))) {
+    context.print("Cancelled; nothing was written.")
+    return 1
+  }
+  const { written } = await initFromPreset(context.root, preset, { issue, title, body })
+  context.print(
+    [
+      `Seeded a self-dogfood run from #${issue} (${written.length} file(s)):`,
+      ...written.map((file) => `  ${file}`),
+      `Next: es trust (gate commands), then /grill with a $${SELF_DOGFOOD_SPEND_CEILING_USD} spend ceiling — keep baseBranch "${SELF_DOGFOOD_BASE_BRANCH}" when the grill rewrites the roadmap — then approve the frontier and spec.`,
+    ].join("\n"),
+  )
   return 0
 }
 

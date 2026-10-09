@@ -73,7 +73,9 @@
   (schema-validated). A "code disposes" gate drops proposals whose
   evidence is not verbatim or whose model numerals the telemetry never
   recorded; nothing is applied automatically, and `--open-pr` (human-run)
-  puts the proposals on a topic branch as a draft PR.
+  puts the proposals on a topic branch as a draft PR. The `self-dogfood`
+  factory preset builds this repo from an issue into a draft PR against
+  `rewrite` (see `docs/SELF-DOGFOOD.md`).
 - **Live-run visibility.** `es status`, `es watch` and the factory dashboard
   lead with one plain sentence (working, waiting on you, possibly stuck,
   halted or done), then each seat's state and last activity and the research

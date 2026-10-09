@@ -77,6 +77,7 @@ import {
 import {
   approve,
   configSet,
+  factoryInit,
   type HumanContext,
   rebaselineControl,
   recordPr,
@@ -106,6 +107,7 @@ Factory
   runs [--all] [--json]         Recent runs across your projects (* marks this one)
   watch [--interval S]          es status, redrawn every S seconds (default 2); q quits   [terminal]
   factory begin                 Start a run (normally done by /grill)
+  factory init --preset <name> --issue <n>   Seed a preset run from a GitHub issue   [human, TTY]
   factory run --headless        Drive the factory through a harness CLI, emitting JSON lines
         [--driver opencode] [--max-turns N] [--log-level quiet|info|debug]
         [--events jsonl] [--events-file <path>] [--turn-timeout S]
@@ -742,6 +744,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         if (sub === "status") return await statusCommand({ root, stateDir: userState, print: io.print }, args)
         if (sub === "resume") return await resume(context, subArgs(2))
         if (sub === "pr") return await recordPr(context, subArgs(2))
+        if (sub === "init") return await factoryInit(context, subArgs(2))
         if (sub === "stop") {
           await atomicWrite(factoryLayout(root).stop, `${rest.join(" ") || "stopped from the CLI"}\n`)
           io.print(

@@ -785,6 +785,75 @@ describe("es improve distill (#136)", () => {
   })
 })
 
+describe("es factory init --preset self-dogfood (#137)", () => {
+  const realPath = process.env.PATH
+
+  async function stubGh(): Promise<string> {
+    const bin = await mkdtemp(path.join(tmpdir(), "es-gh-"))
+    await writeFile(path.join(bin, "gh"), `#!/bin/sh\necho '{"title":"Stub issue","body":"Stub body."}'\n`, {
+      mode: 0o755,
+    })
+    process.env.PATH = `${bin}:${realPath}`
+    return bin
+  }
+
+  afterEach(async () => {
+    process.env.PATH = realPath
+  })
+
+  test("usage errors write nothing", async () => {
+    for (const argv of [
+      ["factory", "init"],
+      ["factory", "init", "--preset", "nope", "--issue", "137"],
+      ["factory", "init", "--preset", "self-dogfood", "--issue", "0"],
+    ]) {
+      const result = await run(argv)
+      expect(result.code).toBe(2)
+      expect(result.out).toContain("Usage: es factory init")
+    }
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
+  })
+
+  test("without a terminal it refuses before writing (human-only)", async () => {
+    const bin = await stubGh()
+    try {
+      const result = await run(["factory", "init", "--preset", "self-dogfood", "--issue", "137"])
+      expect(result.code).toBe(3)
+      expect(await exists(factoryLayout(root).dir)).toBe(false)
+    } finally {
+      await rm(bin, { recursive: true, force: true })
+    }
+  })
+
+  test("a wrong passphrase cancels with nothing written", async () => {
+    const bin = await stubGh()
+    try {
+      const result = await run(["factory", "init", "--preset", "self-dogfood", "--issue", "137"], human("nope"))
+      expect(result.code).toBe(1)
+      expect(await exists(factoryLayout(root).dir)).toBe(false)
+    } finally {
+      await rm(bin, { recursive: true, force: true })
+    }
+  })
+
+  test("at a terminal it seeds the run and reminds about trust, ceiling and approvals", async () => {
+    const bin = await stubGh()
+    try {
+      const result = await run(["factory", "init", "--preset", "self-dogfood", "--issue", "137"], human())
+      expect(result.code).toBe(0)
+      expect(result.out).toContain(".factory/roadmap.json")
+      expect(result.out).toContain("es trust")
+      expect(result.out).toContain("$15")
+      expect(result.out).toContain("rewrite")
+      const roadmap = JSON.parse(await readFile(factoryLayout(root).roadmap, "utf8"))
+      expect(roadmap.baseBranch).toBe("rewrite")
+      expect(await readFile(path.join(root, ".factory/notes/idea-137.md"), "utf8")).toContain("Stub issue")
+    } finally {
+      await rm(bin, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("mcp", () => {
   test("lists coarse tools without any human-only tool and calls them with an advisory agent", async () => {
     const server = createMcpServer({ root, stateDir: state })
