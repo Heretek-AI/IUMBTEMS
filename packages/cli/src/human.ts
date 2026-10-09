@@ -3,6 +3,7 @@
 import { userInfo } from "node:os"
 import {
   type ApprovalStage,
+  type Args,
   applyConfigSet,
   approvalSubject,
   ClaimStore,
@@ -13,6 +14,7 @@ import {
   engineSignedFiles,
   Factory,
   factoryLayout,
+  flag,
   gateRunner,
   HookEngine,
   isTrusted,
@@ -31,7 +33,7 @@ import {
   verifyEngineFile,
   writeJson,
 } from "@heretek-ai/es-core"
-import { type Args, flag, parseExpiry } from "./args.ts"
+import { parseExpiry } from "./args.ts"
 import { type ConfirmIO, confirmHuman } from "./tty.ts"
 
 export interface HumanContext {
