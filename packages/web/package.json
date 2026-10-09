@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "description": "Epistemic Swarm web control plane (private, never published): fleet dashboard, browser approvals, config editor and evidence explorer, served by es-fleet on loopback.",
+  "esTest": {
+    "conditions": [
+      "browser"
+    ]
+  },
   "type": "module",
   "license": "Apache-2.0",
   "repository": {

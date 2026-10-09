@@ -12,7 +12,7 @@ The published trio (core/CLI/plugin) releases in lockstep as 1.6.0.
 
 **New.**
 - **#135: telemetry harvester over runs and evals.** Read-only
-  `es improve harvest --runs <dir>... --evals <dir>... --out <file>`
+  `es improve harvest --runs <dir>[,<dir>] [--evals <dir>[,<dir>]] --out <file>`
   (agent-safe) producing the versioned `TelemetrySchema` dataset: phases
   with replans and failure counts, halts with reasons, spend, gate
   rejections by rule, audit findings by kind/severity, eval results with

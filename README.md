@@ -85,6 +85,8 @@
   `es-fleet web` opens the same fleet in a browser: dashboard, browser
   approvals, a preview-only config editor, and the evidence explorer
   (claim graph, range-highlighted quotes, seal status, dossier exports).
+  `es-fleet` is private, never published to npm — run it from a checkout
+  (`bun packages/fleet/bin/es-fleet.js …`).
 - **OpenCode v2 native.** One plugin registers agents, tools, commands, the
   hook bridge, the LSP runtime and four TUI panels — additively, with no files
   written. Host web results are cached (citable by hash) only for factory
