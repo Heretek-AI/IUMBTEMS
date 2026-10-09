@@ -5,14 +5,14 @@
 // store, no log line — ever holds it. The preview ticket and CSRF token
 // live in the page closure for the same reason.
 import { createSignal } from "solid-js"
-import type { ApprovePreview, ApproveResult } from "./api.ts"
+import type { ApprovePreview, ApproveResult, ApproveStage } from "./api.ts"
 import { RpcError } from "./api.ts"
 import { type Child, h } from "./dom.ts"
 
 export interface PendingPair {
   readonly taskId: string
   readonly reason: string
-  readonly stage: string
+  readonly stage: ApproveStage
 }
 
 export interface ApprovalsPageProps {
@@ -47,7 +47,7 @@ export function ApprovalsPage(props: ApprovalsPageProps): Element {
 
 export interface ApprovePageProps {
   readonly taskId: string
-  readonly stage: string
+  readonly stage: ApproveStage
   readonly loadPreview: () => Promise<ApprovePreview>
   readonly submit: (ticket: string, csrf: string, passphrase: string) => Promise<ApproveResult>
 }

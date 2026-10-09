@@ -8,6 +8,7 @@ import type { BusEvent, FleetSnapshot } from "@heretek-ai/es-fleet"
 import { createSignal, onCleanup } from "solid-js"
 import { render } from "solid-js/web"
 import {
+  type ApproveStage,
   type ConfigView,
   exportEvidenceDossier,
   fetchApprovePreview,
@@ -17,11 +18,14 @@ import {
   fetchEvidenceSource,
   fetchStatus,
   fetchTask,
+  fetchTaskLiveness,
+  isApproveStage,
   previewConfigPlan,
   RpcError,
   submitApproval,
+  type TaskLiveness,
 } from "./api.ts"
-import { ApprovalsPage, ApprovePage } from "./approvals.ts"
+import { ApprovalsPage, ApprovePage, type PendingPair } from "./approvals.ts"
 import { connectBus } from "./bus.ts"
 import { Overview, TaskDetail } from "./components.ts"
 import { ConfigEditor } from "./config.ts"
@@ -34,7 +38,7 @@ type Route =
   | { name: "task"; id: string }
   | { name: "config" }
   | { name: "approvals" }
-  | { name: "approve"; taskId: string; stage: string }
+  | { name: "approve"; taskId: string; stage: ApproveStage }
   | { name: "evidence"; runId: string }
 
 const routeOf = (hash: string): Route => {
@@ -43,8 +47,13 @@ const routeOf = (hash: string): Route => {
   const evidence = /^#\/evidence\/([^/]+)$/.exec(hash)
   if (evidence?.[1]) return { name: "evidence", runId: decodeURIComponent(evidence[1]) }
   const approve = /^#\/approve\/([^/]+)\/([^/]+)$/.exec(hash)
-  if (approve?.[1] && approve?.[2])
-    return { name: "approve", taskId: decodeURIComponent(approve[1]), stage: decodeURIComponent(approve[2]) }
+  if (approve?.[1] && approve?.[2]) {
+    // Fail-closed: only the two approval stages route; anything else is the overview.
+    const stage = decodeURIComponent(approve[2])
+    if (stage === "frontier" || stage === "spec")
+      return { name: "approve", taskId: decodeURIComponent(approve[1]), stage }
+    return { name: "overview" }
+  }
   const task = /^#\/task\/([^/]+)$/.exec(hash)
   return task?.[1] ? { name: "task", id: decodeURIComponent(task[1]) } : { name: "overview" }
 }
@@ -53,6 +62,7 @@ function App(): Element {
   const store = createFleetStore()
   const [route, setRoute] = createSignal<Route>(routeOf(window.location.hash))
   const [task, setTask] = createSignal<FleetSnapshot["tasks"][number] | undefined>(undefined)
+  const [liveness, setLiveness] = createSignal<TaskLiveness | undefined>(undefined)
   const [configView, setConfigView] = createSignal<ConfigView | undefined>(undefined)
   const [configError, setConfigError] = createSignal<string | undefined>(undefined)
   const [error, setError] = createSignal<string | undefined>(undefined)
@@ -69,6 +79,11 @@ function App(): Element {
           setTask(await fetchTask(current.id))
         } catch {
           setTask(undefined)
+        }
+        try {
+          setLiveness(await fetchTaskLiveness(current.id))
+        } catch {
+          setLiveness(undefined)
         }
       }
       if (current.name === "config") {
@@ -87,6 +102,7 @@ function App(): Element {
   const onHash = (): void => {
     setRoute(routeOf(window.location.hash))
     setTask(undefined)
+    setLiveness(undefined)
     void refresh()
   }
   window.addEventListener("hashchange", onHash)
@@ -111,6 +127,17 @@ function App(): Element {
 
   void refresh()
 
+  // Snapshot rows type the stage as string (fleet FleetSnapshot); narrow
+  // fail-closed here so approve links only ever carry frontier|spec.
+  const pendingPairs = (): PendingPair[] => {
+    const out: PendingPair[] = []
+    for (const item of store.state.snapshot?.pending ?? []) {
+      if (!isApproveStage(item.stage)) continue
+      out.push({ taskId: item.taskId, reason: item.reason, stage: item.stage })
+    }
+    return out
+  }
+
   const nav = h(
     "nav",
     null,
@@ -128,9 +155,10 @@ function App(): Element {
         task: () => (route().name === "task" ? task() : undefined),
         events: () => store.state.events,
         pendingStages: () =>
-          (store.state.snapshot?.pending ?? [])
+          pendingPairs()
             .filter((item) => route().name === "task" && item.taskId === (route() as { id: string }).id)
             .map((item) => item.stage),
+        liveness: () => (route().name === "task" ? liveness() : undefined),
       })
     }
     if (current.name === "approve") {
@@ -144,7 +172,7 @@ function App(): Element {
     }
     if (current.name === "approvals") {
       return ApprovalsPage({
-        pending: () => store.state.snapshot?.pending ?? [],
+        pending: pendingPairs,
         error: () => error(),
       })
     }

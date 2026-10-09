@@ -6,7 +6,8 @@
 // always words beside a tone class, and every task is a link (the keyboard
 // path). Interpolated data goes through text nodes, never HTML parsing
 // (probed in components.test.ts): model output is never raw markup.
-import type { BusEvent, FleetSnapshot } from "@heretek-ai/es-fleet"
+import type { BusEvent, FleetSnapshot, TaskLiveness } from "@heretek-ai/es-fleet"
+import type { ApproveStage } from "./api.ts"
 import { layoutDag, statusWord } from "./dag.ts"
 import { type Child, h, svgEl } from "./dom.ts"
 
@@ -150,8 +151,29 @@ export interface TaskDetailProps {
   readonly task: () => Task | undefined
   readonly events: () => readonly BusEvent[]
   /** Stages of this task currently waiting on a human (#131 links). */
-  readonly pendingStages?: () => readonly string[]
+  readonly pendingStages?: () => readonly ApproveStage[]
+  /** Per-task run liveness from `fleet.task.liveness` (#130, S5 handoff). */
+  readonly liveness?: () => TaskLiveness | undefined
 }
+
+const livenessEl = (live: TaskLiveness | undefined): Child =>
+  h(
+    "section",
+    null,
+    h("h2", null, "Run liveness"),
+    live === undefined
+      ? h("p", null, "No liveness yet.")
+      : h(
+          "div",
+          null,
+          h("p", null, live.headline),
+          h("p", null, `Stage ${live.stage}`),
+          live.seats.length > 0
+            ? h("ul", null, ...live.seats.map((seat) => h("li", null, seat)))
+            : h("p", null, "No seats reporting yet."),
+          live.research !== undefined ? h("p", null, live.research) : "",
+        ),
+  )
 
 export function TaskDetail(props: TaskDetailProps): Element {
   return h(
@@ -176,6 +198,7 @@ export function TaskDetail(props: TaskDetailProps): Element {
         ...(props.pendingStages?.() ?? []).map((stage) =>
           h("p", null, h("a", { href: `#/approve/${found.id}/${stage}` }, `Approve ${stage} in the browser`)),
         ),
+        livenessEl(props.liveness?.()),
         found.deps.length > 0
           ? h(
               "section",
