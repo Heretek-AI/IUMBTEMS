@@ -151,10 +151,10 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
 
 ## 5. Evaluations
 
-- **Merge-blocking (deterministic):** five fire suites on the real in-process
+- **Merge-blocking (deterministic):** six fire suites on the real in-process
   host — `grill-fires`, `factory-gate`, `darkharvest-fires`, `audit-fires`,
-  `scout-fires` (`packages/opencode/test/fires*.test.ts`), plus the drift
-  canary (`packages/core/test/drift.test.ts`).
+  `scout-fires`, `research-fires` (`packages/opencode/test/fires*.test.ts`),
+  plus the drift canary (`packages/core/test/drift.test.ts`).
 - **Nightly (model-backed, cost-capped):** `evals/cases/*.json` run against a
   real model with the same graders (`bun run evals`).
 - **Capability matrix:** every ENFORCED row names a test or spike that exists;

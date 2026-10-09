@@ -28,6 +28,7 @@ export const CAPABILITIES = [
   "claims",
   "audit",
   "scout",
+  "research-fires",
 ] as const
 export type Capability = (typeof CAPABILITIES)[number]
 
@@ -146,6 +147,12 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
       detail:
         "OSS scout: cached-only web under an offline (--unshare-net) sandbox, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited.",
       test: "packages/opencode/test/fires.test.ts",
+    },
+    "research-fires": {
+      support: "enforced",
+      detail:
+        "Research fires: the whole research loop on the real host with loopback-only servers — grounded quotes survive the audit, failover records provenance, blocked never fails over, planted sources are refused, retractions degrade to STALE, renders snapshot.",
+      test: "packages/opencode/test/fires-research.test.ts",
     },
   }),
   claude: [
