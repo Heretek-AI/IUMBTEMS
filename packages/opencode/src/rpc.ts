@@ -57,14 +57,14 @@ export function createRpcHandlers(
     tickets.set(token, { kind, subject: hashJson(subject), expires: Date.now() + TTL_MS })
     return token
   }
-  const redeem = (token: string, kind: string, subject: unknown) => {
+  const redeemHash = (token: string, kind: string, subjectHash: string) => {
     const ticket = tickets.get(token)
     tickets.delete(token)
     if (!ticket || ticket.kind !== kind || ticket.expires < Date.now())
       throw new Error("The confirmation expired or does not match; preview again.")
-    if (ticket.subject !== hashJson(subject))
-      throw new Error("What you confirmed changed since the preview; preview again.")
+    if (ticket.subject !== subjectHash) throw new Error("What you confirmed changed since the preview; preview again.")
   }
+  const redeem = (token: string, kind: string, subject: unknown) => redeemHash(token, kind, hashJson(subject))
   const refused = (context: any, error: unknown) =>
     context.error("refused", error instanceof Error ? error.message : String(error), {
       reason: error instanceof Error ? error.message : String(error),
@@ -231,6 +231,7 @@ export function createRpcHandlers(
           token: issue(`approve:${stage}`, subject.subject),
           // ADR 0002 I3: the TUI signs only this subject; approveStage refuses a mismatch.
           subjectHash: hashJson(subject.subject),
+          issuedAt: Date.now(),
         }
       } catch (error) {
         return {
@@ -239,6 +240,23 @@ export function createRpcHandlers(
           lines: [],
           problems: [error instanceof Error ? error.message : String(error)],
         }
+      }
+    },
+    /**
+     * Validate-only redeem of an approval preview ticket (ADR 0002 I3): the
+     * TUI calls this exactly once before signing in-process. It enforces the
+     * 120 s TTL and single-use and checks the subject hash, but signs
+     * nothing — there is still no approve RPC (#49).
+     */
+    redeemApproval: async (input: unknown, context: any) => {
+      const { stage, token, subjectHash } = input as { stage: ApprovalStage; token: unknown; subjectHash: unknown }
+      try {
+        if (typeof token !== "string" || typeof subjectHash !== "string")
+          throw new Error("The confirmation expired or does not match; preview again.")
+        redeemHash(token, `approve:${stage}`, subjectHash)
+        return { ok: true }
+      } catch (error) {
+        return refused(context, error)
       }
     },
     previewTrust: async () => {

@@ -28,6 +28,19 @@ export interface ApproveTuiInput {
   readonly approvedBy?: string
   readonly stateDir?: string
   /**
+   * ADR 0002 I3: the preview ticket redeemed exactly once before signing
+   * (single-use + 120 s TTL). Production passes the token from
+   * previewApproval and a redeem that calls the validate-only
+   * `redeemApproval` RPC (it signs nothing); tests script the ticket map.
+   */
+  readonly previewToken?: string
+  /** `issuedAt` from previewApproval; a preview older than 120 s is refused. */
+  readonly previewIssuedAt?: number
+  /** Validate-only redeem of the preview token (signs nothing). */
+  readonly redeemPreview?: (token: string) => Promise<void>
+  /** Clock override (tests). */
+  readonly now?: () => number
+  /**
    * The masked passphrase dialog (production: readMaskedPassphrase over
    * dialog.show; tests: a scripted function). Resolves to the entered code
    * points, or undefined on cancel. The array is zeroed by the caller.
@@ -42,15 +55,19 @@ export type ApproveTuiOutcome =
   | { readonly ok: false; readonly cancelled: true }
 
 const TERMINAL_FALLBACK = (stage: ApprovalStage) =>
-  `Run \`es approve ${stage}\` at a terminal with your passphrase (1.1.1: approvals need the sealed human key).`
+  `Run \`es approve ${stage}\` at a terminal with your passphrase (approvals need the sealed human key).`
+
+/** ADR 0002 I3: a preview older than this is refused instead of signed. */
+export const APPROVAL_PREVIEW_TTL_MS = 120_000
 
 /**
  * Complete a frontier/spec approval inside the TUI: throttle check, masked
- * passphrase loop, unlock, approveStage with channel "tui" and the preview's
- * subject hash, key destruction. Returns a fallback when this TUI cannot
+ * passphrase loop, unlock, preview-ticket redeem, approveStage with channel
+ * "tui" and the preview's subject hash, key destruction. Returns a fallback when this TUI cannot
  * sign (remote attach without the project root or sealed key): the caller
- * shows the terminal alert. ApprovalError (subject changed since preview)
- * and unexpected failures propagate to the caller's guard.
+ * shows the terminal alert. ApprovalError (subject changed since preview),
+ * an expired or already-used preview, and unexpected failures propagate to
+ * the caller's guard.
  */
 export async function approveInTui(input: ApproveTuiInput): Promise<ApproveTuiOutcome> {
   const dir = input.stateDir ?? defaultStateDir()
@@ -74,6 +91,14 @@ export async function approveInTui(input: ApproveTuiInput): Promise<ApproveTuiOu
     try {
       const signer = await unlockHumanKey(passphrase, dir)
       try {
+        // ADR 0002 I3: the preview ticket is redeemed exactly once, after
+        // the unlock (a typo must not consume it) and before anything is
+        // signed. An expired or already-used preview refuses here.
+        const now = input.now ?? Date.now
+        if (input.previewIssuedAt !== undefined && now() - input.previewIssuedAt > APPROVAL_PREVIEW_TTL_MS)
+          throw new Error("The approval preview expired (> 120 s old); preview again.")
+        if (input.previewToken !== undefined && input.redeemPreview !== undefined)
+          await input.redeemPreview(input.previewToken)
         await noteApprovalSuccess(dir)
         const { record } = await approveStage(input.root, {
           stage: input.stage,
