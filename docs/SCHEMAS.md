@@ -52,6 +52,7 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | license-finding | `schemas/license-finding.schema.json` |
 | model-ref | `schemas/model-ref.schema.json` |
 | parser-id | `schemas/parser-id.schema.json` |
+| prior-art-search | `schemas/prior-art-search.schema.json` |
 | probe-row | `schemas/probe-row.schema.json` |
 | provenance | `schemas/provenance.schema.json` |
 | queereye-tokens | `schemas/queereye-tokens.schema.json` |

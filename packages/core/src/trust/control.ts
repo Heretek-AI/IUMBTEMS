@@ -28,6 +28,8 @@ export const FACTORY_CONTROL = [
   ".factory/brainstorm/*.{json,md}",
   ".factory/brainstorm/runs/**",
   ".factory/harvest/*.{json,md}",
+  ".factory/harvest/runs/**",
+  ".factory/harvest/*.{json,md}",
   ".factory/harvest/*/profile.json",
   ".factory/harvest/clean-room/**",
   ".factory/design/*.{json,css,md}",

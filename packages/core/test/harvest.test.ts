@@ -599,3 +599,136 @@ async function commitAll(root: string): Promise<void> {
   await run(["git", "add", "-A"], { cwd: root })
   await run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "fixture"], { cwd: root })
 }
+
+describe("callable harvest target (#109)", () => {
+  const target = (root: string, input: Record<string, unknown>, agent = "grill") =>
+    harvestTools({ root })
+      .find((tool) => tool.name === "es_harvest_target")!
+      .execute(input, { agent })
+  const verdictsOf = (text: string) => {
+    const json = /--- verdicts \(JSON\) ---\n(\[[\s\S]*\])[\s]*$/.exec(text)?.[1]
+    expect(json).toBeDefined()
+    return JSON.parse(json!) as Array<{
+      target: string
+      license: { spdx: string; family: string; verified: boolean }
+      verdict: string
+      attribution?: string
+      provenance: { origin: string; commit?: string; scannedAt: string }
+    }>
+  }
+  const localLib = async (root: string, dir: string, license: string | undefined) => {
+    await write(root, `${dir}/src/a.ts`, "export const a = 1\n")
+    if (license !== undefined) await write(root, `${dir}/LICENSE`, license)
+  }
+
+  test("fail-closed verdicts: permissive depends, copyleft and unknown go clean-room", async () => {
+    const root = await tmp("es-target-")
+    await localLib(root, "mit-lib", MIT)
+    await localLib(root, "gpl-lib", GPL3)
+    await localLib(root, "mystery-lib", undefined)
+    for (const agent of ["grill", "factory", "scout", "harvester"]) {
+      const text = await target(
+        root,
+        { objective: "vet widget libs", targets: ["local:mit-lib", "local:gpl-lib", "local:mystery-lib"] },
+        agent,
+      )
+      const verdicts = verdictsOf(text)
+      expect(verdicts.map((item) => [item.target, item.verdict])).toEqual([
+        ["local:mit-lib", "depend"],
+        ["local:gpl-lib", "clean-room"],
+        ["local:mystery-lib", "clean-room"],
+      ])
+      expect(verdicts[0]?.license).toMatchObject({ spdx: "MIT", verified: true })
+      expect(verdicts[0]?.attribution).toContain("SPDX:MIT")
+      expect(verdicts[1]?.license).toMatchObject({ spdx: "GPL-3.0", family: "copyleft" })
+      expect(verdicts[2]?.license.spdx).toBe("unknown")
+      for (const item of verdicts) {
+        expect(typeof item.provenance.origin).toBe("string")
+        expect(typeof item.provenance.scannedAt).toBe("string")
+      }
+    }
+    // Strangers get no verdicts.
+    await expect(target(root, { objective: "x", targets: ["local:mit-lib"] }, "es-programmer")).rejects.toThrow(
+      /Only the/,
+    )
+  })
+
+  test("confinement and the per-call target cap", async () => {
+    const root = await tmp("es-target-cap-")
+    const outside = await tmp("es-target-outside-")
+    await localLib(root, "ok-lib", MIT)
+    await expect(target(root, { objective: "x", targets: [`local:${outside}`] })).rejects.toThrow(/outside the project/)
+    await expect(target(root, { objective: "x", targets: ["a", "b", "c", "d", "e", "f"] })).rejects.toThrow(/at most 5/)
+    await expect(target(root, { objective: "x", targets: [] })).rejects.toThrow(/at least one/)
+    await expect(target(root, { targets: ["local:ok-lib"] })).rejects.toThrow(/objective/)
+  })
+
+  test("runs are isolated; profiles land under the run", async () => {
+    const root = await tmp("es-target-runs-")
+    await localLib(root, "solo-lib", MIT)
+    await target(root, { objective: "x", targets: ["local:solo-lib"], run: "r1" })
+    await target(root, { objective: "x", targets: ["local:solo-lib"], run: "r2" })
+    const { readProfile: readRunProfile } = await import("../src/index.ts")
+    const first = await readRunProfile(root, "solo-lib", "r1")
+    const second = await readRunProfile(root, "solo-lib", "r2")
+    expect(first?.license.spdx).toBe("MIT")
+    expect(second?.license.spdx).toBe("MIT")
+    expect(first).not.toBe(second)
+  })
+
+  test("prior-art records validate on write and read; the brainstormer may search", async () => {
+    const root = await tmp("es-prior-art-")
+    const { recordPriorArt, readPriorArt, priorArtUrls } = await import("../src/index.ts")
+    await expect(
+      recordPriorArt(root, [{ idea: "x", query: "y", status: "bogus", results: [], searchedAt: "now" } as never]),
+    ).rejects.toThrow()
+    // A corrupt record on disk is dropped on read, never trusted.
+    const { factoryLayout } = await import("../src/layout.ts")
+    const { writeJson } = await import("../src/util/fs.ts")
+    await writeJson(path.join(factoryLayout(root).runtime, "harvest", "prior-art.json"), [
+      { idea: "x", query: "y", status: "ok", results: [{ title: "t", url: "https://x.test" }], searchedAt: "now" },
+      { idea: "bad", query: 42, status: "ok", results: "nope", searchedAt: "now" },
+    ])
+    expect(await readPriorArt(root)).toHaveLength(1)
+    // Run-keyed records: a brainstorm run sees its own searches plus legacy global ones.
+    await recordPriorArt(root, [
+      {
+        idea: "a",
+        query: "qa",
+        status: "ok",
+        results: [{ title: "ra", url: "https://a.test" }],
+        searchedAt: "now",
+        run: "ra",
+      },
+      {
+        idea: "b",
+        query: "qb",
+        status: "ok",
+        results: [{ title: "rb", url: "https://b.test" }],
+        searchedAt: "now",
+        run: "rb",
+      },
+    ])
+    expect(await priorArtUrls(root, "ra")).toEqual(new Set(["https://x.test", "https://a.test"]))
+    expect(await priorArtUrls(root, "rb")).toEqual(new Set(["https://x.test", "https://b.test"]))
+    // The brainstormer (and grill/factory) may record prior art with the mocked API.
+    const fetch = (async () =>
+      Response.json({
+        items: [{ full_name: "acme/cache", name: "cache", html_url: "https://github.com/acme/cache" }],
+      })) as unknown as typeof globalThis.fetch
+    for (const agent of ["harvester", "brainstormer", "grill", "factory"]) {
+      const priorArt = harvestTools({ root, fetch }).find((tool) => tool.name === "es_harvest_prior_art")!
+      const text = await priorArt.execute(
+        { ideas: [{ id: "b001", title: "cache", text: "a cache layer for speed" }], run: "shared" },
+        { agent },
+      )
+      expect(text).toContain("acme/cache")
+    }
+    await expect(
+      harvestTools({ root, fetch })
+        .find((tool) => tool.name === "es_harvest_prior_art")!
+        .execute({ ideas: [{ id: "b001", title: "cache", text: "a cache layer for speed" }] }, { agent: "scout" }),
+    ).rejects.toThrow(/Only the/)
+    expect(await priorArtUrls(root, "shared")).toContain("https://github.com/acme/cache")
+  })
+})

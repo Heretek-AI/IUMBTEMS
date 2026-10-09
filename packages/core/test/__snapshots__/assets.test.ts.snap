@@ -5,11 +5,11 @@ exports[`agent assets prompt snapshot: a changed prompt must bump its version 1`
   "auditor-antithesis": "v2:15f4d7f75e5bb958",
   "auditor-thesis": "v2:b903e1353177f342",
   "brainstorm-critic": "v1:28fd3abc95c4a28a",
-  "brainstormer": "v2:a1ae7bf72ee51b31",
+  "brainstormer": "v3:eee9b20fb26482a4",
   "designer": "v2:745908a2a4abff0b",
-  "factory": "v8:8c973543bace551a",
-  "grill": "v3:9949ae3f9ca3d04b",
-  "harvester": "v1:7a2e578121cfc637",
+  "factory": "v9:4b48ec73da814ab3",
+  "grill": "v4:722c43eeb12d95bb",
+  "harvester": "v2:c63fbc079e1cbbbe",
   "lens-adjacent-possible": "v1:d6d768502ed2adf2",
   "lens-constraint-removal": "v1:b6510755131beee1",
   "lens-cross-domain": "v1:e2290cd43caa37e1",
@@ -24,6 +24,6 @@ exports[`agent assets prompt snapshot: a changed prompt must bump its version 1`
   "qa-functional": "v1:b3b652e6326a13a7",
   "research-alpha": "v3:ac38ede4e2451670",
   "research-beta": "v3:6e32bacd9903e658",
-  "scout": "v1:d16797f7d5408b18",
+  "scout": "v2:71f5883522ffcb32",
 }
 `;

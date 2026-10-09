@@ -467,21 +467,29 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           }
         }
         if (sub === "show" || sub === undefined) {
-          const result = await readHarvestResult(root).catch(() => undefined)
+          let run: string
+          try {
+            run = parseRunId(rest[0])
+          } catch (error) {
+            io.print(error instanceof Error ? error.message : String(error))
+            return 2
+          }
+          const runPaths = harvestPaths(root, run)
+          const result = await readHarvestResult(root, run).catch(() => undefined)
           if (result) {
-            const report = await readFile(paths.report, "utf8").catch(() => undefined)
+            const report = await readFile(runPaths.report, "utf8").catch(() => undefined)
             io.print(
-              args.flags.json === true ? JSON.stringify(result, null, 2) : (report ?? `${paths.report} is missing`),
+              args.flags.json === true ? JSON.stringify(result, null, 2) : (report ?? `${runPaths.report} is missing`),
             )
             return 0
           }
-          const plan = await readHarvestPlan(root).catch(() => undefined)
+          const plan = await readHarvestPlan(root, run).catch(() => undefined)
           if (plan) {
-            const profiles = await readHarvestProfiles(root).catch(() => [])
+            const profiles = await readHarvestProfiles(root, run).catch(() => [])
             const scanned = new Set(profiles.map((profile) => profile.id))
             io.print(
               [
-                `Darkharvest in progress: ${plan.objective}`,
+                `Darkharvest in progress (run "${run}"): ${plan.objective}`,
                 `Candidates: ${plan.candidates.map((candidate) => `${candidate.id}${scanned.has(candidate.id) ? " ✓" : ""}`).join(", ")}`,
                 `Scanned ${profiles.length}/${plan.candidates.length} · read budget ${plan.readTokensPerCandidate} tokens per candidate`,
               ].join("\n"),
@@ -493,7 +501,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           )
           return 1
         }
-        io.print("Usage: es harvest show [--json] | scan <source>")
+        io.print("Usage: es harvest show [run] [--json] | scan <source>")
         return 2
       }
       case "design": {

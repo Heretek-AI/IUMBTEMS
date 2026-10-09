@@ -379,10 +379,10 @@ export function brainstormTools(context: BrainstormOpsContext): EsToolDef[] {
           throw new ToolRefusal(
             `Still unscored: ${list(unscored.map((idea) => idea.id))}. Have es-brainstorm-critic score them (es_brainstorm_score) first.`,
           )
-        // Prior art must come from a recorded es_harvest_prior_art search, not from memory.
+        // Prior art must come from a recorded es_harvest_prior_art search for this run, not from memory.
         const priorArt = Array.isArray(input.priorArt) ? input.priorArt : []
         if (priorArt.length) {
-          const found = await priorArtUrls(root)
+          const found = await priorArtUrls(root, run)
           const unrecorded = priorArt.filter((entry: { url?: unknown }) => !found.has(String(entry?.url ?? "")))
           if (unrecorded.length)
             throw new ToolRefusal(

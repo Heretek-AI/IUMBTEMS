@@ -119,7 +119,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     harvest: {
       support: "enforced",
-      detail: "Fail-closed SPDX detection, provenance profiles, policy-enforced matrix, clean-room specs.",
+      detail:
+        "Fail-closed SPDX detection, provenance profiles, policy-enforced matrix, clean-room specs. Runs are id-scoped (the human's /harvest is the default run); es_harvest_target gives the grill, factory, scout and harvester deterministic verdicts, and prior-art search is shared with brainstorm callers.",
       test: "packages/opencode/test/harvest.test.ts",
     },
     design: {

@@ -41,7 +41,8 @@
   deduplicated, rubric-scored shortlist with a forced outlier — callable by
   the grill and the factory at depth 1, with the shortlist back as JSON; darkharvest
   tears down competitor projects with fail-closed SPDX detection, per-field
-  provenance and clean-room specs; queereye interviews you into a
+  provenance and clean-room specs, plus a callable verdict check for the
+  grill, the factory and the scout; queereye interviews you into a
   contrast-gated DTCG token system with a generated style guide.
 - **Live-run visibility.** `es status`, `es watch` and the factory dashboard
   lead with one plain sentence (working, waiting on you, possibly stuck,

@@ -131,3 +131,15 @@ export const DEFAULT_LICENSE_WHITELIST = [
   "Unlicense",
   "CC0-1.0",
 ] as const
+
+/** One recorded prior-art search: what es_harvest_prior_art actually found. */
+export const PriorArtSearchSchema = z.object({
+  idea: z.string(),
+  query: z.string(),
+  status: z.enum(["ok", "failed"]),
+  results: z.array(z.object({ title: z.string(), url: z.string() })),
+  searchedAt: z.string(),
+  /** Brainstorm run that ran the search; absent means a legacy global record. */
+  run: z.string().optional(),
+})
+export type PriorArtSearch = z.infer<typeof PriorArtSearchSchema>
