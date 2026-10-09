@@ -120,7 +120,10 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
    a signed sidecar (HMAC under the masked engine key); reads refuse a
    missing or forged seal, and only a human re-signs reviewed files
    (`es reseal --sign`, terminal passphrase confirm; agents have no reseal
-   path — no tool, shell verb denied). Verifiers never create the engine key:
+   path — no tool, shell verb denied). Every source-cache reader verifies
+   seals: scout witnessing, brief export and retract all read through the
+   sealed constructor, so unsealed legacy entries are refused until the
+   human re-fetches the source. Verifiers never create the engine key:
    a reader that cannot see it (an agent sandbox, another state dir) reports
    a missing key, not a forged seal.
 9. **Seats run in the foreground, one writer per research file.** A seat's
