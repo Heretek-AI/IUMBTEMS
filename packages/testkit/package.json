@@ -1,7 +1,8 @@
 {
   "name": "@heretek-ai/es-testkit",
   "version": "1.0.0",
-  "description": "Test harness for OpenCode v2 in-process host with scripted fake models",
+  "private": true,
+  "description": "Test harness for OpenCode v2 in-process host with scripted fake models (private, never published)",
   "type": "module",
   "license": "Apache-2.0",
   "exports": {

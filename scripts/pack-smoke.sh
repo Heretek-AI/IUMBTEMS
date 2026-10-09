@@ -19,12 +19,14 @@ release="$(bun "$root/scripts/packages.ts" --release)"
 # fresh pack when npm resolves the workspace dependencies between tarballs.
 while read -r pkg slug; do rm -f "$out"/${slug}-*.tgz; done <<< "$release"
 
-(cd "$root/packages/core" && rm -rf dist tsconfig.tsbuildinfo && bunx tsc -b)
-(cd "$root/packages/cli" && rm -rf dist && bun run build >/dev/null)
-# The TUI entry ships pre-compiled: the host Solid transform skips
-# node_modules, where npm-installed plugins live, so raw .tsx would fall back
-# to react-jsx and fail on 'react' at load.
-(cd "$root/packages/opencode" && rm -rf dist && bun run build >/dev/null)
+# Build every release package from the same single source of truth (no hand
+# list to drift): each manifest's `build` script knows how (`tsc -b` for core,
+# `bun build` for the CLI; the TUI entry ships pre-compiled because the host
+# Solid transform skips node_modules, where npm-installed plugins live, so
+# raw .tsx would fall back to react-jsx and fail on 'react' at load).
+while read -r pkg slug; do
+  (cd "$root/packages/$pkg" && rm -rf dist tsconfig.tsbuildinfo && bun run build >/dev/null)
+done <<< "$release"
 while read -r pkg slug; do
   (cd "$root/packages/$pkg" && bun pm pack --destination "$out" >/dev/null)
 done <<< "$release"
