@@ -65,7 +65,7 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
       support: "enforced",
       detail:
         "permission.evaluate + tool.execute.before enforce the write/read/shell policy; control files (incl. the engine-sealed evidence cache) denied; research seats get no host websearch/webfetch. Every agent shell runs under bubblewrap by seat kind (cached-web seats offline); seats are refused without it and the user's agents fall back to the weaker argv-aware text policy.",
-      test: "packages/core/test/policy.test.ts",
+      test: "packages/opencode/test/scoping.test.ts",
     },
     hooks: {
       support: "enforced",
@@ -75,13 +75,13 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     question: {
       support: "enforced",
       detail: "Session forms only humans can answer; primaries may ask, autonomous subagent seats may not.",
-      test: PLUGIN,
+      test: "packages/opencode/test/scoping.test.ts",
     },
     subagents: {
       support: "enforced",
       detail:
         "Depth 1; hidden seats are unlisted but invocable by ID, and only from the seats allowed to spawn them. Factory seats are not offered Code Mode execute.",
-      test: PLUGIN,
+      test: "packages/opencode/test/scoping.test.ts",
     },
     compaction: {
       support: "enforced",
