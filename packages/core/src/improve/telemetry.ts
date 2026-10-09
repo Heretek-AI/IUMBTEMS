@@ -9,7 +9,7 @@ import path from "node:path"
 import { verifyAuditChain } from "../audit/chain.ts"
 import { type FactoryState, FactoryStateSchema } from "../factory/state.ts"
 import { stateDir as defaultStateDir, factoryLayout } from "../layout.ts"
-import { type AuditEntry } from "../schema/audit.ts"
+import type { AuditEntry } from "../schema/audit.ts"
 import { AuditRecordSchema } from "../schema/codeaudit.ts"
 import {
   type AuditFindingCount,
@@ -79,8 +79,6 @@ async function gateSummaries(dir: string): Promise<string[]> {
   for (const group of nested) found.push(...group)
   return found
 }
-
-const rulesFromSummary = (parsed: unknown): string[] => findingsFromSummary(parsed).map((finding) => finding.rule)
 
 interface GateFinding {
   readonly rule: string
@@ -252,8 +250,7 @@ async function readRunState(
 const trailOf = (entries: readonly AuditEntry[]): ChainTrailEntry[] =>
   entries.map((entry) => {
     const phase = typeof entry.payload.phase === "string" && entry.payload.phase ? entry.payload.phase : undefined
-    const reason =
-      typeof entry.payload.reason === "string" && entry.payload.reason ? entry.payload.reason : undefined
+    const reason = typeof entry.payload.reason === "string" && entry.payload.reason ? entry.payload.reason : undefined
     return {
       seq: entry.seq,
       hash: entry.hash,
@@ -287,8 +284,7 @@ function phaseFailures(
       const reason = typeof payload.reason === "string" && payload.reason ? payload.reason : "qa failed"
       byPhase.get(phase)!.push({ seat: actorSeat(entry.actor), kind: "qa", reason })
     } else if (entry.action === "phase.replan") {
-      const attempt =
-        typeof payload.attempt === "number" ? `replan attempt ${payload.attempt}` : "replanned"
+      const attempt = typeof payload.attempt === "number" ? `replan attempt ${payload.attempt}` : "replanned"
       const reason = typeof payload.reason === "string" && payload.reason ? payload.reason : attempt
       byPhase.get(phase)!.push({ seat: actorSeat(entry.actor), kind: "replan", reason })
     }
@@ -301,9 +297,12 @@ function phaseFailures(
       for (const id of failed) byPhase.get(id)!.push({ kind: "gate", rule: finding.rule, reason: gateReason(finding) })
     for (const finding of audit)
       for (const id of failed)
-        byPhase
-          .get(id)!
-          .push({ seat: finding.seat, kind: "audit", category: `${finding.kind}/${finding.severity}`, reason: finding.reason })
+        byPhase.get(id)!.push({
+          seat: finding.seat,
+          kind: "audit",
+          category: `${finding.kind}/${finding.severity}`,
+          reason: finding.reason,
+        })
   }
   return byPhase
 }
@@ -465,7 +464,7 @@ const BEARER_TOKEN = /\b([Bb][Ee][Aa][Rr][Ee][Rr]\s+)[A-Za-z0-9\-._~+/=]+/g
 
 /** Known token shapes standing bare in prose. */
 const TOKEN_SHAPE =
-  /\b(?:github_pat_[A-Za-z0-9_]+|sk-ant-[A-Za-z0-9\-_]+|gho_[A-Za-z0-9]+|ghs_[A-Za-z0-9_]+|ghp_[A-Za-z0-9]+|sk-[A-Za-z0-9]+|xox[abprs]-[A-Za-z0-9\-]+|AKIA[0-9A-Z]{16})\b/g
+  /\b(?:github_pat_[A-Za-z0-9_]+|sk-ant-[A-Za-z0-9_-]+|gho_[A-Za-z0-9]+|ghs_[A-Za-z0-9_]+|ghp_[A-Za-z0-9]+|sk-[A-Za-z0-9]+|xox[abprs]-[A-Za-z0-9-]+|AKIA[0-9A-Z]{16})\b/g
 
 /** PEM private-key blocks, whole. */
 const PEM_BLOCK = /-----BEGIN [^-]*PRIVATE KEY[^-]*-----[\s\S]*?-----END [^-]*PRIVATE KEY[^-]*-----/g
@@ -504,9 +503,7 @@ export async function harvestTelemetry(
   options: { stateDir?: string; harvestedAt?: string } = {},
 ): Promise<Telemetry> {
   const harvested = await Promise.all(
-    input.runs.map((root) =>
-      harvestRun(root, { ...(options.stateDir ? { stateDir: options.stateDir } : {}) }),
-    ),
+    input.runs.map((root) => harvestRun(root, { ...(options.stateDir ? { stateDir: options.stateDir } : {}) })),
   )
   harvested.sort((a, b) => compareStrings(a.id, b.id))
   const evalGroups = await Promise.all(input.evals.map((dir) => harvestEvals(dir)))

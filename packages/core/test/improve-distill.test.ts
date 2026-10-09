@@ -32,28 +32,29 @@ const runTelemetry = (id: string, extra: Partial<RunTelemetry> = {}): RunTelemet
   phases: [],
   gateRejections: [],
   auditFindings: [],
-  auditChain: { entries: 1, valid: true },
+  auditChain: { entries: 1, valid: true, trail: [] },
+  seal: { valid: true },
   ...extra,
 })
 
 /** Two runs whose shared signals clear the default thresholds (3 occurrences, 2 runs). */
 const richTelemetry = (): Telemetry => ({
-  version: 1,
+  version: 2,
   harvestedAt: "2026-10-03T00:00:00.000Z",
   runs: [
     runTelemetry("run-a", {
-      gateRejections: [{ rule: "lint/no-unused-vars", count: 2 }],
-      auditFindings: [{ kind: "invariant", severity: "high", count: 2 }],
+      gateRejections: [{ rule: "lint/no-unused-vars", count: 2, logs: [".factory/runs/run-a/gates/s1/summary.json"] }],
+      auditFindings: [{ kind: "invariant", severity: "high", count: 2, sources: [".factory/audits/a1/records.json"] }],
     }),
     runTelemetry("run-b", {
-      gateRejections: [{ rule: "lint/no-unused-vars", count: 1 }],
-      auditFindings: [{ kind: "invariant", severity: "high", count: 1 }],
+      gateRejections: [{ rule: "lint/no-unused-vars", count: 1, logs: [".factory/runs/run-b/gates/s1/summary.json"] }],
+      auditFindings: [{ kind: "invariant", severity: "high", count: 1, sources: [".factory/audits/a1/records.json"] }],
     }),
   ],
   evals: [
-    { case: "case-x", pass: false, failures: ["gate lint red", "gate lint red"], steps: 9 },
-    { case: "case-y", pass: false, failures: ["gate lint red"], steps: 4 },
-    { case: "case-ok", pass: true, failures: [], steps: 3 },
+    { case: "case-x", pass: false, failures: ["gate lint red", "gate lint red"], steps: 9, source: "agg.json" },
+    { case: "case-y", pass: false, failures: ["gate lint red"], steps: 4, source: "agg.json" },
+    { case: "case-ok", pass: true, failures: [], steps: 3, source: "agg.json" },
   ],
 })
 
@@ -68,7 +69,7 @@ const git = async (args: string[], cwd: string) => {
 }
 
 describe("clusterTelemetry", () => {
-  test("deterministic clusters keyed by kind and label", async () => {
+  test("deterministic clusters keyed by (seat, kind, facet)", async () => {
     const telemetry = richTelemetry()
     const first = clusterTelemetry(telemetry)
     expect(first.map((cluster) => [cluster.key, cluster.occurrences, cluster.runIds])).toEqual([
@@ -77,6 +78,20 @@ describe("clusterTelemetry", () => {
       ["gate:lint/no-unused-vars", 3, ["run-a", "run-b"]],
     ])
     expect(clusterTelemetry(telemetry)).toEqual(first)
+    // Evidence links to gate-log paths, audit records and eval files.
+    const byKey = new Map(first.map((cluster) => [cluster.key, cluster]))
+    expect(byKey.get("gate:lint/no-unused-vars")!.evidence).toEqual([
+      "run run-a gate-log .factory/runs/run-a/gates/s1/summary.json: lint/no-unused-vars",
+      "run run-b gate-log .factory/runs/run-b/gates/s1/summary.json: lint/no-unused-vars",
+    ])
+    expect(byKey.get("audit:invariant/high")!.evidence).toEqual([
+      "run run-a audit .factory/audits/a1/records.json: invariant/high",
+      "run run-b audit .factory/audits/a1/records.json: invariant/high",
+    ])
+    expect(byKey.get("eval:gate lint red")!.evidence).toEqual([
+      "eval case-x (agg.json): gate lint red",
+      "eval case-y (agg.json): gate lint red",
+    ])
   })
 
   test("thresholds filter: defaults need 3 occurrences across 2 runs", async () => {
@@ -97,7 +112,7 @@ describe("clusterTelemetry", () => {
 
   test("one lone occurrence never proposes", async () => {
     const telemetry = richTelemetry()
-    telemetry.runs = [runTelemetry("only", { gateRejections: [{ rule: "lint/no-unused-vars", count: 1 }] })]
+    telemetry.runs = [runTelemetry("only", { gateRejections: [{ rule: "lint/no-unused-vars", count: 1, logs: [] }] })]
     telemetry.evals = []
     expect(clusterTelemetry(telemetry)).toEqual([])
   })
@@ -213,7 +228,16 @@ describe("the code-disposes gate", () => {
 
   test("a model the telemetry records is allowed; utf-8/sha-256 are not numerals", async () => {
     const telemetry = richTelemetry()
-    telemetry.evals = [{ case: "case-x", pass: false, failures: ["gate lint red"], steps: 1, model: "acme/llama-8b" }]
+    telemetry.evals = [
+      {
+        case: "case-x",
+        pass: false,
+        failures: ["gate lint red"],
+        steps: 1,
+        model: "acme/llama-8b",
+        source: "agg.json",
+      },
+    ]
     const [proposal] = await distillProposals(telemetry, { minOccurrences: 1, minRuns: 1 })
     const ok = {
       ...proposal!,
@@ -270,9 +294,7 @@ const seatedTelemetry = (): Telemetry => ({
           ],
         },
       ],
-      gateRejections: [
-        { rule: "lint/no-unused-vars", count: 1, logs: [".factory/runs/run-a/gates/s1/summary.json"] },
-      ],
+      gateRejections: [{ rule: "lint/no-unused-vars", count: 1, logs: [".factory/runs/run-a/gates/s1/summary.json"] }],
       auditFindings: [],
       auditChain: {
         entries: 2,
@@ -298,9 +320,7 @@ const seatedTelemetry = (): Telemetry => ({
           ],
         },
       ],
-      gateRejections: [
-        { rule: "lint/no-unused-vars", count: 1, logs: [".factory/runs/run-b/gates/s1/summary.json"] },
-      ],
+      gateRejections: [{ rule: "lint/no-unused-vars", count: 1, logs: [".factory/runs/run-b/gates/s1/summary.json"] }],
       auditFindings: [],
       auditChain: {
         entries: 2,
@@ -341,24 +361,28 @@ describe("S3.5 cluster key and evidence", () => {
 
   test("a dropped proposal is reported with its reason; a rerun is byte-identical", async () => {
     const mod = (await import("../src/improve/distill.ts")) as Record<string, unknown>
-    expect(typeof mod["disposedWithReasons"]).toBe("function")
-    expect(typeof mod["writeDropped"]).toBe("function")
-    const disposedWithReasons = mod["disposedWithReasons"] as (
+    expect(typeof mod.disposedWithReasons).toBe("function")
+    expect(typeof mod.writeDropped).toBe("function")
+    const disposedWithReasons = mod.disposedWithReasons as (
       proposals: Proposal[],
       telemetry: Telemetry,
     ) => Array<{ proposal: Proposal; reasons: string[] }>
-    const writeDropped = mod["writeDropped"] as (
+    const writeDropped = mod.writeDropped as (
       out: string,
       dropped: Array<{ proposal: Proposal; reasons: string[] }>,
     ) => Promise<string>
-    const { proposalId } = await import("../src/improve/distill.ts")
-    void proposalId
     const telemetry: Telemetry = {
       version: 2,
       harvestedAt: "2026-10-03T00:00:00.000Z",
       runs: [],
       evals: [
-        { case: "case-x", pass: false, failures: ["fails like gpt-4 would", "fails like gpt-4 would"], steps: 9, source: "agg.json" },
+        {
+          case: "case-x",
+          pass: false,
+          failures: ["fails like gpt-4 would", "fails like gpt-4 would"],
+          steps: 9,
+          source: "agg.json",
+        },
         { case: "case-y", pass: false, failures: ["fails like gpt-4 would"], steps: 4, source: "agg.json" },
       ],
     }

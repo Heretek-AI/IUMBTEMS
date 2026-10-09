@@ -135,7 +135,14 @@ describe("harvestRun", () => {
 describe("harvestEvals", () => {
   test("the aggregate maps to eval telemetry, preserving modelLimited", async () => {
     expect(await harvestEvals(evals)).toEqual([
-      { case: "grill", pass: true, failures: [], steps: 5, model: "test/model", source: "2026-10-03T00-00-00-000Z.json" },
+      {
+        case: "grill",
+        pass: true,
+        failures: [],
+        steps: 5,
+        model: "test/model",
+        source: "2026-10-03T00-00-00-000Z.json",
+      },
       {
         case: "programmer",
         pass: false,
@@ -217,7 +224,10 @@ async function fixtureCopy(name: string, mutate?: (state: Record<string, unknown
 }
 
 /** Sign a copied run's state.json under a fresh isolated state dir. */
-async function sealedCopy(name: string, mutate?: (state: Record<string, unknown>) => void): Promise<{ root: string; stateDir: string; cleanup(): Promise<void> }> {
+async function sealedCopy(
+  name: string,
+  mutate?: (state: Record<string, unknown>) => void,
+): Promise<{ root: string; stateDir: string; cleanup(): Promise<void> }> {
   const { signEngineFile } = await import("../src/trust/sidecar.ts")
   const root = await fixtureCopy(name, mutate)
   const stateDir = await mkdtemp(path.join(tmpdir(), "es-improve-s3-state-"))
