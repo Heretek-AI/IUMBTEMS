@@ -9,8 +9,16 @@ import { ToolRefusal } from "../ops/tools.ts"
 import type { EsConfig } from "../schema/config.ts"
 import { evaluateWrite, type PolicyContext } from "../trust/policy.ts"
 import { auditMarkdown, formatCoverage, pruneClaims } from "./auditor.ts"
+import {
+  type BackendErrorKind,
+  getBackend,
+  isFetchedSnapshot,
+  resolveBackendOrder,
+  runFetchChain,
+  runSearchChain,
+  type SourceBackend,
+} from "./backends/index.ts"
 import { researchSourcesDir, SourceCache } from "./cache.ts"
-import { fetchPage, type SearchProvider, selectProvider } from "./providers.ts"
 import { isFresh } from "./url.ts"
 
 export interface ResearchOpsContext {
@@ -27,16 +35,26 @@ export interface ResearchOpsContext {
   readonly searchTimeoutS?: number
   /** SearXNG instance (config research.searxngUrl); overrides SEARXNG_URL. */
   readonly searxngUrl?: string
+  /** Pack tierDomains override for source classification at ingestion (#113). */
+  readonly tierDomains?: Record<string, string[]>
+  /** Ordered backend ids (config research.backends); overrides searchProvider. */
+  readonly backends?: string[]
+  /**
+   * Full backend chain override (tests and embedders): when set, the order is
+   * these backends in this order, and availability is still checked per call.
+   */
+  readonly chain?: readonly SourceBackend[]
   readonly now?: () => Date
 }
 
 /** The research-tool options a loaded config sets. */
 export function researchOptions(
   config: Pick<EsConfig, "searchProvider" | "research">,
-): Pick<ResearchOpsContext, "provider" | "cacheTtlDays" | "searchTimeoutS" | "searxngUrl"> {
+): Pick<ResearchOpsContext, "provider" | "backends" | "cacheTtlDays" | "searchTimeoutS" | "searxngUrl"> {
   const research = config.research
   return {
     ...(config.searchProvider ? { provider: config.searchProvider } : {}),
+    ...(research?.backends ? { backends: [...research.backends] } : {}),
     ...(research?.cacheTtlDays !== undefined ? { cacheTtlDays: research.cacheTtlDays } : {}),
     ...(research?.searchTimeoutS !== undefined ? { searchTimeoutS: research.searchTimeoutS } : {}),
     ...(research?.searxngUrl ? { searxngUrl: research.searxngUrl } : {}),
@@ -50,8 +68,8 @@ const object = (properties: Record<string, unknown>, required: string[] = []) =>
   additionalProperties: false,
 })
 
-/** Providers whose snapshots hold the whole page (es_research_fetch and the host's webfetch). */
-const FETCHED = new Set(["fetch", "webfetch"])
+/** Providers whose snapshots hold the whole page: legacy ids plus every fetch-capable backend. */
+const fetchedSnapshot = (providerId: string): boolean => isFetchedSnapshot(providerId)
 
 /**
  * The engine cache for a project. Entries are sealed with the engine key
@@ -68,13 +86,21 @@ const mayResearch = (agent: string | undefined, tool: string): boolean => agent 
 export function researchTools(context: ResearchOpsContext): EsToolDef[] {
   const cache = researchCache(context.root, context.stateDir ?? defaultStateDir())
   const env = context.searxngUrl ? { ...(context.env ?? process.env), SEARXNG_URL: context.searxngUrl } : context.env
-  const provider = (): SearchProvider => {
-    const selected = selectProvider(context.provider, env)
-    if (!selected)
-      throw new Error(
-        "No search provider is configured: set BRAVE_API_KEY, FIRECRAWL_API_KEY or SEARXNG_URL (or fetch known URLs directly).",
-      )
-    return selected
+  const order = resolveBackendOrder({
+    ...(context.backends ? { backends: context.backends } : {}),
+    ...(context.provider ? { provider: context.provider } : {}),
+  })
+  const chain: readonly SourceBackend[] =
+    context.chain ?? order.map((id) => getBackend(id)).filter((backend) => backend !== undefined)
+  // One cooldown map per tools instance (one per plugin process): a down
+  // backend is skipped for a while instead of retried on every call (#106).
+  const cooldowns = new Map<string, { until: number; kind: BackendErrorKind }>()
+  const signals = (toolContext: { signal?: AbortSignal }): AbortSignal | undefined => {
+    const list = [
+      ...(toolContext.signal ? [toolContext.signal] : []),
+      ...(context.searchTimeoutS ? [AbortSignal.timeout(context.searchTimeoutS * 1000)] : []),
+    ]
+    return list.length ? (list.length === 1 ? list[0]! : AbortSignal.any(list)) : undefined
   }
   return [
     {
@@ -85,26 +111,28 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
       execute: async ({ query, limit }, toolContext) => {
         if (!mayResearch(toolContext.agent, "es_research_search"))
           throw new ToolRefusal("Only the research and scout seats may search the web.")
-        const chosen = provider()
-        const signals = [
-          ...(toolContext.signal ? [toolContext.signal] : []),
-          ...(context.searchTimeoutS ? [AbortSignal.timeout(context.searchTimeoutS * 1000)] : []),
-        ]
-        const results = await chosen.search(query, {
-          limit: limit ?? 8,
-          ...(signals.length ? { signal: signals.length === 1 ? signals[0]! : AbortSignal.any(signals) } : {}),
-          ...(context.fetch ? { fetch: context.fetch } : {}),
-          ...(env ? { env } : {}),
-        })
+        const signal = signals(toolContext)
+        const found = await runSearchChain(
+          chain,
+          query,
+          {
+            limit: limit ?? 8,
+            ...(signal ? { signal } : {}),
+            ...(context.fetch ? { fetch: context.fetch } : {}),
+            ...(env ? { env } : {}),
+          },
+          { cooldowns },
+        )
         const lines: string[] = []
-        for (const result of results) {
+        for (const result of found.value) {
           const cached = result.content
             ? await cache.put({
                 url: result.url,
                 title: result.title,
                 text: result.content,
-                provider: chosen.id,
+                provider: found.backend,
                 query,
+                ...(context.tierDomains ? { tierDomains: context.tierDomains } : {}),
               })
             : undefined
           lines.push(
@@ -112,7 +140,7 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
           )
         }
         return lines.length
-          ? `${chosen.id} results for "${query}":\n${lines.join("\n")}`
+          ? `${found.backend} results for "${query}":\n${lines.join("\n")}`
           : `No results for "${query}". Record it as [NEGATIVE_KNOWLEDGE: ${query}] if it matters.`
       },
     },
@@ -139,7 +167,7 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
             ? undefined
             : await cache.byUrl(url).then((hit) =>
                 hit &&
-                FETCHED.has(hit.meta.provider) &&
+                fetchedSnapshot(hit.meta.provider) &&
                 isFresh(hit.meta.retrieved, url, {
                   ...(context.cacheTtlDays !== undefined ? { ttlDays: context.cacheTtlDays } : {}),
                   ...(context.now ? { now: context.now() } : {}),
@@ -147,19 +175,24 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
                   ? hit
                   : undefined,
               )
-        const page = fresh
-          ? undefined
-          : await fetchPage(url, {
-              ...(toolContext.signal ? { signal: toolContext.signal } : {}),
-              ...(context.fetch ? { fetch: context.fetch } : {}),
-            })
+        const fetched =
+          fresh === undefined
+            ? await runFetchChain(chain, url, {
+                ...(toolContext.signal ? { signal: toolContext.signal } : {}),
+                ...(context.fetch ? { fetch: context.fetch } : {}),
+                ...(env ? { env } : {}),
+                cooldowns,
+              })
+            : undefined
+        const page = fetched?.value
         const cached =
           fresh ??
           (await cache.put({
             url: page!.url,
             ...(page!.title ? { title: page!.title } : {}),
             text: page!.text,
-            provider: "fetch",
+            provider: fetched!.backend,
+            ...(context.tierDomains ? { tierDomains: context.tierDomains } : {}),
           }))
         const title = cached.meta.title
         const start = Math.max(0, offset ?? 0)

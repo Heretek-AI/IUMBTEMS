@@ -5,11 +5,12 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 1.1.5.** Phase 0 hardening: source-cache seals on every reader,
-> MCP caller identity is pinned, the CLI and the human-only rule share one
-> argv grammar, seat scoping is probed from the registry, and seat models
-> fail closed (#96–#103, #139). Install from npm (`@heretek-ai/epistemic-swarm`,
-> `@heretek-ai/es-core`, `@heretek-ai/es-cli`); run `es key seal` once.
+> **Status: 1.2.0.** Phase 1 epistemic layer: ordered research backends with
+> failover (Scraper-Swarm gateway leading), callable brainstorm and harvest,
+> research-only runs with a deep-research coordinator, dossier renders, and
+> domain-pack tier weights (#106–#114). Install from npm
+> (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`, `@heretek-ai/es-cli`);
+> run `es key seal` once.
 
 ## Naming
 
@@ -34,10 +35,31 @@
   findings and signed, expiring waivers.
 - **Evidence-first research.** Content-addressed source cache, a pure verbatim
   quote verifier, and an epistemic auditor that downgrades ungrounded claims.
+  Web sources come through an ordered backend chain (Scraper-Swarm gateway,
+  Brave, Firecrawl, SearXNG, direct fetch) with per-backend cooldowns: one
+  provider's outage or rate limit fails over to the next, while a safety
+  refusal never does. To use the self-hosted gateway, mint a key with scopes
+  `search` and `scrape` (`POST /agents/keys` on the panel API) and set
+  `ES_SCRAPER_SWARM_URL` and `ES_SCRAPER_SWARM_TOKEN`; the token never leaves
+  its `Authorization` header and is masked in seat sandboxes. Deep research
+  runs a question adversarially outside the factory flow — thesis, antithesis,
+  synthesis to a grounded report (`es research deep "<question>" --output
+  <dir> --max-usd N`, or `/research deep` in the TUI). A run renders to
+  readable Markdown or a self-contained HTML dossier — tag, status, verbatim
+  quote, source and seal per claim (`es research render --format md|html`).
+  The signed brief stays human-only (`es research export`).
+- **Domain packs.** Pluggable constitutions (quant, biopharma, legal) vet
+  research claims: banned domains, mandatory tags, retraction policy and an
+  accept threshold on the tier-weighted epistemic score. Every cached source
+  is deterministically tiered at ingestion (preprint, peer-reviewed, docs,
+  press — sealed with its metadata) and claims inherit the tier, so source
+  quality moves the score.
 - **Lateral work.** Brainstorm fans out eight divergent lenses into a
-  deduplicated, rubric-scored shortlist with a forced outlier; darkharvest
+  deduplicated, rubric-scored shortlist with a forced outlier — callable by
+  the grill and the factory at depth 1, with the shortlist back as JSON; darkharvest
   tears down competitor projects with fail-closed SPDX detection, per-field
-  provenance and clean-room specs; queereye interviews you into a
+  provenance and clean-room specs, plus a callable verdict check for the
+  grill, the factory and the scout; queereye interviews you into a
   contrast-gated DTCG token system with a generated style guide.
 - **Live-run visibility.** `es status`, `es watch` and the factory dashboard
   lead with one plain sentence (working, waiting on you, possibly stuck,

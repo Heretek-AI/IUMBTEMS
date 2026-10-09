@@ -2,7 +2,7 @@
 // resume, git hooks) require an interactive terminal and the human passphrase,
 // which unlocks the passphrase-sealed human key; agent shells are denied
 // these commands by policy as well.
-import { readFile } from "node:fs/promises"
+import { readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import {
   type Args,
@@ -30,11 +30,13 @@ import {
   installServer,
   LENSES,
   LspManager,
+  listBrainstormRuns,
   listRuns,
   loadEsConfig,
   loadHooks,
   loadInterview,
   parseArgs,
+  parseRunId,
   parseSource,
   readIdeas as readBrainstormIdeas,
   readPlan as readBrainstormPlan,
@@ -48,6 +50,7 @@ import {
   recordConsent,
   renderBrainstorm,
   renderGuide,
+  renderResearchRun,
   researchOptions,
   researchTools,
   SlotLoop,
@@ -74,7 +77,7 @@ import {
   trust,
   waive,
 } from "./human.ts"
-import { auditCommand, auditDismiss, auditShow, scoutCommand, scoutShow } from "./jobs.ts"
+import { auditCommand, auditDismiss, auditShow, researchDeepCommand, scoutCommand, scoutShow } from "./jobs.ts"
 import { keySeal, keyStatus } from "./key.ts"
 import { serveStdio } from "./mcp.ts"
 import { runsCommand, statusCommand } from "./status.ts"
@@ -118,9 +121,11 @@ Other
   research search <query>       Search with the configured provider
   research fetch <url>          Fetch and cache a source (prints its sha256)
   research audit [file] [--prune]  Epistemic audit of a research report
+  research render --format md|html [--out <file>]   Readable dossier (Markdown or self-contained HTML)
   research export [--out <file>]   Signed research brief (.factory/research/brief.pcrb.json)   [human, TTY]
   research verify-brief <file> [--allow-unverifiable]  Check a brief's sources, manifest, signature, quotes
   research retract <sha256> --event retracted|revised [--note "…"]   Degrade claims citing a source   [human, TTY]
+  research deep "<question>" --output <dir> --max-usd N   Adversarial deep research to DONE   [human, TTY]
   brainstorm plan "<idea>"      Freeze a lens fan-out plan (.factory/brainstorm)
         [--lenses a,b] [--ideas N] [--shortlist N] [--force]
   brainstorm show [--json]      Show the plan/progress or the finished shortlist
@@ -248,6 +253,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         return 2
       }
       case "research": {
+        if (sub === "deep") return await researchDeepCommand(context, subArgs(2))
         if (sub === "retract") return await retract(context, subArgs(2))
         if (sub === "export") {
           const out = flag(args, "out")
@@ -334,8 +340,34 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           io.print(text)
           return /Audit passed/.test(text) || /Pruned/.test(text) ? 0 : 1
         }
+        if (sub === "render") {
+          const format = flag(args, "format") ?? "md"
+          if (format !== "md" && format !== "html") {
+            io.print("Usage: es research render --format md|html [--out <file>]")
+            return 2
+          }
+          let text: string
+          try {
+            text = await renderResearchRun(root, {
+              format,
+              ...(io.stateDir ? { stateDir: io.stateDir } : {}),
+            })
+          } catch (error) {
+            io.print(error instanceof Error ? error.message : String(error))
+            return 1
+          }
+          const out = flag(args, "out")
+          if (out) {
+            const file = path.resolve(io.cwd, out)
+            await writeFile(file, text)
+            io.print(`Rendered ${path.relative(root, file) || file} (${format}, ${text.length} bytes)`)
+            return 0
+          }
+          io.print(text)
+          return 0
+        }
         io.print(
-          "Usage: es research search <query> | fetch <url> | audit [file] [--prune] | export [--out <file>] | verify-brief <file> | retract <sha256> --event retracted|revised",
+          'Usage: es research search <query> | fetch <url> | audit [file] [--prune] | render --format md|html [--out <file>] | export [--out <file>] | verify-brief <file> | retract <sha256> --event retracted|revised | deep "<question>" --output <dir> --max-usd N',
         )
         return 2
       }
@@ -391,19 +423,26 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           return 0
         }
         if (sub === "show" || sub === undefined) {
-          const result = await readBrainstormResult(root).catch(() => undefined)
+          let run: string
+          try {
+            run = parseRunId(rest[0])
+          } catch (error) {
+            io.print(error instanceof Error ? error.message : String(error))
+            return 2
+          }
+          const result = await readBrainstormResult(root, run).catch(() => undefined)
           if (result) {
             io.print(args.flags.json === true ? JSON.stringify(result, null, 2) : renderBrainstorm(result))
             return 0
           }
-          const plan = await readBrainstormPlan(root).catch(() => undefined)
+          const plan = await readBrainstormPlan(root, run).catch(() => undefined)
           if (plan) {
-            const ideas = await readBrainstormIdeas(root).catch(() => [])
-            const scores = await readBrainstormScores(root).catch(() => [])
+            const ideas = await readBrainstormIdeas(root, run).catch(() => [])
+            const scores = await readBrainstormScores(root, run).catch(() => [])
             const survivors = ideas.filter((idea) => !idea.duplicateOf)
             io.print(
               [
-                `Brainstorm in progress: "${plan.brief.idea}"`,
+                `Brainstorm in progress (run "${run}"): "${plan.brief.idea}"`,
                 `Lenses: ${plan.lenses.join(", ")}`,
                 `Ideas: ${survivors.length} surviving (${ideas.length - survivors.length} duplicate(s)) · scored ${scores.length}/${survivors.length}`,
                 `Coverage: ${plan.lenses.map((lens) => `${lens} ${survivors.filter((idea) => idea.lens === lens).length}`).join(" · ")}`,
@@ -411,12 +450,15 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
             )
             return 0
           }
+          const runs = await listBrainstormRuns(root).catch(() => [] as string[])
           io.print(
-            `No brainstorm in ${paths.dir}. Start one with /brainstorm in OpenCode, or \`es brainstorm plan "<idea>"\`.`,
+            runs.length
+              ? `No brainstorm run "${run}" in ${paths.dir}. Runs: ${runs.join(", ")}.`
+              : `No brainstorm in ${paths.dir}. Start one with /brainstorm in OpenCode, or \`es brainstorm plan "<idea>"\`.`,
           )
           return 1
         }
-        io.print('Usage: es brainstorm plan "<idea>" | show [--json] | lenses')
+        io.print('Usage: es brainstorm plan "<idea>" | show [run] [--json] | lenses')
         return 2
       }
       case "harvest": {
@@ -455,21 +497,29 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           }
         }
         if (sub === "show" || sub === undefined) {
-          const result = await readHarvestResult(root).catch(() => undefined)
+          let run: string
+          try {
+            run = parseRunId(rest[0])
+          } catch (error) {
+            io.print(error instanceof Error ? error.message : String(error))
+            return 2
+          }
+          const runPaths = harvestPaths(root, run)
+          const result = await readHarvestResult(root, run).catch(() => undefined)
           if (result) {
-            const report = await readFile(paths.report, "utf8").catch(() => undefined)
+            const report = await readFile(runPaths.report, "utf8").catch(() => undefined)
             io.print(
-              args.flags.json === true ? JSON.stringify(result, null, 2) : (report ?? `${paths.report} is missing`),
+              args.flags.json === true ? JSON.stringify(result, null, 2) : (report ?? `${runPaths.report} is missing`),
             )
             return 0
           }
-          const plan = await readHarvestPlan(root).catch(() => undefined)
+          const plan = await readHarvestPlan(root, run).catch(() => undefined)
           if (plan) {
-            const profiles = await readHarvestProfiles(root).catch(() => [])
+            const profiles = await readHarvestProfiles(root, run).catch(() => [])
             const scanned = new Set(profiles.map((profile) => profile.id))
             io.print(
               [
-                `Darkharvest in progress: ${plan.objective}`,
+                `Darkharvest in progress (run "${run}"): ${plan.objective}`,
                 `Candidates: ${plan.candidates.map((candidate) => `${candidate.id}${scanned.has(candidate.id) ? " ✓" : ""}`).join(", ")}`,
                 `Scanned ${profiles.length}/${plan.candidates.length} · read budget ${plan.readTokensPerCandidate} tokens per candidate`,
               ].join("\n"),
@@ -481,7 +531,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           )
           return 1
         }
-        io.print("Usage: es harvest show [--json] | scan <source>")
+        io.print("Usage: es harvest show [run] [--json] | scan <source>")
         return 2
       }
       case "design": {

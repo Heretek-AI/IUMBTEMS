@@ -32,6 +32,14 @@ the run halts. `.factory/STOP` halts every seat tool (except `es_status` when
 halted by spend/runtime); resuming is human-only. The spend ceiling is
 mandatory and raising it is a human act.
 
+**Research-only runs** (`mode: "research"`) answer one objective outside the
+software flow: `beginResearchRun({objective, ceilingUSD})` enters RESEARCH
+directly with no frontier, no approvals and no git repo required, and
+`completeResearch` ends at DONE (deferred frontier facts are not required;
+the dossier takes the run's objective). Spend tracking, STOP, halts, liveness,
+`es status`/`es watch`/`es runs` and the sealed evidence cache are the same
+machinery. The completing seat will be the research coordinator (#111).
+
 ## 2. Seats
 
 Seats are what the trust policy reasons about; the registry is
@@ -81,6 +89,12 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
   HMAC-SHA256 seal from a key kept in the masked private state dir
   (`engine.key`), so a planted entry an agent drops into
   `.factory/research/sources/` is refused on read.
+- Sources arrive through an ordered backend chain (`research.backends`,
+  default Brave → Firecrawl → SearXNG → direct; `searchProvider` still works
+  as a one-element alias). Failures classify as unavailable, auth,
+  rate-limited (429 Retry-After sets the cooldown), upstream or timeout and
+  fail over to the next backend, which is recorded in `SourceMeta.provider`;
+  a `blocked` safety refusal stops the chain instead of routing around it.
 - The design tree (`frontier.json`) is the same shape for humans: nodes are
   decisions or deferred facts, saves are diff-checked (no deletions, no silent
   edits, no round regress), and the tree is the single source for the idea.
@@ -137,10 +151,10 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
 
 ## 5. Evaluations
 
-- **Merge-blocking (deterministic):** five fire suites on the real in-process
+- **Merge-blocking (deterministic):** six fire suites on the real in-process
   host — `grill-fires`, `factory-gate`, `darkharvest-fires`, `audit-fires`,
-  `scout-fires` (`packages/opencode/test/fires*.test.ts`), plus the drift
-  canary (`packages/core/test/drift.test.ts`).
+  `scout-fires`, `research-fires` (`packages/opencode/test/fires*.test.ts`),
+  plus the drift canary (`packages/core/test/drift.test.ts`).
 - **Nightly (model-backed, cost-capped):** `evals/cases/*.json` run against a
   real model with the same graders (`bun run evals`).
 - **Capability matrix:** every ENFORCED row names a test or spike that exists;

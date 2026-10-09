@@ -314,6 +314,129 @@ describe("research brief and retractions", () => {
     expect(recorded.out).toContain("1 claim(s) citing")
     expect((await ClaimStore.load(root)).citing(source).map((claim) => claim.status)).toEqual(["STALE"])
   })
+
+  test("render is agent-safe: md and html to stdout or a file", async () => {
+    const source = await researched()
+    expect((await run(["research", "render", "--format", "bogus"])).code).toBe(2)
+    const md = await run(["research", "render", "--format", "md"])
+    expect(md.code).toBe(0)
+    expect(md.out).toContain("# Research dossier: cli")
+    expect(md.out).toContain("Briefs are signed.")
+    expect(md.out).toContain(source.slice(0, 12))
+    const html = await run(["research", "render", "--format", "html", "--out", "dossier.html"])
+    expect(html.code).toBe(0)
+    expect(html.out).toContain("Rendered dossier.html (html,")
+    const file = await Bun.file(path.join(root, "dossier.html")).text()
+    expect(file).toContain("<!doctype html>")
+    expect(file).not.toContain("<script")
+    expect((await run(["research", "render"])).code).toBe(0)
+  })
+})
+
+describe("es research deep (headless deep research)", () => {
+  test("usage without side effects; a ceiling needs a terminal", async () => {
+    expect((await run(["research", "deep", "--help"])).code).toBe(0)
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
+    const bare = await run(["research", "deep"])
+    expect([bare.code, bare.out]).toEqual([2, expect.stringContaining("--max-usd N")])
+    const noCeiling = await run(["research", "deep", "what queue", "--output", "out"])
+    expect([noCeiling.code, noCeiling.out]).toEqual([2, expect.stringContaining("--max-usd")])
+    const badModel = await run([
+      "research",
+      "deep",
+      "what queue",
+      "--output",
+      "out",
+      "--max-usd",
+      "5",
+      "--model",
+      "nope",
+    ])
+    expect([badModel.code, badModel.out]).toEqual([2, expect.stringContaining("provider/model")])
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
+    const { DRIVERS } = await import("../src/headless.ts")
+    DRIVERS.fake = {
+      id: "fake",
+      available: async () => true,
+      async *turn(_input: unknown) {
+        yield { text: "unused" }
+        return "ses_fake"
+      },
+    }
+    try {
+      // No TTY: the ceiling confirmation refuses before anything is created.
+      // The fake driver pins the driver check, so this reads the same with
+      // or without a harness binary installed.
+      expect(
+        (await run(["research", "deep", "what queue", "--output", "out", "--max-usd", "5", "--driver", "fake"])).code,
+      ).toBe(3)
+      expect(await exists(path.join(root, "out", ".factory"))).toBe(false)
+    } finally {
+      delete DRIVERS.fake
+    }
+  })
+
+  test("a fake driver plays the coordinator flow to DONE", async () => {
+    const { DRIVERS } = await import("../src/headless.ts")
+    const { Factory, gateRunner, researchTools } = await import("@heretek-ai/es-core")
+    const out = path.join(root, "out")
+    const stubFetch = (async () =>
+      new Response("<p>Queues decouple workers from producers durably.</p>", {
+        headers: { "content-type": "text/html" },
+      })) as unknown as typeof fetch
+    const prompts: string[] = []
+    DRIVERS.fake = {
+      id: "fake",
+      available: async () => true,
+      async *turn({ prompt }: { prompt: string }) {
+        yield { text: "working" }
+        prompts.push(prompt)
+        // Alpha gathers, beta finds nothing, the synthesizer resolves, the
+        // coordinator completes — through the real tools and the real gate.
+        const tools = researchTools({
+          root: out,
+          fetch: stubFetch,
+          stateDir: state,
+          policy: async () => ({ root: out }),
+        })
+        const fetched = await tools
+          .find((tool) => tool.name === "es_research_fetch")!
+          .execute({ url: "https://x.test/queues" }, { agent: "es-research-alpha" })
+        const sha = /sha256:([0-9a-f]{64})/.exec(fetched)?.[1]
+        await writeFile(
+          path.join(out, ".factory/research/alpha.md"),
+          `# Alpha\n\n- Queues decouple workers [VERIFIED: sha256:${sha} "decouple workers from producers"]\n`,
+        )
+        await writeFile(
+          path.join(out, ".factory/research/beta.md"),
+          "# Beta\n\n- No counter-evidence cached [NEGATIVE_KNOWLEDGE: searched for queue outages]\n",
+        )
+        await writeFile(
+          path.join(out, ".factory/research/REPORT.md"),
+          `# Report\n\n- Queues decouple workers [VERIFIED: sha256:${sha} "decouple workers from producers"]\n`,
+        )
+        await new Factory(out, { gates: gateRunner({ stateDir: state }), stateDir: state }).completeResearch(
+          "deep-researcher",
+        )
+        return "ses_fake"
+      },
+    }
+    try {
+      const driven = await run(
+        ["research", "deep", "what queue", "--output", "out", "--max-usd", "5", "--driver", "fake"],
+        human(),
+      )
+      expect(driven.code).toBe(0)
+      expect(driven.out).toContain("Research run run-")
+      expect(driven.out).toContain("Research complete: out/.factory/research/REPORT.md")
+      expect(prompts[0]).toContain("Deep research: what queue")
+      expect(prompts[0]).toContain("es-research-alpha")
+      const done = await new Factory(out, { gates: gateRunner({ stateDir: state }), stateDir: state }).read()
+      expect(done).toMatchObject({ mode: "research", stage: "DONE" })
+    } finally {
+      delete DRIVERS.fake
+    }
+  })
 })
 
 describe("es config set", () => {

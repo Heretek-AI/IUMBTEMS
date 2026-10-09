@@ -19,3 +19,4 @@ description: OSS scouting — discovery axes, license/bloat/CVE red-team and cle
   - Core re-checks `adopt` against the verified license and the whitelist.
   - Adoption is the human's decision; the scout never adds a dependency.
 - **Clean-room blueprint:** interfaces, the algorithm in prose, and test fixtures. Never copied code.
+- **Quick verdicts:** `es_harvest_target` checks up to 5 sources for a fail-closed licence verdict (JSON) before proposing `adopt`.

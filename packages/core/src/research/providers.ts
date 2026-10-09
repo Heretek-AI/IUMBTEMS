@@ -21,7 +21,26 @@ export interface SearchProvider {
 }
 
 async function json(response: Response, provider: string) {
-  if (!response.ok) throw new Error(`${provider} search failed: HTTP ${response.status}`)
+  if (!response.ok) {
+    // Machine-readable details for the backend chain (#106): the HTTP status
+    // classifies the failure, and a 429 Retry-After sets the cooldown.
+    const error = new Error(`${provider} search failed: HTTP ${response.status}`) as Error & {
+      status?: number
+      retryAfterMs?: number
+    }
+    error.status = response.status
+    if (response.status === 429) {
+      const retryAfter = response.headers.get("retry-after")
+      if (retryAfter !== null) {
+        if (/^\d+$/.test(retryAfter.trim())) error.retryAfterMs = Number(retryAfter.trim()) * 1000
+        else {
+          const at = Date.parse(retryAfter)
+          if (!Number.isNaN(at)) error.retryAfterMs = Math.max(0, at - Date.now())
+        }
+      }
+    }
+    throw error
+  }
   return response.json() as Promise<any>
 }
 
@@ -103,30 +122,137 @@ export interface FetchedPage {
 }
 
 const MAX_FETCH_BYTES = 3_000_000
+const MAX_FETCH_REDIRECTS = 5
+
+/** A fetchPage refusal on safety grounds (SSRF/policy): the chain must never route around it (#106). */
+const blocked = (message: string) => {
+  const error = new Error(message) as Error & { code?: string }
+  error.code = "blocked"
+  return error
+}
+
+/** An IPv4 dotted quad fetchPage never contacts: loopback, RFC1918, link-local, this-network. */
+const blockedIPv4 = (quad: string, allowLoopback: boolean): boolean => {
+  const octets = quad.split(".").map(Number)
+  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return false
+  const [a, b] = octets as [number, number, number, number]
+  if (allowLoopback && a === 127) return false
+  return (
+    a === 0 || // this network
+    a === 10 || // RFC1918
+    a === 127 || // loopback
+    (a === 172 && b >= 16 && b <= 31) || // RFC1918
+    (a === 192 && b === 168) || // RFC1918
+    (a === 169 && b === 254) // link-local, including cloud metadata endpoints
+  )
+}
+
+/** An IPv6 literal (brackets stripped) fetchPage never contacts. */
+const blockedIPv6 = (host: string, allowLoopback: boolean): boolean => {
+  const name = host.toLowerCase()
+  if (name === "::1") return !allowLoopback
+  if (name === "::") return true
+  // An IPv4-mapped tail (::ffff:169.254.169.254, hex or dotted) is judged as IPv4.
+  const tail = /(?:^|:)(\d+\.\d+\.\d+\.\d+)$/.exec(name)?.[1]
+  if (tail) return blockedIPv4(tail, allowLoopback)
+  if (name.startsWith("::ffff:")) {
+    const words = name.slice("::ffff:".length).split(":")
+    if (words.length === 2 && words.every((word) => /^[0-9a-f]{1,4}$/.test(word))) {
+      const pair = words.map((word) => Number.parseInt(word, 16)) as [number, number]
+      return blockedIPv4(`${pair[0] >> 8}.${pair[0] & 0xff}.${pair[1] >> 8}.${pair[1] & 0xff}`, allowLoopback)
+    }
+    return false
+  }
+  const first = name.split(":", 1)[0]
+  return /^fe[89ab]/.test(first ?? "") || /^f[cd]/.test(first ?? "") // link-local, unique-local
+}
+
+/**
+ * Whether fetchPage must refuse this host without fetching: literal
+ * non-routable IPs (loopback unless the fixture allowance is on) and
+ * localhost. The hostname comes from WHATWG URL parsing (the same parser
+ * fetch uses), so decimal/hex/octal IPv4 tricks arrive already normalised
+ * to a dotted quad; userinfo never reaches the host.
+ */
+const blockedHost = (host: string, allowLoopback: boolean): boolean => {
+  const name = host.toLowerCase().replace(/\.+$/, "")
+  if (name === "localhost" || name.endsWith(".localhost")) return !allowLoopback
+  const bare = name.startsWith("[") && name.endsWith("]") ? name.slice(1, -1) : name
+  const quad = /(?:^|:|^.*:)(\d+\.\d+\.\d+\.\d+)$/.exec(bare)?.[1]
+  if (quad) return blockedIPv4(quad, allowLoopback)
+  if (bare.includes(":")) return blockedIPv6(bare, allowLoopback)
+  return false
+}
+
+/**
+ * Loopback is refused by default. ES_RESEARCH_ALLOW_LOOPBACK=1 re-admits
+ * 127/8, ::1 and localhost for loopback-only fixture servers in tests —
+ * the harness's deterministic pages bind 127.0.0.1 and nothing leaves the
+ * machine. Link-local (169.254/16), RFC1918 and other non-routables stay
+ * refused either way. Never set this in production.
+ */
+const loopbackAllowed = (env: NodeJS.ProcessEnv | undefined): boolean =>
+  /^(1|true|yes)$/i.test(env?.ES_RESEARCH_ALLOW_LOOPBACK ?? "")
+
+/** Parse an http(s) fetch target and refuse non-routable hosts before any fetch. */
+const assertRoutable = (raw: string, allowLoopback: boolean): URL => {
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    throw blocked("Only http(s) URLs can be fetched")
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw blocked("Only http(s) URLs can be fetched")
+  if (blockedHost(parsed.hostname, allowLoopback))
+    throw blocked(`Refusing to fetch ${parsed.hostname}: it resolves to a non-routable address (SSRF guard)`)
+  return parsed
+}
 
 /** Fetch a page and convert it to text. Only http(s); HTML is converted, text formats are kept. */
 export async function fetchPage(
   url: string,
-  options: { signal?: AbortSignal; fetch?: typeof fetch } = {},
+  options: { signal?: AbortSignal; fetch?: typeof fetch; env?: NodeJS.ProcessEnv } = {},
 ): Promise<FetchedPage> {
-  if (!/^https?:\/\//i.test(url)) throw new Error("Only http(s) URLs can be fetched")
-  const response = await (options.fetch ?? fetch)(url, {
-    headers: {
-      "User-Agent": "epistemic-swarm/1.0 (+research cache)",
-      Accept: "text/html,text/plain,text/markdown,application/json;q=0.9,*/*;q=0.5",
-    },
-    redirect: "follow",
-    signal: options.signal ?? AbortSignal.timeout(30_000),
-  })
+  if (!/^https?:\/\//i.test(url)) throw blocked("Only http(s) URLs can be fetched")
+  const doFetch = options.fetch ?? fetch
+  const allowLoopback = loopbackAllowed(options.env ?? process.env)
+  // Redirects are followed one hop at a time so every hop is re-checked:
+  // a redirect onto an internal address is refused before it is fetched.
+  // The first hop keeps the caller's spelling (like response.url || url
+  // before); redirect targets use the normalised absolute form.
+  let current = url
+  assertRoutable(current, allowLoopback)
+  let response: Response | undefined
+  for (let hop = 0; ; hop++) {
+    response = await doFetch(current, {
+      headers: {
+        "User-Agent": "epistemic-swarm/1.0 (+research cache)",
+        Accept: "text/html,text/plain,text/markdown,application/json;q=0.9,*/*;q=0.5",
+      },
+      redirect: "manual",
+      signal: options.signal ?? AbortSignal.timeout(30_000),
+    })
+    const location = response.status >= 300 && response.status < 400 ? response.headers.get("location") : undefined
+    if (!location) break
+    if (hop >= MAX_FETCH_REDIRECTS) throw new Error(`Fetching ${url} failed: too many redirects`)
+    let next: URL
+    try {
+      next = new URL(location, current)
+    } catch {
+      break
+    }
+    current = assertRoutable(next.toString(), allowLoopback).toString()
+  }
+  if (response === undefined) throw new Error(`Fetching ${url} failed: no response`)
   if (!response.ok) throw new Error(`Fetching ${url} failed: HTTP ${response.status}`)
   const contentType = response.headers.get("content-type") ?? "text/plain"
   if (/pdf|octet-stream|image\/|video\/|audio\//.test(contentType))
-    throw new Error(`Cannot cache ${contentType} content as text`)
+    throw blocked(`Cannot cache ${contentType} content as text`)
   const buffer = await response.arrayBuffer()
   const raw = new TextDecoder().decode(buffer.byteLength > MAX_FETCH_BYTES ? buffer.slice(0, MAX_FETCH_BYTES) : buffer)
   if (/html|xml/.test(contentType)) {
     const page = htmlToText(raw)
-    return { url: response.url || url, ...(page.title ? { title: page.title } : {}), text: page.text, contentType }
+    return { url: response.url || current, ...(page.title ? { title: page.title } : {}), text: page.text, contentType }
   }
-  return { url: response.url || url, text: raw, contentType }
+  return { url: response.url || current, text: raw, contentType }
 }

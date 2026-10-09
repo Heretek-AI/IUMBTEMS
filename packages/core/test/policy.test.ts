@@ -85,8 +85,14 @@ describe("write policy", () => {
       ".factory/harvest/widget/profile.json",
       ".factory/harvest/VENDOR-PLAN.md",
       ".factory/harvest/clean-room/widget-search.md",
+      ".factory/harvest/runs/grill-1/plan.json",
+      ".factory/harvest/runs/grill-1/widget/profile.json",
+      ".factory/harvest/runs/grill-1/HARVEST.md",
       ".factory/brainstorm/scores.json",
       ".factory/brainstorm/ideas.json",
+      ".factory/brainstorm/runs/grill-1/plan.json",
+      ".factory/brainstorm/runs/grill-1/ideas.json",
+      ".factory/brainstorm/runs/grill-1/BRAINSTORM.md",
       ".factory/design/tokens.json",
       ".factory/design/STYLE_GUIDE.md",
     ]
@@ -132,6 +138,18 @@ describe("write policy", () => {
         ])
     // Seats keep no other files under research/.
     expect(effect(evaluateWrite(ctx(), "es-research-alpha", ".factory/research/notes.md"))).toBe("deny")
+  })
+
+  test("research runs: the synthesizer alone writes the report, the coordinator plans in notes/ (#111)", () => {
+    // The factory keeps its build-run grant; the mode split is enforced by who
+    // launches the synthesizer (only the deep-researcher, only in research runs).
+    expect(effect(evaluateWrite(ctx(), "factory", ".factory/research/REPORT.md"))).toBe("allow")
+    expect(effect(evaluateWrite(ctx(), "deep-researcher", ".factory/research/REPORT.md"))).toBe("deny")
+    expect(effect(evaluateWrite(ctx(), "es-research-synthesizer", ".factory/research/REPORT.md"))).toBe("allow")
+    expect(effect(evaluateWrite(ctx(), "es-research-synthesizer", ".factory/research/alpha.md"))).toBe("deny")
+    expect(effect(evaluateWrite(ctx(), "deep-researcher", ".factory/research/notes/plan.md"))).toBe("allow")
+    expect(effect(evaluateWrite(ctx(), "deep-researcher", ".factory/research/REPORT.md"))).toBe("deny")
+    expect(effect(evaluateWrite(ctx(), "es-research-alpha", ".factory/research/notes/plan.md"))).toBe("deny")
   })
 
   test("manager cannot escape docs/ with ..", () => {
@@ -219,6 +237,13 @@ describe("shell policy", () => {
     expect(shell("build", "es audit verify").effect).toBe("allow")
     expect(shell("build", "es audit show").effect).toBe("allow")
     expect(shell("build", "es scout show").effect).toBe("allow")
+    // Deep-research runs drive a harness CLI too: human-only, like audit/scout.
+    expect(shell("build", "es research deep 'what queue' --output /tmp/r --max-usd 5").effect).toBe("deny")
+    expect(shell("factory", "es research deep 'what queue' --output /tmp/r --max-usd 5").effect).toBe("deny")
+    expect(shell("build", "es research search x").effect).toBe("allow")
+    // Rendering signs nothing: any seat may render, but export/retract stay human-only.
+    expect(shell("build", "es research render --format html").effect).toBe("allow")
+    expect(shell("factory", "es research render --format md --out /tmp/r.md").effect).toBe("allow")
     // The 1.1.0 audit (#44, #39): quoting, package runners and interpreters.
     for (const command of [
       "es 'approve' spec",
@@ -248,6 +273,8 @@ describe("shell policy", () => {
       "es gates --cwd=. install-git",
       "es --cwd . audit src --max-usd 5",
       "es --cwd . config set models.deep x/y",
+      "es --cwd . research deep 'what queue' --output /tmp/r --max-usd 5",
+      "es research --output /tmp/r deep 'what queue' --max-usd 5",
       "npx @heretek-ai/es-cli --cwd . approve spec",
     ])
       for (const agent of ["build", "es-programmer"])

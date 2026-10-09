@@ -4,14 +4,19 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import {
   auditMarkdown,
+  BackendError,
   braveProvider,
   canonicalUrl,
+  directBackend,
+  fetchPage,
   firecrawlProvider,
   htmlToText,
   isFresh,
   parseTags,
   pruneClaims,
   researchTools,
+  runFetchChain,
+  type SourceBackend,
   SourceCache,
   searxngProvider,
   selectProvider,
@@ -318,5 +323,131 @@ describe("research seat checks (#99: the registry grants, not the caller, decide
     // A granted seat passes the seat check (then reports the missing report, not a refusal).
     expect(await audit.execute({}, { agent: "factory" })).toContain("does not exist yet")
     expect(await audit.execute({}, { agent: "es-research-beta" })).toContain("does not exist yet")
+  })
+})
+
+describe("direct-backend SSRF guard (fail closed, never cached)", () => {
+  const countingFetch = (respond: (url: string) => Response, calls: { count: number }) =>
+    (async (url: string) => {
+      calls.count++
+      return respond(String(url))
+    }) as unknown as typeof fetch
+
+  test("fetchPage refuses loopback, link-local and RFC1918 URLs without fetching", async () => {
+    const internal = [
+      "http://169.254.169.254/latest/meta-data/",
+      "http://127.0.0.1/admin",
+      "http://10.0.0.5/secret",
+      "http://192.168.1.10:8080/secret",
+      "http://172.16.4.9/secret",
+      "http://localhost/secret",
+      "http://[::1]/secret",
+    ]
+    for (const url of internal) {
+      const calls = { count: 0 }
+      const failure = await fetchPage(url, { fetch: countingFetch(() => new Response("x"), calls) }).then(
+        () => "no-throw",
+        (error: unknown) => error,
+      )
+      expect([url, (failure as { code?: string })?.code]).toEqual([url, "blocked"])
+      expect([url, calls.count]).toEqual([url, 0])
+    }
+  })
+
+  test("fetching the metadata URL via direct throws blocked and caches nothing", async () => {
+    const calls = { count: 0 }
+    const fetch = countingFetch(
+      () => new Response("<p>metadata</p>", { headers: { "content-type": "text/html" } }),
+      calls,
+    )
+    const failure = await runFetchChain([directBackend], "http://169.254.169.254/latest/meta-data/", {
+      fetch,
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(failure).toBeInstanceOf(BackendError)
+    expect((failure as BackendError).kind).toBe("blocked")
+    expect(calls.count).toBe(0)
+  })
+
+  test("the loopback allowance admits fixture servers but never the metadata address", async () => {
+    const ok = { count: 0 }
+    const page = await fetchPage("http://127.0.0.1:18381/a", {
+      fetch: countingFetch(() => new Response("<p>fixture</p>", { headers: { "content-type": "text/html" } }), ok),
+      env: { ES_RESEARCH_ALLOW_LOOPBACK: "1" },
+    })
+    expect(page.text).toContain("fixture")
+    expect(ok.count).toBe(1)
+    // Link-local stays refused even with the allowance on, and nothing is fetched.
+    const refused = { count: 0 }
+    const failure = await fetchPage("http://169.254.169.254/latest/meta-data/", {
+      fetch: countingFetch(() => new Response("<p>metadata</p>"), refused),
+      env: { ES_RESEARCH_ALLOW_LOOPBACK: "1" },
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect((failure as { code?: string })?.code).toBe("blocked")
+    expect(refused.count).toBe(0)
+  })
+
+  test("a blocked refusal from an earlier backend stops the chain before direct is attempted", async () => {
+    const calls = { count: 0 }
+    const denyAll: SourceBackend = {
+      id: "deny",
+      capabilities: { search: false, fetch: true },
+      available: () => true,
+      fetch: async () => {
+        throw Object.assign(new Error("denied by policy"), { code: "blocked" })
+      },
+    }
+    const failure = await runFetchChain([denyAll, directBackend], "https://example.com/page", {
+      fetch: countingFetch(() => new Response("<p>ok</p>", { headers: { "content-type": "text/html" } }), calls),
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(failure).toBeInstanceOf(BackendError)
+    expect((failure as BackendError).kind).toBe("blocked")
+    expect(calls.count).toBe(0)
+  })
+
+  test("a redirect onto an internal address is refused and never fetched or cached", async () => {
+    const seen: string[] = []
+    const fetch = (async (url: string) => {
+      seen.push(String(url))
+      return new Response("<p>go inward</p>", {
+        status: 302,
+        headers: { location: "http://169.254.169.254/latest/meta-data/", "content-type": "text/html" },
+      })
+    }) as unknown as typeof fetch
+    const failure = await fetchPage("https://example.com/out", { fetch }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect((failure as { code?: string })?.code).toBe("blocked")
+    expect(seen).toEqual(["https://example.com/out"])
+  })
+
+  test("the fetch tool refuses a metadata URL without fetching or caching it", async () => {
+    const calls = { count: 0 }
+    const tools = researchTools({
+      root: dir,
+      env: {},
+      stateDir: state,
+      policy: async () => ({ root: dir }),
+      fetch: countingFetch(() => new Response("<p>metadata</p>", { headers: { "content-type": "text/html" } }), calls),
+    })
+    const fetchTool = tools.find((tool) => tool.name === "es_research_fetch")!
+    await expect(
+      fetchTool.execute({ url: "http://169.254.169.254/latest/meta-data/" }, { agent: "es-research-alpha" }),
+    ).rejects.toThrow(/non-routable|blocked|SSRF/i)
+    expect(calls.count).toBe(0)
+    expect(
+      await new SourceCache(path.join(dir, ".factory/research/sources"), state).byUrl(
+        "http://169.254.169.254/latest/meta-data/",
+      ),
+    ).toBeUndefined()
   })
 })

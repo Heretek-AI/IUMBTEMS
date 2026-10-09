@@ -4,7 +4,7 @@
 // the ported borderline_claims.json.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
-import { writeFile } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import {
@@ -261,3 +261,137 @@ async function readAuditEntries(root: string, action: string) {
     .map((line) => JSON.parse(line) as { action: string; payload: Record<string, unknown> })
     .filter((entry) => entry.action === action)
 }
+
+describe("source tiers reach claims and the score (#113)", () => {
+  test("the built-in table classifies hosts; packs override it; unknowns stay undefined", async () => {
+    const { classifySourceTier } = await import("../src/research/tier.ts")
+    expect([
+      classifySourceTier("https://arxiv.org/abs/1234"),
+      classifySourceTier("https://export.arxiv.org/abs/1234"),
+      classifySourceTier("https://www.biorxiv.org/content/1"),
+      classifySourceTier("https://doi.org/10.1/abc"),
+      classifySourceTier("https://pubmed.ncbi.nlm.nih.gov/1/"),
+      classifySourceTier("https://www.nature.com/articles/x"),
+      classifySourceTier("https://docs.python.org/3/"),
+      classifySourceTier("https://developer.mozilla.org/en/"),
+      classifySourceTier("https://docs.example.com/x"),
+      classifySourceTier("https://www.fda.gov/news/x"),
+      classifySourceTier("https://journal.example/clean"),
+      classifySourceTier("not a url"),
+      classifySourceTier("https://ARXIV.ORG/ABS/1"),
+    ]).toEqual([
+      "PREPRINT",
+      "PREPRINT",
+      "PREPRINT",
+      "PEER_REVIEWED",
+      "PEER_REVIEWED",
+      "PEER_REVIEWED",
+      "TECHNICAL_DOCUMENTATION",
+      "TECHNICAL_DOCUMENTATION",
+      "TECHNICAL_DOCUMENTATION",
+      "PRIMARY_PRESS",
+      undefined,
+      undefined,
+      "PREPRINT",
+    ])
+    // A pack override wins over the built-ins.
+    expect(classifySourceTier("https://arxiv.org/abs/1", { PEER_REVIEWED: ["arxiv.org"] })).toBe("PEER_REVIEWED")
+    expect(classifySourceTier("https://internal.example/trial", { PRIMARY_PRESS: ["internal.example"] })).toBe(
+      "PRIMARY_PRESS",
+    )
+  })
+
+  test("the tier is stored in sealed SourceMeta; tampering with it voids the seal", async () => {
+    const fx = await gitRepo()
+    try {
+      const { SourceCache } = await import("../src/research/cache.ts")
+      const cache = new SourceCache(path.join(fx.root, ".factory/research/sources"), fx.state)
+      const entry = await cache.put({ url: "https://arxiv.org/abs/1", text: "A preprint finding.", provider: "fetch" })
+      expect(entry.meta.tier).toBe("PREPRINT")
+      expect((await cache.get(entry.meta.sha256))?.meta.tier).toBe("PREPRINT")
+      // Unknown hosts stay tierless (the score falls back to __default__).
+      const plain = await cache.put({ url: "https://example.test/x", text: "Just a page.", provider: "fetch" })
+      expect(plain.meta.tier).toBeUndefined()
+      // The seal covers the tier: rewriting it voids the entry.
+      const { atomicWrite } = await import("../src/util/fs.ts")
+      const metaFile = path.join(fx.root, ".factory/research/sources", `${entry.meta.sha256}.json`)
+      const meta = JSON.parse(await Bun.file(metaFile).text())
+      await atomicWrite(metaFile, `${JSON.stringify({ ...meta, tier: "PEER_REVIEWED" })}\n`)
+      expect(await cache.get(entry.meta.sha256)).toBeUndefined()
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test("claims inherit the cited source's tier; multi-source evidence takes the max weight", async () => {
+    const fx = await gitRepo()
+    try {
+      const { SourceCache, researchSourcesDir } = await import("../src/research/cache.ts")
+      const { auditMarkdown } = await import("../src/research/auditor.ts")
+      const { claimsFromAudit } = await import("../src/claims/research.ts")
+      const { highestTier } = await import("../src/claims/constitution.ts")
+      const cache = new SourceCache(researchSourcesDir(fx.root), fx.state)
+      const peer = await cache.put({
+        url: "https://doi.org/10.1/x",
+        text: "The trial met its endpoint.",
+        provider: "fetch",
+      })
+      const pre = await cache.put({
+        url: "https://arxiv.org/abs/2",
+        text: "A model predicts the endpoint.",
+        provider: "fetch",
+      })
+      await mkdir(path.join(fx.root, ".factory/research"), { recursive: true })
+      const report = [
+        `- The trial met its endpoint [VERIFIED: sha256:${peer.meta.sha256} "met its endpoint"]`,
+        `- A model predicts the endpoint [VERIFIED: sha256:${pre.meta.sha256} "predicts the endpoint"]`,
+      ].join("\n")
+      const audit = await auditMarkdown(report, cache)
+      expect(audit.passed).toBe(true)
+      const found = await claimsFromAudit(audit, cache)
+      expect(found.map((claim) => claim.tier).sort()).toEqual(["PEER_REVIEWED", "PREPRINT"])
+      const pack = await loadDomainPack("biopharma")
+      const constitution = constitutionFromPack(pack)
+      expect(highestTier(["PREPRINT", "PEER_REVIEWED"], constitution)).toBe("PEER_REVIEWED")
+      expect(highestTier([undefined, "PREPRINT"], constitution)).toBe("PREPRINT")
+      expect(highestTier([undefined], constitution)).toBeUndefined()
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test("a peer-reviewed dossier scores above a preprint-only one under biopharma", async () => {
+    const pack = await loadDomainPack("biopharma")
+    const constitution = constitutionFromPack(pack)
+    const peer = computeEpistemicScoreFromClaims(
+      [{ id: "a".repeat(64), tag: "VERIFIED", tier: "PEER_REVIEWED" }],
+      constitution,
+    )
+    const pre = computeEpistemicScoreFromClaims(
+      [{ id: "b".repeat(64), tag: "VERIFIED", tier: "PREPRINT" }],
+      constitution,
+    )
+    expect(peer.score).toBe(1)
+    expect(pre.score).toBe(0.3)
+    // Unknown tiers fall back to __default__.
+    expect(computeEpistemicScoreFromClaims([{ id: "c".repeat(64), tag: "VERIFIED" }], constitution).score).toBe(1)
+  })
+
+  test("tiers do not change claim identity: PCRB export and verify still pass", async () => {
+    const { normalizeClaim, claimId } = await import("../src/claims/claim.ts")
+    const without = normalizeClaim({
+      tag: "VERIFIED",
+      statement: "X holds.",
+      source: { sha256: "a".repeat(64), quote: "x holds" },
+    })
+    const withTier = normalizeClaim({
+      tag: "VERIFIED",
+      statement: "X holds.",
+      source: { sha256: "a".repeat(64), quote: "x holds" },
+      tier: "PEER_REVIEWED",
+    })
+    expect(withTier.id).toBe(without.id)
+    expect(withTier.tier).toBe("PEER_REVIEWED")
+    expect(claimId({ ...without, tier: "PREPRINT" } as never)).toBe(without.id)
+  })
+})

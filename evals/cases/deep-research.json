@@ -1,0 +1,11 @@
+{
+  "id": "deep-research",
+  "description": "The deep-researcher runs a research-only run adversarially (thesis, antithesis, synthesis) to a grounded REPORT.md and completes at DONE. Reported, never blocking.",
+  "agent": "deep-researcher",
+  "prompt": "Deep research: do mechanical gates keep autonomous agents honest? This is a headless run: no human will answer questions, so write the plan note, launch es-research-alpha and es-research-beta in parallel (both subagent calls in one message, in the foreground), then es-research-synthesizer with the disputes, then es_research_audit and es_research_complete. Tag every claim; quotes must be verbatim from cached sources.",
+  "maxSteps": 22,
+  "checks": {
+    "toolsUsed": ["es_research_complete"],
+    "contains": ["DONE"]
+  }
+}

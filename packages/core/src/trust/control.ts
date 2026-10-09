@@ -26,6 +26,9 @@ export const FACTORY_CONTROL = [
   // Engine-owned brainstorm/harvest/design state: only the es_* tools write it
   // (through core), so no seat can hand-edit what a gated tool reads back.
   ".factory/brainstorm/*.{json,md}",
+  ".factory/brainstorm/runs/**",
+  ".factory/harvest/*.{json,md}",
+  ".factory/harvest/runs/**",
   ".factory/harvest/*.{json,md}",
   ".factory/harvest/*/profile.json",
   ".factory/harvest/clean-room/**",

@@ -28,6 +28,7 @@ export const CAPABILITIES = [
   "claims",
   "audit",
   "scout",
+  "research-fires",
 ] as const
 export type Capability = (typeof CAPABILITIES)[number]
 
@@ -108,17 +109,19 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     research: {
       support: "enforced",
       detail:
-        "Engine-sealed cache (#52), fragment-level quote verifier (every ellipsis fragment >= 12 chars; code excerpts one contiguous span of at most 60 lines), auditor, providers and the websearch bridge.",
+        "Engine-sealed cache (#52), fragment-level quote verifier (every ellipsis fragment >= 12 chars; code excerpts one contiguous span of at most 60 lines), auditor, providers and the websearch bridge. Research-only runs complete through the deep-researcher (thesis/antithesis/synthesis at depth 1) at DONE.",
       test: "packages/core/test/research.test.ts",
     },
     brainstorm: {
       support: "enforced",
-      detail: "Lens fan-out, record/score/complete tools, dedupe, rubric, shortlist with a forced outlier.",
+      detail:
+        "Lens fan-out, record/score/complete tools, dedupe, rubric, shortlist with a forced outlier. Runs are id-scoped (the human's /brainstorm is the default run); the grill and the factory run callable brainstorms at depth 1 and get the shortlist as JSON.",
       test: "packages/opencode/test/brainstorm.test.ts",
     },
     harvest: {
       support: "enforced",
-      detail: "Fail-closed SPDX detection, provenance profiles, policy-enforced matrix, clean-room specs.",
+      detail:
+        "Fail-closed SPDX detection, provenance profiles, policy-enforced matrix, clean-room specs. Runs are id-scoped (the human's /harvest is the default run); es_harvest_target gives the grill, factory, scout and harvester deterministic verdicts, and prior-art search is shared with brainstorm callers.",
       test: "packages/opencode/test/harvest.test.ts",
     },
     design: {
@@ -144,6 +147,12 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
       detail:
         "OSS scout: cached-only web under an offline (--unshare-net) sandbox, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited.",
       test: "packages/opencode/test/fires.test.ts",
+    },
+    "research-fires": {
+      support: "enforced",
+      detail:
+        "Research fires: the whole research loop on the real host with loopback-only servers — grounded quotes survive the audit, failover records provenance, blocked never fails over, planted sources are refused, retractions degrade to STALE, renders snapshot.",
+      test: "packages/opencode/test/fires-research.test.ts",
     },
   }),
   claude: [

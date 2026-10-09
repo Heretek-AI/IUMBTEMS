@@ -241,6 +241,60 @@ export default Plugin.define({
         },
       })
       editor.add({
+        name: "research",
+        description: "Adversarial deep research to a grounded report: thesis, antithesis, synthesis (Epistemic Swarm)",
+        execute: async ({ sessionID, prompt, delivery }) => {
+          const say = async (text: string) => {
+            await ctx.session.synthetic({ sessionID, text } as any)
+          }
+          const text = prompt.text?.trim() ?? ""
+          const query = text.replace(/^deep\s+/i, "").trim()
+          const ceiling = /--max-usd\s+([\d.]+)/.exec(text)?.[1]
+          if (!/^deep(\s|$)/i.test(text) || !query.replace(/--max-usd\s+[\d.]+/, "").trim()) {
+            return say("Usage: /research deep <question> --max-usd N")
+          }
+          if (ceiling === undefined || !(Number(ceiling) > 0)) {
+            return say(
+              "Deep research needs a spend ceiling you set: /research deep <question> --max-usd N. Seats halt when the spend reaches it.",
+            )
+          }
+          const existing = await runtime.factory.read().catch(() => undefined)
+          if (existing && existing.mode !== "research") {
+            return say(
+              "This project holds a build run. Start deep research in a directory without one (`es research deep <question> --output <dir> --max-usd N` at a terminal).",
+            )
+          }
+          if (existing?.stage === "HALTED") {
+            return say(
+              "This research run is halted; resume it first (`es factory resume` at a terminal, or /es-resume to preview).",
+            )
+          }
+          if (existing?.stage === "DONE") {
+            return say(
+              "This research run is done. For a new question, start one in a fresh directory (`es research deep <question> --output <dir> --max-usd N` at a terminal).",
+            )
+          }
+          if (!existing) {
+            try {
+              // The human typed /research deep: beginning the run is their action.
+              await runtime.factory.beginResearchRun(
+                { objective: query.replace(/--max-usd\s+[\d.]+/, "").trim(), ceilingUSD: Number(ceiling) },
+                "human:tui",
+              )
+            } catch (error) {
+              return say(`Could not start the research run: ${error instanceof Error ? error.message : String(error)}`)
+            }
+          }
+          await ctx.session.switchAgent({ sessionID, agent: "deep-researcher" } as any)
+          await ctx.session.prompt({
+            ...prompt,
+            sessionID,
+            text: `${await runtime.factory.summary()}\nDeep research runs adversarially: write the plan note, launch es-research-alpha and es-research-beta in parallel (both subagent calls in one message, in the foreground), then es-research-synthesizer with the disputes, then es_research_audit and es_research_complete. No human will answer questions mid-flow.`,
+            delivery,
+          } as any)
+        },
+      })
+      editor.add({
         name: "audit",
         description: "Open a code audit of the active phase or a path and run the auditor pair (Epistemic Swarm)",
         execute: async ({ sessionID, prompt, delivery }) => {

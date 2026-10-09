@@ -74,6 +74,20 @@
         "zero_tolerance"
       ]
     },
+    "tierDomains": {
+      "description": "Pack host overrides by tier for source classification.",
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "exportTemplate": {
       "type": "string"
     }

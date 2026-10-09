@@ -1,10 +1,21 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, readFile, truncate, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, truncate, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import path from "node:path"
 import { approvalSubject, recordApproval, verifyApproval } from "../src/approval/index.ts"
 import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import { verifyAuditChain } from "../src/audit/index.ts"
-import { Factory, FactoryError, FactoryHalted, type GateRequest, type GateRunLike } from "../src/factory/index.ts"
+import {
+  Factory,
+  FactoryError,
+  FactoryHalted,
+  factorySummary,
+  type GateRequest,
+  type GateRunLike,
+  headline,
+  listRuns,
+  readLiveness,
+} from "../src/factory/index.ts"
 import { factoryLayout } from "../src/layout.ts"
 import { run } from "../src/util/proc.ts"
 import { type Fixture, frontier, gitRepo, writeGoal, writeReport, writeSpecs } from "./helpers.ts"
@@ -590,5 +601,64 @@ describe("guards", () => {
     const check = await verifyAuditChain(fx.root)
     expect(check.valid).toBe(false)
     expect(check.error).toContain("truncated")
+  })
+})
+
+describe("research-only runs (#110)", () => {
+  let dir: string
+  let research: Factory
+  beforeEach(async () => {
+    // Deliberately not a git repo: research runs work anywhere.
+    dir = await mkdtemp(path.join(tmpdir(), "es-research-run-"))
+    research = new Factory(dir, { gates, pr, stateDir: fx.state })
+  })
+
+  test("begin with an objective and a ceiling, complete to DONE; the dossier takes the objective", async () => {
+    const begun = await research.beginResearchRun({ objective: "Which queue backs our workers?", ceilingUSD: 5 })
+    expect(begun).toMatchObject({ mode: "research", stage: "RESEARCH", spendCeilingUSD: 5 })
+    expect(begun.objective).toBe("Which queue backs our workers?")
+    await expect(research.beginResearchRun({ objective: "again", ceilingUSD: 5 })).rejects.toThrow(/already exists/)
+    await writeReport(dir, fx.state)
+    const done = await research.completeResearch("factory")
+    expect(done.stage).toBe("DONE")
+    expect(done.mode).toBe("research")
+    const { readDossier } = await import("../src/claims/dossier.ts")
+    const dossier = await readDossier(factoryLayout(dir).researchDossier)
+    expect(dossier?.subject).toBe("Which queue backs our workers?")
+  })
+
+  test("an objective and a ceiling are required", async () => {
+    await expect(research.beginResearchRun({ objective: "  ", ceilingUSD: 5 })).rejects.toThrow(/objective/)
+    await expect(research.beginResearchRun({ objective: "x", ceilingUSD: 0 })).rejects.toThrow(/ceiling/)
+    await expect(research.beginResearchRun({ objective: "x", ceilingUSD: Number.NaN })).rejects.toThrow(/ceiling/)
+  })
+
+  test("deferred frontier facts are not required", async () => {
+    await research.beginResearchRun({ objective: "x", ceilingUSD: 5 })
+    await writeFile(
+      factoryLayout(dir).frontier,
+      JSON.stringify({ version: "1.1", idea: "x", settled: false, round: 1, nodes: [] }),
+    )
+    await writeReport(dir, fx.state)
+    await expect(research.completeResearch("factory")).resolves.toMatchObject({ stage: "DONE" })
+  })
+
+  test("the ceiling and STOP are enforced", async () => {
+    await research.beginResearchRun({ objective: "x", ceilingUSD: 5 })
+    const halted = await research.recordSpend(5, true)
+    expect(halted?.stage).toBe("HALTED")
+    expect(halted?.halt?.reason).toContain("ceiling")
+    await research.resume("tester", { raiseCeilingUSD: 10 })
+    await writeFile(factoryLayout(dir).stop, "pause")
+    await expect(research.completeResearch("factory")).rejects.toThrow(FactoryHalted)
+  })
+
+  test("status vocabulary is research, and the run is indexed", async () => {
+    const begun = await research.beginResearchRun({ objective: "Which queue?", ceilingUSD: 5 })
+    const live = await readLiveness(dir, begun)
+    expect(headline(begun, live)).toMatch(/research run/i)
+    expect(await factorySummary(begun)).toContain("Which queue?")
+    const runs = await listRuns(fx.state)
+    expect(runs.map((entry) => [entry.stage, entry.root])).toContainEqual(["RESEARCH", dir])
   })
 })

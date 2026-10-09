@@ -162,11 +162,13 @@ const STAGE_WORD: Record<string, string> = {
 }
 
 const stageWork = (state: FactoryState) =>
-  state.stage === "BUILD"
-    ? `Building ${state.activePhase ?? "the next phase"}`
-    : state.stage === "QA"
-      ? `QA on ${state.activePhase ?? "the active phase"}`
-      : (STAGE_WORD[state.stage] ?? state.stage)
+  state.mode === "research" && state.stage === "RESEARCH"
+    ? "Research run"
+    : state.stage === "BUILD"
+      ? `Building ${state.activePhase ?? "the next phase"}`
+      : state.stage === "QA"
+        ? `QA on ${state.activePhase ?? "the active phase"}`
+        : (STAGE_WORD[state.stage] ?? state.stage)
 
 const shortSession = (sessionID: string) => (sessionID.length > 16 ? sessionID.slice(0, 16) : sessionID)
 

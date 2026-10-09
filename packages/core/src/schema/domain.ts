@@ -24,6 +24,11 @@ export const DomainPackSchema = z
     bannedDomains: z.array(z.string().min(1)).default([]).describe("Source URLs containing any of these are rejected."),
     mandatoryTags: z.array(ClaimTagSchema).default([]).describe("Every claim must carry one of these tags."),
     retractionPolicy: RetractionPolicySchema.default("standard"),
+    /** Per-tier host overrides for source classification (checked before the built-in table). */
+    tierDomains: z
+      .record(z.string(), z.array(z.string().min(1)))
+      .optional()
+      .describe("Pack host overrides by tier for source classification."),
     /** Legacy metadata; carried so ported pack files round-trip. */
     exportTemplate: z.string().optional(),
   })

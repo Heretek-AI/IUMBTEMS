@@ -37,6 +37,10 @@ const SCOPE_GLOBS: Record<Exclude<WriteScope, "worktree">, readonly string[]> = 
   // One writer per research file: each seat its own notes, never the report.
   "research-alpha": [".factory/research/alpha.md"],
   "research-beta": [".factory/research/beta.md"],
+  // The deep-researcher plans in notes/; the synthesizer alone writes the
+  // report in research runs (the factory still owns it in build runs, #111).
+  "deep-research": [".factory/research/notes/**"],
+  "research-report": [".factory/research/REPORT.md"],
   // Engine state under these dirs is a control file (tools only); seats keep notes.
   brainstorm: [".factory/brainstorm/notes/**"],
   harvest: [".factory/harvest/notes/**"],
@@ -139,7 +143,7 @@ export const HUMAN_VERBS: ReadonlyArray<HumanVerbRule> = [
   ["gates", (next) => next === "install-git"],
   ["lsp", (next) => next === "install"],
   ["config", (next) => next === "set"],
-  ["research", (next) => next === "retract" || next === "export"],
+  ["research", (next) => next === "retract" || next === "export" || next === "deep"],
   // Audit and scout runs drive a harness CLI: an agent must not start nested headless runs.
   ["audit", (next) => next !== undefined && next !== "verify" && next !== "show"],
   ["scout", (next) => next !== undefined && next !== "show"],

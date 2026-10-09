@@ -48,6 +48,8 @@ export interface DriverTurn {
   readonly prompt: string
   readonly session?: string
   readonly signal?: AbortSignal
+  /** Seat model override, "provider/model" (human-set flags only). */
+  readonly model?: string
 }
 
 export interface HarnessDriver {
@@ -76,7 +78,7 @@ function resolveOnPath(binary: string): string | undefined {
 export const opencodeDriver: HarnessDriver = {
   id: "opencode",
   available: () => Promise.resolve(resolveOnPath("opencode") !== undefined),
-  async *turn({ root, agent, prompt, session, signal }) {
+  async *turn({ root, agent, prompt, session, signal, model }) {
     const args = [
       "run",
       "--standalone",
@@ -84,6 +86,7 @@ export const opencodeDriver: HarnessDriver = {
       "json",
       "--agent",
       agent,
+      ...(model ? ["--model", model] : []),
       ...(session ? ["--session", session] : []),
       prompt,
     ]
@@ -126,6 +129,8 @@ export interface HeadlessOptions {
   readonly stallTurns?: number
   readonly stateDir?: string
   readonly signal?: AbortSignal
+  /** Seat model override, "provider/model" (human-set flags only). */
+  readonly model?: string
   /** How often a `progress` event is emitted while a turn runs (default 30 s). */
   readonly progressMs?: number
 }
@@ -220,6 +225,7 @@ export async function* driveHeadless(options: HeadlessOptions, job: HeadlessJob)
       prompt: await job.prompt(state, factory),
       ...(session ? { session } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.model ? { model: options.model } : {}),
     })
     // A turn can run for many minutes (foreground seats): report liveness
     // while it does, so "quiet" is never mistaken for "stuck".

@@ -2,6 +2,8 @@
 // the terminal, then drive the seat headlessly until it settles. Both run on a
 // factory run with a spend ceiling (decision 7): with none, `--max-usd N`
 // starts a GRILL run with that provisional ceiling, confirmed with the passphrase.
+
+import { mkdir, stat } from "node:fs/promises"
 import { userInfo } from "node:os"
 import path from "node:path"
 import {
@@ -13,6 +15,7 @@ import {
   flag,
   gateRunner,
   parseAuditTarget,
+  parseModelRef,
   readAssessments,
   readScoutPlan,
   readScoutResult,
@@ -307,5 +310,94 @@ export async function scoutShow(context: HumanContext, args: Args): Promise<numb
     return 0
   }
   context.print('No scout in .factory/scout. Start one with /scout in OpenCode or `es scout "<feature>" --max-usd N`.')
+  return 1
+}
+
+/**
+ * Human-only `es research deep <query> --output <dir> --max-usd N`: start a
+ * research-only run in the output directory (created; no git repo needed)
+ * and drive the deep-researcher headlessly until REPORT.md completes at DONE.
+ */
+export async function researchDeepCommand(context: HumanContext, args: Args): Promise<number> {
+  const query = args.positionals.join(" ").trim()
+  if (!query) {
+    context.print(
+      'Usage: es research deep "<question>" --output <dir> --max-usd N [--driver <id>] [--model provider/model] [--max-turns N]',
+    )
+    return 2
+  }
+  const level = levelFor(context, args)
+  if (!level) return 2
+  // Validate inputs before touching the environment, so usage errors read
+  // the same with or without a driver installed.
+  const model = flag(args, "model")
+  if (model !== undefined && !parseModelRef(model)) {
+    context.print(`Bad --model "${model}": expected "provider/model" (both parts non-empty, no spaces).`)
+    return 2
+  }
+  const rawCeiling = flag(args, "max-usd")
+  const ceiling = rawCeiling === undefined ? Number.NaN : Number(rawCeiling)
+  if (!(ceiling > 0)) {
+    context.print("Deep research needs a spend ceiling. Give one: --max-usd <USD>.")
+    return 2
+  }
+  const driver = await driverFor(context, args)
+  if (!driver) return 2
+  const outDir = path.resolve(context.root, flag(args, "output") ?? ".")
+  await mkdir(outDir, { recursive: true })
+  const factory = new Factory(outDir, {
+    gates: gateRunner(context.stateDir ? { stateDir: context.stateDir } : {}),
+    ...(context.stateDir ? { stateDir: context.stateDir } : {}),
+  })
+  const lines = [
+    `A research-only run starts in ${path.relative(context.root, outDir) || outDir} with a $${ceiling} ceiling.`,
+    "The deep-researcher runs thesis, antithesis and synthesis headlessly; seats halt when the spend reaches the ceiling.",
+  ]
+  if (!(await confirmHuman(context.io, `Deep research: ${query}`, lines, context.stateDir))) {
+    context.print("Cancelled; nothing was started.")
+    return 1
+  }
+  const begun = await factory.beginResearchRun({ objective: query, ceilingUSD: ceiling }, `human:${user()}`)
+  context.print(`Research run ${begun.runId} started: "${query}".`)
+  const report = path.join(factoryLayout(outDir).research, "REPORT.md")
+  let outcome: HeadlessEvent | undefined
+  for await (const event of drain(
+    context,
+    level,
+    driveHeadless(
+      {
+        root: outDir,
+        driver,
+        ...(turns(args) ? { maxTurns: turns(args)! } : {}),
+        ...(context.stateDir ? { stateDir: context.stateDir } : {}),
+        ...(model ? { model } : {}),
+      },
+      {
+        agent: "deep-researcher",
+        prompt: async () =>
+          `${await factory.summary()}\nDeep research: ${query}. This is a headless run: no human will answer questions, so write the plan note, launch es-research-alpha and es-research-beta in parallel (both subagent calls in one message, in the foreground), then es-research-synthesizer with the disputes, then es_research_audit and es_research_complete.`,
+        finished: async (current) =>
+          current.stage === "DONE" ? { type: "done", report: path.relative(context.root, report) } : undefined,
+        progress: async (current) => {
+          const stamp = async (file: string) =>
+            stat(file)
+              .then((info) => `${info.size}@${info.mtimeMs}`)
+              .catch(() => "-")
+          const research = factoryLayout(outDir).research
+          return JSON.stringify([
+            current.stage,
+            await stamp(path.join(research, "alpha.md")),
+            await stamp(path.join(research, "beta.md")),
+            await stamp(path.join(research, "REPORT.md")),
+          ])
+        },
+      },
+    ),
+  ))
+    outcome = event
+  if (outcome?.type === "done") {
+    context.print(`Research complete: ${outcome.report}`)
+    return 0
+  }
   return 1
 }

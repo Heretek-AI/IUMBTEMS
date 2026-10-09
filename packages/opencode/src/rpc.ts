@@ -19,6 +19,7 @@ import {
   headline,
   installServer,
   isTrusted,
+  listBrainstormRuns,
   loadGatesConfig,
   readFrontier,
   readIdeas,
@@ -181,14 +182,19 @@ export function createRpcHandlers(
       }
     },
     brainstormState: async () => {
-      const plan = await readPlan(runtime.root).catch(() => undefined)
-      if (!plan) return { active: false }
-      const ideas = await readIdeas(runtime.root).catch(() => [])
-      const scores = await readScores(runtime.root).catch(() => [])
-      const result = await readResult(runtime.root).catch(() => undefined)
+      const runs = await listBrainstormRuns(runtime.root).catch(() => [] as string[])
+      // The panel shows the default run, else the latest; every run stays one CLI call away.
+      const run = runs.includes("default") ? "default" : runs[runs.length - 1]
+      const plan = run ? await readPlan(runtime.root, run).catch(() => undefined) : undefined
+      if (!plan || !run) return { active: false, runs }
+      const ideas = await readIdeas(runtime.root, run).catch(() => [])
+      const scores = await readScores(runtime.root, run).catch(() => [])
+      const result = await readResult(runtime.root, run).catch(() => undefined)
       const survivors = ideas.filter((idea) => !idea.duplicateOf)
       return {
         active: true,
+        run,
+        runs,
         brief: plan.brief.idea,
         lenses: plan.lenses,
         ideas: survivors.length,
