@@ -7,14 +7,17 @@
       "properties": {
         "fast": {
           "type": "string",
+          "pattern": "^[^\\s/]+\\/[^\\s/]+$",
           "description": "Model for fast-tier seats (lenses), \"provider/model\"."
         },
         "balanced": {
           "type": "string",
+          "pattern": "^[^\\s/]+\\/[^\\s/]+$",
           "description": "Model for balanced-tier seats (programmer, QA, research)."
         },
         "deep": {
           "type": "string",
+          "pattern": "^[^\\s/]+\\/[^\\s/]+$",
           "description": "Model for deep-tier seats (factory, grill, managers, critics)."
         },
         "agents": {
@@ -23,7 +26,8 @@
             "type": "string"
           },
           "additionalProperties": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[^\\s/]+\\/[^\\s/]+$"
           },
           "description": "Per-agent model overrides by agent id."
         }

@@ -18,7 +18,7 @@ import {
   runGates,
 } from "@heretek-ai/es-core"
 import { Plugin } from "@opencode/plugin"
-import { compileAgents } from "./agents.ts"
+import { compileAgents, modelProblems } from "./agents.ts"
 import { createFactoryContinuation } from "./continue.ts"
 import { createHookBridge } from "./hooks.ts"
 import { createPolicyHooks } from "./policy.ts"
@@ -47,6 +47,17 @@ export default Plugin.define({
       () => [] as string[],
     )
     const agents = await compileAgents(runtime.options, servers)
+    // Fail-closed models (#96): every configured ref is checked against the
+    // host model list here, once. A missing model refuses that seat at launch
+    // (guardSeatLaunch) and shows in es_status; healthy seats are unaffected.
+    await ctx.model.transform((editor) => {
+      for (const problem of modelProblems(
+        runtime.options,
+        agents.map((agent) => agent.spec),
+        (providerID, modelID) => editor.get(providerID, modelID) !== undefined,
+      ))
+        runtime.modelProblems.set(problem.agent, problem)
+    })
     await ctx.agent.transform((editor) => {
       for (const compiled of agents)
         editor.update(compiled.spec.id, (agent) => {

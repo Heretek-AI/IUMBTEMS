@@ -19,4 +19,14 @@ plugin option is ignored with a warning (TUI toast and `/config`). Generated: do
 | `licenseWhitelist` | array | `["MIT","Apache-2.0","BSD-2-Clause","BSD-3-Clause","ISC","0BSD","Unlicense","CC0-1.0"]` | SPDX ids darkharvest may depend on or vendor (a harvest plan may only narrow it); everything else is clean-room only. |
 | `audit` | object | `{"phase":"optional"}` | Code-audit gating tunables (set with `es config set audit.phase required`). |
 
+Nested `models.*` keys (fail-closed: malformed refs and unknown agent ids are rejected at load; a
+configured model missing on the host refuses that seat at launch):
+
+| field | description |
+| --- | --- |
+| `models.fast` | Model for fast-tier seats (lenses), "provider/model". |
+| `models.balanced` | Model for balanced-tier seats (programmer, QA, research). |
+| `models.deep` | Model for deep-tier seats (factory, grill, managers, critics). |
+| `models.agents` | Per-agent model overrides by agent id. |
+
 `es config show` and `/config` print the effective config and which files contributed.
