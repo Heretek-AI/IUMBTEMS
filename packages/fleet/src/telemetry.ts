@@ -196,7 +196,15 @@ export interface TelemetryOptions {
   readonly secrets?: readonly string[]
 }
 
-const jsonBody = (res: { writeHead: Function; end: Function }, code: number, value: unknown): void => {
+/** Case-insensitive request header lookup (names with dashes need no literals at use sites). */
+const field = (headers: Record<string, string>, name: string): string | undefined => headers[name]
+
+interface HttpResponder {
+  writeHead(code: number, headers: Record<string, string | number>): void
+  end(body?: string): void
+}
+
+const jsonBody = (res: HttpResponder, code: number, value: unknown): void => {
   const text = JSON.stringify(value)
   res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(text) })
   res.end(text)
@@ -275,7 +283,7 @@ export class TelemetryServer {
   }
 
   private bearerOk(header: string | undefined): boolean {
-    if (!header || !header.startsWith("Bearer ")) return false
+    if (!header?.startsWith("Bearer ")) return false
     const presented = Buffer.from(header.slice("Bearer ".length))
     const expected = Buffer.from(this.options.token)
     return presented.length === expected.length && timingSafeEqual(presented, expected)
@@ -336,21 +344,24 @@ export class TelemetryServer {
       },
     }
     // Upgrade first: it carries its own auth below.
-    if ((headers["upgrade"] ?? "").toLowerCase() === "websocket" && target === "/fleet/ws")
+    if ((field(headers, "upgrade") ?? "").toLowerCase() === "websocket" && target === "/fleet/ws")
       return this.handleUpgrade(socket, headers, res)
-    if (!this.hostOk(headers["host"])) {
+    if (!this.hostOk(field(headers, "host"))) {
       res.writeHead(403, { "content-length": 0, connection: "close" })
-      return res.end()
+      res.end()
+      return
     }
     if (target !== "/fleet/rpc" || method !== "POST") {
       res.writeHead(404, { "content-length": 0, connection: "close" })
-      return res.end()
+      res.end()
+      return
     }
-    if (!this.bearerOk(headers["authorization"])) {
+    if (!this.bearerOk(field(headers, "authorization"))) {
       res.writeHead(401, { "content-length": 0, connection: "close" })
-      return res.end()
+      res.end()
+      return
     }
-    const length = Number(headers["content-length"] ?? "0")
+    const length = Number(field(headers, "content-length") ?? "0")
     if (!(length >= 0) || length > 1_000_000) {
       jsonBody(res, 200, { error: { code: -32700, message: "parse error" } })
       return
@@ -403,21 +414,18 @@ export class TelemetryServer {
     }
   }
 
-  private handleUpgrade(
-    socket: Socket,
-    headers: Record<string, string>,
-    res: { writeHead: Function; end: Function },
-  ): void {
+  private handleUpgrade(socket: Socket, headers: Record<string, string>, res: HttpResponder): void {
     if (
-      !this.hostOk(headers["host"]) ||
-      !this.originOk(headers["origin"]) ||
-      !this.bearerOk(headers["authorization"])
+      !this.hostOk(field(headers, "host")) ||
+      !this.originOk(field(headers, "origin")) ||
+      !this.bearerOk(field(headers, "authorization"))
     ) {
-      const code = !this.hostOk(headers["host"]) || !this.originOk(headers["origin"]) ? 403 : 401
+      const code = !this.hostOk(field(headers, "host")) || !this.originOk(field(headers, "origin")) ? 403 : 401
       res.writeHead(code, { "content-length": 0, connection: "close" })
-      return res.end()
+      res.end()
+      return
     }
-    const key = headers["sec-websocket-key"] ?? ""
+    const key = field(headers, "sec-websocket-key") ?? ""
     const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64")
     res.writeHead(101, {
       Upgrade: "websocket",
@@ -514,7 +522,7 @@ export class TelemetryServer {
   private stage(event: BusEvent): void {
     const channel = event.type
     // Drop to the latest per key (taskId): a burst for one task emits once.
-    const key = typeof event.payload["taskId"] === "string" ? (event.payload["taskId"] as string) : ""
+    const key = typeof event.payload.taskId === "string" ? event.payload.taskId : ""
     this.pending[channel].set(key, event)
     const now = Date.now()
     if (now - this.lastFlush[channel] >= 1000) {

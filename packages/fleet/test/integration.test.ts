@@ -272,8 +272,8 @@ describe("fleet integration (real host, fake model)", () => {
       expect(cStart).toBeLessThan(bDone)
       // The bus agrees: A starts first, then B and C.
       const order = seen
-        .filter((event) => (event.payload["kind"] as string) === "started")
-        .map((event) => event.payload["taskId"])
+        .filter((event) => (event.payload.kind as string) === "started")
+        .map((event) => event.payload.taskId)
       expect(order[0]).toBe("int1-a")
       expect(order.slice(1).sort()).toEqual(["int1-b", "int1-c"])
       // Ownership: each branch tree carries only its own output — and never

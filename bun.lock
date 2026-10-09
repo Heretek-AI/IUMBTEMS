@@ -14,7 +14,7 @@
     },
     "packages/cli": {
       "name": "@heretek-ai/es-cli",
-      "version": "1.3.0",
+      "version": "1.4.0",
       "bin": {
         "es": "./bin/es.js",
         "epistemic-swarm": "./bin/es.js",
@@ -26,7 +26,7 @@
     },
     "packages/core": {
       "name": "@heretek-ai/es-core",
-      "version": "1.3.0",
+      "version": "1.4.0",
       "dependencies": {
         "vscode-jsonrpc": "9.0.3",
         "vscode-languageserver-protocol": "3.18.4",
@@ -50,7 +50,7 @@
     },
     "packages/opencode": {
       "name": "@heretek-ai/epistemic-swarm",
-      "version": "1.3.0",
+      "version": "1.4.0",
       "dependencies": {
         "@heretek-ai/es-core": "workspace:*",
         "@opencode/plugin": "2.0.24",

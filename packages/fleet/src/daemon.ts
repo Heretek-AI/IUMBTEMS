@@ -137,7 +137,7 @@ export class FleetDaemon {
           const record = await allocateWorktree(this.options.repoRoot, this.options.stateRoot, id, { now }).catch(
             async () => (await loadRegistry(this.options.stateRoot))?.worktrees[id],
           )
-          if (!record || record.status !== "allocated") continue
+          if (record?.status !== "allocated") continue
           await prepareTaskRun({ ...spec, worktreeDir: record.dir })
           const port = this.spawner(
             { ...spec, worktreeDir: record.dir },
@@ -211,7 +211,7 @@ export class FleetDaemon {
       const conflicted = task.status === "waiting-human" && this.conflicted.has(id)
       if (task.status !== "done" && task.status !== "failed" && task.status !== "cancelled" && !conflicted) continue
       const record = (await loadRegistry(this.options.stateRoot))?.worktrees[id]
-      if (!record || record.status !== "allocated") {
+      if (record?.status !== "allocated") {
         this.conflicted.delete(id)
         continue
       }

@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test"
 import { createHash, randomBytes } from "node:crypto"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
-import { createConnection, createServer } from "node:net"
+import { createConnection } from "node:net"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { ensureToken, type FleetSnapshot, scrubPayload, TelemetryServer } from "../src/telemetry.ts"
