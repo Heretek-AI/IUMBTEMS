@@ -9,8 +9,16 @@ import { readFleetSnapshot, renderDashboard } from "../src/watch.ts"
 const snapshot: FleetSnapshot = {
   daemon: { running: true, pid: 4242, maxUsd: 50, concurrency: 2 },
   tasks: [
-    { id: "a", status: "running", ceilingUSD: 5, spendUsd: 1.25, reason: "building" },
-    { id: "b", status: "waiting-human", ceilingUSD: 5, spendUsd: 0, reason: "frontier approval" },
+    { id: "a", title: "Alpha", status: "running", ceilingUSD: 5, spendUsd: 1.25, deps: [], reason: "building" },
+    {
+      id: "b",
+      title: "Beta",
+      status: "waiting-human",
+      ceilingUSD: 5,
+      spendUsd: 0,
+      deps: ["a"],
+      reason: "frontier approval",
+    },
   ],
   spendUsd: 1.25,
   pending: [{ taskId: "b", reason: "frontier approval" }],

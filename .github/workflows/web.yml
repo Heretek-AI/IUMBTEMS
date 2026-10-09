@@ -30,6 +30,8 @@ jobs:
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun x biome check packages/web
       - run: bun run typecheck
-      - run: bun test packages/web
+      # Browser conditions: the web tests render with the client Solid build
+      # (the default toolchain resolves its server build, whose render throws).
+      - run: bun --conditions=browser test packages/web
       - run: bun run build
         working-directory: packages/web

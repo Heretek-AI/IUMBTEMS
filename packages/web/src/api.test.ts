@@ -1,7 +1,7 @@
 // Bus client (#129): strict response parsing, auth failure mapping. The
 // fetch transport is stubbed per test; no DOM is touched.
 import { afterEach, describe, expect, test } from "bun:test"
-import { fetchStatus, parseStatus, RpcError, rpc } from "./api.ts"
+import { fetchStatus, fetchTask, parseStatus, RpcError, rpc } from "./api.ts"
 
 const realFetch = globalThis.fetch
 
@@ -17,7 +17,7 @@ describe("parseStatus", () => {
   test("it accepts a well-formed snapshot", () => {
     const snapshot = parseStatus({
       daemon: { running: true, pid: 7, maxUsd: 50, concurrency: 2 },
-      tasks: [{ id: "a", status: "running", ceilingUSD: 5, spendUsd: 1 }],
+      tasks: [{ id: "a", title: "Alpha", status: "running", ceilingUSD: 5, spendUsd: 1, deps: [] }],
       spendUsd: 1,
       pending: [{ taskId: "a", reason: "frontier approval" }],
     })
@@ -71,5 +71,14 @@ describe("rpc", () => {
       },
     })
     expect((await fetchStatus()).spendUsd).toBe(0)
+  })
+
+  test("fetchTask returns the parsed task, or throws when it is missing", async () => {
+    stubFetch(200, {
+      result: { task: { id: "a", title: "Alpha", status: "done", ceilingUSD: 5, spendUsd: 5, deps: [] } },
+    })
+    expect((await fetchTask("a")).title).toBe("Alpha")
+    stubFetch(200, { error: { code: -32603, message: "unknown task" } })
+    await expect(fetchTask("a")).rejects.toThrow(RpcError)
   })
 })

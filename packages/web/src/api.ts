@@ -17,13 +17,16 @@ export class RpcError extends Error {
 const SnapshotTask = (raw: unknown): FleetSnapshot["tasks"][number] | undefined => {
   if (typeof raw !== "object" || raw === null) return undefined
   const task = raw as Record<string, unknown>
-  if (typeof task.id !== "string" || typeof task.status !== "string") return undefined
+  if (typeof task.id !== "string" || typeof task.title !== "string" || typeof task.status !== "string") return undefined
   if (typeof task.ceilingUSD !== "number" || typeof task.spendUsd !== "number") return undefined
+  if (!Array.isArray(task.deps) || task.deps.some((dep) => typeof dep !== "string")) return undefined
   return {
     id: task.id,
+    title: task.title,
     status: task.status,
     ceilingUSD: task.ceilingUSD,
     spendUsd: task.spendUsd,
+    deps: [...(task.deps as string[])],
     ...(typeof task.reason === "string" ? { reason: task.reason } : {}),
   }
 }
@@ -74,8 +77,8 @@ export function parseStatus(raw: unknown): FleetSnapshot {
 }
 
 /** One JSON-RPC call against the daemon bus (same-origin, cookie-authenticated). */
-export async function rpc<T>(method: string, params: Record<string, unknown>): Promise<T> {
-  const response = await fetch("/fleet/rpc", {
+export async function rpc<T>(method: string, params: Record<string, unknown>, base = ""): Promise<T> {
+  const response = await fetch(`${base}/fleet/rpc`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "content-type": "application/json" },
@@ -94,6 +97,14 @@ export async function rpc<T>(method: string, params: Record<string, unknown>): P
 }
 
 /** Fleet overview for the hello page (#130 grows this into the dashboard). */
-export async function fetchStatus(): Promise<FleetSnapshot> {
-  return parseStatus(await rpc<unknown>("fleet.status", {}))
+export async function fetchStatus(base = ""): Promise<FleetSnapshot> {
+  return parseStatus(await rpc<unknown>("fleet.status", {}, base))
+}
+
+/** One task for the detail page (#130). */
+export async function fetchTask(id: string, base = ""): Promise<FleetSnapshot["tasks"][number]> {
+  const result = await rpc<{ task?: unknown }>("fleet.task", { id }, base)
+  const task = SnapshotTask(result.task)
+  if (!task) throw new RpcError(-32603, `the daemon returned no task ${id}`)
+  return task
 }

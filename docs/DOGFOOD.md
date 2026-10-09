@@ -104,6 +104,9 @@ long ago it acted.
     waits on you.
   - A toast announces stage changes, and also a paused factory after three
     turns without progress (run `/factory` to continue).
+- **Web** (`es-fleet web` prints a one-time loopback URL): the fleet
+  overview and per-task pages across the whole fleet — DAG, spend against
+  the ceiling, pending approvals, live updates with a stale banner (#130).
 - **Headless**: `es factory run --headless` prints JSON lines.
   - It emits a `progress` event every 30 s while a turn runs.
   - `stalled` carries its evidence (the headline, last activity, running

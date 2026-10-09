@@ -13,9 +13,11 @@ export async function readFleetSnapshot(stateRoot: string): Promise<FleetSnapsho
         .sort((a, b) => (a.id < b.id ? -1 : 1))
         .map((task) => ({
           id: task.id,
+          title: task.title,
           status: task.status,
           ceilingUSD: task.ceilingUSD,
           spendUsd: task.result?.spendUsd ?? 0,
+          deps: [...task.deps].sort(),
           ...(task.reason ? { reason: task.reason } : {}),
         }))
     : []

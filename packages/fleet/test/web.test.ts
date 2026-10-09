@@ -23,7 +23,6 @@ const snap = (): FleetSnapshot => ({
   spendUsd: 0,
   pending: [],
 })
-
 async function rig() {
   const state = await mkdtemp(path.join(tmpdir(), "es-fleet-web-"))
   const webRoot = path.join(state, "site")
@@ -85,16 +84,15 @@ describe("web tickets", () => {
     const state = await mkdtemp(path.join(tmpdir(), "es-fleet-web-"))
     try {
       const ticket = await mintWebTicket(state)
-      const results = await Promise.all(
-        Array.from({ length: 10 }, () => redeemWebTicket(state, ticket)),
-      )
+      const results = await Promise.all(Array.from({ length: 10 }, () => redeemWebTicket(state, ticket)))
       expect(results.filter(Boolean)).toHaveLength(1)
     } finally {
       await rm(state, { recursive: true, force: true })
     }
   })
 
-  test("malformed and expired tickets are refused", async () => {    const state = await mkdtemp(path.join(tmpdir(), "es-fleet-web-"))
+  test("malformed and expired tickets are refused", async () => {
+    const state = await mkdtemp(path.join(tmpdir(), "es-fleet-web-"))
     try {
       expect(await redeemWebTicket(state, "not-hex")).toBe(false)
       expect(await redeemWebTicket(state, "../token")).toBe(false)

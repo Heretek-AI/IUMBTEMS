@@ -129,6 +129,30 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
   'none'`), `X-Content-Type-Options: nosniff` and `Referrer-Policy:
   no-referrer`.
 
+## Fleet dashboard (#130)
+
+- Hash-routed (`#/` overview, `#/task/:id`), built from the read-only bus
+  only: `fleet.status`, `fleet.task`, and the WS `changed`/`liveness`
+  stream. There are no mutation paths in the dashboard code (audited per
+  ticket: the only requests are those two RPC methods plus WS subscribe).
+- The overview draws the task DAG (columns by depth, edges from each task's
+  `deps`, served by the bus since #130), a task table, fleet spend against
+  the ceiling, and the pending-approvals list linking to each task page.
+  Status is always words beside colour (1.3 vocabulary: running→working,
+  waiting-human→waiting on you, etc.), and every task is a link, so the UI
+  stays navigable by keyboard and readable without colour.
+- Liveness is fleet-level: the bus serves per-task status, reason, spend
+  and deps, not per-run seats/stages/research — the detail page shows the
+  server-rendered reason string, spend, deps and recent bus events for the
+  task. (Full run liveness would need a per-run RPC the #126 bus does not
+  define; the dashboard stays within the read-only bus by design.)
+- Live updates: WS events refetch the snapshot; a reconnect refetches too.
+  No data for 5 s shows a stale banner (`role="status"`).
+- Tests run with `bun --conditions=browser test packages/web`: the web
+  suite renders with the client Solid build (components use `solid-js/html`
+  templates — no JSX transform exists for bun's runner), against fixture
+  data plus a real TelemetryServer for the WS integration test.
+
 ## Integration suite (#127)
 
 `packages/fleet/test/integration.test.ts` is merge-blocking (runs in

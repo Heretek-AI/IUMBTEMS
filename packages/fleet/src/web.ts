@@ -9,7 +9,7 @@
 // sent back; the localhost bind plus Host/Origin checks are the transport
 // defense instead.
 import { randomBytes } from "node:crypto"
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { fleetDir } from "./state.ts"
 

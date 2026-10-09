@@ -1,0 +1,35 @@
+/* Dashboard tones (#130): status colour lives in a same-origin stylesheet
+   because the daemon's CSP (`style-src 'self'`) refuses inline styles. The
+   status word is always rendered beside the dot. */
+.tone-work {
+  color: #2f9e6e;
+}
+.tone-wait {
+  color: #c07c14;
+}
+.tone-queue {
+  color: #64748b;
+}
+.tone-done {
+  color: #3d7a8c;
+}
+.tone-bad {
+  color: #c0392b;
+}
+.tone-idle {
+  color: #8a8a8a;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  margin: 2rem;
+}
+table {
+  border-collapse: collapse;
+}
+th,
+td {
+  border: 1px solid #cbd5e1;
+  padding: 0.35rem 0.7rem;
+  text-align: left;
+}

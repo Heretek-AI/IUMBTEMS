@@ -167,9 +167,12 @@ export async function ensureToken(stateRoot: string): Promise<string> {
 
 export interface SnapshotTask {
   readonly id: string
+  readonly title: string
   readonly status: string
   readonly ceilingUSD: number
   readonly spendUsd: number
+  /** Dependency ids: the edges of the fleet DAG (#130 draws them). */
+  readonly deps: readonly string[]
   readonly reason?: string
 }
 
