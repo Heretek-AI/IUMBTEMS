@@ -512,7 +512,7 @@ describe("es research deep (headless deep research)", () => {
         })
         const fetched = await tools
           .find((tool) => tool.name === "es_research_fetch")!
-          .execute({ url: "https://x.test/queues" }, { agent: "es-research-alpha" })
+          .execute({ url: "https://192.0.2.1/queues" }, { agent: "es-research-alpha" })
         const sha = /sha256:([0-9a-f]{64})/.exec(fetched)?.[1]
         await writeFile(
           path.join(out, ".factory/research/alpha.md"),
@@ -729,7 +729,7 @@ describe("es improve harvest (#135)", () => {
     expect(result.code).toBe(0)
     expect(result.out).toContain("2 run(s) and 2 eval(s)")
     const parsed = JSON.parse(await readFile(out, "utf8"))
-    expect(parsed.version).toBe(1)
+    expect(parsed.version).toBe(2)
     expect(parsed.runs.map((run: { id: string }) => run.id)).toEqual(["run-clean", "run-replan"])
     expect(parsed.evals.map((item: { case: string }) => item.case)).toEqual(["grill", "programmer"])
   })
@@ -958,6 +958,10 @@ describe("es factory init --preset self-dogfood (#137)", () => {
       const roadmap = JSON.parse(await readFile(factoryLayout(root).roadmap, "utf8"))
       expect(roadmap.baseBranch).toBe("rewrite")
       expect(await readFile(path.join(root, ".factory/notes/idea-137.md"), "utf8")).toContain("Stub issue")
+      const entries = await recentAuditEntries(root, 5)
+      const seeded = entries.find((entry) => entry.action === "factory.preset")!
+      expect(seeded.actor).toMatch(/^human:.+/)
+      expect(seeded.actor).not.toBe("human:unknown")
     } finally {
       await rm(bin, { recursive: true, force: true })
     }

@@ -359,7 +359,7 @@ export async function factoryInit(context: HumanContext, args: Args): Promise<nu
     context.print("Cancelled; nothing was written.")
     return 1
   }
-  const { written } = await initFromPreset(context.root, preset, { issue, title, body })
+  const { written } = await initFromPreset(context.root, preset, { issue, title, body }, { actor: `human:${user()}` })
   context.print(
     [
       `Seeded a self-dogfood run from #${issue} (${written.length} file(s)):`,

@@ -58,7 +58,7 @@ describe("es research as human operator (#99)", () => {
       new Response("<html><head><title>T</title></head><body><p>Human fetchable content here.</p></body></html>", {
         headers: { "content-type": "text/html" },
       })) as unknown as typeof fetch
-    const result = await run(["research", "fetch", "https://example.test/page"])
+    const result = await run(["research", "fetch", "https://192.0.2.1/page"])
     expect(result.code).toBe(0)
     expect(result.out).toContain("sha256:")
   })

@@ -167,6 +167,9 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
 - Tests run with `bun --conditions=browser test packages/web`: the web
   suite renders with the client Solid build, against fixture
   data plus a real TelemetryServer for the WS integration test.
+  Test-only exception: `packages/web/test/bus.contract.test.ts` runtime-imports
+  `TelemetryServer`/`fleetPaths` for that WS contract test; shipped `src/`
+  code uses `import type` only.
 
 ## Browser approvals (#131, ADR 0002 option b)
 
