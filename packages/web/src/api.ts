@@ -290,3 +290,217 @@ export async function previewConfigPlan(file: "config" | "gates", content: unkno
     commands: strings(result.commands),
   }
 }
+
+export interface EvidenceFilter {
+  readonly tag?: string
+  readonly status?: string
+  readonly tier?: string
+  readonly text?: string
+}
+
+export interface EvidenceClaimSummary {
+  readonly id: string
+  readonly tag: string
+  readonly status: string
+  readonly statement: string
+  readonly sourceSha: string | null
+  readonly tier?: string
+}
+
+export interface EvidenceQuoteRange {
+  readonly start: number
+  readonly end: number
+}
+
+export interface EvidenceQuote {
+  readonly quote: string
+  readonly verified: boolean
+  readonly ranges: readonly EvidenceQuoteRange[]
+}
+
+export interface EvidenceClaim {
+  readonly id: string
+  readonly tag: string
+  readonly status: string
+  readonly statement: string
+  readonly sourceSha: string | null
+  readonly tier?: string
+}
+
+export interface EvidenceRetraction {
+  readonly source: string
+  readonly event: string
+  readonly at: string
+  readonly note: string
+  readonly by: string
+}
+
+export interface EvidenceClaimDetail {
+  readonly claim: EvidenceClaim
+  readonly quotes: readonly EvidenceQuote[]
+  readonly retractions: readonly EvidenceRetraction[]
+  readonly events: ReadonlyArray<{ claim: string; from: string; to: string; reason: string; at: string }>
+  readonly rankExplanation: string
+  readonly files: readonly string[]
+}
+
+export interface EvidenceSource {
+  readonly meta: {
+    readonly sha256: string
+    readonly url: string
+    readonly title?: string
+    readonly retrieved: string
+    readonly provider: string
+    readonly bytes: number
+    readonly tier?: string
+  }
+  readonly seal: string
+  readonly text: string
+  readonly truncated: boolean
+}
+
+export interface EvidenceExport {
+  readonly format: string
+  readonly body: string
+  readonly truncated: boolean
+}
+
+const optStr = (raw: unknown): string | undefined => (typeof raw === "string" ? raw : undefined)
+
+const reqRec = (raw: unknown, what: string): Record<string, unknown> => {
+  if (!isRecord(raw)) throw new RpcError(-32603, `the daemon returned no ${what}`)
+  return raw
+}
+
+/** Claim list for a run, narrowed by tag/status/tier/text (#133). */
+export async function fetchEvidenceClaims(
+  runId: string,
+  filter: EvidenceFilter = {},
+  base = "",
+): Promise<{ claims: EvidenceClaimSummary[]; truncated: boolean }> {
+  const params: Record<string, unknown> = { runId }
+  const clean: Record<string, string> = {}
+  for (const [key, value] of Object.entries(filter)) if (value !== undefined && value !== "") clean[key] = value
+  if (Object.keys(clean).length) params.filter = clean
+  const result = await rpc<{ claims?: unknown; truncated?: unknown }>("evidence.claims", params, base)
+  if (!Array.isArray(result.claims)) throw new RpcError(-32603, "the daemon returned no evidence claims")
+  return {
+    claims: result.claims.map((entry) => {
+      const claim = reqRec(entry, "evidence claim")
+      const tier = optStr(claim.tier)
+      return {
+        id: str(claim.id, "evidence claim"),
+        tag: str(claim.tag, "evidence claim"),
+        status: str(claim.status, "evidence claim"),
+        statement: str(claim.statement, "evidence claim"),
+        sourceSha: claim.sourceSha === null ? null : str(claim.sourceSha, "evidence claim"),
+        ...(tier !== undefined ? { tier } : {}),
+      }
+    }),
+    truncated: result.truncated === true,
+  }
+}
+
+/** One claim with quotes, retractions, events and rank (#133). */
+export async function fetchEvidenceClaim(runId: string, id: string, base = ""): Promise<EvidenceClaimDetail> {
+  const result = await rpc<unknown>("evidence.claim", { runId, id }, base)
+  const root = reqRec(result, "evidence claim")
+  const claim = reqRec(root.claim, "evidence claim")
+  const tier = optStr(claim.tier)
+  const source = claim.source === undefined ? undefined : reqRec(claim.source, "evidence claim")
+  const sourceSha = source === undefined ? null : str(source.sha256, "evidence claim")
+  if (
+    !Array.isArray(root.quotes) ||
+    !Array.isArray(root.retractions) ||
+    !Array.isArray(root.events) ||
+    !Array.isArray(root.files)
+  )
+    throw new RpcError(-32603, "the daemon returned no evidence claim")
+  return {
+    claim: {
+      id: str(claim.id, "evidence claim"),
+      tag: str(claim.tag, "evidence claim"),
+      status: str(claim.status, "evidence claim"),
+      statement: str(claim.statement, "evidence claim"),
+      sourceSha,
+      ...(tier !== undefined ? { tier } : {}),
+    },
+    quotes: root.quotes.map((entry) => {
+      const quote = reqRec(entry, "evidence quote")
+      if (!Array.isArray(quote.ranges)) throw new RpcError(-32603, "the daemon returned no evidence quote")
+      return {
+        quote: str(quote.quote, "evidence quote"),
+        verified: quote.verified === true,
+        ranges: quote.ranges.map((range) => {
+          const span = reqRec(range, "evidence range")
+          if (typeof span.start !== "number" || typeof span.end !== "number")
+            throw new RpcError(-32603, "the daemon returned no evidence range")
+          return { start: span.start, end: span.end }
+        }),
+      }
+    }),
+    retractions: root.retractions.map((entry) => {
+      const retraction = reqRec(entry, "evidence retraction")
+      return {
+        source: str(retraction.source, "evidence retraction"),
+        event: str(retraction.event, "evidence retraction"),
+        at: str(retraction.at, "evidence retraction"),
+        note: typeof retraction.note === "string" ? retraction.note : "",
+        by: str(retraction.by, "evidence retraction"),
+      }
+    }),
+    events: root.events.map((entry) => {
+      const event = reqRec(entry, "evidence event")
+      return {
+        claim: str(event.claim, "evidence event"),
+        from: str(event.from, "evidence event"),
+        to: str(event.to, "evidence event"),
+        reason: str(event.reason, "evidence event"),
+        at: str(event.at, "evidence event"),
+      }
+    }),
+    rankExplanation: str(root.rankExplanation, "evidence claim"),
+    files: strArray(root.files, "evidence claim"),
+  }
+}
+
+/** One source with capped text and seal status (#133). */
+export async function fetchEvidenceSource(runId: string, sha: string, base = ""): Promise<EvidenceSource> {
+  const result = await rpc<unknown>("evidence.source", { runId, sha }, base)
+  const root = reqRec(result, "evidence source")
+  const meta = reqRec(root.meta, "evidence source")
+  const title = optStr(meta.title)
+  const tier = optStr(meta.tier)
+  return {
+    meta: {
+      sha256: str(meta.sha256, "evidence source"),
+      url: str(meta.url, "evidence source"),
+      ...(title !== undefined ? { title } : {}),
+      retrieved: str(meta.retrieved, "evidence source"),
+      provider: str(meta.provider, "evidence source"),
+      bytes: typeof meta.bytes === "number" ? meta.bytes : 0,
+      ...(tier !== undefined ? { tier } : {}),
+    },
+    seal: str(root.seal, "evidence source"),
+    text: str(root.text, "evidence source"),
+    truncated: root.truncated === true,
+  }
+}
+
+/** Rendered dossier export through the #112 renderers (#133). */
+export async function exportEvidenceDossier(
+  runId: string,
+  format: "markdown" | "html",
+  base = "",
+): Promise<EvidenceExport> {
+  const result = await rpc<{ format?: unknown; body?: unknown; truncated?: unknown }>(
+    "evidence.export",
+    { runId, format },
+    base,
+  )
+  return {
+    format: typeof result.format === "string" ? result.format : format,
+    body: typeof result.body === "string" ? result.body : "",
+    truncated: result.truncated === true,
+  }
+}

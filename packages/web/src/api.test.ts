@@ -2,8 +2,12 @@
 // fetch transport is stubbed per test; no DOM is touched.
 import { afterEach, describe, expect, test } from "bun:test"
 import {
+  exportEvidenceDossier,
   fetchApprovePreview,
   fetchConfigView,
+  fetchEvidenceClaim,
+  fetchEvidenceClaims,
+  fetchEvidenceSource,
   fetchStatus,
   fetchTask,
   parseStatus,
@@ -147,5 +151,40 @@ describe("rpc", () => {
     )
     expect(failure).toBeInstanceOf(RpcError)
     expect(failure?.details.remaining).toBe(3)
+  })
+
+  test("evidence calls parse their payloads and reject malformed ones", async () => {
+    stubFetch(200, {
+      result: {
+        claims: [{ id: "c", tag: "VERIFIED", status: "LIVE", statement: "s", sourceSha: null }],
+        truncated: false,
+      },
+    })
+    const listed = await fetchEvidenceClaims("run1", { tag: "VERIFIED" })
+    expect(listed.claims).toHaveLength(1)
+    stubFetch(200, { result: { claims: [{ id: "c" }] } })
+    await expect(fetchEvidenceClaims("run1")).rejects.toThrow(RpcError)
+    stubFetch(200, {
+      result: {
+        claim: { id: "c", tag: "VERIFIED", status: "LIVE", statement: "s", sourceSha: null },
+        quotes: [],
+        retractions: [],
+        events: [],
+        rankExplanation: "r",
+        files: [],
+      },
+    })
+    expect((await fetchEvidenceClaim("run1", "c")).rankExplanation).toBe("r")
+    stubFetch(200, {
+      result: {
+        meta: { sha256: "x", url: "u", retrieved: "r", provider: "p", bytes: 1 },
+        seal: "sealed",
+        text: "t",
+        truncated: false,
+      },
+    })
+    expect((await fetchEvidenceSource("run1", "x")).seal).toBe("sealed")
+    stubFetch(200, { result: { format: "markdown", body: "# x", truncated: false } })
+    expect((await exportEvidenceDossier("run1", "markdown")).body).toBe("# x")
   })
 })

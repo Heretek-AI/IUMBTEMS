@@ -9,8 +9,12 @@ import { createSignal, onCleanup } from "solid-js"
 import { render } from "solid-js/web"
 import {
   type ConfigView,
+  exportEvidenceDossier,
   fetchApprovePreview,
   fetchConfigView,
+  fetchEvidenceClaim,
+  fetchEvidenceClaims,
+  fetchEvidenceSource,
   fetchStatus,
   fetchTask,
   previewConfigPlan,
@@ -22,6 +26,7 @@ import { connectBus } from "./bus.ts"
 import { Overview, TaskDetail } from "./components.ts"
 import { ConfigEditor } from "./config.ts"
 import { h } from "./dom.ts"
+import { EvidencePage } from "./evidence.ts"
 import { createFleetStore } from "./store.ts"
 
 type Route =
@@ -30,10 +35,13 @@ type Route =
   | { name: "config" }
   | { name: "approvals" }
   | { name: "approve"; taskId: string; stage: string }
+  | { name: "evidence"; runId: string }
 
 const routeOf = (hash: string): Route => {
   if (hash === "#/config") return { name: "config" }
   if (hash === "#/approvals") return { name: "approvals" }
+  const evidence = /^#\/evidence\/([^/]+)$/.exec(hash)
+  if (evidence?.[1]) return { name: "evidence", runId: decodeURIComponent(evidence[1]) }
   const approve = /^#\/approve\/([^/]+)\/([^/]+)$/.exec(hash)
   if (approve?.[1] && approve?.[2])
     return { name: "approve", taskId: decodeURIComponent(approve[1]), stage: decodeURIComponent(approve[2]) }
@@ -138,6 +146,16 @@ function App(): Element {
       return ApprovalsPage({
         pending: () => store.state.snapshot?.pending ?? [],
         error: () => error(),
+      })
+    }
+    if (current.name === "evidence") {
+      const { runId } = current
+      return EvidencePage({
+        runId,
+        loadClaims: (filter) => fetchEvidenceClaims(runId, filter),
+        loadClaim: (id) => fetchEvidenceClaim(runId, id),
+        loadSource: (sha) => fetchEvidenceSource(runId, sha),
+        exportDoc: (format) => exportEvidenceDossier(runId, format),
       })
     }
     if (current.name === "config") {

@@ -18,6 +18,21 @@ export {
 } from "./configview.ts"
 export { type DaemonOptions, FleetDaemon, type TransitionEvent, type WorkerPort } from "./daemon.ts"
 export {
+  type EvidenceClaimDetail,
+  type EvidenceClaimFilter,
+  type EvidenceClaimSummary,
+  type EvidenceQuote,
+  type EvidenceSourceView,
+  EXPORT_CAP,
+  exportEvidence,
+  MAX_CLAIMS,
+  readEvidenceClaim,
+  readEvidenceClaims,
+  readEvidenceSource,
+  type SealStatus,
+  SOURCE_TEXT_CAP,
+} from "./evidence.ts"
+export {
   assertHumanStart,
   FleetError,
   type FleetHandle,

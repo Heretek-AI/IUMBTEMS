@@ -21,6 +21,7 @@ import {
 import { z } from "zod"
 import { ApproveTickets, CsrfTokens } from "./approve.ts"
 import { planConfigFile, readConfigView } from "./configview.ts"
+import { exportEvidence, readEvidenceClaim, readEvidenceClaims, readEvidenceSource } from "./evidence.ts"
 import { fleetPaths } from "./state.ts"
 import {
   loopbackOriginOk,
@@ -212,6 +213,19 @@ const RpcSchemas = {
   /** Read-only config preview (#132, preview-only): no apply method exists. */
   "fleet.config.get": StrictObject({}),
   "fleet.config.plan": StrictObject({ file: z.enum(["config", "gates"]), content: z.unknown() }),
+  /** Read-only evidence reads (#133): claims, detail, sources, exports. */
+  "evidence.claims": StrictObject({
+    runId: z.string().min(1),
+    filter: StrictObject({
+      tag: z.string().optional(),
+      status: z.string().optional(),
+      tier: z.string().optional(),
+      text: z.string().optional(),
+    }).optional(),
+  }),
+  "evidence.claim": StrictObject({ runId: z.string().min(1), id: z.string().min(1) }),
+  "evidence.source": StrictObject({ runId: z.string().min(1), sha: z.string().min(1) }),
+  "evidence.export": StrictObject({ runId: z.string().min(1), format: z.enum(["markdown", "html"]) }),
 } as const
 
 type RpcMethod = keyof typeof RpcSchemas
@@ -702,6 +716,13 @@ export class TelemetryServer {
     res.end(text)
   }
 
+  /** Worktree dir for a run id, or a throw the bus reports as unknown-run. */
+  private async runDir(runId: string): Promise<string> {
+    const record = (await loadRegistry(this.options.stateRoot))?.worktrees[runId]
+    if (record?.status !== "allocated") throw new Error(`unknown run ${JSON.stringify(runId)}`)
+    return record.dir
+  }
+
   private async dispatch(method: RpcMethod, params: never): Promise<unknown> {
     const snapshot = await this.options.getSnapshot()
     switch (method) {
@@ -727,6 +748,35 @@ export class TelemetryServer {
         if (!this.options.configRoot) throw new Error("no repo is configured for the config preview")
         const input = params as { file: "config" | "gates"; content: unknown }
         return planConfigFile(this.options.configRoot, { file: input.file, content: input.content })
+      }
+      case "evidence.claims": {
+        const dir = await this.runDir((params as { runId: string }).runId)
+        const filter = (params as { filter?: Record<string, string> }).filter ?? {}
+        return readEvidenceClaims(dir, {
+          ...(filter.tag ? { tag: filter.tag } : {}),
+          ...(filter.status ? { status: filter.status } : {}),
+          ...(filter.tier ? { tier: filter.tier } : {}),
+          ...(filter.text ? { text: filter.text } : {}),
+        })
+      }
+      case "evidence.claim": {
+        const dir = await this.runDir((params as { runId: string }).runId)
+        const detail = await readEvidenceClaim(dir, (params as { id: string }).id)
+        if (!detail) throw new Error(`unknown claim ${JSON.stringify((params as { id: string }).id)}`)
+        return detail
+      }
+      case "evidence.source": {
+        const dir = await this.runDir((params as { runId: string }).runId)
+        const seen = await readEvidenceSource(dir, this.options.stateRoot, (params as { sha: string }).sha)
+        if (!seen) throw new Error("unknown or tampered source")
+        return seen
+      }
+      case "evidence.export": {
+        const dir = await this.runDir((params as { runId: string }).runId)
+        const format = (params as { format: "markdown" | "html" }).format
+        const rendered = await exportEvidence(dir, this.options.stateRoot, format)
+        if (!rendered) throw new Error("nothing to export yet (no dossier or report)")
+        return rendered
       }
     }
   }

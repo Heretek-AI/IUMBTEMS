@@ -196,6 +196,27 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
   editor is documented here instead of there (hand-editing generated docs
   fails `docs:check`).
 
+## Evidence explorer (#133)
+
+- Hash-routed (`#/evidence/<task>` from the task page): claim/source
+  graph (coloured by tag, dashed when not LIVE), tag/status/tier
+  filters, inspector (statement, rank explanation, retractions, history)
+  and a source viewer that highlights verified quote ranges with `<mark>`
+  elements built from text nodes — hostile source text is never parsed
+  as HTML. Seal status (sealed / unsealed / invalid / unknown) shows on
+  every source.
+- Read-only bus methods: `evidence.claims {runId, filter}`,
+  `evidence.claim {runId, id}` (quotes with original-text ranges from
+  core's `locateQuote`, retractions, rank), `evidence.source {runId,
+  sha}` (capped text, meta, seal) and `evidence.export {runId,
+  markdown|html}` (the #112 `renderResearchRun` renderers). Lists and
+  texts are capped; every call leaves all files untouched (hashed in
+  tests). Editing claims and recording retractions stay terminal-only.
+- Quote ranges come from `locateQuote` (core): `verifyQuote` decides,
+  an index map through the same normalisation locates each fragment,
+  and every range self-checks back to its fragment (a divergence yields
+  no highlight, never a wrong one).
+
 ## Integration suite (#127)
 
 `packages/fleet/test/integration.test.ts` is merge-blocking (runs in

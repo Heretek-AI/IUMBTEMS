@@ -149,4 +149,11 @@ describe("task detail", () => {
     show(TaskDetail({ task: () => found, events: () => [] }))
     expect(document.body.querySelector('a[href^="#/approve/"]')).toBeNull()
   })
+
+  test("the task links to its evidence page", () => {
+    setup()
+    const found = task("a", "running", {})
+    show(TaskDetail({ task: () => found, events: () => [] }))
+    expect(document.body.querySelector('a[href="#/evidence/a"]')).not.toBeNull()
+  })
 })

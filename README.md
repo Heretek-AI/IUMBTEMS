@@ -69,6 +69,9 @@
   halted or done), then each seat's state and last activity and the research
   progress. `es runs` lists runs across projects. The TUI footer shows the
   stage and the running seat; headless runs emit `progress` events.
+  `es-fleet web` opens the same fleet in a browser: dashboard, browser
+  approvals, a preview-only config editor, and the evidence explorer
+  (claim graph, range-highlighted quotes, seal status, dossier exports).
 - **OpenCode v2 native.** One plugin registers agents, tools, commands, the
   hook bridge, the LSP runtime and four TUI panels — additively, with no files
   written. Host web results are cached (citable by hash) only for factory

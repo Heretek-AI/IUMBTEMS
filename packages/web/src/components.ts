@@ -154,41 +154,49 @@ export interface TaskDetailProps {
 }
 
 export function TaskDetail(props: TaskDetailProps): Element {
-  return h("main", null, h("p", null, h("a", { href: "#/" }, "← Fleet")), () => {
-    const found = props.task()
-    if (!found) return h("p", null, "Unknown task.")
-    const word = statusWord(found.status)
-    const mine = props.events().filter((event) => (event.payload as Record<string, unknown>).taskId === found.id)
-    return h(
-      "article",
-      null,
-      h("h1", null, `${found.id} — ${found.title}`),
-      h("p", null, h("span", { class: `tone-${word.tone}`, "aria-hidden": "true" }, "●"), ` ${word.word}`),
-      h("p", null, `${money(found.spendUsd)} of ${money(found.ceilingUSD)}`),
-      found.reason !== undefined ? h("p", null, found.reason) : "",
-      ...(props.pendingStages?.() ?? []).map((stage) =>
-        h("p", null, h("a", { href: `#/approve/${found.id}/${stage}` }, `Approve ${stage} in the browser`)),
-      ),
-      found.deps.length > 0
-        ? h(
-            "section",
-            null,
-            h("h2", null, "Waits for"),
-            h("ul", null, ...found.deps.map((dep) => h("li", null, h("a", { href: `#/task/${dep}` }, dep)))),
-          )
-        : "",
-      h(
-        "section",
+  return h(
+    "main",
+    null,
+    h("p", null, h("a", { href: "#/" }, "← Fleet"), () => {
+      const found = props.task()
+      return found ? h("span", null, " · ", h("a", { href: `#/evidence/${found.id}` }, "Evidence")) : ""
+    }),
+    () => {
+      const found = props.task()
+      if (!found) return h("p", null, "Unknown task.")
+      const word = statusWord(found.status)
+      const mine = props.events().filter((event) => (event.payload as Record<string, unknown>).taskId === found.id)
+      return h(
+        "article",
         null,
-        h("h2", null, "Recent events"),
-        mine.length > 0
+        h("h1", null, `${found.id} — ${found.title}`),
+        h("p", null, h("span", { class: `tone-${word.tone}`, "aria-hidden": "true" }, "●"), ` ${word.word}`),
+        h("p", null, `${money(found.spendUsd)} of ${money(found.ceilingUSD)}`),
+        found.reason !== undefined ? h("p", null, found.reason) : "",
+        ...(props.pendingStages?.() ?? []).map((stage) =>
+          h("p", null, h("a", { href: `#/approve/${found.id}/${stage}` }, `Approve ${stage} in the browser`)),
+        ),
+        found.deps.length > 0
           ? h(
-              "ol",
+              "section",
               null,
-              ...mine.slice(-10).map((entry) => h("li", null, `#${entry.seq} ${eventKind(entry)} · ${entry.at}`)),
+              h("h2", null, "Waits for"),
+              h("ul", null, ...found.deps.map((dep) => h("li", null, h("a", { href: `#/task/${dep}` }, dep)))),
             )
-          : h("p", null, "No events yet."),
-      ),
-    )
-  })
+          : "",
+        h(
+          "section",
+          null,
+          h("h2", null, "Recent events"),
+          mine.length > 0
+            ? h(
+                "ol",
+                null,
+                ...mine.slice(-10).map((entry) => h("li", null, `#${entry.seq} ${eventKind(entry)} · ${entry.at}`)),
+              )
+            : h("p", null, "No events yet."),
+        ),
+      )
+    },
+  )
 }

@@ -33,3 +33,11 @@ td {
   padding: 0.35rem 0.7rem;
   text-align: left;
 }
+
+/* Verified quote spans in hostile source text (#133). */
+.quote-mark {
+  background: #fef08a;
+}
+.source-text {
+  white-space: pre-wrap;
+}
