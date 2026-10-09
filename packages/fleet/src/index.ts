@@ -1,6 +1,7 @@
 // Fleet package entrypoint (#122): daemon lifecycle, state, and (from later
 // tickets) the scheduler, worktree coordinator, workers and telemetry bus.
 export { VERSION } from "./bin.ts"
+export { type DaemonOptions, FleetDaemon, type TransitionEvent, type WorkerPort } from "./daemon.ts"
 export {
   assertHumanStart,
   FleetError,
@@ -58,6 +59,38 @@ export {
   validateDag,
 } from "./tasks.ts"
 export {
+  type BusEvent,
+  EventLog,
+  ensureToken,
+  type FleetSnapshot,
+  readTelemetryEndpoint,
+  type SnapshotTask,
+  scrubPayload,
+  type TelemetryOptions,
+  TelemetryServer,
+} from "./telemetry.ts"
+export { readFleetSnapshot, renderDashboard, type WatchOptions, watchFleet } from "./watch.ts"
+export {
+  type BreakerOptions,
+  buildWorkerArgv,
+  CircuitBreaker,
+  defaultGateCheck,
+  emptyAcc,
+  type FoldedEvent,
+  foldWorkerEvent,
+  loadWorkerPids,
+  prepareTaskRun,
+  type SpendAcc,
+  saveWorkerPids,
+  Worker,
+  type WorkerEnvelope,
+  WorkerError,
+  type WorkerOptions,
+  type WorkerOutcome,
+  type WorkerSpec,
+  WorkerSupervisor,
+} from "./worker.ts"
+export {
   type AllocateOptions,
   allocateWorktree,
   emptyRegistry,
@@ -83,24 +116,3 @@ export {
   WorktreeStatusSchema,
   withRepoLock,
 } from "./worktree.ts"
-export {
-  CircuitBreaker,
-  buildWorkerArgv,
-  defaultGateCheck,
-  emptyAcc,
-  foldWorkerEvent,
-  loadWorkerPids,
-  prepareTaskRun,
-  saveWorkerPids,
-  Worker,
-  WorkerError,
-  WorkerSupervisor,
-  type BreakerOptions,
-  type FoldedEvent,
-  type SpendAcc,
-  type WorkerEnvelope,
-  type WorkerOptions,
-  type WorkerOutcome,
-  type WorkerSpec,
-} from "./worker.ts"
-export { FleetDaemon, type DaemonOptions, type TransitionEvent, type WorkerPort } from "./daemon.ts"

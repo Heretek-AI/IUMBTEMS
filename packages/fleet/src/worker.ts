@@ -184,7 +184,13 @@ export class Worker {
       for await (const line of lines) {
         let envelope: WorkerEnvelope | undefined
         try {
-          const raw = JSON.parse(line) as { kind?: unknown; event?: unknown; v?: unknown; at?: unknown; runId?: unknown }
+          const raw = JSON.parse(line) as {
+            kind?: unknown
+            event?: unknown
+            v?: unknown
+            at?: unknown
+            runId?: unknown
+          }
           if (typeof raw.kind === "string" && typeof raw.event === "object" && raw.event !== null)
             envelope = {
               v: typeof raw.v === "number" ? raw.v : 0,

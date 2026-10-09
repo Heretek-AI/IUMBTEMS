@@ -10,6 +10,8 @@ import { FleetDaemon } from "./daemon.ts"
 import { assertHumanStart, FleetError, fleetStatus, startFleet, stopFleet } from "./lifecycle.ts"
 import { reportTask } from "./scheduler.ts"
 import { addTask, loadDag, saveDag, TERMINAL } from "./tasks.ts"
+import { ensureToken, TelemetryServer } from "./telemetry.ts"
+import { readFleetSnapshot, watchFleet } from "./watch.ts"
 import { defaultGateCheck } from "./worker.ts"
 import { gcWorktrees } from "./worktree.ts"
 
@@ -19,12 +21,14 @@ const HELP = `es-fleet ${VERSION} — Epistemic Swarm fleet daemon (human-only, 
 
 Usage:
   es-fleet start --max-usd <n> [--concurrency <k>] [--foreground]   start the daemon (TTY + confirmation)
+        [--repo <dir>] [--es-bin <path>] [--port <n>] [--interval-ms <ms>]
   es-fleet stop                                                     stop the daemon
   es-fleet status [--json]                                          show daemon status (agent-safe)
   es-fleet task add --file <task.json>                              add a task from a JSON file (human-only)
   es-fleet task list [--json]                                       list tasks
   es-fleet task cancel <id> [--reason <text>]                       cancel a task (human-only)
   es-fleet gc [--repo <dir>]                                        remove orphaned worktrees (human-only)
+  es-fleet watch                                                    live dashboard over the telemetry bus
 
 Options:
   --state-dir <dir>   override the user state dir (default: es state dir)
@@ -92,15 +96,27 @@ export async function main(argv: readonly string[]): Promise<number> {
           `Fleet daemon running (pid ${handle.pid}, ceiling $${maxUsd}, started ${handle.startedAt}).\n`,
         )
         // Own the task loop: recover workers, then tick until signalled.
+        const esBin = valueFlag(rest, ["--es-bin"]) ?? "es"
+        const token = await ensureToken(root)
+        const bus = new TelemetryServer({
+          stateRoot: root,
+          port: Number(valueFlag(rest, ["--port"]) ?? "0"),
+          token,
+          getSnapshot: () => readFleetSnapshot(root),
+        })
         const daemon = new FleetDaemon({
           repoRoot: valueFlag(rest, ["--repo"]) ?? process.cwd(),
           stateRoot: root,
-          esBin: valueFlag(rest, ["--es-bin"]) ?? "es",
+          esBin,
           ...(Number.isFinite(concurrency) ? { concurrency } : {}),
           fleetCeilingUsd: maxUsd,
-          checkGates: defaultGateCheck(valueFlag(rest, ["--es-bin"]) ?? "es"),
+          checkGates: defaultGateCheck(esBin),
+          onTransition: (event) =>
+            void bus.log.appendSync("changed", { taskId: event.taskId, kind: event.type, detail: event.detail ?? "" }),
         })
         await daemon.recover()
+        await bus.start()
+        process.stdout.write(`Telemetry bus on 127.0.0.1:${bus.port} (token in <stateDir>/fleet/token).\n`)
         await daemon.tick()
         const everyMs = Math.max(1_000, Number(valueFlag(rest, ["--interval-ms"]) ?? "5000"))
         const timer = setInterval(
@@ -111,6 +127,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         const shutdown = async () => {
           clearInterval(timer)
           await daemon.shutdown()
+          await bus.stop()
           await handle.close()
           process.exit(0)
         }
@@ -188,6 +205,9 @@ export async function main(argv: readonly string[]): Promise<number> {
           `gc: removed ${report.removed.length} worktree(s), salvaged ${report.salvaged.length} branch(es), dropped ${report.dropped.length} record(s).\n`,
         )
         return 0
+      }
+      case "watch": {
+        return watchFleet({ stateRoot: root })
       }
       default:
         process.stderr.write(`Unknown command ${JSON.stringify(command ?? "")}.\n\n${HELP}`)

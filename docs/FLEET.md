@@ -90,3 +90,22 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
   prepare → launch → fold reports → land done tasks → release; `stop` is the
   kill switch. `es-fleet start --foreground` runs the loop (`--repo`,
   `--es-bin`, `--interval-ms`).
+
+## Telemetry bus and watch (#126)
+
+- The daemon serves a read-only bus on `127.0.0.1:<port>` (random free port
+  recorded in `telemetry.json`; bearer token in `token`, 0600, readable only
+  by the human outside any sandbox):
+  - `POST /fleet/rpc`: strict-schema JSON-RPC — `fleet.status`,
+    `fleet.task {id}`, `fleet.pending`, `fleet.events {since}` (monotonic
+    backlog replay over the persisted `events.jsonl`).
+  - `GET /fleet/ws`: WebSocket stream of `changed` and `liveness` events,
+    coalesced to at most one emit per channel per second (notifySoon),
+    dropping to the latest per taskId on bursts.
+- Fail-closed binding: localhost only, `Authorization: Bearer` (401),
+  `Host: 127.0.0.1|localhost:<port>` (403, DNS-rebinding defense), `Origin`
+  checked on WS upgrades (403). Every method is read-only (the suite hashes
+  state files around calls). Payloads are scrubbed (secret-named keys and
+  known secret values become `[redacted]`; credentials never enter payloads).
+- `es-fleet watch` polls the bus and redraws a terminal dashboard (headline
+  spend, task table, pending approvals, recent events); `q` quits, needs a TTY.
