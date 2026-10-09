@@ -3,7 +3,7 @@
 // live DOM, including one reactive update (the WS re-render path) and one
 // hostile-content probe (model output is never raw HTML).
 import { describe, expect, test } from "bun:test"
-import type { FleetSnapshot } from "@heretek-ai/es-fleet"
+import type { FleetSnapshot, TaskLiveness } from "@heretek-ai/es-fleet"
 import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import { Overview, TaskDetail } from "./components.ts"
@@ -155,5 +155,24 @@ describe("task detail", () => {
     const found = task("a", "running", {})
     show(TaskDetail({ task: () => found, events: () => [] }))
     expect(document.body.querySelector('a[href="#/evidence/a"]')).not.toBeNull()
+  })
+
+  test("it renders run liveness: headline, stage, seats and research", () => {
+    setup()
+    const found = task("a", "running", {})
+    const liveness: TaskLiveness = {
+      taskId: "a",
+      stage: "SPEC",
+      headline: "programmer is editing the UI",
+      seats: ["manager: waiting on programmer", "programmer: editing since 12:00"],
+      research: "alpha 3/5 sources, beta 2/5",
+    }
+    show(TaskDetail({ task: () => found, events: () => [], liveness: () => liveness }))
+    const text = document.body.textContent ?? ""
+    expect(text).toContain("programmer is editing the UI")
+    expect(text).toContain("SPEC")
+    expect(text).toContain("manager: waiting on programmer")
+    expect(text).toContain("programmer: editing since 12:00")
+    expect(text).toContain("alpha 3/5 sources, beta 2/5")
   })
 })

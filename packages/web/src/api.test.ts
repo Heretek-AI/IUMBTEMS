@@ -10,6 +10,7 @@ import {
   fetchEvidenceSource,
   fetchStatus,
   fetchTask,
+  fetchTaskLiveness,
   parseStatus,
   previewConfigPlan,
   RpcError,
@@ -94,6 +95,35 @@ describe("rpc", () => {
     expect((await fetchTask("a")).title).toBe("Alpha")
     stubFetch(200, { error: { code: -32603, message: "unknown task" } })
     await expect(fetchTask("a")).rejects.toThrow(RpcError)
+  })
+
+  test("fetchTaskLiveness parses the liveness payload and rejects malformed ones", async () => {
+    stubFetch(200, {
+      result: {
+        taskId: "a",
+        stage: "SPEC",
+        headline: "programmer is editing the UI",
+        seats: ["manager: waiting on programmer"],
+        research: "alpha 3/5 sources, beta 2/5",
+      },
+    })
+    const live = await fetchTaskLiveness("a")
+    expect(live.headline).toBe("programmer is editing the UI")
+    expect(live.seats).toEqual(["manager: waiting on programmer"])
+    expect(live.research).toBe("alpha 3/5 sources, beta 2/5")
+    stubFetch(200, { result: { taskId: "a", stage: "SPEC" } })
+    await expect(fetchTaskLiveness("a")).rejects.toThrow(RpcError)
+  })
+
+  test("parseStatus rejects a pending entry with an unknown stage", () => {
+    expect(() =>
+      parseStatus({
+        daemon: { running: true, pid: 7, maxUsd: 50, concurrency: 2 },
+        tasks: [],
+        spendUsd: 0,
+        pending: [{ taskId: "a", reason: "frontier approval", stage: "council" }],
+      }),
+    ).toThrow(RpcError)
   })
 
   test("fetchConfigView parses the view and rejects malformed payloads", async () => {

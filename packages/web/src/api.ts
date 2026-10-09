@@ -1,8 +1,30 @@
-// Read-only bus client (#129, ticket #130 builds the dashboard on it): the
-// browser calls the same `POST /fleet/rpc` the CLI uses, authenticated by
-// the session cookie the ticket exchange set (same-origin fetch carries it;
-// no token ever touches client state). Strict-schema responses only.
-import type { FleetSnapshot } from "@heretek-ai/es-fleet"
+// Bus client (#129, ticket #130 builds the dashboard on it): reads go over
+// the same `POST /fleet/rpc` the CLI uses, authenticated by the session
+// cookie the ticket exchange set (same-origin fetch carries it; no token
+// ever touches client state). Strict-schema responses only. The single
+// mutating call is the approval submit (#131, ADR 0002 option b): the
+// passphrase travels only over loopback, bound to a single-use ticket.
+import type {
+  ApproveTicket,
+  ConfigDrift,
+  ConfigPlan,
+  ConfigView,
+  EvidenceClaimSummary,
+  EvidenceQuote,
+  FleetSnapshot,
+  TaskLiveness,
+} from "@heretek-ai/es-fleet"
+
+export type { ConfigDrift, ConfigPlan, ConfigView, EvidenceClaimSummary, EvidenceQuote, TaskLiveness }
+
+/** Approval stages the browser can preview and submit (fleet ApproveTicket). */
+export type ApproveStage = ApproveTicket["stage"]
+
+/** Fail-closed stage check for fleet snapshot rows (typed `string` upstream). */
+export const isApproveStage = (raw: unknown): raw is ApproveStage => raw === "frontier" || raw === "spec"
+
+/** Claim tag vocabulary, shared by the evidence filters and layout. */
+export type Tag = "VERIFIED" | "INFERRED" | "HYPOTHESIS" | "NEGATIVE_KNOWLEDGE"
 
 export class RpcError extends Error {
   constructor(
@@ -58,10 +80,10 @@ export function parseStatus(raw: unknown): FleetSnapshot {
     if (!task) throw new RpcError(-32603, "fleet.status returned a malformed task")
     cleanTasks.push(task)
   }
-  const cleanPending: { taskId: string; reason: string; stage: string }[] = []
+  const cleanPending: { taskId: string; reason: string; stage: ApproveStage }[] = []
   for (const entry of pending) {
     const item = entry as Record<string, unknown>
-    if (typeof item?.taskId !== "string" || typeof item?.reason !== "string" || typeof item?.stage !== "string")
+    if (typeof item?.taskId !== "string" || typeof item?.reason !== "string" || !isApproveStage(item?.stage))
       throw new RpcError(-32603, "fleet.status returned a malformed pending entry")
     cleanPending.push({ taskId: item.taskId, reason: item.reason, stage: item.stage })
   }
@@ -174,8 +196,26 @@ const strArray = (raw: unknown, what: string): string[] => {
   return [...raw]
 }
 
+/** One task's run liveness for the detail page (#130, `fleet.task.liveness`). */
+export async function fetchTaskLiveness(id: string, base = ""): Promise<TaskLiveness> {
+  const result = await rpc<unknown>("fleet.task.liveness", { id }, base)
+  if (typeof result !== "object" || result === null) throw new RpcError(-32603, "the daemon returned no task liveness")
+  const seen = result as Record<string, unknown>
+  if (typeof seen.headline !== "string" || typeof seen.stage !== "string" || !Array.isArray(seen.seats))
+    throw new RpcError(-32603, "the daemon returned no task liveness")
+  return {
+    taskId: str(seen.taskId, "task liveness"),
+    stage: seen.stage,
+    headline: seen.headline,
+    seats: strArray(seen.seats, "task liveness"),
+    ...(typeof seen.runId === "string" ? { runId: seen.runId } : {}),
+    ...(typeof seen.research === "string" ? { research: seen.research } : {}),
+    ...(typeof seen.lastActivityAt === "string" ? { lastActivityAt: seen.lastActivityAt } : {}),
+  }
+}
+
 /** Preview a frontier or spec approval: subject, hash and single-use ticket (#131). */
-export async function fetchApprovePreview(runId: string, stage: string, base = ""): Promise<ApprovePreview> {
+export async function fetchApprovePreview(runId: string, stage: ApproveStage, base = ""): Promise<ApprovePreview> {
   const body = await approveCall("/fleet/approve/preview", { runId, stage }, "", base)
   if (!Array.isArray(body.files)) throw new RpcError(-32603, "the daemon returned no approval preview")
   const files: ApproveFile[] = []
@@ -210,30 +250,6 @@ export async function submitApproval(
     alreadyApproved: body.alreadyApproved === true,
     factoryStage: typeof body.factoryStage === "string" ? body.factoryStage : null,
   }
-}
-
-export interface ConfigDrift {
-  readonly clean: boolean
-  readonly violations: readonly string[]
-  readonly hasBaseline: boolean
-}
-
-export interface ConfigView {
-  readonly config: Record<string, unknown> | null
-  readonly configHash: string | null
-  readonly gates: Record<string, unknown> | null
-  readonly gatesHash: string | null
-  readonly drift: ConfigDrift
-  readonly forbidden: readonly string[]
-}
-
-export interface ConfigPlan {
-  readonly ok: boolean
-  readonly errors: readonly string[]
-  readonly oldHash: string | null
-  readonly newHash: string | null
-  readonly changedKeys: readonly string[]
-  readonly commands: readonly string[]
 }
 
 const isRecord = (raw: unknown): raw is Record<string, unknown> =>
@@ -291,41 +307,19 @@ export async function previewConfigPlan(file: "config" | "gates", content: unkno
   }
 }
 
+/** Claim list narrowing for a run (#133): the tag is the closed Tag vocabulary. */
 export interface EvidenceFilter {
-  readonly tag?: string
+  readonly tag?: Tag
   readonly status?: string
   readonly tier?: string
   readonly text?: string
 }
 
-export interface EvidenceClaimSummary {
-  readonly id: string
-  readonly tag: string
-  readonly status: string
-  readonly statement: string
-  readonly sourceSha: string | null
-  readonly tier?: string
-}
+/** One quote with its verified source ranges (fleet EvidenceQuote). */
+export type EvidenceQuoteRange = EvidenceQuote["ranges"][number]
 
-export interface EvidenceQuoteRange {
-  readonly start: number
-  readonly end: number
-}
-
-export interface EvidenceQuote {
-  readonly quote: string
-  readonly verified: boolean
-  readonly ranges: readonly EvidenceQuoteRange[]
-}
-
-export interface EvidenceClaim {
-  readonly id: string
-  readonly tag: string
-  readonly status: string
-  readonly statement: string
-  readonly sourceSha: string | null
-  readonly tier?: string
-}
+/** One claim in full: same row shape as the fleet claim summary. */
+export type EvidenceClaim = EvidenceClaimSummary
 
 export interface EvidenceRetraction {
   readonly source: string
