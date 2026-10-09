@@ -247,7 +247,9 @@ export async function renderResearchRun(
   const stateDir = options.stateDir ?? defaultStateDir()
   const cache = researchCache(root, stateDir)
   const key = await readEngineKey(stateDir).catch(() => undefined)
-  const shas = [...new Set(claims.flatMap((claim) => (claim.source ? [claim.source.sha256] : [])))].sort()
+  const shas = [...new Set(claims.flatMap((claim) => (claim.source ? [claim.source.sha256] : [])))].sort((a, b) =>
+    a.localeCompare(b),
+  )
   const sources: RenderSource[] = []
   const missing: string[] = []
   for (const sha of shas) {
