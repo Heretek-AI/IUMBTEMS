@@ -12,6 +12,8 @@ import { AGENTS, type AgentSpec, ALL_ES_TOOLS, bwrapAvailable } from "@heretek-a
 import { boot, directiveScript, evaluatePermission, type Harness, matchWildcard } from "@heretek-ai/es-testkit"
 import { createMcpServer } from "../../cli/src/mcp.ts"
 import { HOST_WEB_TOOLS, permissionRules } from "../src/agents.ts"
+import { createRuntime, parseOptions } from "../src/runtime.ts"
+import { registerTools } from "../src/tools.ts"
 
 const pluginDir = path.resolve(import.meta.dir, "..")
 const call = (name: string, args: Record<string, unknown> = {}) => `@@CALL ${name} ${JSON.stringify(args)}@@`
@@ -237,5 +239,24 @@ describe("MCP probe (#99): a seat reaches no out-of-spec tool through es mcp", (
     })
     expect(denied?.result.isError).toBe(true)
     expect(denied?.result.content[0].text).toContain("called by es-qa-functional")
+  })
+})
+
+describe("item 1 (#101): registerTools registers every registry tool exactly once", () => {
+  test("the registered es_* names equal ALL_ES_TOOLS with no duplicates", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "es-scoping-reg-"))
+    const state = await mkdtemp(path.join(tmpdir(), "es-scoping-reg-state-"))
+    try {
+      const runtime = await createRuntime(root, parseOptions({ stateDir: state }))
+      const names: string[] = []
+      registerTools({ add: (tool: any) => void names.push(tool.name) }, runtime)
+      await runtime.lsp.stopAll().catch(() => undefined)
+      const esNames = names.filter((name) => name.startsWith("es_"))
+      expect([...new Set(esNames)].sort()).toEqual([...ALL_ES_TOOLS].sort())
+      expect(esNames.length).toBe(new Set(esNames).size)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(state, { recursive: true, force: true })
+    }
   })
 })
