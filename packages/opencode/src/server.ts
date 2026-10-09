@@ -10,6 +10,7 @@ import {
   formatReport,
   git,
   livenessLines,
+  loadPrompt,
   loadSkills,
   parseAuditTarget,
   readJson,
@@ -290,7 +291,9 @@ export default Plugin.define({
           await ctx.session.prompt({
             ...prompt,
             sessionID,
-            text: `${await runtime.factory.summary()}\nDeep research runs adversarially: write the plan note, launch es-research-alpha and es-research-beta in parallel (both subagent calls in one message, in the foreground), then es-research-synthesizer with the disputes, then es_research_audit and es_research_complete. No human will answer questions mid-flow.`,
+            // The coordinator flow is single-sourced from the seat's prompt in
+            // core; this only adds the run state.
+            text: `${await runtime.factory.summary()}\nDeep research runs adversarially, with no human answering questions mid-flow:\n\n${(await loadPrompt("deep-researcher")).body}`,
             delivery,
           } as any)
         },
