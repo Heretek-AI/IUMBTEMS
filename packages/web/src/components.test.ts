@@ -30,7 +30,7 @@ const snapshot = (extra: Partial<FleetSnapshot> = {}): FleetSnapshot => ({
     task("b", "waiting-human", { spendUsd: 0.25, deps: ["a"], reason: "frontier approval" }),
   ],
   spendUsd: 1.75,
-  pending: [{ taskId: "b", reason: "frontier approval" }],
+  pending: [{ taskId: "b", reason: "frontier approval", stage: "frontier" }],
   ...extra,
 })
 
@@ -138,5 +138,15 @@ describe("task detail", () => {
     setup()
     show(TaskDetail({ task: () => undefined, events: () => [] }))
     expect(document.body.textContent).toMatch(/unknown task/i)
+  })
+
+  test("a pending stage links to its approve page", () => {
+    setup()
+    const found = task("a", "waiting-human", { reason: "frontier approval" })
+    show(TaskDetail({ task: () => found, events: () => [], pendingStages: () => ["frontier"] }))
+    expect(document.body.querySelector('a[href="#/approve/a/frontier"]')).not.toBeNull()
+    document.body.innerHTML = ""
+    show(TaskDetail({ task: () => found, events: () => [] }))
+    expect(document.body.querySelector('a[href^="#/approve/"]')).toBeNull()
   })
 })

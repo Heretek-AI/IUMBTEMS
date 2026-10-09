@@ -149,6 +149,8 @@ export function Overview(props: OverviewProps): Element {
 export interface TaskDetailProps {
   readonly task: () => Task | undefined
   readonly events: () => readonly BusEvent[]
+  /** Stages of this task currently waiting on a human (#131 links). */
+  readonly pendingStages?: () => readonly string[]
 }
 
 export function TaskDetail(props: TaskDetailProps): Element {
@@ -164,6 +166,9 @@ export function TaskDetail(props: TaskDetailProps): Element {
       h("p", null, h("span", { class: `tone-${word.tone}`, "aria-hidden": "true" }, "●"), ` ${word.word}`),
       h("p", null, `${money(found.spendUsd)} of ${money(found.ceilingUSD)}`),
       found.reason !== undefined ? h("p", null, found.reason) : "",
+      ...(props.pendingStages?.() ?? []).map((stage) =>
+        h("p", null, h("a", { href: `#/approve/${found.id}/${stage}` }, `Approve ${stage} in the browser`)),
+      ),
       found.deps.length > 0
         ? h(
             "section",

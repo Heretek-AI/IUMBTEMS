@@ -153,8 +153,27 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
   templates — no JSX transform exists for bun's runner), against fixture
   data plus a real TelemetryServer for the WS integration test.
 
-## Config editor, preview-only (#132)
+## Browser approvals (#131, ADR 0002 option b)
 
+- Hash-routed (`#/approvals` list, `#/approve/<task>/<stage>` page).
+  `POST /fleet/approve/preview {runId, stage}` (bearer or session) returns
+  the subject summary, files and hashes plus a single-use ticket (TTL
+  120 s) bound to `hashJson(subject)` and a session CSRF token;
+  `POST /fleet/approve {ticket, passphrase}` requires the session cookie,
+  a loopback Origin and the CSRF header, then re-derives the subject,
+  refuses a mismatch, unlocks the sealed key in-process, calls
+  `approveStage` with `channel: "web"` and destroys the signer.
+- Fail-closed: bearer-only, missing CSRF/Origin and foreign origins are
+  refused; tickets redeem once; changed artifacts refuse with 409; five
+  wrong passphrases lock the surface (core limiter, web-scoped state) with
+  an audited `approval.lockout`. The passphrase travels only over
+  loopback, lives in one page-local variable, and never reaches logs,
+  events, responses or state files (probed in tests).
+- The page holds the passphrase in a masked, non-reactive input cleared
+  on submit. Trust, waive, resume, key seal, config set and export stay
+  terminal-only (ADR 0002 I7) — this ticket adds no path for them.
+
+## Config editor, preview-only (#132)
 - Hash-routed (`#/config`), two tabs: project config
   (`.factory/config.json`) and gates (`.factory/gates.json`). The page
   shows the current layers with their file hashes and the drift state, an

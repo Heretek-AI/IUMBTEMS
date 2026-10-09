@@ -1,7 +1,17 @@
 // Bus client (#129): strict response parsing, auth failure mapping. The
 // fetch transport is stubbed per test; no DOM is touched.
 import { afterEach, describe, expect, test } from "bun:test"
-import { fetchConfigView, fetchStatus, fetchTask, parseStatus, previewConfigPlan, RpcError, rpc } from "./api.ts"
+import {
+  fetchApprovePreview,
+  fetchConfigView,
+  fetchStatus,
+  fetchTask,
+  parseStatus,
+  previewConfigPlan,
+  RpcError,
+  rpc,
+  submitApproval,
+} from "./api.ts"
 
 const realFetch = globalThis.fetch
 
@@ -19,7 +29,7 @@ describe("parseStatus", () => {
       daemon: { running: true, pid: 7, maxUsd: 50, concurrency: 2 },
       tasks: [{ id: "a", title: "Alpha", status: "running", ceilingUSD: 5, spendUsd: 1, deps: [] }],
       spendUsd: 1,
-      pending: [{ taskId: "a", reason: "frontier approval" }],
+      pending: [{ taskId: "a", reason: "frontier approval", stage: "frontier" }],
     })
     expect(snapshot.daemon.pid).toBe(7)
     expect(snapshot.tasks).toHaveLength(1)
@@ -107,5 +117,35 @@ describe("rpc", () => {
     const plan = await previewConfigPlan("gates", { topN: 3 })
     expect(plan.ok).toBe(true)
     expect(plan.changedKeys).toEqual(["topN"])
+  })
+
+  test("fetchApprovePreview parses the preview and rejects malformed payloads", async () => {
+    stubFetch(200, {
+      ticket: "t",
+      csrf: "c",
+      subjectHash: "ab".repeat(32),
+      summary: ["Idea: x"],
+      files: [{ path: ".factory/frontier.json", sha256: "cd".repeat(32) }],
+      spendCeilingUSD: 25,
+      pending: true,
+    })
+    const seen = await fetchApprovePreview("t1", "frontier")
+    expect(seen.summary).toEqual(["Idea: x"])
+    expect(seen.files).toHaveLength(1)
+    stubFetch(200, { ticket: "t" })
+    await expect(fetchApprovePreview("t1", "frontier")).rejects.toThrow(RpcError)
+  })
+
+  test("submitApproval returns the result and surfaces refusal details", async () => {
+    stubFetch(200, { ok: true, stage: "frontier", alreadyApproved: false, factoryStage: "RESEARCH" })
+    const done = await submitApproval("t", "c", "pass")
+    expect(done.factoryStage).toBe("RESEARCH")
+    stubFetch(403, { error: "wrong passphrase", remaining: 3 })
+    const failure = await submitApproval("t", "c", "nope").then(
+      () => undefined,
+      (error: unknown) => error as RpcError,
+    )
+    expect(failure).toBeInstanceOf(RpcError)
+    expect(failure?.details.remaining).toBe(3)
   })
 })

@@ -8,6 +8,8 @@ export class RpcError extends Error {
   constructor(
     readonly code: number,
     message: string,
+    /** Extra machine-readable fields the server sent (remaining, retryAfterSec). */
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message)
     this.name = "RpcError"
@@ -56,12 +58,12 @@ export function parseStatus(raw: unknown): FleetSnapshot {
     if (!task) throw new RpcError(-32603, "fleet.status returned a malformed task")
     cleanTasks.push(task)
   }
-  const cleanPending: { taskId: string; reason: string }[] = []
+  const cleanPending: { taskId: string; reason: string; stage: string }[] = []
   for (const entry of pending) {
     const item = entry as Record<string, unknown>
-    if (typeof item?.taskId !== "string" || typeof item?.reason !== "string")
+    if (typeof item?.taskId !== "string" || typeof item?.reason !== "string" || typeof item?.stage !== "string")
       throw new RpcError(-32603, "fleet.status returned a malformed pending entry")
-    cleanPending.push({ taskId: item.taskId, reason: item.reason })
+    cleanPending.push({ taskId: item.taskId, reason: item.reason, stage: item.stage })
   }
   return {
     daemon: {
@@ -96,6 +98,36 @@ export async function rpc<T>(method: string, params: Record<string, unknown>, ba
   return envelope.result as T
 }
 
+/**
+ * One call against the browser-approval endpoints (same-origin; the
+ * session cookie and CSRF token ride along). Server refusals carry
+ * machine-readable details (remaining attempts, retry delay).
+ */
+async function approveCall(
+  target: "/fleet/approve/preview" | "/fleet/approve",
+  payload: Record<string, unknown>,
+  csrf: string,
+  base = "",
+): Promise<Record<string, unknown>> {
+  const response = await fetch(`${base}${target}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json", ...(csrf ? { "x-csrf": csrf } : {}) },
+    body: JSON.stringify(payload),
+  })
+  if (response.status === 401) throw new RpcError(401, "not signed in: open the one-time URL from `es-fleet web`")
+  const body = (await response.json().catch(() => undefined)) as Record<string, unknown> | undefined
+  if (!response.ok) {
+    const message =
+      typeof body?.error === "string" ? body.error : `the daemon refused the call (HTTP ${response.status})`
+    const { error: _dropped, ...details } = body ?? {}
+    void _dropped
+    throw new RpcError(response.status, message, details)
+  }
+  if (!body || typeof body !== "object") throw new RpcError(-32603, "the daemon returned no approval payload")
+  return body
+}
+
 /** Fleet overview for the hello page (#130 grows this into the dashboard). */
 export async function fetchStatus(base = ""): Promise<FleetSnapshot> {
   return parseStatus(await rpc<unknown>("fleet.status", {}, base))
@@ -107,6 +139,77 @@ export async function fetchTask(id: string, base = ""): Promise<FleetSnapshot["t
   const task = SnapshotTask(result.task)
   if (!task) throw new RpcError(-32603, `the daemon returned no task ${id}`)
   return task
+}
+
+export interface ApproveFile {
+  readonly path: string
+  readonly sha256: string
+}
+
+export interface ApprovePreview {
+  readonly ticket: string
+  readonly csrf: string
+  readonly subjectHash: string
+  readonly summary: string[]
+  readonly files: readonly ApproveFile[]
+  readonly spendCeilingUSD?: number
+  readonly pending: boolean
+}
+
+export interface ApproveResult {
+  readonly ok: boolean
+  readonly stage: string
+  readonly alreadyApproved: boolean
+  readonly factoryStage: string | null
+}
+
+const str = (raw: unknown, what: string): string => {
+  if (typeof raw !== "string" || raw.length === 0) throw new RpcError(-32603, `the daemon returned no ${what}`)
+  return raw
+}
+
+const strArray = (raw: unknown, what: string): string[] => {
+  if (!Array.isArray(raw) || raw.some((entry) => typeof entry !== "string"))
+    throw new RpcError(-32603, `the daemon returned no ${what}`)
+  return [...raw]
+}
+
+/** Preview a frontier or spec approval: subject, hash and single-use ticket (#131). */
+export async function fetchApprovePreview(runId: string, stage: string, base = ""): Promise<ApprovePreview> {
+  const body = await approveCall("/fleet/approve/preview", { runId, stage }, "", base)
+  if (!Array.isArray(body.files)) throw new RpcError(-32603, "the daemon returned no approval preview")
+  const files: ApproveFile[] = []
+  for (const entry of body.files) {
+    if (typeof entry !== "object" || entry === null)
+      throw new RpcError(-32603, "the daemon returned no approval preview")
+    const file = entry as Record<string, unknown>
+    files.push({ path: str(file.path, "approval preview"), sha256: str(file.sha256, "approval preview") })
+  }
+  return {
+    ticket: str(body.ticket, "approval preview"),
+    csrf: str(body.csrf, "approval preview"),
+    subjectHash: str(body.subjectHash, "approval preview"),
+    summary: strArray(body.summary, "approval preview"),
+    files,
+    ...(typeof body.spendCeilingUSD === "number" ? { spendCeilingUSD: body.spendCeilingUSD } : {}),
+    pending: body.pending === true,
+  }
+}
+
+/** Submit the passphrase for a previewed ticket (#131, ADR 0002 option b). */
+export async function submitApproval(
+  ticket: string,
+  csrf: string,
+  passphrase: string,
+  base = "",
+): Promise<ApproveResult> {
+  const body = await approveCall("/fleet/approve", { ticket, passphrase }, csrf, base)
+  return {
+    ok: body.ok === true,
+    stage: typeof body.stage === "string" ? body.stage : "",
+    alreadyApproved: body.alreadyApproved === true,
+    factoryStage: typeof body.factoryStage === "string" ? body.factoryStage : null,
+  }
 }
 
 export interface ConfigDrift {

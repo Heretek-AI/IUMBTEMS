@@ -1,24 +1,42 @@
-// Dashboard app (#130) with the preview-only config editor (#132):
-// hash-routed fleet overview, task and config pages over the read-only
-// bus. No mutation paths exist in this ticket's code: the only requests
-// are `fleet.status` / `fleet.task` / `fleet.config.get` /
-// `fleet.config.plan` and the WS subscribe. Approving (pending items link
-// to their task page) arrives with #131.
+// Dashboard app (#130) with the preview-only config editor (#132) and
+// browser approvals (#131, ADR 0002 option b): hash-routed fleet overview,
+// task, approvals, approve and config pages. The only mutating requests
+// are the approval submit (passphrase over loopback, ticket-bound); every
+// other request is a read over the bus plus the WS subscribe.
 
 import type { BusEvent, FleetSnapshot } from "@heretek-ai/es-fleet"
 import { createSignal, onCleanup } from "solid-js"
 import { render } from "solid-js/web"
-import { type ConfigView, fetchConfigView, fetchStatus, fetchTask, previewConfigPlan, RpcError } from "./api.ts"
+import {
+  type ConfigView,
+  fetchApprovePreview,
+  fetchConfigView,
+  fetchStatus,
+  fetchTask,
+  previewConfigPlan,
+  RpcError,
+  submitApproval,
+} from "./api.ts"
+import { ApprovalsPage, ApprovePage } from "./approvals.ts"
 import { connectBus } from "./bus.ts"
 import { Overview, TaskDetail } from "./components.ts"
 import { ConfigEditor } from "./config.ts"
 import { h } from "./dom.ts"
 import { createFleetStore } from "./store.ts"
 
-type Route = { name: "overview" } | { name: "task"; id: string } | { name: "config" }
+type Route =
+  | { name: "overview" }
+  | { name: "task"; id: string }
+  | { name: "config" }
+  | { name: "approvals" }
+  | { name: "approve"; taskId: string; stage: string }
 
 const routeOf = (hash: string): Route => {
   if (hash === "#/config") return { name: "config" }
+  if (hash === "#/approvals") return { name: "approvals" }
+  const approve = /^#\/approve\/([^/]+)\/([^/]+)$/.exec(hash)
+  if (approve?.[1] && approve?.[2])
+    return { name: "approve", taskId: decodeURIComponent(approve[1]), stage: decodeURIComponent(approve[2]) }
   const task = /^#\/task\/([^/]+)$/.exec(hash)
   return task?.[1] ? { name: "task", id: decodeURIComponent(task[1]) } : { name: "overview" }
 }
@@ -85,7 +103,15 @@ function App(): Element {
 
   void refresh()
 
-  const nav = h("nav", null, h("a", { href: "#/" }, "Fleet"), " · ", h("a", { href: "#/config" }, "Config"))
+  const nav = h(
+    "nav",
+    null,
+    h("a", { href: "#/" }, "Fleet"),
+    " · ",
+    h("a", { href: "#/approvals" }, "Approvals"),
+    " · ",
+    h("a", { href: "#/config" }, "Config"),
+  )
 
   return h("div", null, nav, () => {
     const current = route()
@@ -93,6 +119,25 @@ function App(): Element {
       return TaskDetail({
         task: () => (route().name === "task" ? task() : undefined),
         events: () => store.state.events,
+        pendingStages: () =>
+          (store.state.snapshot?.pending ?? [])
+            .filter((item) => route().name === "task" && item.taskId === (route() as { id: string }).id)
+            .map((item) => item.stage),
+      })
+    }
+    if (current.name === "approve") {
+      const { taskId, stage } = current
+      return ApprovePage({
+        taskId,
+        stage,
+        loadPreview: () => fetchApprovePreview(taskId, stage),
+        submit: (ticket, csrf, passphrase) => submitApproval(ticket, csrf, passphrase),
+      })
+    }
+    if (current.name === "approvals") {
+      return ApprovalsPage({
+        pending: () => store.state.snapshot?.pending ?? [],
+        error: () => error(),
       })
     }
     if (current.name === "config") {

@@ -8,7 +8,18 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { appendFile, mkdir, open, readFile, writeFile } from "node:fs/promises"
 import { createServer, type Server, type Socket } from "node:net"
 import path from "node:path"
+import {
+  approvalSubject,
+  approveStage,
+  checkApprovalAttempts,
+  hashJson,
+  noteApprovalSuccess,
+  noteWrongPassphrase,
+  pendingApprovals,
+  unlockHumanKey,
+} from "@heretek-ai/es-core"
 import { z } from "zod"
+import { ApproveTickets, CsrfTokens } from "./approve.ts"
 import { planConfigFile, readConfigView } from "./configview.ts"
 import { fleetPaths } from "./state.ts"
 import {
@@ -20,6 +31,7 @@ import {
   WEB_SECURITY_HEADERS,
   WebSessions,
 } from "./web.ts"
+import { loadRegistry } from "./worktree.ts"
 
 export interface BusEvent {
   readonly seq: number
@@ -186,7 +198,8 @@ export interface FleetSnapshot {
   }
   readonly tasks: readonly SnapshotTask[]
   readonly spendUsd: number
-  readonly pending: ReadonlyArray<{ readonly taskId: string; readonly reason: string }>
+  /** Tasks waiting on a human, with the stage to approve (#131 links here). */
+  readonly pending: ReadonlyArray<{ readonly taskId: string; readonly reason: string; readonly stage: string }>
 }
 
 const StrictObject = (shape: Record<string, z.ZodTypeAny>) => z.strictObject(shape)
@@ -220,6 +233,8 @@ export interface TelemetryOptions {
    * `fleet.config.*` reports that no repo is configured.
    */
   readonly configRoot?: string
+  /** Preview-ticket TTL override for tests (default 120 s, ADR 0002 I3). */
+  readonly approveTicketTtlMs?: number
 }
 
 /** Case-insensitive request header lookup (names with dashes need no literals at use sites). */
@@ -256,6 +271,8 @@ export class TelemetryServer {
   private server: Server | undefined
   private actualPort = 0
   private readonly sessions = new WebSessions()
+  private readonly approveTickets: ApproveTickets
+  private readonly csrf = new CsrfTokens()
   private pending: Record<BusChannel, Map<string, BusEvent>> = { changed: new Map(), liveness: new Map() }
   private lastFlush: Record<BusChannel, number> = { changed: 0, liveness: 0 }
   private flushTimer: Record<BusChannel, ReturnType<typeof setTimeout> | undefined> = {
@@ -268,6 +285,7 @@ export class TelemetryServer {
 
   constructor(private readonly options: TelemetryOptions) {
     this.log = new EventLog(path.join(fleetPaths(options.stateRoot).dir, "events.jsonl"))
+    this.approveTickets = new ApproveTickets(options.approveTicketTtlMs)
   }
 
   get port(): number {
@@ -380,6 +398,10 @@ export class TelemetryServer {
     }
     if (target !== "/fleet/rpc" || method !== "POST") {
       if (method === "GET" && !(target ?? "").startsWith("/fleet/")) return this.serveWeb(target ?? "/", headers, res)
+      // Browser approvals (#131, ADR 0002 option b): preview is a read
+      // (bearer or session), submit is browser-only (cookie + Origin + CSRF).
+      if (method === "POST" && target === "/fleet/approve/preview") return this.approvePreview(headers, rest, res)
+      if (method === "POST" && target === "/fleet/approve") return this.approveSubmit(headers, rest, res)
       res.writeHead(404, { "content-length": 0, connection: "close" })
       res.end()
       return
@@ -509,6 +531,175 @@ export class TelemetryServer {
       connection: "close",
     })
     res.end(body)
+  }
+
+  /**
+   * Browser approval preview (#131, ADR 0002 I3/I6): a read — bearer or
+   * session — returning the subject, its hash and a single-use ticket.
+   */
+  private async approvePreview(headers: Record<string, string>, rest: Buffer, res: HttpResponder): Promise<void> {
+    if (!this.bearerOk(field(headers, "authorization")) && !this.sessionRpcOk(headers)) {
+      // Same convention as read-only RPC: a presented session cookie that
+      // cannot authorize is a forbidden CSRF/origin failure (403).
+      const code = parseSessionCookie(field(headers, "cookie")) !== undefined ? 403 : 401
+      res.writeHead(code, { "content-length": 0, connection: "close" })
+      res.end()
+      return
+    }
+    let body: unknown
+    try {
+      body = this.readBody(headers, rest)
+    } catch {
+      this.fail(res, 400, "parse error")
+      return
+    }
+    const parsed = z
+      .object({ runId: z.string().min(1), stage: z.enum(["frontier", "spec"]) })
+      .strict()
+      .safeParse(body)
+    if (!parsed.success) {
+      this.fail(res, 400, "want {runId, stage: frontier|spec}")
+      return
+    }
+    const record = (await loadRegistry(this.options.stateRoot))?.worktrees[parsed.data.runId]
+    if (record?.status !== "allocated") {
+      this.fail(res, 404, `unknown run ${JSON.stringify(parsed.data.runId)}`)
+      return
+    }
+    let subject: { subject: Array<{ path: string; sha256: string }>; summary: string[]; spendCeilingUSD?: number }
+    try {
+      subject = await approvalSubject(record.dir, parsed.data.stage)
+    } catch (error) {
+      this.fail(res, 400, error instanceof Error ? error.message : String(error))
+      return
+    }
+    const pending = (await pendingApprovals(record.dir)).some((item) => item.stage === parsed.data.stage)
+    const subjectHash = hashJson(subject.subject)
+    const ticket = this.approveTickets.issue({ repoDir: record.dir, stage: parsed.data.stage, subjectHash })
+    const session = parseSessionCookie(field(headers, "cookie"))
+    const csrf = session && this.sessions.valid(session) ? this.csrf.forSession(session) : ""
+    this.ok(res, {
+      ticket,
+      csrf,
+      subjectHash,
+      summary: subject.summary,
+      files: subject.subject,
+      ...(subject.spendCeilingUSD !== undefined ? { spendCeilingUSD: subject.spendCeilingUSD } : {}),
+      pending,
+    })
+  }
+
+  /**
+   * Browser approval submit (#131, ADR 0002 option b): browser-only by
+   * construction — session cookie, loopback Origin and session CSRF are
+   * all required before the ticket is even looked at. The passphrase
+   * unlocks the sealed key in-process; the signer is destroyed in a
+   * finally, and the passphrase is never stored, logged or returned.
+   */
+  private async approveSubmit(headers: Record<string, string>, rest: Buffer, res: HttpResponder): Promise<void> {
+    const session = parseSessionCookie(field(headers, "cookie")) ?? ""
+    if (!this.sessions.valid(session)) {
+      res.writeHead(401, { "content-length": 0, connection: "close" })
+      res.end()
+      return
+    }
+    if (!loopbackOriginOk(field(headers, "origin")) || !this.csrf.check(session, field(headers, "x-csrf"))) {
+      res.writeHead(403, { "content-length": 0, connection: "close" })
+      res.end()
+      return
+    }
+    let body: unknown
+    try {
+      body = this.readBody(headers, rest)
+    } catch {
+      this.fail(res, 400, "parse error")
+      return
+    }
+    const parsed = z
+      .object({ ticket: z.string().min(1), passphrase: z.string().min(1).max(4096) })
+      .strict()
+      .safeParse(body)
+    if (!parsed.success) {
+      this.fail(res, 400, "want {ticket, passphrase}")
+      return
+    }
+    const webDir = path.join(fleetPaths(this.options.stateRoot).dir, "web-approvals")
+    await mkdir(webDir, { recursive: true })
+    const attempts = await checkApprovalAttempts(webDir)
+    if (!attempts.allowed) {
+      this.fail(res, 423, "too many wrong passphrases", { retryAfterSec: attempts.retryAfterSec })
+      return
+    }
+    const entry = this.approveTickets.redeem(parsed.data.ticket)
+    if (!entry) {
+      this.fail(res, 403, "unknown or expired ticket; preview again")
+      return
+    }
+    let subject: { subject: Array<{ path: string; sha256: string }> }
+    try {
+      subject = await approvalSubject(entry.repoDir, entry.stage)
+    } catch (error) {
+      this.fail(res, 409, error instanceof Error ? error.message : String(error))
+      return
+    }
+    if (hashJson(subject.subject) !== entry.subjectHash) {
+      this.fail(res, 409, "the preview is stale: the artifacts changed since the preview; preview again")
+      return
+    }
+    const { ticket: _ticket, passphrase } = parsed.data
+    void _ticket
+    let signer: Awaited<ReturnType<typeof unlockHumanKey>>
+    try {
+      signer = await unlockHumanKey(passphrase, this.options.stateRoot)
+    } catch {
+      const check = await noteWrongPassphrase({
+        dir: webDir,
+        root: entry.repoDir,
+        stage: entry.stage,
+        channel: "web",
+      })
+      if (check.allowed) this.fail(res, 403, "wrong passphrase", { remaining: check.remaining })
+      else this.fail(res, 423, "too many wrong passphrases", { retryAfterSec: check.retryAfterSec })
+      return
+    }
+    try {
+      const result = await approveStage(entry.repoDir, {
+        stage: entry.stage,
+        channel: "web",
+        signer,
+        stateDir: this.options.stateRoot,
+        expectedSubjectHash: entry.subjectHash,
+      })
+      await noteApprovalSuccess(webDir)
+      this.ok(res, {
+        ok: true,
+        stage: entry.stage,
+        alreadyApproved: result.alreadyApproved,
+        factoryStage: result.factoryStage ?? null,
+      })
+    } catch (error) {
+      this.fail(res, 500, error instanceof Error ? error.message : String(error))
+    } finally {
+      signer.destroy()
+    }
+  }
+
+  private readBody(headers: Record<string, string>, rest: Buffer): unknown {
+    const length = Number(field(headers, "content-length") ?? "0")
+    if (!Number.isInteger(length) || length < 0 || length > 1_000_000) throw new Error("bad length")
+    return JSON.parse(rest.subarray(0, length).toString("utf8"))
+  }
+
+  private ok(res: HttpResponder, value: unknown): void {
+    const text = JSON.stringify(value)
+    res.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(text) })
+    res.end(text)
+  }
+
+  private fail(res: HttpResponder, code: number, message: string, extra: Record<string, unknown> = {}): void {
+    const text = JSON.stringify({ error: message, ...extra })
+    res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(text) })
+    res.end(text)
   }
 
   private async dispatch(method: RpcMethod, params: never): Promise<unknown> {

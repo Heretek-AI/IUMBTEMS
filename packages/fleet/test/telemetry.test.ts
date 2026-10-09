@@ -23,7 +23,7 @@ const snapshot = (extra: Partial<FleetSnapshot> = {}): FleetSnapshot => ({
     { id: "b", title: "Beta", status: "pending", ceilingUSD: 5, spendUsd: 0, deps: ["a"] },
   ],
   spendUsd: 1.25,
-  pending: [{ taskId: "a", reason: "frontier approval" }],
+  pending: [{ taskId: "a", reason: "frontier approval", stage: "frontier" }],
   ...extra,
 })
 

@@ -24,7 +24,8 @@
 - **Factory stages, enforced by code.** Grill → Research → Spec → Build ⇄ QA →
   Release runs through a state machine; every `es_*` tool refuses an
   out-of-order step. Approvals (frontier, spec) are human-only and complete
-  in the TUI (masked passphrase dialog, in-process signing) or at a terminal
+  in the TUI (masked passphrase dialog, in-process signing), in the browser
+  (preview, then passphrase over loopback), or at a terminal
   (`es approve`); waivers and trust stay terminal-only (`es waive`,
   `es trust`), all signed with the passphrase-sealed Ed25519 human key
   (`es key seal` once); agents

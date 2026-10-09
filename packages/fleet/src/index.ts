@@ -1,5 +1,12 @@
 // Fleet package entrypoint (#122): daemon lifecycle, state, and (from later
 // tickets) the scheduler, worktree coordinator, workers and telemetry bus.
+
+export {
+  APPROVE_TICKET_TTL_MS,
+  type ApproveTicket,
+  ApproveTickets,
+  CsrfTokens,
+} from "./approve.ts"
 export { VERSION } from "./bin.ts"
 export {
   type ConfigDrift,
