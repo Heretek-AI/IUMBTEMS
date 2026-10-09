@@ -167,4 +167,79 @@ describe("approveInTui", () => {
       await fx.cleanup()
     }
   })
+
+  test("an expired preview is refused and signs nothing (I3 TTL)", async () => {
+    const fx = await setup()
+    try {
+      let redeemed = 0
+      await expect(
+        approveInTui({
+          root: fx.root,
+          stage: "frontier",
+          expectedSubjectHash: await fx.hash(),
+          stateDir: fx.state,
+          previewToken: "tok-expired",
+          previewIssuedAt: Date.now() - 121_000,
+          redeemPreview: async () => {
+            redeemed++
+          },
+          readPassphrase: async () => [...PASSPHRASE],
+        }),
+      ).rejects.toThrow(/expired/)
+      expect(redeemed).toBe(0)
+      expect(await readApproval(fx.root, "frontier")).toBeUndefined()
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test("a reused preview token is refused and signs nothing (I3 single-use)", async () => {
+    const fx = await setup()
+    try {
+      // Single-use ticket map, like the server's: the first redeem consumes
+      // the token, the second refuses.
+      const live = new Set(["tok-1"])
+      const redeemPreview = async (token: string) => {
+        if (!live.delete(token)) throw new Error("The confirmation expired or does not match; preview again.")
+      }
+      await redeemPreview("tok-1")
+      await expect(
+        approveInTui({
+          root: fx.root,
+          stage: "frontier",
+          expectedSubjectHash: await fx.hash(),
+          stateDir: fx.state,
+          previewToken: "tok-1",
+          redeemPreview,
+          readPassphrase: async () => [...PASSPHRASE],
+        }),
+      ).rejects.toThrow(/expired or does not match/)
+      expect(await readApproval(fx.root, "frontier")).toBeUndefined()
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test("the preview token is redeemed exactly once on success", async () => {
+    const fx = await setup()
+    try {
+      const redeemed: string[] = []
+      const outcome = await approveInTui({
+        root: fx.root,
+        stage: "frontier",
+        expectedSubjectHash: await fx.hash(),
+        stateDir: fx.state,
+        previewToken: "tok-1",
+        previewIssuedAt: Date.now(),
+        redeemPreview: async (token) => {
+          redeemed.push(token)
+        },
+        readPassphrase: async () => [...PASSPHRASE],
+      })
+      expect(outcome.ok).toBe(true)
+      expect(redeemed).toEqual(["tok-1"])
+    } finally {
+      await fx.cleanup()
+    }
+  })
 })
