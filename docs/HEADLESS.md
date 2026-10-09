@@ -13,8 +13,9 @@ Without flags the run prints one JSON object per line (see `presentEvent`
 in `packages/cli/src/headless.ts`): lifecycle events always, one compact
 line per tool call and the assistant's text at the default `info` level,
 raw harness events with long strings clipped at `debug`, lifecycle and
-progress only at `quiet`. Per-turn metrics are not printed; they go to the
-event stream below.
+progress only at `quiet`. Per-turn metrics print at `debug` only — never at
+`info`/`quiet`, so the default output is unchanged by them; they always go
+to the event stream below.
 
 ## Machine-readable event stream (`--events jsonl`)
 
@@ -32,13 +33,18 @@ line on stdout:
 - `turn-metrics` follows every completed turn: `turn`, `costUSD` (the
   sealed run-state spend delta across the turn), opportunistic
   `tokensIn`/`tokensOut` (only when the driver reports them), and `tools`
-  (`name`, `ok`, optional `ms`).
+  (`name`, `ok`, optional `ms`, optional `seat` — duration and seat only
+  when the driver reports them).
 - `--events-file <path>` writes the envelopes to the file instead, keeping
   the human lines on stdout.
 
 The envelope's type and Zod schema are exported from the CLI package for
-the fleet to parse: `JsonlEnvelope`, `HeadlessJsonlSchema`, `toJsonl`
-(`packages/cli/src/headless.ts`).
+external consumers: `JsonlEnvelope`, `HeadlessJsonlSchema`, `toJsonl`
+(`packages/cli/src/headless.ts`). The fleet does not import that schema:
+it parses each line with `JSON.parse`, keeps only envelopes with a string
+`kind` and an object `event`, and folds them in `foldWorkerEvent`
+(`packages/fleet/src/worker.ts`), reading `costUSD`/`tokensIn`/`tokensOut`
+as numbers.
 
 ## Cancellation and turn timeouts
 
