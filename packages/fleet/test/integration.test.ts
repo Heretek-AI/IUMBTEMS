@@ -5,12 +5,13 @@
 // worktrees, driven by the real FleetDaemon tick loop, landed by the real
 // gated landing, and observed over the real telemetry bus.
 //
-// Three cases plus two break probes:
+// Four cases plus break probes:
 //  1. happy DAG (A, then B and C in parallel): ordering, overlap, ownership,
 //     gated merges, base stability, bus event order;
 //  2. failure: error, retry(1), cancellation of dependents, merge conflict
 //     repair (conflict -> waiting-human, tip stable);
 //  3. cancellation and cleanup: mid-run stop, resumable record, salvage, gc.
+//  4. gate failure: gates reject the landing, the task fails, no branch moves.
 // Probes prove the suite bites: a shared worktree and an early start both
 // fail the ownership/ordering checks.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"

@@ -4,7 +4,7 @@
 // collaborator the loop cannot own in tests (spawning, gates) is injected.
 
 import { applyDecision, markGateFailed, reportTask, schedule, type TaskReport } from "./scheduler.ts"
-import { loadDag, saveDag } from "./tasks.ts"
+import { emptyDag, loadDag, saveDag } from "./tasks.ts"
 import {
   CircuitBreaker,
   loadWorkerPids,
@@ -93,7 +93,7 @@ export class FleetDaemon {
     await this.exclusive(async () => {
       const { reattached, failed } = this.supervisor.recover(records, Date.now())
       const now = new Date().toISOString()
-      let dag = (await loadDag(this.options.stateRoot)) ?? { v: 1 as const, tasks: {} }
+      let dag = (await loadDag(this.options.stateRoot)) ?? emptyDag()
       for (const taskId of reattached) this.emit({ type: "recovered", taskId, detail: "reattached to live run" })
       for (const { taskId, reason } of failed) {
         const next = reportTask(dag, taskId, { outcome: "failed", reason }, now)
@@ -108,7 +108,7 @@ export class FleetDaemon {
   async tick(): Promise<void> {
     await this.exclusive(async () => {
       const now = new Date().toISOString()
-      let dag = (await loadDag(this.options.stateRoot)) ?? { v: 1 as const, tasks: {} }
+      let dag = (await loadDag(this.options.stateRoot)) ?? emptyDag()
       const decision = schedule(dag, this.caps())
       dag = applyDecision(dag, { unblock: decision.unblock, start: [], cancel: decision.cancel }, now)
       const launched: string[] = []
@@ -189,7 +189,7 @@ export class FleetDaemon {
   async foldReport(taskId: string, report: TaskReport): Promise<void> {
     await this.exclusive(async () => {
       const now = new Date().toISOString()
-      const dag = (await loadDag(this.options.stateRoot)) ?? { v: 1 as const, tasks: {} }
+      const dag = (await loadDag(this.options.stateRoot)) ?? emptyDag()
       // Late reports after teardown name unknown tasks: not an error, drop them.
       if (!dag.tasks[taskId]) {
         this.emit({ type: "refused", taskId, detail: "stale report for an unknown task" })
@@ -205,7 +205,7 @@ export class FleetDaemon {
 
   private async reconcileTerminals(): Promise<void> {
     const now = new Date().toISOString()
-    let dag = (await loadDag(this.options.stateRoot)) ?? { v: 1 as const, tasks: {} }
+    let dag = (await loadDag(this.options.stateRoot)) ?? emptyDag()
     for (const id of Object.keys(dag.tasks).sort((a, b) => a.localeCompare(b))) {
       const task = dag.tasks[id]!
       const conflicted = task.status === "waiting-human" && this.conflicted.has(id)
@@ -265,7 +265,7 @@ export class FleetDaemon {
     }
     await this.exclusive(async () => {
       const now = new Date().toISOString()
-      let dag = (await loadDag(this.options.stateRoot)) ?? { v: 1 as const, tasks: {} }
+      let dag = (await loadDag(this.options.stateRoot)) ?? emptyDag()
       for (const id of Object.keys(dag.tasks).sort((a, b) => a.localeCompare(b))) {
         if (dag.tasks[id]!.status !== "running") continue
         const next = reportTask(dag, id, { outcome: "cancelled", reason: "fleet stopped; run is resumable" }, now)

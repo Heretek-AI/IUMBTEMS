@@ -12,7 +12,7 @@ import { FleetDaemon } from "./daemon.ts"
 import { assertHumanStart, FleetError, fleetStatus, startFleet, stopFleet } from "./lifecycle.ts"
 import { reportTask } from "./scheduler.ts"
 import { fleetPaths } from "./state.ts"
-import { addTask, loadDag, saveDag, TERMINAL } from "./tasks.ts"
+import { addTask, emptyDag, loadDag, saveDag, TERMINAL } from "./tasks.ts"
 import { ensureToken, readTelemetryEndpoint, TelemetryServer } from "./telemetry.ts"
 import { readFleetSnapshot, watchFleet } from "./watch.ts"
 import { mintWebTicket } from "./web.ts"
@@ -345,7 +345,7 @@ export async function main(argv: readonly string[]): Promise<number> {
           if (!file) throw new FleetError("`es-fleet task add` needs --file <task.json>.")
           const raw = JSON.parse(await readFile(file, "utf8")) as unknown
           const inputs = Array.isArray(raw) ? raw : [raw]
-          let dag = (await loadDag(root)) ?? { v: 1 as const, tasks: {} }
+          let dag = (await loadDag(root)) ?? emptyDag()
           const now = new Date().toISOString()
           for (const input of inputs) dag = addTask(dag, input as Record<string, unknown>, now)
           await saveDag(root, dag)

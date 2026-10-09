@@ -17,6 +17,7 @@ import {
   noteWrongPassphrase,
   pendingApprovals,
   unlockHumanKey,
+  withLock,
 } from "@heretek-ai/es-core"
 import { z } from "zod"
 import { ApproveTickets, CsrfTokens } from "./approve.ts"
@@ -162,22 +163,24 @@ export function scrubPayload(value: unknown, secrets: readonly string[]): unknow
 
 /** Bearer token for the bus: created once at 0600 in the masked state dir. */
 export async function ensureToken(stateRoot: string): Promise<string> {
-  const file = fleetPaths(stateRoot).token
-  try {
-    const current = (await readFile(file, "utf8")).trim()
-    if (current.length >= 32) return current
-  } catch {
-    // Missing: create below.
-  }
-  await mkdir(path.dirname(file), { recursive: true })
-  const handle = await open(file, "w", 0o600)
-  try {
-    const token = randomBytes(32).toString("hex")
-    await handle.writeFile(`${token}\n`)
-    return token
-  } finally {
-    await handle.close()
-  }
+  const paths = fleetPaths(stateRoot)
+  return withLock(paths.lock, async () => {
+    try {
+      const current = (await readFile(paths.token, "utf8")).trim()
+      if (current.length >= 32) return current
+    } catch {
+      // Missing: create below.
+    }
+    await mkdir(path.dirname(paths.token), { recursive: true })
+    const handle = await open(paths.token, "w", 0o600)
+    try {
+      const token = randomBytes(32).toString("hex")
+      await handle.writeFile(`${token}\n`)
+      return token
+    } finally {
+      await handle.close()
+    }
+  })
 }
 
 export interface SnapshotTask {
@@ -298,8 +301,10 @@ const contentLengthOf = (header: string): number => {
 }
 
 /**
- * The bus server. Bind, token, Host and Origin are all fail-closed; every
- * method is read-only (no state is written anywhere in request handling).
+ * The bus server. Bind, token, Host and Origin are all fail-closed. Every
+ * JSON-RPC method is read-only (no state is written anywhere in RPC
+ * handling); the browser approve endpoints are the deliberate exception —
+ * preview issues single-use tickets and submit writes approvals.
  */
 export class TelemetryServer {
   readonly log: EventLog
@@ -348,7 +353,9 @@ export class TelemetryServer {
     this.actualPort = (this.server.address() as { port: number }).port
     const paths = fleetPaths(this.options.stateRoot)
     await mkdir(paths.dir, { recursive: true })
-    await writeFile(path.join(paths.dir, "telemetry.json"), JSON.stringify({ port: this.actualPort }))
+    await withLock(paths.lock, () =>
+      writeFile(path.join(paths.dir, "telemetry.json"), JSON.stringify({ port: this.actualPort })),
+    )
   }
 
   async stop(): Promise<void> {
