@@ -80,3 +80,39 @@ export const TelemetrySchema = z
   })
   .strict()
 export type Telemetry = z.infer<typeof TelemetrySchema>
+
+// ------------------------------------------------- distillation (#136)
+
+export const ClusterKindSchema = z.enum(["gate", "audit", "eval"])
+export type ClusterKind = z.infer<typeof ClusterKindSchema>
+
+/** One recurring signal: the same failure keyed across runs, with its evidence. */
+export const ClusterSchema = z
+  .object({
+    key: z.string().min(1),
+    kind: ClusterKindSchema,
+    /** Human-readable label (the rule, category or failing case). */
+    label: z.string().min(1),
+    occurrences: z.number().int().nonnegative(),
+    runIds: z.array(z.string().min(1)),
+    /** Verbatim evidence strings, each present in the source telemetry. */
+    evidence: z.array(z.string().min(1)),
+  })
+  .strict()
+export type Cluster = z.infer<typeof ClusterSchema>
+
+export const ProposalKindSchema = z.enum(["prompt-guidance", "gate-tuning", "domain-pack"])
+export type ProposalKind = z.infer<typeof ProposalKindSchema>
+
+/** A reviewable proposal: rationale plus evidence-linked files, never applied. */
+export const ProposalSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: ProposalKindSchema,
+    cluster: ClusterSchema,
+    rationale: z.string().min(1),
+    /** Proposal-dir-relative files this proposal writes (patch, explanation, pack). */
+    files: z.array(z.string().min(1)),
+  })
+  .strict()
+export type Proposal = z.infer<typeof ProposalSchema>

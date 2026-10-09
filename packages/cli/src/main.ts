@@ -86,7 +86,7 @@ import {
   trust,
   waive,
 } from "./human.ts"
-import { improveHarvest } from "./improve.ts"
+import { improveDistill, improveHarvest } from "./improve.ts"
 import { auditCommand, auditDismiss, auditShow, researchDeepCommand, scoutCommand, scoutShow } from "./jobs.ts"
 import { keySeal, keyStatus } from "./key.ts"
 import { serveStdio } from "./mcp.ts"
@@ -144,6 +144,8 @@ Other
   harvest show [--json]         Show the teardown plan/progress or the report
   harvest scan <source>         Scan one source (local path, git URL, github:owner/repo, npm:name)
   improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file>   Harvest read-only telemetry from runs and evals
+  improve distill --telemetry <file> --out <dir> [--open-pr]   Cluster telemetry into reviewable proposals
+        [--open-pr opens a draft PR from a topic branch; human-run, refused without a terminal]
   design [status]               Design interview progress (resumes from .factory/design)
   design render                 Re-render tokens.css + STYLE_GUIDE.md from tokens.json
   design check                  Fail on render drift, invalid tokens or one-off mints
@@ -676,7 +678,11 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
       }
       case "improve": {
         if (sub === "harvest") return await improveHarvest(subArgs(2), { print: io.print, cwd: io.cwd })
-        io.print("Usage: es improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file>")
+        if (sub === "distill")
+          return await improveDistill(subArgs(2), { print: io.print, cwd: io.cwd, confirm: io.confirm }, root)
+        io.print(
+          "Usage: es improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file> | distill --telemetry <file> --out <dir> [--open-pr]",
+        )
         return 2
       }
       case "hooks": {

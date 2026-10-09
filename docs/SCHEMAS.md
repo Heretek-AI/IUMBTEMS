@@ -29,6 +29,8 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | claim-status | `schemas/claim-status.schema.json` |
 | claim-tag | `schemas/claim-tag.schema.json` |
 | claim | `schemas/claim.schema.json` |
+| cluster-kind | `schemas/cluster-kind.schema.json` |
+| cluster | `schemas/cluster.schema.json` |
 | command-check | `schemas/command-check.schema.json` |
 | design-answers | `schemas/design-answers.schema.json` |
 | design-artifacts | `schemas/design-artifacts.schema.json` |
@@ -58,6 +60,8 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | parser-id | `schemas/parser-id.schema.json` |
 | prior-art-search | `schemas/prior-art-search.schema.json` |
 | probe-row | `schemas/probe-row.schema.json` |
+| proposal-kind | `schemas/proposal-kind.schema.json` |
+| proposal | `schemas/proposal.schema.json` |
 | provenance | `schemas/provenance.schema.json` |
 | queereye-tokens | `schemas/queereye-tokens.schema.json` |
 | record-signature | `schemas/record-signature.schema.json` |

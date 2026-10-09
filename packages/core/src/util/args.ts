@@ -47,6 +47,7 @@ export const BOOLEAN_FLAGS: readonly string[] = [
   "allow-unverifiable",
   "global",
   "open-only",
+  "open-pr",
   "sign",
   "all",
 ]
