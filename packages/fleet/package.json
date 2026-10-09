@@ -38,6 +38,9 @@
     "@heretek-ai/es-core": "workspace:*",
     "zod": "4.6.5"
   },
+  "devDependencies": {
+    "@heretek-ai/es-testkit": "workspace:*"
+  },
   "engines": {
     "node": ">=22"
   }

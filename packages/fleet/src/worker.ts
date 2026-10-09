@@ -176,9 +176,9 @@ export class Worker {
       if (stderrTail.length > 20) stderrTail.shift()
     })
     const lines = createInterface({ input: child.stdout! })
-    const finished = new Promise<number>((resolve) => {
-      child.once("exit", (code) => resolve(code ?? 1))
-      child.once("error", () => resolve(1))
+    const finished = new Promise<{ code: number | null; signal: string | null }>((resolve) => {
+      child.once("exit", (code, signal) => resolve({ code, signal }))
+      child.once("error", () => resolve({ code: 1, signal: null }))
     })
     try {
       for await (const line of lines) {
@@ -210,10 +210,15 @@ export class Worker {
     } finally {
       lines.removeAllListeners()
     }
-    const code = await finished
+    const { code, signal } = await finished
     if (this.terminal) return toOutcome(this.terminal, this.acc.spendUsd)
-    if (code === 130) {
-      const report: TaskReport = { outcome: "cancelled", reason: "run exited 130 (SIGTERM); resumable" }
+    // Killed by a signal (the daemon's SIGTERM stop): the run is cancelled
+    // and resumable, exactly like the headless exit-130 path.
+    if (signal !== null || code === 130) {
+      const report: TaskReport = {
+        outcome: "cancelled",
+        reason: signal !== null ? `run stopped by ${signal}; resumable` : "run exited 130 (SIGTERM); resumable",
+      }
       this.emit(report)
       return toOutcome(report, this.acc.spendUsd)
     }

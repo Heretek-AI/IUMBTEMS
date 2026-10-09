@@ -55,6 +55,8 @@ export class FleetDaemon {
     massThreshold: 5,
   })
   private readonly ports = new Map<string, WorkerPort>()
+  /** Tasks whose landing conflicted: retried after human repair, else waiting. */
+  private readonly conflicted = new Set<string>()
   private queue: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: DaemonOptions) {}
@@ -152,15 +154,25 @@ export class FleetDaemon {
             this.options.stateRoot,
             Object.fromEntries(this.supervisor.entries().map((entry) => [entry.taskId, entry.pid])),
           )
-          void port.run().then(async (outcome) => {
-            this.supervisor.untrack(id)
-            this.ports.delete(id)
-            await saveWorkerPids(
-              this.options.stateRoot,
-              Object.fromEntries(this.supervisor.entries().map((entry) => [entry.taskId, entry.pid])),
-            ).catch(() => undefined)
-            if (outcome.status === "failed") this.breaker.noteCrash(id, Date.now())
-          })
+          void port
+            .run()
+            .then(async (outcome) => {
+              this.supervisor.untrack(id)
+              this.ports.delete(id)
+              await saveWorkerPids(
+                this.options.stateRoot,
+                Object.fromEntries(this.supervisor.entries().map((entry) => [entry.taskId, entry.pid])),
+              ).catch(() => undefined)
+              if (outcome.status === "failed") this.breaker.noteCrash(id, Date.now())
+            })
+            .catch((error) => {
+              const reason = `worker crashed: ${error instanceof Error ? error.message : String(error)}`
+              this.supervisor.untrack(id)
+              this.ports.delete(id)
+              this.breaker.noteCrash(id, Date.now())
+              this.emit({ type: "refused", taskId: id, detail: reason })
+              void this.foldReport(id, { outcome: "failed", reason })
+            })
           launched.push(id)
           this.emit({ type: "started", taskId: id, detail: record.dir })
         } catch (error) {
@@ -178,6 +190,11 @@ export class FleetDaemon {
     await this.exclusive(async () => {
       const now = new Date().toISOString()
       const dag = (await loadDag(this.options.stateRoot)) ?? { v: 1 as const, tasks: {} }
+      // Late reports after teardown name unknown tasks: not an error, drop them.
+      if (!dag.tasks[taskId]) {
+        this.emit({ type: "refused", taskId, detail: "stale report for an unknown task" })
+        return
+      }
       const next = reportTask(dag, taskId, report, now)
       if (next.changed) {
         await saveDag(this.options.stateRoot, next.dag)
@@ -191,10 +208,14 @@ export class FleetDaemon {
     let dag = (await loadDag(this.options.stateRoot)) ?? { v: 1 as const, tasks: {} }
     for (const id of Object.keys(dag.tasks).sort()) {
       const task = dag.tasks[id]!
-      if (task.status !== "done" && task.status !== "failed" && task.status !== "cancelled") continue
+      const conflicted = task.status === "waiting-human" && this.conflicted.has(id)
+      if (task.status !== "done" && task.status !== "failed" && task.status !== "cancelled" && !conflicted) continue
       const record = (await loadRegistry(this.options.stateRoot))?.worktrees[id]
-      if (!record || record.status !== "allocated") continue
-      if (task.status === "done") {
+      if (!record || record.status !== "allocated") {
+        this.conflicted.delete(id)
+        continue
+      }
+      if (task.status === "done" || conflicted) {
         const landed = await landTask(
           this.options.repoRoot,
           this.options.stateRoot,
@@ -203,9 +224,16 @@ export class FleetDaemon {
           this.options.checkGates,
         )
         if (landed.landed) {
+          this.conflicted.delete(id)
+          if (conflicted) {
+            const next = reportTask(dag, id, { outcome: "done", reason: "landed after human repair" }, now)
+            dag = next.dag
+            await saveDag(this.options.stateRoot, dag)
+          }
           await releaseWorktree(this.options.repoRoot, this.options.stateRoot, id, "merged")
           this.emit({ type: "released", taskId: id, detail: "landed and released" })
         } else if (landed.conflict) {
+          this.conflicted.add(id)
           const next = reportTask(dag, id, { outcome: "waiting-human", reason: landed.reason }, now)
           dag = next.dag
           await saveDag(this.options.stateRoot, dag)

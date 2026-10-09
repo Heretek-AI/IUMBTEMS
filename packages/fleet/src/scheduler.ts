@@ -139,7 +139,19 @@ export function reportTask(
 ): { dag: DagState; changed: boolean } {
   const task = dag.tasks[id]
   if (!task) throw new FleetError(`Unknown task ${JSON.stringify(id)}.`)
-  if (TERMINAL.has(task.status)) return { dag, changed: false }
+  // Landing conflicts reopen a done task for human repair (#127): nothing
+  // else leaves a terminal state.
+  if (TERMINAL.has(task.status)) {
+    if (task.status === "done" && report.outcome === "waiting-human")
+      return {
+        dag: {
+          v: dag.v,
+          tasks: { ...dag.tasks, [id]: { ...task, status: "waiting-human", reason: report.reason, updatedAt: now } },
+        },
+        changed: true,
+      }
+    return { dag, changed: false }
+  }
   const spend = report.outcome === "done" || report.outcome === "failed" ? report.spendUsd : undefined
   const result =
     spend === undefined ? task.result : { spendUsd: spend, summary: "summary" in report ? report.summary : undefined }

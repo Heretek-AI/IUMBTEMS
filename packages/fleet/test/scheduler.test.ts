@@ -123,6 +123,19 @@ describe("failure policies", () => {
     expect(dag.tasks.a!.status).toBe("waiting-human")
     expect(dag.tasks.a!.reason).toMatch(/replan/i)
   })
+
+  test("a landing conflict reopens a done task as waiting-human (#127)", () => {
+    let dag = dagOf([{ id: "a" }])
+    dag = runTo(dag, ["a"], "done")
+    expect(dag.tasks.a!.status).toBe("done")
+    const next = reportTask(dag, "a", { outcome: "waiting-human", reason: "merge conflict landing" }, NOW)
+    expect(next.changed).toBe(true)
+    expect(next.dag.tasks.a!.status).toBe("waiting-human")
+    // After human repair the task lands as done again.
+    const redone = reportTask(next.dag, "a", { outcome: "done", reason: "landed after human repair" }, NOW)
+    expect(redone.changed).toBe(true)
+    expect(redone.dag.tasks.a!.status).toBe("done")
+  })
 })
 
 describe("determinism", () => {

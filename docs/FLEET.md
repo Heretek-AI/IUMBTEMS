@@ -109,3 +109,22 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
   known secret values become `[redacted]`; credentials never enter payloads).
 - `es-fleet watch` polls the bus and redraws a terminal dashboard (headline
   spend, task table, pending approvals, recent events); `q` quits, needs a TTY.
+
+## Integration suite (#127)
+
+`packages/fleet/test/integration.test.ts` is merge-blocking (runs in
+`bun run check`, ~10 s, deterministic — 5/5 green): one booted testkit host
+is the fleet repo, and scripted seat turns (fake model) do real work in real
+isolated worktrees under the real daemon loop, landing and bus.
+- Case 1: A, then B and C in parallel — start/finish marks prove ordering
+  and overlap; branch trees prove output ownership and that `.factory/` run
+  state never leaks across branches (it would collide on landing); the
+  integration branch collects every output; `main` never moves.
+- Case 2: error/retry/cancel/conflict — `failOnce`+`retry(1)` runs twice
+  then succeeds; terminal failure cancels dependents; an add/add conflict
+  reopens the loser as `waiting-human` (landing conflicts are the one
+  transition allowed out of `done`) while the tip stays stable.
+- Case 3: mid-run `shutdown()` SIGTERMs the worker (exit signal maps to
+  `cancelled`/resumable), the abandoned branch is salvaged, `gc` is clean.
+- Break probes: a shared worktree and a pre-dep start both fail the
+  ownership/ordering checks, proving the suite bites.
