@@ -100,10 +100,12 @@ export async function initFromPreset(
       content: `# #${idea.issue}: ${idea.title}\n\n${idea.body.trim()}\n`,
     },
   ]
-  for (const file of written) {
-    await mkdir(path.dirname(path.join(root, file.rel)), { recursive: true })
-    await writeFile(path.join(root, file.rel), file.content)
-  }
+  await Promise.all(
+    written.map(async (file) => {
+      await mkdir(path.dirname(path.join(root, file.rel)), { recursive: true })
+      await writeFile(path.join(root, file.rel), file.content)
+    }),
+  )
   return { written: written.map((file) => file.rel), baseBranch: SELF_DOGFOOD_BASE_BRANCH }
 }
 

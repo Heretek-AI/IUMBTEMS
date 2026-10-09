@@ -302,7 +302,7 @@ export async function recordPr(context: HumanContext, args: Args): Promise<numbe
 export async function factoryInit(context: HumanContext, args: Args): Promise<number> {
   const preset = flag(args, "preset")
   const issueRaw = flag(args, "issue")
-  const issue = issueRaw !== undefined ? Number(issueRaw) : NaN
+  const issue = issueRaw !== undefined ? Number(issueRaw) : Number.NaN
   if (preset !== "self-dogfood" || !Number.isInteger(issue) || issue <= 0) {
     context.print("Usage: es factory init --preset self-dogfood --issue <n>")
     return 2

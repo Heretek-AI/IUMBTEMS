@@ -230,7 +230,7 @@ describe("the code-disposes gate", () => {
   test("distilled proposals stand undisposed", async () => {
     const telemetry = richTelemetry()
     const proposals = await distillProposals(telemetry)
-    expect(proposals.length).toBe(3)
+    expect(proposals).toHaveLength(3)
     expect(undisposed(proposals, telemetry)).toEqual(proposals)
   })
 })

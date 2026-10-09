@@ -703,7 +703,7 @@ describe("es improve distill (#136)", () => {
       "0",
     ])
     expect(thresholds.code).toBe(2)
-    expect(thresholds.out).toContain("Bad thresholds")
+    expect(thresholds.out).toContain("Bad --min-occurrences")
     const missing = await run(["improve", "distill", "--out", path.join(root, "p")])
     expect(missing.code).toBe(2)
     expect(missing.out).toContain("Usage: es improve distill")

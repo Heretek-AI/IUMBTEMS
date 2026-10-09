@@ -18,11 +18,14 @@ import { DomainPackSchema } from "../schema/domain.ts"
 import {
   type Cluster,
   type ClusterKind,
+  type EvalTelemetry,
   type Proposal,
   type ProposalKind,
   ProposalSchema,
+  type RunTelemetry,
   type Telemetry,
 } from "../schema/improve.ts"
+import { compareStrings } from "../util/compare.ts"
 import { shortHash } from "../util/hash.ts"
 
 export interface DistillThresholds {
@@ -41,45 +44,60 @@ interface Signal {
   readonly evidence: string
 }
 
+/** One signal per counted occurrence (a count-2 rejection is two signals). */
+function repeat(count: number, signal: Signal): Signal[] {
+  const out: Signal[] = []
+  for (let i = 0; i < count; i++) out.push(signal)
+  return out
+}
+
+function runSignals(run: RunTelemetry): Signal[] {
+  const out: Signal[] = []
+  for (const rejection of run.gateRejections)
+    out.push(
+      ...repeat(rejection.count, {
+        kind: "gate",
+        label: rejection.rule,
+        runId: run.id,
+        evidence: `run ${run.id}: gate rejection ${rejection.rule}`,
+      }),
+    )
+  for (const finding of run.auditFindings)
+    out.push(
+      ...repeat(finding.count, {
+        kind: "audit",
+        label: `${finding.kind}/${finding.severity}`,
+        runId: run.id,
+        evidence: `run ${run.id}: audit finding ${finding.kind}/${finding.severity}`,
+      }),
+    )
+  if (run.halt)
+    out.push({
+      kind: "eval",
+      label: `halt/${run.halt.from}`,
+      runId: run.id,
+      evidence: `run ${run.id}: halt from ${run.halt.from}: ${run.halt.reason}`,
+    })
+  return out
+}
+
+function evalSignals(evalCase: EvalTelemetry): Signal[] {
+  if (evalCase.pass) return []
+  const failures = evalCase.failures.length > 0 ? evalCase.failures : ["failed"]
+  return failures.map((failure) => ({
+    kind: "eval" as const,
+    // Key on the failure text itself: the same reason across cases is
+    // one cluster; the case stays in the evidence and the run id.
+    label: failure,
+    runId: `eval/${evalCase.case}`,
+    evidence: `eval ${evalCase.case}: ${failure}`,
+  }))
+}
+
 function signals(telemetry: Telemetry): Signal[] {
   const out: Signal[] = []
-  for (const run of telemetry.runs) {
-    for (const rejection of run.gateRejections)
-      for (let i = 0; i < rejection.count; i++)
-        out.push({
-          kind: "gate",
-          label: rejection.rule,
-          runId: run.id,
-          evidence: `run ${run.id}: gate rejection ${rejection.rule}`,
-        })
-    for (const finding of run.auditFindings)
-      for (let i = 0; i < finding.count; i++)
-        out.push({
-          kind: "audit",
-          label: `${finding.kind}/${finding.severity}`,
-          runId: run.id,
-          evidence: `run ${run.id}: audit finding ${finding.kind}/${finding.severity}`,
-        })
-    if (run.halt)
-      out.push({
-        kind: "eval",
-        label: `halt/${run.halt.from}`,
-        runId: run.id,
-        evidence: `run ${run.id}: halt from ${run.halt.from}: ${run.halt.reason}`,
-      })
-  }
-  for (const evalCase of telemetry.evals) {
-    if (evalCase.pass) continue
-    for (const failure of evalCase.failures.length ? evalCase.failures : ["failed"])
-      out.push({
-        kind: "eval",
-        // Key on the failure text itself: the same reason across cases is
-        // one cluster; the case stays in the evidence and the run id.
-        label: failure,
-        runId: `eval/${evalCase.case}`,
-        evidence: `eval ${evalCase.case}: ${failure}`,
-      })
-  }
+  for (const run of telemetry.runs) out.push(...runSignals(run))
+  for (const evalCase of telemetry.evals) out.push(...evalSignals(evalCase))
   return out
 }
 
@@ -90,7 +108,24 @@ function signals(telemetry: Telemetry): Signal[] {
  * harvester said it.
  */
 export function signalEvidence(telemetry: Telemetry): string[] {
-  return [...new Set(signals(telemetry).map((signal) => signal.evidence))].sort()
+  const evidence = [...new Set(signals(telemetry).map((signal) => signal.evidence))]
+  evidence.sort(compareStrings)
+  return evidence
+}
+
+interface ClusterGroup {
+  kind: ClusterKind
+  label: string
+  runIds: Set<string>
+  evidence: string[]
+}
+
+const toCluster = (key: string, group: ClusterGroup): Cluster => {
+  const runIds = [...group.runIds]
+  runIds.sort(compareStrings)
+  const evidence = [...new Set(group.evidence)]
+  evidence.sort(compareStrings)
+  return { key, kind: group.kind, label: group.label, occurrences: group.evidence.length, runIds, evidence }
 }
 
 /**
@@ -100,7 +135,7 @@ export function signalEvidence(telemetry: Telemetry): string[] {
 export function clusterTelemetry(telemetry: Telemetry, thresholds: DistillThresholds = {}): Cluster[] {
   const minOccurrences = thresholds.minOccurrences ?? DEFAULT_THRESHOLDS.minOccurrences
   const minRuns = thresholds.minRuns ?? DEFAULT_THRESHOLDS.minRuns
-  const groups = new Map<string, { kind: ClusterKind; label: string; runIds: Set<string>; evidence: string[] }>()
+  const groups = new Map<string, ClusterGroup>()
   for (const signal of signals(telemetry)) {
     const key = `${signal.kind}:${signal.label}`
     let group = groups.get(key)
@@ -111,17 +146,15 @@ export function clusterTelemetry(telemetry: Telemetry, thresholds: DistillThresh
     group.runIds.add(signal.runId)
     group.evidence.push(signal.evidence)
   }
-  return [...groups.entries()]
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .filter(([, group]) => group.evidence.length >= minOccurrences && group.runIds.size >= minRuns)
-    .map(([key, group]) => ({
-      key,
-      kind: group.kind,
-      label: group.label,
-      occurrences: group.evidence.length,
-      runIds: [...group.runIds].sort(),
-      evidence: [...new Set(group.evidence)].sort(),
-    }))
+  const entries = [...groups.entries()]
+  entries.sort(([a], [b]) => compareStrings(a, b))
+  const clusters: Cluster[] = []
+  for (const [key, group] of entries) {
+    if (group.evidence.length < minOccurrences) continue
+    if (group.runIds.size < minRuns) continue
+    clusters.push(toCluster(key, group))
+  }
+  return clusters
 }
 
 const KIND_FOR_CLUSTER: Record<ClusterKind, ProposalKind> = {
@@ -141,102 +174,118 @@ const slug = (text: string): string =>
 export const proposalId = (kind: ProposalKind, cluster: Pick<Cluster, "key">): string =>
   `${kind}-${slug(cluster.key)}-${shortHash(cluster.key)}`
 
-const SEAT_FOR_AUDIT = (label: string): string => (label.startsWith("invariant/") ? "auditor-thesis" : "programmer")
+const seatForAudit = (label: string): string => {
+  if (label.startsWith("invariant/")) return "auditor-thesis"
+  return "programmer"
+}
 
 const promptFor = (promptId: string): string => `packages/core/assets/prompts/${promptId}.md`
 
-/**
- * Render one proposal's files (but write nothing): proposal.json metadata is
- * assembled by `writeProposals`. Prompt patches are unified diffs against the
- * seat's prompt asset: a version-bump hunk plus a known-pitfall insertion.
- */
-export async function renderProposalFiles(
-  cluster: Cluster,
-): Promise<{ kind: ProposalKind; id: string; rationale: string; files: Record<string, string> }> {
-  const kind = KIND_FOR_CLUSTER[cluster.kind]
-  const id = proposalId(kind, cluster)
-  if (kind === "gate-tuning") {
-    const rationale =
-      `Gate rule "${cluster.label}" rejected ${cluster.occurrences} time(s) across ${cluster.runIds.length} run(s) ` +
-      `(${cluster.runIds.join(", ")}). This proposal only explains the pattern: gates.json is a factory control ` +
-      `file, so a human applies any tuning with \`es rebaseline\`. Nothing here changes a gate on its own.`
-    return {
-      kind,
-      id,
-      rationale,
-      files: {
-        "gates.md": [
-          `# Gate-tuning proposal: ${cluster.label}`,
-          ``,
-          rationale,
-          ``,
-          `## Evidence`,
-          ...cluster.evidence.map((quote) => `- ${quote}`),
-          ``,
-          `## Suggested direction (human applies with \`es rebaseline\`)`,
-          ``,
-          `Consider whether rule "${cluster.label}" needs a waiver scope, a fix in the seats' guidance, or a ` +
-            `tighter check. Do not apply this file mechanically: review the evidence first.`,
-          ``,
-        ].join("\n"),
-      },
-    }
+const evidenceSection = (evidence: readonly string[]): string =>
+  ["## Evidence", ...evidence.map((quote) => `- ${quote}`), ``].join("\n")
+
+interface RenderedProposal {
+  readonly kind: ProposalKind
+  readonly id: string
+  readonly rationale: string
+  readonly files: Record<string, string>
+}
+
+function renderGateTuning(cluster: Cluster): RenderedProposal {
+  const kind = "gate-tuning" as const
+  const rationale =
+    `Gate rule "${cluster.label}" rejected ${cluster.occurrences} time(s) across ${cluster.runIds.length} run(s) ` +
+    `(${cluster.runIds.join(", ")}). This proposal only explains the pattern: gates.json is a factory control ` +
+    `file, so a human applies any tuning with \`es rebaseline\`. Nothing here changes a gate on its own.`
+  return {
+    kind,
+    id: proposalId(kind, cluster),
+    rationale,
+    files: {
+      "gates.md": [
+        `# Gate-tuning proposal: ${cluster.label}`,
+        ``,
+        rationale,
+        ``,
+        evidenceSection(cluster.evidence),
+        `## Suggested direction (human applies with \`es rebaseline\`)`,
+        ``,
+        `Consider whether rule "${cluster.label}" needs a waiver scope, a fix in the seats' guidance, or a ` +
+          `tighter check. Do not apply this file mechanically: review the evidence first.`,
+        ``,
+      ].join("\n"),
+    },
   }
-  if (kind === "prompt-guidance") {
-    const promptId = SEAT_FOR_AUDIT(cluster.label)
-    const asset = await loadPrompt(promptId)
-    const next = asset.meta.version + 1
-    const pitfall = `Known pitfall (distilled from ${cluster.occurrences} occurrence(s) of ${cluster.label}): re-read the evidence above before recording a verdict.`
-    const source = await readFile(promptFor(promptId), "utf8").catch(() => undefined)
-    const lines = (source ?? `${asset.body}\n`).replace(/\n$/, "").split("\n")
-    const versionLine = lines.findIndex((line) => /^version:\s*\d+\s*$/.test(line))
-    const hunks: string[] = []
-    if (versionLine > 0) {
-      const ctxBefore = lines.slice(Math.max(0, versionLine - 2), versionLine)
-      const ctxAfter = lines.slice(versionLine + 1, versionLine + 3)
-      const oldStart = versionLine - ctxBefore.length + 1
-      const oldCount = ctxBefore.length + 1 + ctxAfter.length
-      hunks.push(
-        `@@ -${oldStart},${oldCount} +${oldStart},${oldCount} @@`,
-        ...ctxBefore.map((line) => ` ${line}`),
-        `-version: ${asset.meta.version}`,
-        `+version: ${next}`,
-        ...ctxAfter.map((line) => ` ${line}`),
-      )
-    }
-    const tail = lines.slice(-3)
-    const tailStart = lines.length - tail.length + 1
-    hunks.push(
-      `@@ -${tailStart},${tail.length} +${tailStart},${tail.length + 1} @@`,
-      ...tail.map((line) => ` ${line}`),
-      `+${pitfall}`,
-    )
-    const rationale =
-      `Audit signal "${cluster.label}" recurred ${cluster.occurrences} time(s) across ${cluster.runIds.length} run(s). ` +
-      `This patch adds one known-pitfall line to the ${promptId} prompt and bumps its frontmatter to v${next}, ` +
-      `so the assets drift check stays green when a human applies it. Review the evidence before applying.`
-    return {
-      kind,
-      id,
-      rationale,
-      files: {
-        "prompt.patch": [`--- a/${promptFor(promptId)}`, `+++ b/${promptFor(promptId)}`, ...hunks, ``].join("\n"),
-        "rationale.md": [
-          `# Prompt-guidance proposal: ${promptId}`,
-          ``,
-          rationale,
-          ``,
-          `## Evidence`,
-          ...cluster.evidence.map((quote) => `- ${quote}`),
-          ``,
-        ].join("\n"),
-      },
-    }
+}
+
+/** A unified-diff hunk replacing one line with context on both sides. */
+function replaceHunk(lines: readonly string[], index: number, oldLine: string, newLine: string): string[] {
+  const before = lines.slice(Math.max(0, index - 2), index)
+  const after = lines.slice(index + 1, index + 3)
+  const start = index - before.length + 1
+  const count = before.length + 1 + after.length
+  return [
+    `@@ -${start},${count} +${start},${count} @@`,
+    ...before.map((line) => ` ${line}`),
+    `-${oldLine}`,
+    `+${newLine}`,
+    ...after.map((line) => ` ${line}`),
+  ]
+}
+
+/** A unified-diff hunk appending one line at the end of the file. */
+function appendHunk(lines: readonly string[], newLine: string): string[] {
+  const tail = lines.slice(-3)
+  const start = lines.length - tail.length + 1
+  return [
+    `@@ -${start},${tail.length} +${start},${tail.length + 1} @@`,
+    ...tail.map((line) => ` ${line}`),
+    `+${newLine}`,
+  ]
+}
+
+async function renderPromptGuidance(cluster: Cluster): Promise<RenderedProposal> {
+  const kind = "prompt-guidance" as const
+  const promptId = seatForAudit(cluster.label)
+  const asset = await loadPrompt(promptId)
+  const next = asset.meta.version + 1
+  const pitfall = `Known pitfall (distilled from ${cluster.occurrences} occurrence(s) of ${cluster.label}): re-read the evidence above before recording a verdict.`
+  const source = await readFile(promptFor(promptId), "utf8").catch(() => undefined)
+  const lines = (source ?? `${asset.body}\n`).replace(/\n$/, "").split("\n")
+  const versionLine = lines.findIndex((line) => /^version:\s*\d+\s*$/.test(line))
+  const hunks: string[] = []
+  if (versionLine > 0)
+    hunks.push(...replaceHunk(lines, versionLine, `version: ${asset.meta.version}`, `version: ${next}`))
+  hunks.push(...appendHunk(lines, pitfall))
+  const rationale =
+    `Audit signal "${cluster.label}" recurred ${cluster.occurrences} time(s) across ${cluster.runIds.length} run(s). ` +
+    `This patch adds one known-pitfall line to the ${promptId} prompt and bumps its frontmatter to v${next}, ` +
+    `so the assets drift check stays green when a human applies it. Review the evidence before applying.`
+  return {
+    kind,
+    id: proposalId(kind, cluster),
+    rationale,
+    files: {
+      "prompt.patch": [`--- a/${promptFor(promptId)}`, `+++ b/${promptFor(promptId)}`, ...hunks, ``].join("\n"),
+      "rationale.md": [
+        `# Prompt-guidance proposal: ${promptId}`,
+        ``,
+        rationale,
+        ``,
+        evidenceSection(cluster.evidence),
+      ].join("\n"),
+    },
   }
-  const packId = `distilled-${slug(cluster.label)}`.slice(0, 48)
+}
+
+function renderDomainPack(cluster: Cluster): RenderedProposal {
+  const kind = "domain-pack" as const
   const pack = DomainPackSchema.parse({
-    packId,
-    description: `Distilled from ${cluster.occurrences} occurrence(s) of ${cluster.label} across ${cluster.runIds.join(", ")}: research touching this failure domain must cite primary evidence. Human-reviewed proposal; not applied.`,
+    packId: `distilled-${slug(cluster.label)}`.slice(0, 48),
+    description:
+      `Distilled from ${cluster.occurrences} occurrence(s) of ${cluster.label} across ` +
+      `${cluster.runIds.join(", ")}: research touching this failure domain must cite primary evidence. ` +
+      `Human-reviewed proposal; not applied.`,
     tierWeights: { __default__: 1 },
     mandatoryTags: ["VERIFIED"],
   })
@@ -246,7 +295,7 @@ export async function renderProposalFiles(
     `It is schema-valid but unreviewed: a human adopts it by adding it to assets/domain-packs/.`
   return {
     kind,
-    id,
+    id: proposalId(kind, cluster),
     rationale,
     files: {
       "pack.json": `${JSON.stringify(pack, null, 2)}\n`,
@@ -255,40 +304,70 @@ export async function renderProposalFiles(
         ``,
         rationale,
         ``,
-        `## Evidence`,
-        ...cluster.evidence.map((quote) => `- ${quote}`),
-        ``,
+        evidenceSection(cluster.evidence),
       ].join("\n"),
     },
   }
 }
 
+/**
+ * Render one proposal's files (but write nothing): proposal.json metadata is
+ * assembled by `writeProposals`. Prompt patches are unified diffs against the
+ * seat's prompt asset: a version-bump hunk plus a known-pitfall insertion.
+ */
+export async function renderProposalFiles(cluster: Cluster): Promise<RenderedProposal> {
+  const kind = KIND_FOR_CLUSTER[cluster.kind]
+  if (kind === "gate-tuning") return renderGateTuning(cluster)
+  if (kind === "prompt-guidance") return renderPromptGuidance(cluster)
+  return renderDomainPack(cluster)
+}
+
 /** Distill every surviving cluster into a validated proposal (deterministic order). */
 export async function distillProposals(telemetry: Telemetry, thresholds: DistillThresholds = {}): Promise<Proposal[]> {
-  const out: Proposal[] = []
-  for (const cluster of clusterTelemetry(telemetry, thresholds)) {
-    const rendered = await renderProposalFiles(cluster)
-    const files = Object.keys(rendered.files).sort()
-    out.push(
-      ProposalSchema.parse({ id: rendered.id, kind: rendered.kind, cluster, rationale: rendered.rationale, files }),
-    )
-  }
-  return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  const clusters = clusterTelemetry(telemetry, thresholds)
+  const rendered = await Promise.all(clusters.map((cluster) => renderProposalFiles(cluster)))
+  const out = rendered.map((item, index) => {
+    const files = Object.keys(item.files)
+    files.sort(compareStrings)
+    return ProposalSchema.parse({
+      id: item.id,
+      kind: item.kind,
+      cluster: clusters[index],
+      rationale: item.rationale,
+      files,
+    })
+  })
+  out.sort((a, b) => compareStrings(a.id, b.id))
+  return out
 }
 
 // ------------------------------------------------- the "code disposes" gate
 
-/** Model-numeral candidates: letters, then a separator, then a version number (`gpt-4`, `claude 3.5`). */
-const MODEL_NUMERAL =
-  /\b[a-z][a-z0-9]*(?:[-_ ][a-z0-9]+)*[-_ ]\d+(?:\.\d+)+\b|\b(?:gpt|claude|gemini|llama|mistral|qwen)[-_. ]?\d[\w.]*\b/gi
+/**
+ * Model-numeral candidates: a known model family name with a version number
+ * (`gpt-4`, `llama-8b`). The vendor list keeps the pattern linear; anything
+ * else never reads as a model claim.
+ */
+const MODEL_NUMERAL = /\b(?:gpt|claude|gemini|llama|mistral|qwen)[-_. ]?\d[\w.]*\b/gi
 
 const KNOWN_NON_MODELS = new Set(["utf-8", "utf8", "sha-256", "sha256", "base-64", "base64", "v1", "v2"])
 
 /** Model strings the telemetry actually records (eval models). */
 export function telemetryModels(telemetry: Telemetry): Set<string> {
   const models = new Set<string>()
-  for (const evalCase of telemetry.evals) if (evalCase.model) models.add(evalCase.model.toLowerCase())
+  for (const evalCase of telemetry.evals) {
+    if (evalCase.model) models.add(evalCase.model.toLowerCase())
+  }
   return models
+}
+
+const numeralAllowed = (numeral: string, allowed: ReadonlySet<string>): boolean => {
+  if (KNOWN_NON_MODELS.has(numeral)) return true
+  for (const model of allowed) {
+    if (model.includes(numeral)) return true
+    if (numeral.includes(model)) return true
+  }
+  return false
 }
 
 /**
@@ -299,17 +378,18 @@ export function telemetryModels(telemetry: Telemetry): Set<string> {
 export function disposeReason(proposal: Proposal, telemetry: Telemetry): string[] {
   const verbatim = new Set(signalEvidence(telemetry))
   const reasons: string[] = []
-  for (const quote of proposal.cluster.evidence)
+  for (const quote of proposal.cluster.evidence) {
     if (!verbatim.has(quote)) reasons.push(`evidence is not a verbatim quote: ${quote.slice(0, 80)}`)
+  }
   const allowed = telemetryModels(telemetry)
   const text = `${proposal.rationale} ${proposal.cluster.label}`
-  for (const match of new Set(text.match(MODEL_NUMERAL) ?? [])) {
+  const matches = new Set(text.match(MODEL_NUMERAL) ?? [])
+  for (const match of matches) {
     const numeral = match.toLowerCase()
-    if (KNOWN_NON_MODELS.has(numeral)) continue
-    if (![...allowed].some((model) => model.includes(numeral) || numeral.includes(model)))
-      reasons.push(`hallucinated model numeral: ${match}`)
+    if (!numeralAllowed(numeral, allowed)) reasons.push(`hallucinated model numeral: ${match}`)
   }
-  return reasons.sort()
+  reasons.sort(compareStrings)
+  return reasons
 }
 
 /** Every proposal that survives the gate (throws on none — callers report). */
@@ -324,6 +404,14 @@ export interface WrittenProposal extends Proposal {
   readonly dir: string
 }
 
+async function writeOne(out: string, proposal: Proposal, files: Record<string, string>): Promise<WrittenProposal> {
+  const dir = path.join(out, proposal.id)
+  await mkdir(dir, { recursive: true })
+  await writeFile(path.join(dir, "proposal.json"), `${JSON.stringify(proposal, null, 2)}\n`)
+  await Promise.all(Object.entries(files).map(([name, content]) => writeFile(path.join(dir, name), content)))
+  return { ...proposal, dir }
+}
+
 /**
  * Write proposals under `<out>/<id>/` (proposal.json plus the rendered
  * files). Writes nowhere else: prompts, packs and gates.json are never
@@ -334,14 +422,9 @@ export async function writeProposals(
   proposals: Proposal[],
   rendered: Map<string, Record<string, string>>,
 ): Promise<WrittenProposal[]> {
-  const written: WrittenProposal[] = []
-  for (const proposal of proposals) {
-    const dir = path.join(out, proposal.id)
-    await mkdir(dir, { recursive: true })
-    const files = rendered.get(proposal.id) ?? {}
-    await writeFile(path.join(dir, "proposal.json"), `${JSON.stringify(proposal, null, 2)}\n`)
-    for (const [name, content] of Object.entries(files)) await writeFile(path.join(dir, name), content)
-    written.push({ ...proposal, dir })
-  }
-  return written.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  const written = await Promise.all(
+    proposals.map((proposal) => writeOne(out, proposal, rendered.get(proposal.id) ?? {})),
+  )
+  written.sort((a, b) => compareStrings(a.id, b.id))
+  return written
 }
