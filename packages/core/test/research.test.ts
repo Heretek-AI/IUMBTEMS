@@ -12,6 +12,9 @@ import {
   firecrawlProvider,
   htmlToText,
   isFresh,
+  locateQuote,
+  normalizeForQuote,
+  normalizeWithMap,
   parseTags,
   pruneClaims,
   researchTools,
@@ -55,6 +58,45 @@ describe("verbatim quotes", () => {
     expect(verifyQuote(SOURCE, "a ... a ... a ... a ... a ... a ... a").reason).toContain("fragment")
     expect(verifyQuote(SOURCE, "Bun is a fast ... manager").ok).toBe(false)
     expect(verifyQuote(SOURCE, "Bun is a fast all-in-one ... a package manager").ok).toBe(true)
+  })
+
+  test("locateQuote returns original-text ranges that normalise to the fragments", () => {
+    const single = locateQuote(SOURCE, "fast all-in-one JavaScript runtime")
+    expect(single).toHaveLength(1)
+    expect(SOURCE.slice(single![0]!.start, single![0]!.end)).toBe("fast all-in-one JavaScript runtime")
+    const curly = locateQuote("He said “hello world, friends”", 'said "hello world, friends"')
+    expect(curly).toHaveLength(1)
+    const curlySlice = "He said “hello world, friends”".slice(curly![0]!.start, curly![0]!.end)
+    expect(curlySlice).toContain("“hello world, friends”")
+    expect(normalizeForQuote(curlySlice)).toBe('said "hello world, friends"')
+    const linked = locateQuote("[Bun](https://bun.sh) is fast and furious", "Bun is fast and furious")
+    expect(linked).toHaveLength(2)
+    expect("[Bun](https://bun.sh) is fast and furious".slice(linked![0]!.start, linked![0]!.end)).toBe("Bun")
+    expect("[Bun](https://bun.sh) is fast and furious".slice(linked![1]!.start, linked![1]!.end)).toBe(
+      " is fast and furious",
+    )
+    const two = locateQuote(SOURCE, "fast all-in-one ... a package manager")
+    expect(two).toHaveLength(2)
+    expect(two![0]!.end).toBeLessThanOrEqual(two![1]!.start)
+    for (const range of two!) expect(SOURCE.slice(range.start, range.end).length).toBeGreaterThan(0)
+  })
+
+  test("locateQuote refuses what verifyQuote refuses", () => {
+    expect(locateQuote(SOURCE, "Bun")).toBeUndefined()
+    expect(locateQuote(SOURCE, "a slow runtime for JavaScript")).toBeUndefined()
+    expect(locateQuote(SOURCE, "a package manager ... fast all-in-one")).toBeUndefined()
+  })
+
+  test("normalizeWithMap agrees with normalizeForQuote character for character", () => {
+    const cases = [
+      SOURCE,
+      "He said “hello” — yes…  really",
+      "[Bun](https://bun.sh) is **fast** and `lean`",
+      "  spaced\t\tout\n\nlines  ",
+      "NBSP here and　fullwidth",
+      "café ﬁligree",
+    ]
+    for (const text of cases) expect(normalizeWithMap(text).text).toBe(normalizeForQuote(text))
   })
 })
 

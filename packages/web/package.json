@@ -1,0 +1,29 @@
+{
+  "name": "@heretek-ai/es-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Epistemic Swarm web control plane (private, never published): fleet dashboard, browser approvals, config editor and evidence explorer, served by es-fleet on loopback.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Heretek-AI/IUMBTEMS.git",
+    "directory": "packages/web"
+  },
+  "scripts": {
+    "build": "vite build",
+    "test": "bun --conditions=browser test"
+  },
+  "dependencies": {
+    "@heretek-ai/es-fleet": "workspace:*",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "happy-dom": "20.14.6",
+    "vite": "7.3.6",
+    "vite-plugin-solid": "2.11.14"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

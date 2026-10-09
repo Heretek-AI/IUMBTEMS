@@ -110,6 +110,113 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
 - `es-fleet watch` polls the bus and redraws a terminal dashboard (headline
   spend, task table, pending approvals, recent events); `q` quits, needs a TTY.
 
+## Web control plane (#129)
+
+- `packages/web` (SolidJS + Vite, private, never published; ADR 0003) builds
+  to `packages/web/dist/`, which the daemon serves from the bus port at `/`.
+- `es-fleet web` (human-only, refused under `ES_SANDBOX`) mints a single-use
+  ticket (32 random bytes, TTL 120 s, kept as a file under the masked state
+  dir) and prints a one-time URL `http://127.0.0.1:<port>/?t=<ticket>`. The
+  first load redeems it for an `HttpOnly; SameSite=Strict` session cookie
+  (12 h); the ticket never redeems twice — the claim is an atomic rename, so
+  even concurrent loads grant exactly one session — and expires after 120 s,
+  so browser-history or proxy retention of the URL is harmless.
+- Fail-closed: anonymous loads are 401, bad tickets 403, wrong Host 403, a
+  non-loopback Origin 403, traversal outside the web root 404. The session
+  cookie also authorizes read-only RPC and WS, but only with a loopback
+  Origin present (bearer calls are unaffected). Every web response carries a
+  strict CSP (`default-src 'self'`, no inline scripts, `frame-ancestors
+  'none'`), `X-Content-Type-Options: nosniff` and `Referrer-Policy:
+  no-referrer`.
+
+## Fleet dashboard (#130)
+
+- Hash-routed (`#/` overview, `#/task/:id`), built from the read-only bus
+  only: `fleet.status`, `fleet.task`, and the WS `changed`/`liveness`
+  stream. There are no mutation paths in the dashboard code (audited per
+  ticket: the only requests are those two RPC methods plus WS subscribe).
+- The overview draws the task DAG (columns by depth, edges from each task's
+  `deps`, served by the bus since #130), a task table, fleet spend against
+  the ceiling, and the pending-approvals list linking to each task page.
+  Status is always words beside colour (1.3 vocabulary: running→working,
+  waiting-human→waiting on you, etc.), and every task is a link, so the UI
+  stays navigable by keyboard and readable without colour.
+- Liveness is fleet-level: the bus serves per-task status, reason, spend
+  and deps, not per-run seats/stages/research — the detail page shows the
+  server-rendered reason string, spend, deps and recent bus events for the
+  task. (Full run liveness would need a per-run RPC the #126 bus does not
+  define; the dashboard stays within the read-only bus by design.)
+- Live updates: WS events refetch the snapshot; a reconnect refetches too.
+  No data for 5 s shows a stale banner (`role="status"`).
+- Tests run with `bun --conditions=browser test packages/web`: the web
+  suite renders with the client Solid build (components use `solid-js/html`
+  templates — no JSX transform exists for bun's runner), against fixture
+  data plus a real TelemetryServer for the WS integration test.
+
+## Browser approvals (#131, ADR 0002 option b)
+
+- Hash-routed (`#/approvals` list, `#/approve/<task>/<stage>` page).
+  `POST /fleet/approve/preview {runId, stage}` (bearer or session) returns
+  the subject summary, files and hashes plus a single-use ticket (TTL
+  120 s) bound to `hashJson(subject)` and a session CSRF token;
+  `POST /fleet/approve {ticket, passphrase}` requires the session cookie,
+  a loopback Origin and the CSRF header, then re-derives the subject,
+  refuses a mismatch, unlocks the sealed key in-process, calls
+  `approveStage` with `channel: "web"` and destroys the signer.
+- Fail-closed: bearer-only, missing CSRF/Origin and foreign origins are
+  refused; tickets redeem once; changed artifacts refuse with 409; five
+  wrong passphrases lock the surface (core limiter, web-scoped state) with
+  an audited `approval.lockout`. The passphrase travels only over
+  loopback, lives in one page-local variable, and never reaches logs,
+  events, responses or state files (probed in tests).
+- The page holds the passphrase in a masked, non-reactive input cleared
+  on submit. Trust, waive, resume, key seal, config set and export stay
+  terminal-only (ADR 0002 I7) — this ticket adds no path for them.
+
+## Config editor, preview-only (#132)
+- Hash-routed (`#/config`), two tabs: project config
+  (`.factory/config.json`) and gates (`.factory/gates.json`). The page
+  shows the current layers with their file hashes and the drift state, an
+  editor, and — after Preview — strict-schema errors inline or the exact
+  diff (old hash → new hash, changed keys) plus the exact terminal commands
+  (`es config set <key> <json>` per changed config key; save +
+  `es rebaseline` for gates).
+- Two read-only bus methods back it: `fleet.config.get {}` (current
+  layers, hashes, drift, forbidden keys) and `fleet.config.plan {file,
+  content}` (validates with the same `EsConfigSchema`/`GatesConfigSchema`
+  the terminal path uses; the previewed hash is the sha256 of the exact
+  bytes `writeJson` would emit). Both leave every file untouched (hashed
+  around the calls in tests).
+- Preview-only is enforced, not promised: the bus has no
+  `fleet.config.apply` (unknown-method), the UI has no apply button, and
+  the editor says so on the page. Browser apply stays terminal-only per
+  ADR 0002 I7 until the user explicitly extends it (after #131) — tracked
+  as a follow-up issue, not this ticket.
+- Note: `docs/CONFIG.md` is generated from the config schema, so the
+  editor is documented here instead of there (hand-editing generated docs
+  fails `docs:check`).
+
+## Evidence explorer (#133)
+
+- Hash-routed (`#/evidence/<task>` from the task page): claim/source
+  graph (coloured by tag, dashed when not LIVE), tag/status/tier
+  filters, inspector (statement, rank explanation, retractions, history)
+  and a source viewer that highlights verified quote ranges with `<mark>`
+  elements built from text nodes — hostile source text is never parsed
+  as HTML. Seal status (sealed / unsealed / invalid / unknown) shows on
+  every source.
+- Read-only bus methods: `evidence.claims {runId, filter}`,
+  `evidence.claim {runId, id}` (quotes with original-text ranges from
+  core's `locateQuote`, retractions, rank), `evidence.source {runId,
+  sha}` (capped text, meta, seal) and `evidence.export {runId,
+  markdown|html}` (the #112 `renderResearchRun` renderers). Lists and
+  texts are capped; every call leaves all files untouched (hashed in
+  tests). Editing claims and recording retractions stay terminal-only.
+- Quote ranges come from `locateQuote` (core): `verifyQuote` decides,
+  an index map through the same normalisation locates each fragment,
+  and every range self-checks back to its fragment (a divergence yields
+  no highlight, never a wrong one).
+
 ## Integration suite (#127)
 
 `packages/fleet/test/integration.test.ts` is merge-blocking (runs in

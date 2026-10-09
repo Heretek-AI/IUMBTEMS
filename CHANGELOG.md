@@ -1,5 +1,85 @@
 # Changelog
 
+## 1.5.0 — 2026-10-09
+
+Phase 4 web control plane: the fleet daemon serves a browser UI on
+loopback behind a one-time URL — a fleet dashboard, frontier/spec
+approvals in the browser (ADR 0002 option b), a preview-only config
+editor, and an evidence explorer with range-highlighted quotes and seal
+statuses. `packages/web` stays private and is served from the repo (the
+fleet daemon is private too, so no asset-shipping decision is needed);
+the published trio (core/CLI/plugin) release in lockstep as 1.5.0.
+
+**Security.**
+- **#129: the web UI is localhost-only behind a single-use ticket
+  exchange.** `es-fleet web` (human-only, refused under `ES_SANDBOX`)
+  mints a 32-byte ticket (TTL 120 s, atomic-rename claim) that the first
+  load redeems for an `HttpOnly; SameSite=Strict` session cookie; wrong
+  Host (DNS-rebinding defense) and non-loopback Origin are refused, and
+  every web response carries a strict CSP (`default-src 'self'`, no
+  inline scripts, `frame-ancestors 'none'`).
+- **#131: browser approvals sign only what was previewed.** Preview
+  returns the subject, files and hashes with a single-use ticket bound
+  to `hashJson(subject)`; submit needs the session cookie, a loopback
+  Origin and the session CSRF token, then re-derives the subject
+  (409 on mismatch), unlocks the sealed key in-process, records with
+  channel `web`, and destroys the signer. Five wrong passphrases lock
+  the web surface with an audited `approval.lockout`; the passphrase
+  lives in one page-local variable and appears in no log, event,
+  response or state file (probed). The ADR 0002 adversarial-review
+  checklist for the browser path passes 9/9 applicable probes (posted
+  on #131); I8 stays user-confirmable (option b implemented).
+  Trust, waive, resume, key seal, config set and export are untouched
+  and stay terminal-only.
+- **#133: hostile source text is inert.** Quotes render through text
+  nodes split by verified ranges into `<mark>` spans (never HTML
+  parsing, probed with `<script>`/event-handler payloads); seal status
+  (sealed/unsealed/invalid/unknown) shows on every source, with
+  tampered bytes refused by their content hash.
+
+**Behaviour changes.**
+- `fleet.status` pending entries now carry the approvable `stage`,
+  enriched from each worktree's pending list (#131); snapshot tasks
+  carry `title` and `deps` for the DAG (#130).
+- `bun run test` runs the web suite first under browser conditions
+  (the client Solid build), then every other package (#130).
+
+**New.**
+- **#129: `packages/web` (private, never published).** SolidJS + Vite
+  (ADR 0003: shared signals with the TUI, 15 kB hello build), served by
+  the daemon from the bus port; declared `deps.ts` boundaries and a
+  path-filtered CI job.
+- **#130: fleet dashboard.** Columns-by-depth task DAG, task table,
+  spend against the ceiling, pending list, per-task pages and a live WS
+  stream with reconnect refetch and a 5 s stale banner — read-only
+  throughout, status always in words beside colour.
+- **#131: approvals pages.** `#/approvals` list and
+  `#/approve/<task>/<stage>` page (masked, non-reactive input cleared
+  on submit; remaining-attempt and lockout-delay alerts).
+- **#132: config editor, preview-only.** Project/gates tabs with
+  strict-schema validation, exact hash diffs and copyable terminal
+  commands over read-only `fleet.config.get`/`fleet.config.plan`; the
+  bus has no apply method and the UI no apply button. Browser apply is
+  deferred to #145 (needs #131's pattern plus the user's ADR 0002
+  extension).
+- **#133: evidence explorer.** Claim/source graph with tag/status/tier
+  filters, inspector (rank explanation, retractions, history), source
+  viewer with verified quote highlights, and Markdown/HTML dossier
+  exports through the #112 renderers — read-only, capped payloads.
+  Core gains `locateQuote` (index-mapped ranges, self-checked).
+
+**Evals and CI.**
+- Web tests render with the client Solid build under happy-dom
+  (`bun --conditions=browser test packages/web`).
+- Full `bun run test`: the same 8 pre-existing bwrap-overlay sandbox
+  failures as 1.4.0 (identical set fails on the base; green in CI
+  where bwrap works).
+
+**Dependencies.**
+- `packages/web` shares the TUI's `solid-js` 1.9.15 lockfile entry; new
+  stock npm needs are `vite`, `vite-plugin-solid` and dev-only
+  `happy-dom`. Zero vendored code in the phase.
+
 ## 1.4.0 — 2026-10-09
 
 Phase 3 fleet: concurrent task DAGs run on one machine under a human-only

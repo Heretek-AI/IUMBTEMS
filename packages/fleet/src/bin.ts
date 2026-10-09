@@ -1,17 +1,20 @@
 // `es-fleet`: the human-only fleet daemon CLI (#122). `start` and `stop`
 // refuse agent sandboxes outright and `start` additionally requires an
 // interactive terminal plus an explicit confirmation, because a running
-// fleet spends money. `status` is read-only and agent-safe.
+// fleet spends money. `status` is read-only and agent-safe. `web` (#129)
+// prints a one-time browser URL for the local control plane.
 import { spawn } from "node:child_process"
 import { readFile } from "node:fs/promises"
+import path from "node:path"
 import { createInterface } from "node:readline"
 import { stateDir } from "@heretek-ai/es-core"
 import { FleetDaemon } from "./daemon.ts"
 import { assertHumanStart, FleetError, fleetStatus, startFleet, stopFleet } from "./lifecycle.ts"
 import { reportTask } from "./scheduler.ts"
 import { addTask, loadDag, saveDag, TERMINAL } from "./tasks.ts"
-import { ensureToken, TelemetryServer } from "./telemetry.ts"
+import { ensureToken, readTelemetryEndpoint, TelemetryServer } from "./telemetry.ts"
 import { readFleetSnapshot, watchFleet } from "./watch.ts"
+import { mintWebTicket } from "./web.ts"
 import { defaultGateCheck } from "./worker.ts"
 import { gcWorktrees } from "./worktree.ts"
 
@@ -29,6 +32,7 @@ Usage:
   es-fleet task cancel <id> [--reason <text>]                       cancel a task (human-only)
   es-fleet gc [--repo <dir>]                                        remove orphaned worktrees (human-only)
   es-fleet watch                                                    live dashboard over the telemetry bus
+  es-fleet web                                                      print a one-time browser URL for the web UI (human-only)
 
 Options:
   --state-dir <dir>   override the user state dir (default: es state dir)
@@ -98,14 +102,18 @@ export async function main(argv: readonly string[]): Promise<number> {
         // Own the task loop: recover workers, then tick until signalled.
         const esBin = valueFlag(rest, ["--es-bin"]) ?? "es"
         const token = await ensureToken(root)
+        const repoRoot = valueFlag(rest, ["--repo"]) ?? process.cwd()
+        const webRoot = valueFlag(rest, ["--web-root"]) ?? path.join(repoRoot, "packages", "web", "dist")
         const bus = new TelemetryServer({
           stateRoot: root,
           port: Number(valueFlag(rest, ["--port"]) ?? "0"),
           token,
           getSnapshot: () => readFleetSnapshot(root),
+          webRoot,
+          configRoot: repoRoot,
         })
         const daemon = new FleetDaemon({
-          repoRoot: valueFlag(rest, ["--repo"]) ?? process.cwd(),
+          repoRoot,
           stateRoot: root,
           esBin,
           ...(Number.isFinite(concurrency) ? { concurrency } : {}),
@@ -208,6 +216,16 @@ export async function main(argv: readonly string[]): Promise<number> {
       }
       case "watch": {
         return watchFleet({ stateRoot: root })
+      }
+      case "web": {
+        // Opening the UI is a human action: agents run sandboxed and are
+        // refused here, and the printed ticket redeems exactly once.
+        assertHumanStart(process.env, "open the fleet web UI")
+        const endpoint = await readTelemetryEndpoint(root)
+        if (!endpoint) throw new FleetError("The fleet is not running: start it first with `es-fleet start`.")
+        const ticket = await mintWebTicket(root)
+        process.stdout.write(`http://127.0.0.1:${endpoint.port}/?t=${ticket}\n`)
+        return 0
       }
       default:
         process.stderr.write(`Unknown command ${JSON.stringify(command ?? "")}.\n\n${HELP}`)

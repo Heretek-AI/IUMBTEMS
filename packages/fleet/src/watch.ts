@@ -1,9 +1,11 @@
 // `es-fleet watch` terminal dashboard (#126): a read-only view over the
 // telemetry bus. Rendering is pure (`renderDashboard`, tested); the loop
 // polls `fleet.status` and redraws until `q`.
+import { pendingApprovals } from "@heretek-ai/es-core"
 import { fleetStatus } from "./lifecycle.ts"
-import { loadDag } from "./tasks.ts"
+import { loadDag, type Task } from "./tasks.ts"
 import { type BusEvent, type FleetSnapshot, readTelemetryEndpoint } from "./telemetry.ts"
+import { loadRegistry } from "./worktree.ts"
 
 /** Read the full snapshot the bus serves (shared by the server and watch). */
 export async function readFleetSnapshot(stateRoot: string): Promise<FleetSnapshot> {
@@ -13,9 +15,11 @@ export async function readFleetSnapshot(stateRoot: string): Promise<FleetSnapsho
         .sort((a, b) => (a.id < b.id ? -1 : 1))
         .map((task) => ({
           id: task.id,
+          title: task.title,
           status: task.status,
           ceilingUSD: task.ceilingUSD,
           spendUsd: task.result?.spendUsd ?? 0,
+          deps: [...task.deps].sort((a, b) => a.localeCompare(b)),
           ...(task.reason ? { reason: task.reason } : {}),
         }))
     : []
@@ -24,10 +28,29 @@ export async function readFleetSnapshot(stateRoot: string): Promise<FleetSnapsho
     daemon: { running: daemon.running, pid: daemon.pid, maxUsd: daemon.maxUsd, concurrency: daemon.concurrency },
     tasks,
     spendUsd,
-    pending: tasks
-      .filter((task) => task.status === "waiting-human")
-      .map((task) => ({ taskId: task.id, reason: task.reason ?? "waiting for a human" })),
+    pending: await pendingEntries(stateRoot, tasks),
   }
+}
+
+/**
+ * Actionable approvals: every (task, stage) pair the worktrees actually
+ * hold pending (#131 links each pair to its approve page). A
+ * waiting-human task whose worktree is gone contributes nothing — its
+ * status row still reads waiting-human, but there is nothing to preview.
+ */
+async function pendingEntries(
+  stateRoot: string,
+  tasks: ReadonlyArray<Pick<Task, "id" | "status"> & { reason?: string }>,
+): Promise<Array<{ taskId: string; reason: string; stage: string }>> {
+  const registry = await loadRegistry(stateRoot).catch(() => undefined)
+  const found: Array<{ taskId: string; reason: string; stage: string }> = []
+  for (const task of tasks) {
+    if (task.status !== "waiting-human") continue
+    const dir = registry?.worktrees[task.id]?.dir
+    const stages = dir ? await pendingApprovals(dir).catch(() => []) : []
+    for (const entry of stages) found.push({ taskId: task.id, reason: task.reason ?? entry.stage, stage: entry.stage })
+  }
+  return found
 }
 
 /** Render one dashboard frame: headline, task table, pending approvals, recent events. */

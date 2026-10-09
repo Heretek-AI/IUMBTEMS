@@ -1,7 +1,37 @@
 // Fleet package entrypoint (#122): daemon lifecycle, state, and (from later
 // tickets) the scheduler, worktree coordinator, workers and telemetry bus.
+
+export {
+  APPROVE_TICKET_TTL_MS,
+  type ApproveTicket,
+  ApproveTickets,
+  CsrfTokens,
+} from "./approve.ts"
 export { VERSION } from "./bin.ts"
+export {
+  type ConfigDrift,
+  type ConfigPlan,
+  type ConfigPlanInput,
+  type ConfigView,
+  planConfigFile,
+  readConfigView,
+} from "./configview.ts"
 export { type DaemonOptions, FleetDaemon, type TransitionEvent, type WorkerPort } from "./daemon.ts"
+export {
+  type EvidenceClaimDetail,
+  type EvidenceClaimFilter,
+  type EvidenceClaimSummary,
+  type EvidenceQuote,
+  type EvidenceSourceView,
+  EXPORT_CAP,
+  exportEvidence,
+  MAX_CLAIMS,
+  readEvidenceClaim,
+  readEvidenceClaims,
+  readEvidenceSource,
+  type SealStatus,
+  SOURCE_TEXT_CAP,
+} from "./evidence.ts"
 export {
   assertHumanStart,
   FleetError,
@@ -70,6 +100,21 @@ export {
   TelemetryServer,
 } from "./telemetry.ts"
 export { readFleetSnapshot, renderDashboard, type WatchOptions, watchFleet } from "./watch.ts"
+export {
+  contentTypeFor,
+  loopbackOriginOk,
+  mintWebTicket,
+  parseSessionCookie,
+  redeemWebTicket,
+  resolveWebFile,
+  sessionSetCookie,
+  WEB_SECURITY_HEADERS,
+  WEB_SESSION_COOKIE,
+  WEB_SESSION_TTL_MS,
+  WEB_TICKET_TTL_MS,
+  type WebFile,
+  WebSessions,
+} from "./web.ts"
 export {
   type BreakerOptions,
   buildWorkerArgv,

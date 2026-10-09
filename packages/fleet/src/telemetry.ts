@@ -8,8 +8,31 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { appendFile, mkdir, open, readFile, writeFile } from "node:fs/promises"
 import { createServer, type Server, type Socket } from "node:net"
 import path from "node:path"
+import {
+  approvalSubject,
+  approveStage,
+  checkApprovalAttempts,
+  hashJson,
+  noteApprovalSuccess,
+  noteWrongPassphrase,
+  pendingApprovals,
+  unlockHumanKey,
+} from "@heretek-ai/es-core"
 import { z } from "zod"
+import { ApproveTickets, CsrfTokens } from "./approve.ts"
+import { planConfigFile, readConfigView } from "./configview.ts"
+import { exportEvidence, readEvidenceClaim, readEvidenceClaims, readEvidenceSource } from "./evidence.ts"
 import { fleetPaths } from "./state.ts"
+import {
+  loopbackOriginOk,
+  parseSessionCookie,
+  redeemWebTicket,
+  resolveWebFile,
+  sessionSetCookie,
+  WEB_SECURITY_HEADERS,
+  WebSessions,
+} from "./web.ts"
+import { loadRegistry } from "./worktree.ts"
 
 export interface BusEvent {
   readonly seq: number
@@ -158,9 +181,12 @@ export async function ensureToken(stateRoot: string): Promise<string> {
 
 export interface SnapshotTask {
   readonly id: string
+  readonly title: string
   readonly status: string
   readonly ceilingUSD: number
   readonly spendUsd: number
+  /** Dependency ids: the edges of the fleet DAG (#130 draws them). */
+  readonly deps: readonly string[]
   readonly reason?: string
 }
 
@@ -173,7 +199,8 @@ export interface FleetSnapshot {
   }
   readonly tasks: readonly SnapshotTask[]
   readonly spendUsd: number
-  readonly pending: ReadonlyArray<{ readonly taskId: string; readonly reason: string }>
+  /** Tasks waiting on a human, with the stage to approve (#131 links here). */
+  readonly pending: ReadonlyArray<{ readonly taskId: string; readonly reason: string; readonly stage: string }>
 }
 
 const StrictObject = (shape: Record<string, z.ZodTypeAny>) => z.strictObject(shape)
@@ -183,6 +210,22 @@ const RpcSchemas = {
   "fleet.task": StrictObject({ id: z.string().min(1) }),
   "fleet.pending": StrictObject({}),
   "fleet.events": StrictObject({ since: z.number().int().min(0).default(0) }),
+  /** Read-only config preview (#132, preview-only): no apply method exists. */
+  "fleet.config.get": StrictObject({}),
+  "fleet.config.plan": StrictObject({ file: z.enum(["config", "gates"]), content: z.unknown() }),
+  /** Read-only evidence reads (#133): claims, detail, sources, exports. */
+  "evidence.claims": StrictObject({
+    runId: z.string().min(1),
+    filter: StrictObject({
+      tag: z.string().optional(),
+      status: z.string().optional(),
+      tier: z.string().optional(),
+      text: z.string().optional(),
+    }).optional(),
+  }),
+  "evidence.claim": StrictObject({ runId: z.string().min(1), id: z.string().min(1) }),
+  "evidence.source": StrictObject({ runId: z.string().min(1), sha: z.string().min(1) }),
+  "evidence.export": StrictObject({ runId: z.string().min(1), format: z.enum(["markdown", "html"]) }),
 } as const
 
 type RpcMethod = keyof typeof RpcSchemas
@@ -194,6 +237,18 @@ export interface TelemetryOptions {
   readonly token: string
   readonly getSnapshot: () => FleetSnapshot | Promise<FleetSnapshot>
   readonly secrets?: readonly string[]
+  /**
+   * Directory of the built web UI (#129). When set, `GET /` serves it
+   * behind the single-use ticket exchange; when unset, web loads 404.
+   */
+  readonly webRoot?: string
+  /**
+   * Repo root the read-only config preview reads (#132). When unset,
+   * `fleet.config.*` reports that no repo is configured.
+   */
+  readonly configRoot?: string
+  /** Preview-ticket TTL override for tests (default 120 s, ADR 0002 I3). */
+  readonly approveTicketTtlMs?: number
 }
 
 /** Case-insensitive request header lookup (names with dashes need no literals at use sites). */
@@ -229,6 +284,9 @@ export class TelemetryServer {
   readonly log: EventLog
   private server: Server | undefined
   private actualPort = 0
+  private readonly sessions = new WebSessions()
+  private readonly approveTickets: ApproveTickets
+  private readonly csrf = new CsrfTokens()
   private pending: Record<BusChannel, Map<string, BusEvent>> = { changed: new Map(), liveness: new Map() }
   private lastFlush: Record<BusChannel, number> = { changed: 0, liveness: 0 }
   private flushTimer: Record<BusChannel, ReturnType<typeof setTimeout> | undefined> = {
@@ -241,6 +299,7 @@ export class TelemetryServer {
 
   constructor(private readonly options: TelemetryOptions) {
     this.log = new EventLog(path.join(fleetPaths(options.stateRoot).dir, "events.jsonl"))
+    this.approveTickets = new ApproveTickets(options.approveTicketTtlMs)
   }
 
   get port(): number {
@@ -352,12 +411,20 @@ export class TelemetryServer {
       return
     }
     if (target !== "/fleet/rpc" || method !== "POST") {
+      if (method === "GET" && !(target ?? "").startsWith("/fleet/")) return this.serveWeb(target ?? "/", headers, res)
+      // Browser approvals (#131, ADR 0002 option b): preview is a read
+      // (bearer or session), submit is browser-only (cookie + Origin + CSRF).
+      if (method === "POST" && target === "/fleet/approve/preview") return this.approvePreview(headers, rest, res)
+      if (method === "POST" && target === "/fleet/approve") return this.approveSubmit(headers, rest, res)
       res.writeHead(404, { "content-length": 0, connection: "close" })
       res.end()
       return
     }
-    if (!this.bearerOk(field(headers, "authorization"))) {
-      res.writeHead(401, { "content-length": 0, connection: "close" })
+    if (!this.bearerOk(field(headers, "authorization")) && !this.sessionRpcOk(headers)) {
+      // A presented session cookie that cannot authorize is a forbidden
+      // CSRF/origin failure (403); wholly missing credentials are 401.
+      const code = parseSessionCookie(field(headers, "cookie")) !== undefined ? 403 : 401
+      res.writeHead(code, { "content-length": 0, connection: "close" })
       res.end()
       return
     }
@@ -394,6 +461,268 @@ export class TelemetryServer {
     }
   }
 
+  /**
+   * Cookie authentication for read-only RPC (#129): the browser session may
+   * call the bus only when it also presents a loopback Origin. Bearer calls
+   * (CLI, watch, scripts) are unaffected. Fail-closed: no Origin, no cookie
+   * access — browsers always send Origin on a POST fetch.
+   */
+  private sessionRpcOk(headers: Record<string, string>): boolean {
+    return (
+      loopbackOriginOk(field(headers, "origin")) && this.sessions.valid(parseSessionCookie(field(headers, "cookie")))
+    )
+  }
+
+  /**
+   * The web UI (#129): `GET /?t=<ticket>` redeems a single-use ticket for a
+   * session cookie and the entry page; later loads present the cookie.
+   * Anonymous loads are 401, bad tickets 403, everything carries the strict
+   * security headers. Without a configured `webRoot` every load 404s.
+   */
+  private async serveWeb(target: string, headers: Record<string, string>, res: HttpResponder): Promise<void> {
+    const deny = (code: 401 | 403): void => {
+      res.writeHead(code, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
+      res.end()
+    }
+    if (this.options.webRoot === undefined) {
+      res.writeHead(404, { "content-length": 0, connection: "close" })
+      res.end()
+      return
+    }
+    if (!this.originOk(field(headers, "origin"))) {
+      deny(403)
+      return
+    }
+    const query = target.split("?", 2)[1] ?? ""
+    const ticket = query
+      .split("&")
+      .map((part) => part.split("=", 2) as [string, string?])
+      .find(([name]) => name === "t")?.[1]
+    if (ticket !== undefined) {
+      const ok = await redeemWebTicket(this.options.stateRoot, ticket)
+      if (!ok) {
+        deny(403)
+        return
+      }
+      const session = this.sessions.create()
+      await this.sendWebFile(res, this.options.webRoot, "/", {
+        "set-cookie": sessionSetCookie(session),
+      })
+      return
+    }
+    if (!this.sessions.valid(parseSessionCookie(field(headers, "cookie")))) {
+      deny(401)
+      return
+    }
+    await this.sendWebFile(res, this.options.webRoot, target)
+  }
+
+  private async sendWebFile(
+    res: HttpResponder,
+    webRoot: string,
+    target: string,
+    extra: Record<string, string> = {},
+  ): Promise<void> {
+    const found = await resolveWebFile(webRoot, target)
+    if (!found) {
+      res.writeHead(404, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
+      res.end()
+      return
+    }
+    let body: string
+    try {
+      body = await readFile(found.file, "utf8")
+    } catch {
+      res.writeHead(404, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
+      res.end()
+      return
+    }
+    res.writeHead(200, {
+      ...WEB_SECURITY_HEADERS,
+      ...extra,
+      "content-type": found.contentType,
+      "content-length": Buffer.byteLength(body),
+      connection: "close",
+    })
+    res.end(body)
+  }
+
+  /**
+   * Browser approval preview (#131, ADR 0002 I3/I6): a read — bearer or
+   * session — returning the subject, its hash and a single-use ticket.
+   */
+  private async approvePreview(headers: Record<string, string>, rest: Buffer, res: HttpResponder): Promise<void> {
+    if (!this.bearerOk(field(headers, "authorization")) && !this.sessionRpcOk(headers)) {
+      // Same convention as read-only RPC: a presented session cookie that
+      // cannot authorize is a forbidden CSRF/origin failure (403).
+      const code = parseSessionCookie(field(headers, "cookie")) !== undefined ? 403 : 401
+      res.writeHead(code, { "content-length": 0, connection: "close" })
+      res.end()
+      return
+    }
+    let body: unknown
+    try {
+      body = this.readBody(headers, rest)
+    } catch {
+      this.fail(res, 400, "parse error")
+      return
+    }
+    const parsed = z
+      .object({ runId: z.string().min(1), stage: z.enum(["frontier", "spec"]) })
+      .strict()
+      .safeParse(body)
+    if (!parsed.success) {
+      this.fail(res, 400, "want {runId, stage: frontier|spec}")
+      return
+    }
+    const record = (await loadRegistry(this.options.stateRoot))?.worktrees[parsed.data.runId]
+    if (record?.status !== "allocated") {
+      this.fail(res, 404, `unknown run ${JSON.stringify(parsed.data.runId)}`)
+      return
+    }
+    let subject: { subject: Array<{ path: string; sha256: string }>; summary: string[]; spendCeilingUSD?: number }
+    try {
+      subject = await approvalSubject(record.dir, parsed.data.stage)
+    } catch (error) {
+      this.fail(res, 400, error instanceof Error ? error.message : String(error))
+      return
+    }
+    const pending = (await pendingApprovals(record.dir)).some((item) => item.stage === parsed.data.stage)
+    const subjectHash = hashJson(subject.subject)
+    const ticket = this.approveTickets.issue({ repoDir: record.dir, stage: parsed.data.stage, subjectHash })
+    const session = parseSessionCookie(field(headers, "cookie"))
+    const csrf = session && this.sessions.valid(session) ? this.csrf.forSession(session) : ""
+    this.ok(res, {
+      ticket,
+      csrf,
+      subjectHash,
+      summary: subject.summary,
+      files: subject.subject,
+      ...(subject.spendCeilingUSD !== undefined ? { spendCeilingUSD: subject.spendCeilingUSD } : {}),
+      pending,
+    })
+  }
+
+  /**
+   * Browser approval submit (#131, ADR 0002 option b): browser-only by
+   * construction — session cookie, loopback Origin and session CSRF are
+   * all required before the ticket is even looked at. The passphrase
+   * unlocks the sealed key in-process; the signer is destroyed in a
+   * finally, and the passphrase is never stored, logged or returned.
+   */
+  private async approveSubmit(headers: Record<string, string>, rest: Buffer, res: HttpResponder): Promise<void> {
+    const session = parseSessionCookie(field(headers, "cookie")) ?? ""
+    if (!this.sessions.valid(session)) {
+      res.writeHead(401, { "content-length": 0, connection: "close" })
+      res.end()
+      return
+    }
+    if (!loopbackOriginOk(field(headers, "origin")) || !this.csrf.check(session, field(headers, "x-csrf"))) {
+      res.writeHead(403, { "content-length": 0, connection: "close" })
+      res.end()
+      return
+    }
+    let body: unknown
+    try {
+      body = this.readBody(headers, rest)
+    } catch {
+      this.fail(res, 400, "parse error")
+      return
+    }
+    const parsed = z
+      .object({ ticket: z.string().min(1), passphrase: z.string().min(1).max(4096) })
+      .strict()
+      .safeParse(body)
+    if (!parsed.success) {
+      this.fail(res, 400, "want {ticket, passphrase}")
+      return
+    }
+    const webDir = path.join(fleetPaths(this.options.stateRoot).dir, "web-approvals")
+    await mkdir(webDir, { recursive: true })
+    const attempts = await checkApprovalAttempts(webDir)
+    if (!attempts.allowed) {
+      this.fail(res, 423, "too many wrong passphrases", { retryAfterSec: attempts.retryAfterSec })
+      return
+    }
+    const entry = this.approveTickets.redeem(parsed.data.ticket)
+    if (!entry) {
+      this.fail(res, 403, "unknown or expired ticket; preview again")
+      return
+    }
+    let subject: { subject: Array<{ path: string; sha256: string }> }
+    try {
+      subject = await approvalSubject(entry.repoDir, entry.stage)
+    } catch (error) {
+      this.fail(res, 409, error instanceof Error ? error.message : String(error))
+      return
+    }
+    if (hashJson(subject.subject) !== entry.subjectHash) {
+      this.fail(res, 409, "the preview is stale: the artifacts changed since the preview; preview again")
+      return
+    }
+    const { ticket: _ticket, passphrase } = parsed.data
+    void _ticket
+    let signer: Awaited<ReturnType<typeof unlockHumanKey>>
+    try {
+      signer = await unlockHumanKey(passphrase, this.options.stateRoot)
+    } catch {
+      const check = await noteWrongPassphrase({
+        dir: webDir,
+        root: entry.repoDir,
+        stage: entry.stage,
+        channel: "web",
+      })
+      if (check.allowed) this.fail(res, 403, "wrong passphrase", { remaining: check.remaining })
+      else this.fail(res, 423, "too many wrong passphrases", { retryAfterSec: check.retryAfterSec })
+      return
+    }
+    try {
+      const result = await approveStage(entry.repoDir, {
+        stage: entry.stage,
+        channel: "web",
+        signer,
+        stateDir: this.options.stateRoot,
+        expectedSubjectHash: entry.subjectHash,
+      })
+      await noteApprovalSuccess(webDir)
+      this.ok(res, {
+        ok: true,
+        stage: entry.stage,
+        alreadyApproved: result.alreadyApproved,
+        factoryStage: result.factoryStage ?? null,
+      })
+    } catch (error) {
+      this.fail(res, 500, error instanceof Error ? error.message : String(error))
+    } finally {
+      signer.destroy()
+    }
+  }
+
+  private readBody(headers: Record<string, string>, rest: Buffer): unknown {
+    const length = Number(field(headers, "content-length") ?? "0")
+    if (!Number.isInteger(length) || length < 0 || length > 1_000_000) throw new Error("bad length")
+    return JSON.parse(rest.subarray(0, length).toString("utf8"))
+  }
+
+  private ok(res: HttpResponder, value: unknown): void {
+    const text = JSON.stringify(value)
+    res.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(text) })
+    res.end(text)
+  }
+
+  private fail(res: HttpResponder, code: number, message: string, extra: Record<string, unknown> = {}): void {
+    const text = JSON.stringify({ error: message, ...extra })
+    res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(text) })
+    res.end(text)
+  }
+
+  /** Worktree dir for a run id, or a throw the bus reports as unknown-run. */
+  private async runDir(runId: string): Promise<string> {
+    const record = (await loadRegistry(this.options.stateRoot))?.worktrees[runId]
+    if (record?.status !== "allocated") throw new Error(`unknown run ${JSON.stringify(runId)}`)
+    return record.dir
+  }
+
   private async dispatch(method: RpcMethod, params: never): Promise<unknown> {
     const snapshot = await this.options.getSnapshot()
     switch (method) {
@@ -411,14 +740,54 @@ export class TelemetryServer {
         const since = (params as { since?: number }).since ?? 0
         return { events: this.events.filter((event) => event.seq > since), now: this.events.at(-1)?.seq ?? 0 }
       }
+      case "fleet.config.get": {
+        if (!this.options.configRoot) throw new Error("no repo is configured for the config preview")
+        return readConfigView(this.options.configRoot)
+      }
+      case "fleet.config.plan": {
+        if (!this.options.configRoot) throw new Error("no repo is configured for the config preview")
+        const input = params as { file: "config" | "gates"; content: unknown }
+        return planConfigFile(this.options.configRoot, { file: input.file, content: input.content })
+      }
+      case "evidence.claims": {
+        const dir = await this.runDir((params as { runId: string }).runId)
+        const filter = (params as { filter?: Record<string, string> }).filter ?? {}
+        return readEvidenceClaims(dir, {
+          ...(filter.tag ? { tag: filter.tag } : {}),
+          ...(filter.status ? { status: filter.status } : {}),
+          ...(filter.tier ? { tier: filter.tier } : {}),
+          ...(filter.text ? { text: filter.text } : {}),
+        })
+      }
+      case "evidence.claim": {
+        const dir = await this.runDir((params as { runId: string }).runId)
+        const detail = await readEvidenceClaim(dir, (params as { id: string }).id)
+        if (!detail) throw new Error(`unknown claim ${JSON.stringify((params as { id: string }).id)}`)
+        return detail
+      }
+      case "evidence.source": {
+        const dir = await this.runDir((params as { runId: string }).runId)
+        const seen = await readEvidenceSource(dir, this.options.stateRoot, (params as { sha: string }).sha)
+        if (!seen) throw new Error("unknown or tampered source")
+        return seen
+      }
+      case "evidence.export": {
+        const dir = await this.runDir((params as { runId: string }).runId)
+        const format = (params as { format: "markdown" | "html" }).format
+        const rendered = await exportEvidence(dir, this.options.stateRoot, format)
+        if (!rendered) throw new Error("nothing to export yet (no dossier or report)")
+        return rendered
+      }
     }
   }
 
   private handleUpgrade(socket: Socket, headers: Record<string, string>, res: HttpResponder): void {
+    const cookieOk =
+      loopbackOriginOk(field(headers, "origin")) && this.sessions.valid(parseSessionCookie(field(headers, "cookie")))
     if (
       !this.hostOk(field(headers, "host")) ||
       !this.originOk(field(headers, "origin")) ||
-      !this.bearerOk(field(headers, "authorization"))
+      (!this.bearerOk(field(headers, "authorization")) && !cookieOk)
     ) {
       const code = !this.hostOk(field(headers, "host")) || !this.originOk(field(headers, "origin")) ? 403 : 401
       res.writeHead(code, { "content-length": 0, connection: "close" })
@@ -426,6 +795,9 @@ export class TelemetryServer {
       return
     }
     const key = field(headers, "sec-websocket-key") ?? ""
+    // NOSONAR (typescript:S4790): SHA-1 is mandated here by RFC 6455 §1.3
+    // (the WebSocket accept hash); it authenticates nothing and protects no
+    // secret — the bus token check already ran before the upgrade.
     const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64")
     res.writeHead(101, {
       Upgrade: "websocket",

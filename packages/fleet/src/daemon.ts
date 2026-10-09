@@ -206,7 +206,7 @@ export class FleetDaemon {
   private async reconcileTerminals(): Promise<void> {
     const now = new Date().toISOString()
     let dag = (await loadDag(this.options.stateRoot)) ?? { v: 1 as const, tasks: {} }
-    for (const id of Object.keys(dag.tasks).sort()) {
+    for (const id of Object.keys(dag.tasks).sort((a, b) => a.localeCompare(b))) {
       const task = dag.tasks[id]!
       const conflicted = task.status === "waiting-human" && this.conflicted.has(id)
       if (task.status !== "done" && task.status !== "failed" && task.status !== "cancelled" && !conflicted) continue
@@ -259,7 +259,7 @@ export class FleetDaemon {
     await this.exclusive(async () => {
       const now = new Date().toISOString()
       let dag = (await loadDag(this.options.stateRoot)) ?? { v: 1 as const, tasks: {} }
-      for (const id of Object.keys(dag.tasks).sort()) {
+      for (const id of Object.keys(dag.tasks).sort((a, b) => a.localeCompare(b))) {
         if (dag.tasks[id]!.status !== "running") continue
         const next = reportTask(dag, id, { outcome: "cancelled", reason: "fleet stopped; run is resumable" }, now)
         dag = next.dag

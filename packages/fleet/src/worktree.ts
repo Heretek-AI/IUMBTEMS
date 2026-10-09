@@ -157,7 +157,7 @@ export async function rebaseSymlinks(worktreeDir: string, repoRoot: string): Pro
     }
   }
   await walk(worktreeDir)
-  return rewritten.sort()
+  return rewritten.sort((a, b) => a.localeCompare(b))
 }
 
 export interface AllocateOptions {

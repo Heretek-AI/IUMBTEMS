@@ -57,6 +57,7 @@ explicitly — the run cannot start without it. When the design tree is settled,
 approve it:
 
 - TUI: `/es-approve` previews what you are approving, asks for your passphrase (masked), and records it; or
+- browser: `es-fleet web` prints a one-time URL; the approvals page previews the subject and hashes, then asks for your passphrase (masked) and records with channel `web`; or
 - terminal: `es approve frontier` (asks for your passphrase)
 
 ## 3. Research and spec
@@ -71,7 +72,8 @@ unattended run. Either way the factory drives RESEARCH and then SPEC:
 
 Seats run in the foreground, so a research turn can take minutes. That is
 work, not a stall: see "Watching a run" below. When the spec is ready,
-approve it the same way (`/es-approve` records it in the TUI; `es approve spec` records
+approve it the same way (`/es-approve` records it in the TUI, the approvals
+page records it in the browser, `es approve spec` records
 it in a terminal).
 
 ## 4. Autonomous build
@@ -104,6 +106,9 @@ long ago it acted.
     waits on you.
   - A toast announces stage changes, and also a paused factory after three
     turns without progress (run `/factory` to continue).
+- **Web** (`es-fleet web` prints a one-time loopback URL): the fleet
+  overview and per-task pages across the whole fleet — DAG, spend against
+  the ceiling, pending approvals, live updates with a stale banner (#130).
 - **Headless**: `es factory run --headless` prints JSON lines.
   - It emits a `progress` event every 30 s while a turn runs.
   - `stalled` carries its evidence (the headline, last activity, running

@@ -36,18 +36,23 @@ if (!check.ok) {
 // it declares which packages it may not import, and core and cli may never
 // import a new surface (their entries must ban it).
 const BOUNDARIES = [
-  { pkg: "core", banned: ["cli", "opencode", "testkit", "fleet"] },
-  { pkg: "cli", banned: ["opencode", "testkit", "fleet"] },
+  { pkg: "core", banned: ["cli", "opencode", "testkit", "fleet", "web"] },
+  { pkg: "cli", banned: ["opencode", "testkit", "fleet", "web"] },
   { pkg: "opencode", banned: [] as string[] },
   { pkg: "testkit", banned: [] as string[] },
   // Fleet depends on core only (#122): never on the CLI or the plugin.
-  { pkg: "fleet", banned: ["cli", "opencode"] },
+  // It serves the built web UI as static files (#129), never as an import.
+  { pkg: "fleet", banned: ["cli", "opencode", "web"] },
+  // Web is a leaf surface (#129): nothing imports it, and it imports
+  // nothing at runtime except the fleet API's schema types (type-only).
+  { pkg: "web", banned: ["core", "cli", "opencode", "testkit"] },
 ] as const
 const NPM_NAME: Record<string, string> = {
   cli: "@heretek-ai/es-cli",
   opencode: "@heretek-ai/epistemic-swarm",
   testkit: "@heretek-ai/es-testkit",
   fleet: "@heretek-ai/es-fleet",
+  web: "@heretek-ai/es-web",
 }
 const SPECIFIER = /\b(?:from|import)\s*\(?\s*["']([^"']+)["']/g
 

@@ -11,11 +11,19 @@ import { ensureToken, type FleetSnapshot, scrubPayload, TelemetryServer } from "
 const snapshot = (extra: Partial<FleetSnapshot> = {}): FleetSnapshot => ({
   daemon: { running: true, pid: 4242, maxUsd: 50, concurrency: 2 },
   tasks: [
-    { id: "a", status: "running", ceilingUSD: 5, spendUsd: 1.25, reason: "waiting on frontier" },
-    { id: "b", status: "pending", ceilingUSD: 5, spendUsd: 0 },
+    {
+      id: "a",
+      title: "Alpha",
+      status: "running",
+      ceilingUSD: 5,
+      spendUsd: 1.25,
+      deps: [],
+      reason: "waiting on frontier",
+    },
+    { id: "b", title: "Beta", status: "pending", ceilingUSD: 5, spendUsd: 0, deps: ["a"] },
   ],
   spendUsd: 1.25,
-  pending: [{ taskId: "a", reason: "frontier approval" }],
+  pending: [{ taskId: "a", reason: "frontier approval", stage: "frontier" }],
   ...extra,
 })
 
@@ -156,7 +164,17 @@ describe("payload scrubbing", () => {
     const state = await mkdtemp(path.join(tmpdir(), "es-fleet-bus-"))
     try {
       const snap = snapshot({
-        tasks: [{ id: "a", status: "failed", ceilingUSD: 5, spendUsd: 2, reason: `crashed with token ${TOKEN}` }],
+        tasks: [
+          {
+            id: "a",
+            title: "Alpha",
+            status: "failed",
+            ceilingUSD: 5,
+            spendUsd: 2,
+            deps: [],
+            reason: `crashed with token ${TOKEN}`,
+          },
+        ],
       })
       const server = await serverFor(state, snap)
       try {

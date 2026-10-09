@@ -5,10 +5,10 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 1.4.0.** Phase 3 fleet: concurrent task DAGs under a human-only
-> `es-fleet` daemon — deterministic scheduler, isolated worktrees with gated
-> landings, per-task spend ceilings, read-only telemetry bus and `watch`
-> (#122–#127). Install from npm
+> **Status: 1.5.0.** Phase 4 web control plane: the fleet daemon serves a
+> browser UI on loopback behind a one-time URL — fleet dashboard, browser
+> approvals, preview-only config editor and evidence explorer
+> (#129–#133, #145 follows for browser-apply). Install from npm
 > (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`, `@heretek-ai/es-cli`);
 > run `es key seal` once.
 
@@ -24,7 +24,8 @@
 - **Factory stages, enforced by code.** Grill → Research → Spec → Build ⇄ QA →
   Release runs through a state machine; every `es_*` tool refuses an
   out-of-order step. Approvals (frontier, spec) are human-only and complete
-  in the TUI (masked passphrase dialog, in-process signing) or at a terminal
+  in the TUI (masked passphrase dialog, in-process signing), in the browser
+  (preview, then passphrase over loopback), or at a terminal
   (`es approve`); waivers and trust stay terminal-only (`es waive`,
   `es trust`), all signed with the passphrase-sealed Ed25519 human key
   (`es key seal` once); agents
@@ -68,6 +69,9 @@
   halted or done), then each seat's state and last activity and the research
   progress. `es runs` lists runs across projects. The TUI footer shows the
   stage and the running seat; headless runs emit `progress` events.
+  `es-fleet web` opens the same fleet in a browser: dashboard, browser
+  approvals, a preview-only config editor, and the evidence explorer
+  (claim graph, range-highlighted quotes, seal status, dossier exports).
 - **OpenCode v2 native.** One plugin registers agents, tools, commands, the
   hook bridge, the LSP runtime and four TUI panels — additively, with no files
   written. Host web results are cached (citable by hash) only for factory
@@ -83,6 +87,7 @@
 | `packages/cli` | The `es` CLI and a coarse MCP server for non-OpenCode harnesses. |
 | `packages/testkit` | Real in-process host testing (`boot`, scripted fake model). |
 | `packages/fleet` | The `es-fleet` daemon (private): concurrent task DAGs in isolated worktrees. |
+| `packages/web` | The web control plane (private, never published): dashboard, browser approvals, config editor, evidence explorer — SolidJS, served by `es-fleet` on loopback. |
 | `scripts/` | `docs.ts` (generated contracts/docs) and `v2-head.sh` (nightly compatibility). |
 | `schemas/`, `docs/` | Generated: JSON Schemas, capability matrix, config and schema docs. |
 | `spikes/` | Recorded proofs from the M0/M6 spikes. |
