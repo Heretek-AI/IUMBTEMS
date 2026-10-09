@@ -15,7 +15,7 @@
 import { readFile } from "node:fs/promises"
 import { type HumanSigner, humanKeyId, verifyRecordSignature } from "../approval/keystore.ts"
 import { factoryLayout, stateDir } from "../layout.ts"
-import { researchSourcesDir, SourceCache } from "../research/cache.ts"
+import { researchCache } from "../research/ops.ts"
 import { verifyQuote } from "../research/quote.ts"
 import { type Brief, BriefSchema, type Claim } from "../schema/claims.ts"
 import { atomicWrite, readJson } from "../util/fs.ts"
@@ -30,6 +30,8 @@ export interface ExportBriefOptions {
   readonly signer: HumanSigner
   /** Where to write the brief (default .factory/research/brief.pcrb.json). */
   readonly out?: string
+  /** Engine-key dir for the sealed source cache (#98); defaults to the global state dir. */
+  readonly stateDir?: string
   readonly now?: () => Date
 }
 
@@ -55,7 +57,7 @@ export async function exportBrief(root: string, options: ExportBriefOptions): Pr
   const store = await ClaimStore.load(root)
   const research = store.dossiers.find((item) => item.dossier.mode === "research")
   if (!research) throw new Error("No research dossier yet: es_research_complete writes .factory/research/dossier.json.")
-  const cache = new SourceCache(researchSourcesDir(root))
+  const cache = researchCache(root, options.stateDir ?? stateDir())
   const now = options.now ?? (() => new Date())
   const known = new Set(research.dossier.claims.map((claim) => claim.id))
   const witnesses = new Map(

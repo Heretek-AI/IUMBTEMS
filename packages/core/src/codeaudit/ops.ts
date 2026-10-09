@@ -133,7 +133,7 @@ export function codeAuditTools(ops: OpsContext): EsToolDef[] {
           findings: parsed.data,
           at: new Date().toISOString(),
         })
-        await writeAuditArtifacts(root, tree.audit, round, tree)
+        await writeAuditArtifacts(root, tree.audit, round, tree, ops.stateDir)
         const recorded = await factory.auditVerdict(context.agent, tree.audit.id, verdict, String(notes)).catch(refusal)
         await rewriteAuditReport(root, recorded.audit, round)
         const status =

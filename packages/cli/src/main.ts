@@ -282,6 +282,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           const { file, brief } = await exportBrief(root, {
             signer,
             ...(outFile ? { out: outFile } : {}),
+            ...(io.stateDir ? { stateDir: io.stateDir } : {}),
           })
           const witnessed = brief.claims.filter((claim) => claim.witness.ok).length
           io.print(

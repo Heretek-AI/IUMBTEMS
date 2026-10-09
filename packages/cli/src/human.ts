@@ -23,8 +23,7 @@ import {
   recordApproval,
   recordRetraction,
   recordWaiver,
-  researchSourcesDir,
-  SourceCache,
+  researchCache,
   signEngineFile,
   stateDir,
   trustProject,
@@ -317,7 +316,7 @@ export async function retract(context: HumanContext, args: Args): Promise<number
   }
   const store = await ClaimStore.load(context.root)
   const affected = store.citing(source)
-  const cached = await new SourceCache(researchSourcesDir(context.root)).get(source)
+  const cached = await researchCache(context.root, context.stateDir ?? stateDir()).get(source)
   const to = event === "RETRACTED" ? "STALE" : "SUSPECT"
   const lines = [
     `Source:  ${source}`,

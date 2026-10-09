@@ -209,7 +209,7 @@ describe("the scout tools", () => {
   test("a recorded claim must survive its witness; a fabricated quote refuses the record", async () => {
     const tool = tools()
     await planAll(tool)
-    const source = await new SourceCache(researchSourcesDir(root)).put({
+    const source = await new SourceCache(researchSourcesDir(root), state).put({
       url: "https://bench.test/mit",
       text: "mit handles ten million calls per second on a laptop.",
       provider: "fetch",
