@@ -164,12 +164,12 @@ const KIND_FOR_CLUSTER: Record<ClusterKind, ProposalKind> = {
 }
 
 const slug = (text: string): string => {
-  const words = text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+/, "")
-    .replace(/-+$/, "")
-  return words.slice(0, 48) || "proposal"
+  const dashed = text.toLowerCase().replace(/[^a-z0-9]+/g, "-")
+  let start = 0
+  while (dashed[start] === "-") start += 1
+  let end = dashed.length
+  while (end > start && dashed[end - 1] === "-") end -= 1
+  return dashed.slice(start, end).slice(0, 48) || "proposal"
 }
 
 /** Stable proposal id from the cluster key (deterministic across runs). */
