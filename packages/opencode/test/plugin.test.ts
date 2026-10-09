@@ -5,22 +5,17 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
+  approveStage,
   bwrapAvailable,
   commandSetHash,
-  Factory,
-  factoryLayout,
-  gateRunner,
   HookEngine,
   type HumanSigner,
   loadGatesConfig,
-  pendingApprovals,
-  recordApproval,
   researchSourcesDir,
   SourceCache,
   sealHumanKey,
   trustProject,
   unlockHumanKey,
-  writeJson,
 } from "@heretek-ai/es-core"
 import { boot, directiveScript, type Harness, lastAgentRequest, systemText } from "@heretek-ai/es-testkit"
 import { EsRpc } from "../src/rpc-def.ts"
@@ -340,14 +335,7 @@ describe("a factory run end to end on the real host", () => {
     expect(preview.lines.join("\n")).toContain("$5 USD")
     // S4: approve/trust/resume RPCs removed — TUI previews, terminal signs with the sealed key.
     expect(typeof (rpc as any).approve).not.toBe("function")
-    await recordApproval(h.directory, { stage: "frontier", channel: "cli", signer })
-    await writeJson(
-      factoryLayout(h.directory).pending,
-      (await pendingApprovals(h.directory)).filter((item) => item.stage !== "frontier"),
-    )
-    const fac = new Factory(h.directory, { gates: gateRunner({ stateDir: state }), stateDir: state })
-    if (!(await fac.read())) await fac.begin("human:tester")
-    if ((await fac.read())?.stage === "GRILL") await fac.beginResearch("human:tester")
+    await approveStage(h.directory, { stage: "frontier", channel: "cli", signer, stateDir: state })
     expect((await rpc.status({}, where(h))).stage).toBe("RESEARCH")
 
     const cache = new SourceCache(researchSourcesDir(h.directory), state)
@@ -388,11 +376,7 @@ describe("a factory run end to end on the real host", () => {
     expect(early.tools[0]?.text).toContain("no spec approval")
     const spec = await rpc.previewApproval({ stage: "spec" }, where(h))
     expect(spec.ok).toBe(true)
-    await recordApproval(h.directory, { stage: "spec", channel: "cli", signer })
-    await writeJson(
-      factoryLayout(h.directory).pending,
-      (await pendingApprovals(h.directory)).filter((item) => item.stage !== "spec"),
-    )
+    await approveStage(h.directory, { stage: "spec", channel: "cli", signer, stateDir: state })
     const build = await h.run(call("es_build_start"), { agent: "factory" })
     expect(build.tools[0]?.status).toBe("completed")
     expect(build.tools[0]?.text).toContain(`worktree:.factory/worktrees/${phase}`)

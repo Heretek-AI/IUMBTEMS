@@ -6,6 +6,7 @@ import {
   type Args,
   applyConfigSet,
   approvalSubject,
+  approveStage,
   ClaimStore,
   ConfigError,
   type ConfigSetPlan,
@@ -13,16 +14,13 @@ import {
   engineKeyPath,
   engineSignedFiles,
   Factory,
-  factoryLayout,
   flag,
   gateRunner,
   HookEngine,
   isTrusted,
   loadGatesConfig,
   planConfigSet,
-  readJson,
   rebaseline,
-  recordApproval,
   recordRetraction,
   recordWaiver,
   researchCache,
@@ -31,7 +29,6 @@ import {
   trustProject,
   verifyControl,
   verifyEngineFile,
-  writeJson,
 } from "@heretek-ai/es-core"
 import { parseExpiry } from "./args.ts"
 import { type ConfirmIO, confirmHuman } from "./tty.ts"
@@ -63,23 +60,17 @@ export async function approve(context: HumanContext, args: Args): Promise<number
     context.print("Cancelled; nothing was approved.")
     return 1
   }
-  const record = await recordApproval(context.root, {
+  // One code path for every surface (#117): the service records, clears
+  // pending and (for frontier) begins research under its own locks.
+  const { record, alreadyApproved } = await approveStage(context.root, {
     stage,
     channel: "cli",
     signer,
+    ...(context.stateDir ? { stateDir: context.stateDir } : {}),
   })
-  const pending =
-    (await readJson<Array<{ stage: string }>>(factoryLayout(context.root).pending).catch(() => undefined)) ?? []
-  await writeJson(
-    factoryLayout(context.root).pending,
-    pending.filter((item) => item.stage !== stage),
+  context.print(
+    `${alreadyApproved ? "Already approved" : "Approved"} ${stage} (${record.subject.length} artifact(s)) as ${record.approvedBy}.`,
   )
-  if (stage === "frontier") {
-    const factory = factoryFor(context)
-    if (!(await factory.read())) await factory.begin(`human:${record.approvedBy}`)
-    if ((await factory.read())?.stage === "GRILL") await factory.beginResearch(`human:${record.approvedBy}`)
-  }
-  context.print(`Approved ${stage} (${record.subject.length} artifact(s)) as ${record.approvedBy}.`)
   return 0
 }
 

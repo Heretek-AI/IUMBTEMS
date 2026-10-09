@@ -6,7 +6,6 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | schema | file |
 | --- | --- |
 | acceptance-criterion | `schemas/acceptance-criterion.schema.json` |
-| approval-channel | `schemas/approval-channel.schema.json` |
 | approval-stage | `schemas/approval-stage.schema.json` |
 | approval-subject | `schemas/approval-subject.schema.json` |
 | approval | `schemas/approval.schema.json` |
@@ -22,6 +21,7 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | brainstorm-score | `schemas/brainstorm-score.schema.json` |
 | brainstorm-shortlist-entry | `schemas/brainstorm-shortlist-entry.schema.json` |
 | brief | `schemas/brief.schema.json` |
+| channel | `schemas/channel.schema.json` |
 | check-status | `schemas/check-status.schema.json` |
 | claim-location | `schemas/claim-location.schema.json` |
 | claim-status | `schemas/claim-status.schema.json` |

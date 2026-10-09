@@ -16,6 +16,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
+  approveStage,
   Factory,
   factoryLayout,
   gateRunner,
@@ -23,7 +24,6 @@ import {
   type HumanSigner,
   readFrontier,
   readHarvestResult,
-  recordApproval,
   researchSourcesDir,
   SourceCache,
   sealHumanKey,
@@ -155,8 +155,13 @@ describe("grill-fires", () => {
     expect(fourth.tools[0]?.text).toContain("frozen")
 
     // A granted frontier approval starts RESEARCH; the fact gates its completion.
-    await recordApproval(h.directory, { stage: "frontier", channel: "cli", approvedBy: "tester", signer })
-    await factory().beginResearch("human:tester")
+    await approveStage(h.directory, {
+      stage: "frontier",
+      channel: "cli",
+      approvedBy: "tester",
+      signer,
+      stateDir: state,
+    })
     const cache = new SourceCache(researchSourcesDir(h.directory), state)
     const source = await cache.put({
       url: "https://example.test/handoff",
@@ -214,8 +219,13 @@ describe("factory-gate", () => {
       settled: true,
       nodes: [{ id: "scope", question: "Which harness first?", status: "settled", answer: "opencode", round: 1 }],
     })
-    await recordApproval(h.directory, { stage: "frontier", channel: "cli", approvedBy: "tester", signer })
-    await factory().beginResearch("human:tester")
+    await approveStage(h.directory, {
+      stage: "frontier",
+      channel: "cli",
+      approvedBy: "tester",
+      signer,
+      stateDir: state,
+    })
     const cache = new SourceCache(researchSourcesDir(h.directory), state)
     const source = await cache.put({
       url: "https://example.test/handoff",
@@ -253,7 +263,7 @@ describe("factory-gate", () => {
     expect(existsSync(path.join(h.directory, ".factory/worktrees"))).toBe(false)
 
     // The human approves; the scripted factory seat can now build.
-    await recordApproval(h.directory, { stage: "spec", channel: "cli", approvedBy: "tester", signer })
+    await approveStage(h.directory, { stage: "spec", channel: "cli", approvedBy: "tester", signer, stateDir: state })
     const started = await h.run(call("es_build_start"), { agent: "factory" })
     // [status, text]: the text names the refusal reason.
     expect([started.tools[0]?.status, started.tools[0]?.text]).toEqual([
