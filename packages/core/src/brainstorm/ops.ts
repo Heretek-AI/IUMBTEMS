@@ -17,10 +17,12 @@ import {
   BrainstormScoreSchema,
   RUBRIC,
 } from "../schema/brainstorm.ts"
+import { withLock } from "../util/fs.ts"
 import { createEmbedder, type EmbeddingsConfig } from "./embed.ts"
 import { collapseDuplicates, collapseDuplicatesEmbedded, rankIdeas, selectShortlist } from "./engine.ts"
 import { buildPlan, LENSES, type PlanOptions } from "./lenses.ts"
 import {
+  brainstormRunPaths,
   DEFAULT_RUN,
   parseRunId,
   readIdeas,
@@ -211,42 +213,51 @@ export function brainstormTools(context: BrainstormOpsContext): EsToolDef[] {
           throw new ToolRefusal(`"${lens}" is not in this plan. Planned lenses: ${plan.lenses.join(", ")}.`)
         const batch = Array.isArray(input.ideas) ? input.ideas : []
         if (!batch.length) throw new ToolRefusal("Give at least one idea.")
-        const existing = await readIdeas(root, run)
-        const used = existing.filter((idea) => idea.lens === lens).length
-        if (used + batch.length > plan.ideasPerLens)
-          throw new ToolRefusal(
-            `The "${lens}" lens already has ${used} idea(s); recording ${batch.length} more exceeds the cap of ${plan.ideasPerLens}.`,
+        // Locked read → mutate → write on the ideas file: two lenses
+        // recording at once must not lose each other's ideas or mint the
+        // same id twice. The write itself stays atomic (writeJson).
+        const { stored, recorded, byId } = await withLock(brainstormRunPaths(root, run).ideas, async () => {
+          const existing = await readIdeas(root, run)
+          const used = existing.filter((idea) => idea.lens === lens).length
+          if (used + batch.length > plan.ideasPerLens)
+            throw new ToolRefusal(
+              `The "${lens}" lens already has ${used} idea(s); recording ${batch.length} more exceeds the cap of ${plan.ideasPerLens}.`,
+            )
+          let seq = existing.reduce(
+            (max, idea) => Math.max(max, Number.parseInt(idea.id.replace(/^b/, ""), 10) || 0),
+            0,
           )
-        let seq = existing.reduce((max, idea) => Math.max(max, Number.parseInt(idea.id.replace(/^b/, ""), 10) || 0), 0)
-        const recorded: BrainstormIdea[] = []
-        for (const [index, raw] of batch.entries()) {
-          const title = String(raw?.title ?? "").trim()
-          const text = String(raw?.text ?? "").trim()
-          if (title.length < 3) throw new ToolRefusal(`Idea ${index + 1}: title is too short.`)
-          if (title.length > 200) throw new ToolRefusal(`Idea ${index + 1}: title is too long (200 characters).`)
-          if (text.length < 40) throw new ToolRefusal(`Idea ${index + 1}: text is too short; explain the idea.`)
-          if (text.length > plan.maxIdeaChars)
-            throw new ToolRefusal(`Idea ${index + 1}: text exceeds ${plan.maxIdeaChars} characters.`)
-          seq += 1
-          recorded.push({
-            id: `b${String(seq).padStart(3, "0")}`,
-            lens,
-            title,
-            text,
-            ...(raw?.notes ? { notes: String(raw.notes) } : {}),
-            recordedAt: now(),
+          const recorded: BrainstormIdea[] = []
+          for (const [index, raw] of batch.entries()) {
+            const title = String(raw?.title ?? "").trim()
+            const text = String(raw?.text ?? "").trim()
+            if (title.length < 3) throw new ToolRefusal(`Idea ${index + 1}: title is too short.`)
+            if (title.length > 200) throw new ToolRefusal(`Idea ${index + 1}: title is too long (200 characters).`)
+            if (text.length < 40) throw new ToolRefusal(`Idea ${index + 1}: text is too short; explain the idea.`)
+            if (text.length > plan.maxIdeaChars)
+              throw new ToolRefusal(`Idea ${index + 1}: text exceeds ${plan.maxIdeaChars} characters.`)
+            seq += 1
+            recorded.push({
+              id: `b${String(seq).padStart(3, "0")}`,
+              lens,
+              title,
+              text,
+              ...(raw?.notes ? { notes: String(raw.notes) } : {}),
+              recordedAt: now(),
+            })
+          }
+          const all = [...existing, ...recorded]
+          const hits = await collapse(all, plan.dedupeMode, plan.dedupeThreshold)
+          const byId = new Map(hits.map((hit) => [hit.id, hit]))
+          const stored = all.map((idea) => {
+            const hit = byId.get(idea.id)
+            return hit ? { ...idea, duplicateOf: hit.duplicateOf, similarity: hit.similarity } : idea
           })
-        }
-        const all = [...existing, ...recorded]
-        const hits = await collapse(all, plan.dedupeMode, plan.dedupeThreshold)
-        const byId = new Map(hits.map((hit) => [hit.id, hit]))
-        const stored = all.map((idea) => {
-          const hit = byId.get(idea.id)
-          return hit ? { ...idea, duplicateOf: hit.duplicateOf, similarity: hit.similarity } : idea
+          await writeIdeas(root, stored, run)
+          return { stored, recorded, byId }
         })
-        await writeIdeas(root, stored, run)
         const lines = [
-          `Recorded ${recorded.length} idea(s) for "${lens}" (${used + recorded.length}/${plan.ideasPerLens}): ${recorded.map((idea) => idea.id).join(", ")}`,
+          `Recorded ${recorded.length} idea(s) for "${lens}" (${stored.filter((idea) => idea.lens === lens).length}/${plan.ideasPerLens}): ${recorded.map((idea) => idea.id).join(", ")}`,
         ]
         const dropped = recorded.map((idea) => byId.get(idea.id)).filter((hit) => hit !== undefined)
         for (const hit of dropped)
