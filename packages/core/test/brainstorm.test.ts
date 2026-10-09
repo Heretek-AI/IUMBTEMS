@@ -346,6 +346,17 @@ describe("the tool loop", () => {
       ),
     ).rejects.toThrow(/exceeds 600 characters/)
   })
+
+  test("two concurrent submissions both persist with distinct ids (S2.4)", async () => {
+    await call("es_brainstorm_plan", { idea: "concurrent", lenses: ["inversion", "scamper"] }, "brainstormer")
+    await Promise.all([
+      call("es_brainstorm_record", { lens: "inversion", ideas: [idea(11)] }, "brainstormer"),
+      call("es_brainstorm_record", { lens: "scamper", ideas: [idea(22)] }, "brainstormer"),
+    ])
+    const ideas = await readIdeas(root)
+    expect(ideas).toHaveLength(2)
+    expect(new Set(ideas.map((item) => item.id)).size).toBe(2)
+  })
 })
 
 describe("callable runs (#108)", () => {
