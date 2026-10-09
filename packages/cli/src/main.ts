@@ -5,8 +5,10 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import {
+  type Args,
   aliasReuseRatio,
   atomicWrite,
+  BOOLEAN_FLAGS,
   brainstormPaths,
   buildPlan,
   candidateId,
@@ -19,6 +21,7 @@ import {
   factoryLayout,
   factorySummary,
   findOneOffs,
+  flag,
   formatDiagnostics,
   gateRunner,
   git,
@@ -31,6 +34,7 @@ import {
   loadEsConfig,
   loadHooks,
   loadInterview,
+  parseArgs,
   parseSource,
   readIdeas as readBrainstormIdeas,
   readPlan as readBrainstormPlan,
@@ -56,7 +60,6 @@ import {
   writeArtifacts,
   writeProfile,
 } from "@heretek-ai/es-core"
-import { type Args, flag, parseArgs } from "./args.ts"
 import { gatesRun, installGitHooks } from "./gates.ts"
 import { DRIVERS, LOG_LEVELS, logLevel, presentEvent, runHeadless } from "./headless.ts"
 import {
@@ -97,12 +100,12 @@ Factory
         [--accept-drift] [--raise-ceiling USD] [--extend-runtime]
   factory pr <url>              Record a release PR opened by hand   [human, TTY]
 
-Checkpoints and exceptions                                      [human, TTY]
-  approve <frontier|spec>       Approve a checkpoint (shows hashes; asks for the passphrase)
-  trust [--show]                Approve this project's gate commands by hash
-  rebaseline                    Accept hand edits to pinned control files (gates.json, config.json)
+Checkpoints and exceptions
+  approve <frontier|spec>       Approve a checkpoint (shows hashes; asks for the passphrase)   [human, TTY]
+  trust [--show]                Approve this project's gate commands by hash   [human, TTY]
+  rebaseline                    Accept hand edits to pinned control files (gates.json, config.json)   [human, TTY]
   reseal [--sign]               Verify engine sidecars (re-sign reviewed files)   [human, TTY]
-  waive <rule> --reason "…" [--files <glob>] [--expires 7d] [--id <name>]
+  waive <rule> --reason "…" [--files <glob>] [--expires 7d] [--id <name>]   [human, TTY]
   key seal                      Create the passphrase-sealed human key   [human, TTY]
   key status                    Show the human key fingerprint
 
@@ -115,7 +118,7 @@ Other
   research search <query>       Search with the configured provider
   research fetch <url>          Fetch and cache a source (prints its sha256)
   research audit [file] [--prune]  Epistemic audit of a research report
-  research export [--out <file>]   Signed research brief (.factory/research/brief.pcrb.json)
+  research export [--out <file>]   Signed research brief (.factory/research/brief.pcrb.json)   [human, TTY]
   research verify-brief <file> [--allow-unverifiable]  Check a brief's sources, manifest, signature, quotes
   research retract <sha256> --event retracted|revised [--note "…"]   Degrade claims citing a source   [human, TTY]
   brainstorm plan "<idea>"      Freeze a lens fan-out plan (.factory/brainstorm)
@@ -176,24 +179,6 @@ async function projectRoot(cwd: string): Promise<string> {
   const top = await git(cwd, ["rev-parse", "--show-toplevel"], { allowFail: true })
   return top.code === 0 ? top.stdout.trim() : cwd
 }
-
-const BOOLEAN_FLAGS = [
-  "full",
-  "staged",
-  "json",
-  "show",
-  "headless",
-  "accept-drift",
-  "extend-runtime",
-  "uninstall",
-  "help",
-  "force",
-  "allow-unverifiable",
-  "global",
-  "open-only",
-  "sign",
-  "all",
-]
 
 export async function main(argv: readonly string[], io: MainIO): Promise<number> {
   const args = parseArgs(argv, BOOLEAN_FLAGS)
