@@ -422,6 +422,44 @@ describe("fleet integration (real host, fake model)", () => {
     }
   }, 120_000)
 
+  test("case 4: a gate failure marks the task failed and moves no branch", async () => {
+    const root = h.directory
+    const dagState = await mkdtemp(path.join(tmpdir(), "es-fleet-int-4-"))
+    const marks = await mkdtemp(path.join(tmpdir(), "es-fleet-int-4-marks-"))
+    try {
+      let dag: DagState = emptyDag()
+      dag = addTask(dag, taskInput("int4-gated"), STAMP)
+      await saveDag(dagState, dag)
+      const intTip = async (): Promise<string | undefined> => {
+        try {
+          return await tip(root, "fleet/integration/fleet")
+        } catch {
+          return undefined
+        }
+      }
+      const before = await intTip()
+      const { bus } = await busFor(dagState)
+      const daemon = daemonFor(h, dagState, bus, {
+        marks,
+        checkGates: () => Promise.resolve({ ok: false as const, reason: "int4 test gate failure" }),
+      })
+      try {
+        await drive(daemon, async () => (await dagStatus(dagState, "int4-gated")) === "failed", 90_000, "GATED to fail")
+        const final = (await loadDag(dagState))!
+        expect(final.tasks["int4-gated"]?.status).toBe("failed")
+        expect(final.tasks["int4-gated"]?.reason).toMatch(/int4 test gate failure/)
+        expect(await intTip()).toBe(before)
+        expect(await tip(root, "main")).toBe(base)
+      } finally {
+        await bus.stop().catch(() => undefined)
+        await releaseAll(root, dagState)
+      }
+    } finally {
+      await rm(dagState, { recursive: true, force: true })
+      await rm(marks, { recursive: true, force: true })
+    }
+  }, 150_000)
+
   test("break probes: shared worktrees and early starts fail the checks", async () => {
     const root = h.directory
     // Probe 1: two tasks pointed at one worktree break output ownership.

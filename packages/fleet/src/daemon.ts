@@ -3,7 +3,7 @@
 // gated landings. All DAG mutations serialize through a promise mutex; every
 // collaborator the loop cannot own in tests (spawning, gates) is injected.
 
-import { applyDecision, reportTask, schedule, type TaskReport } from "./scheduler.ts"
+import { applyDecision, markGateFailed, reportTask, schedule, type TaskReport } from "./scheduler.ts"
 import { loadDag, saveDag } from "./tasks.ts"
 import {
   CircuitBreaker,
@@ -238,6 +238,13 @@ export class FleetDaemon {
           dag = next.dag
           await saveDag(this.options.stateRoot, dag)
           this.emit({ type: "report", taskId: id, detail: "waiting-human: merge conflict" })
+        } else if (landed.gateFailed) {
+          // Gates rejected the work: the task failed, nothing was merged.
+          const next = markGateFailed(dag, id, landed.reason, now)
+          dag = next.dag
+          await saveDag(this.options.stateRoot, dag)
+          await releaseWorktree(this.options.repoRoot, this.options.stateRoot, id, "abandoned")
+          this.emit({ type: "report", taskId: id, detail: "failed: gates rejected the landing" })
         }
       } else {
         await releaseWorktree(this.options.repoRoot, this.options.stateRoot, id, "abandoned")

@@ -59,6 +59,7 @@ export {
   type CancelEntry,
   type Capacity,
   type Decision,
+  markGateFailed,
   reportTask,
   schedule,
   type TaskReport,

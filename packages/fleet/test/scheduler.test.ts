@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { applyDecision, reportTask, schedule } from "../src/scheduler.ts"
+import { applyDecision, markGateFailed, reportTask, schedule } from "../src/scheduler.ts"
 import { addTask, type DagState, emptyDag, loadDag, saveDag, TaskSchema } from "../src/tasks.ts"
 
 const NOW = "2026-10-09T12:00:00.000Z"
@@ -209,6 +209,19 @@ describe("persistence", () => {
     } finally {
       await rm(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe("markGateFailed", () => {
+  test("done becomes failed with the gate reason; other statuses are unchanged", () => {
+    const done = reportTask(dagOf([{ id: "a" }]), "a", { outcome: "done" }, NOW).dag
+    const failed = markGateFailed(done, "a", "gates failed", NOW)
+    expect(failed.changed).toBe(true)
+    expect(failed.dag.tasks.a.status).toBe("failed")
+    expect(failed.dag.tasks.a.reason).toBe("gates failed")
+    const untouched = markGateFailed(dagOf([{ id: "a" }]), "a", "gates failed", NOW)
+    expect(untouched.changed).toBe(false)
+    expect(untouched.dag.tasks.a.status).toBe("pending")
   })
 })
 
