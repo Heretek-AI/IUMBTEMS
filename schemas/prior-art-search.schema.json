@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "idea": {
+      "type": "string"
+    },
+    "query": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "failed"
+      ]
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "url"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "searchedAt": {
+      "type": "string"
+    },
+    "run": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "idea",
+    "query",
+    "status",
+    "results",
+    "searchedAt"
+  ],
+  "additionalProperties": false
+}

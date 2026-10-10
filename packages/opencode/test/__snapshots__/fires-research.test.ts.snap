@@ -1,0 +1,28 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`research-fires degradation and export 5. export: the Markdown render matches its snapshot 1`] = `
+"# Research dossier: Do gates hold?
+
+Evidence \`ba13d7f2a3d0c525a5b1cf25b5350dae3f5eeeb3c6bf5af4c561ac3322f76bad\` · 1 claim(s) (1 stale) · 1 source(s).
+
+## Report
+
+# Report
+
+- Gates hold [VERIFIED: sha256:b58cf0ed82036c60779e94aebbb7d7bc8f69c481d9ceb3f80c18d0504fd13822 "keep agents honest under load"]
+
+## Claims
+
+| id | tag | status | claim | evidence |
+| --- | --- | --- | --- | --- |
+| cc3a6fcb85bb | VERIFIED | STALE | Gates hold | "keep agents honest under load" — [b58cf0ed8203](#source-b58cf0ed8203) |
+
+## Sources
+
+<a id="source-b58cf0ed8203"></a>### \`b58cf0ed8203\` — http://127.0.0.1:18381/a
+
+- retrieved <retrieved> · provider direct · sealed
+
+> Alpha gates keep agents honest under load.
+"
+`;

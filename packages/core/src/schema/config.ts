@@ -1,16 +1,43 @@
 // One canonical config for the Epistemic Swarm plugin: layered global →
 // project → plugin options, emitted as JSON Schema for the generated docs.
 import { z } from "zod"
+import { AGENTS } from "../agents/registry.ts"
 import { DEFAULT_LICENSE_WHITELIST } from "./harvest.ts"
+
+/** A concrete model: "provider/model", both parts non-empty, no whitespace (#96). */
+export const ModelRefSchema = z
+  .string()
+  .regex(/^[^\s/]+\/\S+$/, 'expected "provider/model" (both parts non-empty, no spaces)')
+
+/** Split a model ref on the first slash; undefined when malformed (#96). */
+export function parseModelRef(ref: string): { providerID: string; id: string } | undefined {
+  const slash = ref.indexOf("/")
+  if (slash <= 0 || slash === ref.length - 1 || /\s/.test(ref)) return undefined
+  return { providerID: ref.slice(0, slash), id: ref.slice(slash + 1) }
+}
+
+const AGENT_IDS: ReadonlySet<string> = new Set(AGENTS.map((agent) => agent.id))
 
 export const EsConfigSchema = z
   .object({
     models: z
       .object({
-        fast: z.string().describe('Model for fast-tier seats (lenses), "provider/model".').optional(),
-        balanced: z.string().describe("Model for balanced-tier seats (programmer, QA, research).").optional(),
-        deep: z.string().describe("Model for deep-tier seats (factory, grill, managers, critics).").optional(),
-        agents: z.record(z.string(), z.string()).describe("Per-agent model overrides by agent id.").optional(),
+        fast: ModelRefSchema.describe('Model for fast-tier seats (lenses), "provider/model".').optional(),
+        balanced: ModelRefSchema.describe("Model for balanced-tier seats (programmer, QA, research).").optional(),
+        deep: ModelRefSchema.describe("Model for deep-tier seats (factory, grill, managers, critics).").optional(),
+        agents: z
+          .record(z.string(), ModelRefSchema)
+          .describe("Per-agent model overrides by agent id.")
+          .optional()
+          .superRefine((agents, ctx) => {
+            for (const id of Object.keys(agents ?? {}))
+              if (!AGENT_IDS.has(id))
+                ctx.addIssue({
+                  code: "custom",
+                  path: [id],
+                  message: `unknown agent id "${id}"; models.agents keys must be registry agent ids`,
+                })
+          }),
       })
       .strict()
       .describe("Abstract model tiers mapped to concrete provider/model ids; unset tiers inherit the session default.")
@@ -74,6 +101,13 @@ export const EsConfigSchema = z
           .string()
           .regex(/^https?:\/\/[^\s/]+\S*$/, "expected an http(s) URL")
           .describe("SearXNG instance (else SEARXNG_URL). Global config or plugin options only.")
+          .optional(),
+        backends: z
+          .array(z.enum(["scraper-swarm", "brave", "firecrawl", "searxng", "direct"]))
+          .min(1)
+          .describe(
+            "Ordered source backends for search and fetch failover (a safety refusal never fails over); unset keeps the searchProvider behaviour.",
+          )
           .optional(),
       })
       .strict()

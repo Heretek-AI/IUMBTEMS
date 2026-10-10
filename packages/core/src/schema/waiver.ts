@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { RecordSignatureSchema } from "./approval.ts"
+import { ChannelSchema, RecordSignatureSchema } from "./approval.ts"
 
 /** A human-signed, expiring exception for findings matching `rule` (glob) in `files` (glob). */
 export const WaiverSchema = z.object({
@@ -12,7 +12,7 @@ export const WaiverSchema = z.object({
   approvedBy: z.string().min(1),
   approvedAt: z.string().datetime(),
   expiresAt: z.string().datetime(),
-  channel: z.enum(["cli", "tui"]),
+  channel: ChannelSchema,
   auditHead: z.object({ seq: z.number().int().nonnegative(), hash: z.string().length(64) }).nullable(),
   signature: RecordSignatureSchema,
 })

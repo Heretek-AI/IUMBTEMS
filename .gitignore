@@ -21,3 +21,9 @@ evals/results/
 audit.md
 *.pyc
 __pycache__/
+
+# Fleet task worktrees (one isolated checkout per task, #124)
+.fleet/
+
+# Tier-1 phase worktrees (one checkout per ticket, merged into integration/*)
+.worktrees/

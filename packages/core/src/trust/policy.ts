@@ -5,6 +5,7 @@
 // handlers and the Antigravity PreToolUse hook.
 import { agentSpec, type WriteScope } from "../agents/registry.ts"
 import { stateDir } from "../layout.ts"
+import { BOOLEAN_FLAGS } from "../util/args.ts"
 import { matchAny } from "../util/glob.ts"
 import { controlClass } from "./control.ts"
 import { canonicalPath, isInside, relativeTo, resolveTarget } from "./paths.ts"
@@ -18,6 +19,13 @@ export interface PolicyContext {
   readonly worktree?: string
   /** Override for the user-global state dir (tests). */
   readonly stateDir?: string
+  /**
+   * The sealed run state's mode (#111): in build runs only `factory-docs`
+   * writes `.factory/research/REPORT.md`, in research runs only
+   * `research-report` does. Absent (no run, or an unreadable state): both
+   * are denied. Producers read it from the sealed run state.
+   */
+  readonly runMode?: "build" | "research"
 }
 
 const allow: Decision = { effect: "allow" }
@@ -36,6 +44,10 @@ const SCOPE_GLOBS: Record<Exclude<WriteScope, "worktree">, readonly string[]> = 
   // One writer per research file: each seat its own notes, never the report.
   "research-alpha": [".factory/research/alpha.md"],
   "research-beta": [".factory/research/beta.md"],
+  // The deep-researcher plans in notes/; the synthesizer alone writes the
+  // report in research runs (the factory still owns it in build runs, #111).
+  "deep-research": [".factory/research/notes/**"],
+  "research-report": [".factory/research/REPORT.md"],
   // Engine state under these dirs is a control file (tools only); seats keep notes.
   brainstorm: [".factory/brainstorm/notes/**"],
   harvest: [".factory/harvest/notes/**"],
@@ -69,8 +81,43 @@ export function evaluateWrite(context: PolicyContext, agentId: string | undefine
     }
   }
 
+  // Fleet isolation (#124): task worktrees live under `.fleet/`. Any agent
+  // may write only inside its own active worktree (seats still pass the
+  // scope check below); every other `.fleet/` write is denied, including
+  // the user's own agents outside a task worktree.
+  if (relative !== undefined && (relative === ".fleet" || relative.startsWith(".fleet/"))) {
+    const worktree = context.worktree ? canonicalPath(context.worktree) : undefined
+    const inner = worktree ? relativeTo(worktree, absolute) : undefined
+    const own =
+      inner !== undefined &&
+      inner !== "." &&
+      inner !== ".git" &&
+      !inner.startsWith(".git/") &&
+      inner !== ".fleet" &&
+      !inner.startsWith(".fleet/")
+    if (!own)
+      return deny(`"${relative}" is fleet isolation state; agents may write only inside their own task worktree.`)
+  }
+
   if (!spec) return allow
   if (relative === undefined) return deny(`Factory seat "${spec.id}" may not write outside the project: ${absolute}`)
+
+  // REPORT.md has one writer per run mode (#111): the synthesizer is the
+  // only writer in research runs, the factory in build runs (AGENTS.md).
+  // The mode comes from the sealed run state; when it cannot be read both
+  // writers are denied (fail closed).
+  if (relative === ".factory/research/REPORT.md") {
+    const mode = context.runMode
+    const writer = mode === "build" ? "factory-docs" : mode === "research" ? "research-report" : undefined
+    if (writer !== undefined && spec.writes.includes(writer)) return allow
+    const who =
+      mode === "build"
+        ? "only the factory writes it in a build run"
+        : mode === "research"
+          ? "only the research synthesizer writes it in a research run"
+          : "the run mode cannot be read, so no seat writes it"
+    return deny(`Seat "${spec.id}" may not write "${relative}": ${who}.`)
+  }
 
   for (const scope of spec.writes) {
     if (scope === "worktree") {
@@ -120,11 +167,20 @@ export type ShellDecision =
 /** The command with shell quoting and escapes removed, so `es 'approve'` and `.fac""tory` read plainly. */
 export const unquoteShell = (command: string) => command.replaceAll(/['"\\]/g, "")
 
-const words = (command: string) => command.split(/[^\w@./-]+/).filter(Boolean)
+const words = (command: string) => command.split(/[^\w@./=:-]+/).filter(Boolean)
 
 const ES_BINARY = /^(es|epistemic-swarm|es\.js|es-cli|@heretek-ai\/es-cli(@[\w.-]+)?)$|\/(es|es\.js|epistemic-swarm)$/
-/** Human-only verbs: the next word(s) after the es binary. */
-const HUMAN_VERBS: ReadonlyArray<readonly [string, ((next: string | undefined) => boolean)?]> = [
+/**
+ * The fleet daemon binary (#122). It has its own verbs (`start`, `stop`,
+ * `status`, `task`, `watch`, `gc`), so it is matched separately: the whole
+ * binary is human-only except a token-less `status` and `--help`, because a running fleet
+ * spends money.
+ */
+const FLEET_BINARY = /^(es-fleet|es-fleet\.js|@heretek-ai\/es-fleet(@[\w.-]+)?)$|\/es-fleet(\.js)?$/
+/** Human-only verbs: the next word(s) after the es binary. Exported for the
+ *  argv-parity property test (#97): the CLI grammar lives in core. */
+export type HumanVerbRule = readonly [string, ((next: string | undefined) => boolean)?]
+export const HUMAN_VERBS: ReadonlyArray<HumanVerbRule> = [
   ["approve"],
   ["trust"],
   ["waive"],
@@ -132,11 +188,11 @@ const HUMAN_VERBS: ReadonlyArray<readonly [string, ((next: string | undefined) =
   ["rebaseline"],
   ["key"],
   ["reseal"],
-  ["factory", (next) => next === "resume" || next === "pr"],
+  ["factory", (next) => next === "resume" || next === "pr" || next === "init" || next === "run"],
   ["gates", (next) => next === "install-git"],
   ["lsp", (next) => next === "install"],
   ["config", (next) => next === "set"],
-  ["research", (next) => next === "retract" || next === "export"],
+  ["research", (next) => next === "retract" || next === "export" || next === "deep"],
   // Audit and scout runs drive a harness CLI: an agent must not start nested headless runs.
   ["audit", (next) => next !== undefined && next !== "verify" && next !== "show"],
   ["scout", (next) => next !== undefined && next !== "show"],
@@ -151,7 +207,7 @@ const HUMAN_VERBS: ReadonlyArray<readonly [string, ((next: string | undefined) =
 function isPlainHelp(command: string): boolean {
   if (/[;&|\n()'"`$\\<>{}]/.test(command)) return false
   const argv = command.trim().split(/\s+/)
-  if (!ES_BINARY.test(argv[0] ?? "")) return false
+  if (!ES_BINARY.test(argv[0] ?? "") && !FLEET_BINARY.test(argv[0] ?? "")) return false
   const help = argv.indexOf("--help")
   const end = argv.indexOf("--")
   return help > 0 && (end === -1 || help < end)
@@ -166,10 +222,12 @@ interface Cursor {
 /**
  * Where the CLI parser's next positional could be, scanning from `from` (an
  * index past the end means there is none). The parser takes flags anywhere
- * (#88): `--` makes the rest positional, and `--flag value` consumes the
- * value unless the flag is boolean. The boolean list is the CLI's, so a bare
- * `--flag` counts both ways; `--flag=value` is two words here (`words` splits
- * at `=`) and reads the same.
+ * (#88): `--` makes the rest positional, `--flag value` consumes the value
+ * unless the flag is boolean, and `--flag=value` never consumes the next word
+ * (the value is inline, as in the CLI's parseArgs, #97). A KNOWN boolean (the
+ * CLI's BOOLEAN_FLAGS, #97) never consumes, so only the next word is a
+ * candidate; an unknown `--flag` counts both ways, since the next word may be
+ * its value or the verb.
  */
 function nextPositionals(tokens: readonly string[], from: Cursor): Cursor[] {
   const found: Cursor[] = []
@@ -183,9 +241,44 @@ function nextPositionals(tokens: readonly string[], from: Cursor): Cursor[] {
     const token = tokens[cursor.at]
     if (token === undefined || cursor.literal || !token.startsWith("--")) found.push(cursor)
     else if (token === "--") stack.push({ at: cursor.at + 1, literal: true })
-    else stack.push({ at: cursor.at + 1, literal: false }, { at: cursor.at + 2, literal: false })
+    else {
+      const name = token.slice(2).split("=", 1)[0]!
+      const inline = token.includes("=")
+      stack.push({ at: cursor.at + 1, literal: false })
+      if (!inline && !BOOLEAN_FLAGS.includes(name)) stack.push({ at: cursor.at + 2, literal: false })
+    }
   }
   return found
+}
+
+/**
+ * Whether the fleet binary at `tokens[binary]` runs a human-only verb: every
+ * verb except a token-less `status` (#122, #126). Resolution is single-path and fail-closed:
+ * known booleans (the CLI's BOOLEAN_FLAGS, #97) never consume a word, while
+ * every other `--flag` is assumed to take a value, so an unknown flag swallows
+ * the next word and the command stays human-only. `--` makes the rest
+ * positional, and `--flag=value` never consumes.
+ */
+function fleetHumanOnlyAfter(tokens: readonly string[], binary: number): boolean {
+  // `status --token` prints the bus bearer token (#126): like every other
+  // fleet verb it is human-only, wherever the flag sits in the argv.
+  if (tokens.slice(binary + 1).some((token) => token === "--token" || token.startsWith("--token="))) return true
+  let i = binary + 1
+  let literal = false
+  while (i < tokens.length) {
+    const token = tokens[i]!
+    if (literal || !token.startsWith("--")) return token !== "status"
+    if (token === "--") {
+      literal = true
+      i += 1
+      continue
+    }
+    const name = token.slice(2).split("=", 1)[0]!
+    if (BOOLEAN_FLAGS.includes(name) || token.includes("=")) i += 1
+    else i += 2
+  }
+  // A bare `es-fleet` (or flags alone) can still start work: human-only.
+  return true
 }
 
 /** Whether the es binary at `tokens[binary]` can run a human-only verb. */
@@ -209,7 +302,11 @@ function humanVerbAfter(tokens: readonly string[], binary: number): boolean {
 export function invokesHumanOnly(command: string): boolean {
   if (isPlainHelp(command)) return false
   const tokens = words(unquoteShell(command))
-  return tokens.some((token, index) => ES_BINARY.test(token) && humanVerbAfter(tokens, index))
+  return tokens.some(
+    (token, index) =>
+      (ES_BINARY.test(token) && humanVerbAfter(tokens, index)) ||
+      (FLEET_BINARY.test(token) && fleetHumanOnlyAfter(tokens, index)),
+  )
 }
 
 /**
@@ -220,11 +317,14 @@ const calledAtHead = (command: string): boolean =>
   !command.includes("<<") &&
   segments(unquoteShell(command)).some((segment) => {
     const tokens = words(segment)
-    return ES_BINARY.test(tokens[0] ?? "") && humanVerbAfter(tokens, 0)
+    return (
+      (ES_BINARY.test(tokens[0] ?? "") && humanVerbAfter(tokens, 0)) ||
+      (FLEET_BINARY.test(tokens[0] ?? "") && fleetHumanOnlyAfter(tokens, 0))
+    )
   })
 
 const HUMAN_ONLY =
-  "That command is human-only (approvals, trust, waivers, resume, rebaseline, keys, config set, retractions, exports, audit and scout runs); agents cannot run it."
+  "That command is human-only (approvals, trust, waivers, resume, rebaseline, keys, config set, retractions, exports, audit and scout runs, fleet start/stop); agents cannot run it."
 const MENTION_HINT =
   " If it only names the verb in text (a here-doc, a commit message, a `--body` argument), the rule still reads a call: write the text to a file with the edit tool and pass the file (`gh … --body-file`, `git commit -F`)."
 
@@ -232,6 +332,8 @@ const CONTROL_MENTION =
   /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|audits\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design|scout)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/i
 /** Any mention of the factory dir (a `cd .factory` reaches control files without naming them). */
 const FACTORY_MENTION = /(^|[\s/=:])\.factory(\/|[\s;|&]|$)/i
+/** Any mention of fleet isolation state (task worktrees live under `.fleet/`). */
+const FLEET_MENTION = /(^|[\s/=:])\.fleet(\/|[\s;|&]|$)/i
 const MUTATING =
   /(>|\btee\b|\brm\b|\bmv\b|\bcp\b|\bln\b|\btruncate\b|\bchmod\b|\bchown\b|\btouch\b|\bsed\s+(-[a-zA-Z]*i|--in-place)|\bdd\b|\binstall\b|\bgit\s+(checkout|restore|rm|mv|reset|clean|apply|am|stash))/
 
@@ -320,6 +422,19 @@ export function evaluateShell(
         reason:
           "Factory seats may not reference control files from the shell. Inspect them with the read tool (it lists directories too), glob or grep; es_status summarizes the run (seats, research progress, last activity).",
       }
+    // Fleet isolation (#124): a seat's shell may name its own task worktree
+    // but never another task's `.fleet/` paths.
+    const ownWorktree = context.worktree ? canonicalPath(context.worktree) : undefined
+    const ownRelative = ownWorktree ? relativeTo(canonicalPath(context.root), ownWorktree) : undefined
+    const withoutOwn = [ownWorktree, ownRelative, ownRelative ? `./${ownRelative}` : undefined]
+      .filter((name): name is string => !!name)
+      .reduce((text, name) => text.split(name).join(""), plain)
+    if (FLEET_MENTION.test(withoutOwn))
+      return {
+        effect: "deny",
+        reason:
+          "Factory seats may not reference other tasks' fleet worktrees (.fleet/) from the shell; work only inside your own task worktree.",
+      }
     const git = seatForbiddenGit(command)
     if (git)
       return {
@@ -331,13 +446,13 @@ export function evaluateShell(
   }
   // The user's own agents: control files and the factory dir only in provably read-only commands.
   if (
-    (CONTROL_MENTION.test(plain) || FACTORY_MENTION.test(plain)) &&
+    (CONTROL_MENTION.test(plain) || FACTORY_MENTION.test(plain) || FLEET_MENTION.test(plain)) &&
     (MUTATING.test(plain) || !isProvablyReadOnly(plain))
   )
     return {
       effect: "deny",
       reason:
-        "Epistemic Swarm's .factory/ and control files may only be mentioned in a provably read-only shell command (no interpreters, redirection or substitution); use the read tool otherwise.",
+        "Epistemic Swarm's .factory/ and .fleet/ state may only be mentioned in a provably read-only shell command (no interpreters, redirection or substitution); use the read tool otherwise.",
     }
   return options.sandboxAvailable
     ? { effect: "allow", mode: "sandbox", kind: "user", offline: false }

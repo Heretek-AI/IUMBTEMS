@@ -162,11 +162,13 @@ const STAGE_WORD: Record<string, string> = {
 }
 
 const stageWork = (state: FactoryState) =>
-  state.stage === "BUILD"
-    ? `Building ${state.activePhase ?? "the next phase"}`
-    : state.stage === "QA"
-      ? `QA on ${state.activePhase ?? "the active phase"}`
-      : (STAGE_WORD[state.stage] ?? state.stage)
+  state.mode === "research" && state.stage === "RESEARCH"
+    ? "Research run"
+    : state.stage === "BUILD"
+      ? `Building ${state.activePhase ?? "the next phase"}`
+      : state.stage === "QA"
+        ? `QA on ${state.activePhase ?? "the active phase"}`
+        : (STAGE_WORD[state.stage] ?? state.stage)
 
 const shortSession = (sessionID: string) => (sessionID.length > 16 ? sessionID.slice(0, 16) : sessionID)
 
@@ -188,7 +190,7 @@ export function headline(state: FactoryState | undefined, liveness: Liveness): s
       : "Done: the run is complete."
   if (liveness.pending.length) {
     const stages = liveness.pending.map((item) => item.stage)
-    return `Waiting for you: approve the ${stages.join(" and ")} (\`es approve ${stages[0]}\` in a terminal; /es-approve previews it).`
+    return `Waiting for you: approve the ${stages.join(" and ")} with /es-approve (or \`es approve ${stages[0]}\` in a terminal).`
   }
   if (state.stage === "GRILL") return "The grill is running: answer its questions in the grill session."
   const running = liveness.seats.filter((seat) => seat.state === "running")
@@ -300,7 +302,7 @@ export function formatHuman(state: FactoryState | undefined, liveness: Liveness,
   }
   if (liveness.pending.length)
     lines.push(
-      `waiting on you: ${liveness.pending.map((item) => `approve ${item.stage} (\`es approve ${item.stage}\`)`).join(", ")}`,
+      `waiting on you: ${liveness.pending.map((item) => `approve ${item.stage} (/es-approve, or \`es approve ${item.stage}\`)`).join(", ")}`,
     )
   return lines.join("\n")
 }

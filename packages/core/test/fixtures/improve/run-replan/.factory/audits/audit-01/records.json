@@ -1,0 +1,26 @@
+[
+  {
+    "audit": "audit-01",
+    "round": 1,
+    "seat": "auditor-thesis",
+    "by": "auditor",
+    "verdict": "fail",
+    "notes": "one invariant does not hold",
+    "findings": [
+      {
+        "kind": "invariant",
+        "title": "control files are deny-write",
+        "severity": "high",
+        "file": "packages/core/src/trust/policy.ts",
+        "lines": [
+          59,
+          75
+        ],
+        "excerpt": "export function evaluateWrite(context, agentId, target)",
+        "detail": "the programmer seat can write a control file path",
+        "holds": false
+      }
+    ],
+    "at": "2026-10-02T02:00:00.000Z"
+  }
+]

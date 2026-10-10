@@ -1,5 +1,5 @@
 // Waivers are requested by agents but granted only by a human through the
-// CLI (TTY) or TUI dialog. Records are HMAC-signed like approvals; unsigned,
+// CLI (TTY) or TUI dialog. Records are Ed25519-signed like approvals; unsigned,
 // malformed or expired waivers are ignored and reported.
 import { readdir, readFile } from "node:fs/promises"
 import { hostname, userInfo } from "node:os"
@@ -7,6 +7,7 @@ import path from "node:path"
 import { type HumanSigner, signatureProblem } from "../approval/keystore.ts"
 import { appendAuditEntry, auditHead } from "../audit/chain.ts"
 import { factoryLayout, stateDir } from "../layout.ts"
+import type { Channel } from "../schema/approval.ts"
 import type { GateFinding } from "../schema/gates.ts"
 import { isWaiverActive, type Waiver, WaiverSchema } from "../schema/waiver.ts"
 import { rebaseline } from "../trust/control.ts"
@@ -19,7 +20,7 @@ export interface RecordWaiverInput {
   readonly files?: string
   readonly reason: string
   readonly expiresAt: Date
-  readonly channel: "cli" | "tui"
+  readonly channel: Channel
   readonly approvedBy?: string
   /** The unlocked human key. */
   readonly signer: HumanSigner

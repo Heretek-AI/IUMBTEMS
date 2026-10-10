@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import type { BrainstormIdea, BrainstormScore } from "../src/index.ts"
 import {
-  brainstormPaths,
+  brainstormRunPaths,
   brainstormTools,
   buildPlan,
   collapseDuplicates,
@@ -266,7 +266,7 @@ describe("the tool loop", () => {
     expect(result!.shortlist.some((entry) => entry.outlier)).toBe(true)
     expect(result!.ranked[0]?.total).toBe(16)
     expect(renderBrainstorm(result!)).toContain("## Shortlist")
-    expect(await Bun.file(brainstormPaths(root).report).text()).toContain("forced outlier")
+    expect(await Bun.file(brainstormRunPaths(root).report).text()).toContain("forced outlier")
     expect(beforeComplete).toContain("brainstorm.json")
   })
 
@@ -345,5 +345,113 @@ describe("the tool loop", () => {
         "brainstormer",
       ),
     ).rejects.toThrow(/exceeds 600 characters/)
+  })
+
+  test("two concurrent submissions both persist with distinct ids (S2.4)", async () => {
+    await call("es_brainstorm_plan", { idea: "concurrent", lenses: ["inversion", "scamper"] }, "brainstormer")
+    await Promise.all([
+      call("es_brainstorm_record", { lens: "inversion", ideas: [idea(11)] }, "brainstormer"),
+      call("es_brainstorm_record", { lens: "scamper", ideas: [idea(22)] }, "brainstormer"),
+    ])
+    const ideas = await readIdeas(root)
+    expect(ideas).toHaveLength(2)
+    expect(new Set(ideas.map((item) => item.id)).size).toBe(2)
+  })
+})
+
+describe("callable runs (#108)", () => {
+  const runCall = (name: string, input: Record<string, unknown>, agent: string) => {
+    const tool = brainstormTools({ root }).find((item) => item.name === name)!
+    return tool.execute(input, { agent })
+  }
+
+  test("two concurrent runs are isolated; force applies within a run", async () => {
+    await runCall("es_brainstorm_plan", { idea: "first", lenses: ["inversion"], run: "a" }, "grill")
+    await runCall("es_brainstorm_plan", { idea: "second", lenses: ["scamper"], run: "b" }, "factory")
+    await runCall("es_brainstorm_record", { lens: "inversion", ideas: [idea(1)], run: "a" }, "grill")
+    expect(await readIdeas(root, "a")).toHaveLength(1)
+    expect(await readIdeas(root, "b")).toHaveLength(0)
+    expect((await readPlan(root, "a"))?.brief.idea).toBe("first")
+    expect((await readPlan(root, "b"))?.brief.idea).toBe("second")
+    // A new plan for run "a" is refused while it holds ideas; run "b" is unaffected.
+    await expect(runCall("es_brainstorm_plan", { idea: "other", run: "a" }, "grill")).rejects.toThrow(/force:true/)
+    await runCall("es_brainstorm_plan", { idea: "other", run: "a", force: true }, "grill")
+    expect(await readIdeas(root, "a")).toEqual([])
+    expect((await readPlan(root, "b"))?.brief.idea).toBe("second")
+  })
+
+  test("legacy top-level files read as the default run", async () => {
+    const { writeJson } = await import("../src/util/fs.ts")
+    const { factoryLayout } = await import("../src/layout.ts")
+    const layout = factoryLayout(root)
+    const plan = buildPlan({ idea: "legacy" }).plan
+    await writeJson(layout.brainstormPlan, plan)
+    expect((await readPlan(root))?.brief.idea).toBe("legacy")
+    expect((await readPlan(root, "default"))?.brief.idea).toBe("legacy")
+    expect(await readPlan(root, "other")).toBeUndefined()
+  })
+
+  test("grill and factory pass the seat checks; lenses cannot record and strangers cannot plan", async () => {
+    await runCall("es_brainstorm_plan", { idea: "x", lenses: ["inversion"] }, "grill")
+    await expect(runCall("es_brainstorm_plan", { idea: "x" }, "es-programmer")).rejects.toThrow(/brainstormer seat/)
+    await expect(
+      runCall("es_brainstorm_record", { lens: "inversion", ideas: [idea(1)] }, "es-lens-inversion"),
+    ).rejects.toThrow(/brainstormer seat/)
+    await runCall("es_brainstorm_record", { lens: "inversion", ideas: [idea(2)] }, "factory")
+    expect(await readIdeas(root)).toHaveLength(1)
+    await expect(runCall("es_brainstorm_complete", {}, "es-lens-inversion")).rejects.toThrow(/brainstormer seat/)
+  })
+
+  test("run ids reject path traversal; empty means the default run", async () => {
+    for (const run of ["../evil", "a/b", "has space"]) {
+      await expect(runCall("es_brainstorm_plan", { idea: "x", run }, "grill")).rejects.toThrow(/run id/i)
+      await expect(
+        runCall("es_brainstorm_record", { lens: "inversion", ideas: [idea(1)], run }, "grill"),
+      ).rejects.toThrow(/run id/i)
+    }
+    await runCall("es_brainstorm_plan", { idea: "x", lenses: ["inversion"], run: "" }, "grill")
+    expect((await readPlan(root))?.brief.idea).toBe("x")
+  })
+
+  test("complete returns parseable shortlist JSON; budget defaults bound non-brainstormer callers", async () => {
+    const planned = await runCall("es_brainstorm_plan", { idea: "Cheap options", run: "lean" }, "grill")
+    expect(planned).toContain("lean")
+    const stored = await readPlan(root, "lean")
+    expect(stored?.lenses).toHaveLength(4)
+    expect(stored?.ideasPerLens).toBe(3)
+    expect(stored?.shortlistSize).toBe(5)
+    // The brainstormer keeps the full defaults.
+    await runCall("es_brainstorm_plan", { idea: "Full options", run: "full" }, "brainstormer")
+    expect(await readPlan(root, "full")).toMatchObject({ ideasPerLens: 5, shortlistSize: 7 })
+    expect((await readPlan(root, "full"))?.lenses).toHaveLength(6)
+
+    const lenses = stored!.lenses
+    for (const [index, lens] of lenses.entries())
+      await runCall("es_brainstorm_record", { lens, ideas: [idea(index + 1)], run: "lean" }, "grill")
+    const survivors = (await readIdeas(root, "lean")).filter((item) => !item.duplicateOf)
+    await runCall(
+      "es_brainstorm_score",
+      {
+        scores: survivors.map((item) => ({ id: item.id, novelty: 4, upside: 4, feasibility: 4, fit: 4 })),
+        run: "lean",
+      },
+      "es-brainstorm-critic",
+    )
+    const done = await runCall("es_brainstorm_complete", { run: "lean", allowPartial: true }, "grill")
+    const json = /--- shortlist \(JSON\) ---\n(\{[\s\S]*\})/.exec(done)?.[1]
+    expect(json).toBeDefined()
+    const parsed = JSON.parse(json!) as {
+      run: string
+      shortlist: Array<{ id: string; title: string; lens: string; total: number; outlier: boolean }>
+    }
+    expect(parsed.run).toBe("lean")
+    expect(parsed.shortlist.length).toBeGreaterThan(0)
+    for (const entry of parsed.shortlist) {
+      expect(typeof entry.id).toBe("string")
+      expect(typeof entry.title).toBe("string")
+      expect(typeof entry.lens).toBe("string")
+      expect(typeof entry.total).toBe("number")
+      expect(typeof entry.outlier).toBe("boolean")
+    }
   })
 })

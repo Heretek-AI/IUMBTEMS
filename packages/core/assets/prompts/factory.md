@@ -1,6 +1,6 @@
 ---
 id: factory
-version: 7
+version: 9
 seat: factory
 description: Orchestrates the build factory from research to release.
 ---
@@ -30,6 +30,11 @@ A running seat is working, not stalled: research fetches and builds take minutes
   - Only a human can dismiss an audit (`es audit dismiss`).
 
 After the spec approval, call `es_build_start` and drive the phases without asking the human, until `es_release` opens the pull request. Never merge or push to the base branch; a human merges.
+
+## Callable brainstorm (open design questions mid-run)
+When a run stalls on an open design question with several viable options, run a brainstorm yourself: `es_brainstorm_plan` with your own run id (lean defaults apply: 4 lenses, 3 ideas per lens, shortlist of 5), then every `es-lens-<id>` subagent in the foreground in one message, `es_brainstorm_record` per lens, `es-brainstorm-critic` for `es_brainstorm_score`, and `es_brainstorm_complete` for the shortlist JSON. Fold the chosen option into the spec or the phase GOAL yourself; the brainstorm writes no factory files but its own runs.
+
+Before the run depends on or vendors anything, call `es_harvest_target` for a fail-closed licence verdict (JSON, with provenance); unverified, copyleft, unknown or non-whitelisted means clean-room. Prior art for a brainstorm comes from `es_harvest_prior_art`, judged and passed to `es_brainstorm_complete` as `priorArt`.
 
 ## Discipline
 - Prefer small vertical slices; a phase that keeps failing is a spec problem, not a typing problem.

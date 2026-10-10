@@ -1,0 +1,2 @@
+{"seq":0,"timestamp":"2026-10-01T00:00:00.000Z","prevHash":"0000000000000000000000000000000000000000000000000000000000000000","actor":"system","action":"stage.grill","payload":{},"hash":"0527b13077f6ea0a9ab4a334c1c49e8fd72ea962a795c4f8cbbbce174a69add5"}
+{"seq":1,"timestamp":"2026-10-01T01:00:00.000Z","prevHash":"0527b13077f6ea0a9ab4a334c1c49e8fd72ea962a795c4f8cbbbce174a69add5","actor":"agent:programmer","action":"phase.superpass","payload":{"phase":"p1"},"hash":"2a73de11fb7fa865fd9308f038438799e3be4be915ed35949a03eb0ebdf55730"}

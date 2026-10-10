@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "runId": "run-broken",
+  "stage": "BUILD",
+  "mode": "build",
+  "createdAt": "2026-10-01T00:00:00.000Z",
+  "updatedAt": "2026-10-01T01:00:00.000Z",
+  "spend": {
+    "usd": 0.5,
+    "estimated": false,
+    "events": 3
+  },
+  "phases": [],
+  "audits": []
+}

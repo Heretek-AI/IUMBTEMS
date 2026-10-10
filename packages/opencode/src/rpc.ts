@@ -1,7 +1,9 @@
-// Server side of the TUI previews. Human-only mutations (approve, trust,
-// resume) happen at a terminal with the passphrase-sealed key, never via RPC:
-// the TUI previews, then points at `es approve`, `es trust`, `es factory
-// resume`. Only lspInstall still mutates via a preview token.
+// Server side of the TUI previews. Approvals complete in the TUI process
+// (masked dialog, in-process signing, ADR 0002); trust and resume sign at a
+// terminal with the passphrase-sealed key. The TUI previews, then either
+// signs itself or points at `es trust` / `es factory resume`. No approve,
+// trust or resume call ever crosses RPC: only lspInstall still mutates via
+// a preview token.
 import { randomBytes } from "node:crypto"
 import {
   type ApprovalStage,
@@ -19,6 +21,7 @@ import {
   headline,
   installServer,
   isTrusted,
+  listBrainstormRuns,
   loadGatesConfig,
   readFrontier,
   readIdeas,
@@ -54,14 +57,14 @@ export function createRpcHandlers(
     tickets.set(token, { kind, subject: hashJson(subject), expires: Date.now() + TTL_MS })
     return token
   }
-  const redeem = (token: string, kind: string, subject: unknown) => {
+  const redeemHash = (token: string, kind: string, subjectHash: string) => {
     const ticket = tickets.get(token)
     tickets.delete(token)
     if (!ticket || ticket.kind !== kind || ticket.expires < Date.now())
       throw new Error("The confirmation expired or does not match; preview again.")
-    if (ticket.subject !== hashJson(subject))
-      throw new Error("What you confirmed changed since the preview; preview again.")
+    if (ticket.subject !== subjectHash) throw new Error("What you confirmed changed since the preview; preview again.")
   }
+  const redeem = (token: string, kind: string, subject: unknown) => redeemHash(token, kind, hashJson(subject))
   const refused = (context: any, error: unknown) =>
     context.error("refused", error instanceof Error ? error.message : String(error), {
       reason: error instanceof Error ? error.message : String(error),
@@ -181,14 +184,19 @@ export function createRpcHandlers(
       }
     },
     brainstormState: async () => {
-      const plan = await readPlan(runtime.root).catch(() => undefined)
-      if (!plan) return { active: false }
-      const ideas = await readIdeas(runtime.root).catch(() => [])
-      const scores = await readScores(runtime.root).catch(() => [])
-      const result = await readResult(runtime.root).catch(() => undefined)
+      const runs = await listBrainstormRuns(runtime.root).catch(() => [] as string[])
+      // The panel shows the default run, else the latest; every run stays one CLI call away.
+      const run = runs.includes("default") ? "default" : runs[runs.length - 1]
+      const plan = run ? await readPlan(runtime.root, run).catch(() => undefined) : undefined
+      if (!plan || !run) return { active: false, runs }
+      const ideas = await readIdeas(runtime.root, run).catch(() => [])
+      const scores = await readScores(runtime.root, run).catch(() => [])
+      const result = await readResult(runtime.root, run).catch(() => undefined)
       const survivors = ideas.filter((idea) => !idea.duplicateOf)
       return {
         active: true,
+        run,
+        runs,
         brief: plan.brief.idea,
         lenses: plan.lenses,
         ideas: survivors.length,
@@ -221,6 +229,9 @@ export function createRpcHandlers(
           ],
           problems: [],
           token: issue(`approve:${stage}`, subject.subject),
+          // ADR 0002 I3: the TUI signs only this subject; approveStage refuses a mismatch.
+          subjectHash: hashJson(subject.subject),
+          issuedAt: Date.now(),
         }
       } catch (error) {
         return {
@@ -229,6 +240,23 @@ export function createRpcHandlers(
           lines: [],
           problems: [error instanceof Error ? error.message : String(error)],
         }
+      }
+    },
+    /**
+     * Validate-only redeem of an approval preview ticket (ADR 0002 I3): the
+     * TUI calls this exactly once before signing in-process. It enforces the
+     * 120 s TTL and single-use and checks the subject hash, but signs
+     * nothing — there is still no approve RPC (#49).
+     */
+    redeemApproval: async (input: unknown, context: any) => {
+      const { stage, token, subjectHash } = input as { stage: ApprovalStage; token: unknown; subjectHash: unknown }
+      try {
+        if (typeof token !== "string" || typeof subjectHash !== "string")
+          throw new Error("The confirmation expired or does not match; preview again.")
+        redeemHash(token, `approve:${stage}`, subjectHash)
+        return { ok: true }
+      } catch (error) {
+        return refused(context, error)
       }
     },
     previewTrust: async () => {

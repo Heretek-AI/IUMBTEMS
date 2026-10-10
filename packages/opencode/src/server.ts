@@ -7,10 +7,12 @@ import {
   describeTarget,
   ensureEngineKey,
   factoryLayout,
+  flag,
   formatReport,
   git,
   livenessLines,
   loadSkills,
+  parseArgs,
   parseAuditTarget,
   readJson,
   readLiveness,
@@ -18,7 +20,7 @@ import {
   runGates,
 } from "@heretek-ai/es-core"
 import { Plugin } from "@opencode/plugin"
-import { compileAgents } from "./agents.ts"
+import { compileAgents, modelProblems } from "./agents.ts"
 import { createFactoryContinuation } from "./continue.ts"
 import { createHookBridge } from "./hooks.ts"
 import { createPolicyHooks } from "./policy.ts"
@@ -31,6 +33,19 @@ import { createSessionHooks, createSpendTracker } from "./session.ts"
 import { registerTools } from "./tools.ts"
 
 export const PLUGIN_ID = "epistemic-swarm"
+
+/** `/research deep <question> --max-usd N`, split with the core CLI grammar (no command-local regex). */
+export type DeepResearchArgs = { query: string; ceiling: string } | { error: "usage" | "ceiling" }
+
+export function parseDeepResearchArgs(text: string): DeepResearchArgs {
+  const argv = parseArgs(text.split(/\s+/).filter(Boolean))
+  const [head, ...rest] = argv.positionals
+  const query = rest.join(" ").trim()
+  if (head?.toLowerCase() !== "deep" || query === "") return { error: "usage" }
+  const ceiling = flag(argv, "max-usd")
+  if (ceiling === undefined || !(Number(ceiling) > 0)) return { error: "ceiling" }
+  return { query, ceiling }
+}
 
 export default Plugin.define({
   id: PLUGIN_ID,
@@ -47,6 +62,18 @@ export default Plugin.define({
       () => [] as string[],
     )
     const agents = await compileAgents(runtime.options, servers)
+    // Fail-closed models (#96): every configured ref is checked against the
+    // host model list here, once. A missing model refuses every tool call by
+    // that seat (the policy before-hook) and shows in es_status; healthy
+    // seats are unaffected.
+    await ctx.model.transform((editor) => {
+      for (const problem of modelProblems(
+        runtime.options,
+        agents.map((agent) => agent.spec),
+        (providerID, modelID) => editor.get(providerID, modelID) !== undefined,
+      ))
+        runtime.modelProblems.set(problem.agent, problem)
+    })
     await ctx.agent.transform((editor) => {
       for (const compiled of agents)
         editor.update(compiled.spec.id, (agent) => {
@@ -225,6 +252,59 @@ export default Plugin.define({
             text: prompt.text?.trim()
               ? `Scout: ${prompt.text}`
               : "Ask me for the feature to scout and our license posture, then plan the candidates.",
+            delivery,
+          } as any)
+        },
+      })
+      editor.add({
+        name: "research",
+        description: "Adversarial deep research to a grounded report: thesis, antithesis, synthesis (Epistemic Swarm)",
+        execute: async ({ sessionID, prompt, delivery }) => {
+          const say = async (text: string) => {
+            await ctx.session.synthetic({ sessionID, text } as any)
+          }
+          const text = prompt.text?.trim() ?? ""
+          const parsed = parseDeepResearchArgs(text)
+          if ("error" in parsed && parsed.error === "usage") {
+            return say("Usage: /research deep <question> --max-usd N")
+          }
+          if ("error" in parsed) {
+            return say(
+              "Deep research needs a spend ceiling you set: /research deep <question> --max-usd N. Seats halt when the spend reaches it.",
+            )
+          }
+          const { query, ceiling } = parsed
+          const existing = await runtime.factory.read().catch(() => undefined)
+          if (existing && existing.mode !== "research") {
+            return say(
+              "This project holds a build run. Start deep research in a directory without one (`es research deep <question> --output <dir> --max-usd N` at a terminal).",
+            )
+          }
+          if (existing?.stage === "HALTED") {
+            return say(
+              "This research run is halted; resume it first (`es factory resume` at a terminal, or /es-resume to preview).",
+            )
+          }
+          if (existing?.stage === "DONE") {
+            return say(
+              "This research run is done. For a new question, start one in a fresh directory (`es research deep <question> --output <dir> --max-usd N` at a terminal).",
+            )
+          }
+          if (!existing) {
+            try {
+              // The human typed /research deep: beginning the run is their action.
+              await runtime.factory.beginResearchRun({ objective: query, ceilingUSD: Number(ceiling) }, "human:tui")
+            } catch (error) {
+              return say(`Could not start the research run: ${error instanceof Error ? error.message : String(error)}`)
+            }
+          }
+          await ctx.session.switchAgent({ sessionID, agent: "deep-researcher" } as any)
+          await ctx.session.prompt({
+            ...prompt,
+            sessionID,
+            // The coordinator flow is the deep-researcher seat's system prompt
+            // (single-sourced in core); this only adds the run state.
+            text: `${await runtime.factory.summary()}\nDeep research runs adversarially, with no human answering questions mid-flow; follow your Flow through es_research_complete.`,
             delivery,
           } as any)
         },

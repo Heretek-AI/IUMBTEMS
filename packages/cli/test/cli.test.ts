@@ -7,14 +7,20 @@ import {
   Factory,
   factoryLayout,
   gateRunner,
+  HUMAN_VERBS,
+  loadPrompt,
+  parseArgs,
   readApproval,
+  recentAuditEntries,
   researchSourcesDir,
   SourceCache,
   sealHumanKey,
+  stringifyFrontmatter,
 } from "@heretek-ai/es-core"
-import { parseArgs, parseExpiry } from "../src/args.ts"
+import { parseExpiry } from "../src/args.ts"
 import { type HarnessDriver, type HeadlessEvent, presentEvent, runHeadless } from "../src/headless.ts"
-import { main } from "../src/main.ts"
+import { openProposalsPr } from "../src/improve.ts"
+import { commandHelp, main } from "../src/main.ts"
 import { createMcpServer } from "../src/mcp.ts"
 import { type ConfirmIO, confirmHuman, NotInteractive } from "../src/tty.ts"
 import { VERSION } from "../src/version.ts"
@@ -91,6 +97,62 @@ describe("args", () => {
   })
 })
 
+describe("HELP human-only markers match HUMAN_VERBS (#97)", () => {
+  // Every human-only command line carries an explicit [human, TTY] (or
+  // [human]) marker; section headers do not count. Placeholders (<…>, […],
+  // "…") are not literal sub-verbs and are skipped.
+  const literal = (word: string | undefined): string | undefined =>
+    word !== undefined && /^[A-Za-z][\w.-]*$/.test(word) ? word : undefined
+  const commands = () => {
+    const help = commandHelp("no-such-command")
+    const rows: Array<{ verb: string; sub: string | undefined; marked: boolean; line: string }> = []
+    for (const line of help.split("\n")) {
+      const match = /^ {2}(\S+)(?:\s+(\S+))?/.exec(line)
+      if (!match) continue
+      rows.push({
+        verb: match[1]!,
+        sub: literal(match[2]),
+        marked: /\[human[^\]]*\]/.test(line),
+        line: line.trim(),
+      })
+    }
+    return rows
+  }
+
+  test("every marked verb is human-only, and every human-only verb is marked", () => {
+    const rows = commands()
+    expect(rows.length).toBeGreaterThan(20)
+    const names = new Set(HUMAN_VERBS.map(([name]) => name))
+    for (const row of rows.filter((item) => item.marked)) {
+      expect([row.line, names.has(row.verb)]).toEqual([row.line, true])
+      const [, predicate] = HUMAN_VERBS.find(([name]) => name === row.verb)!
+      if (row.sub !== undefined && predicate !== undefined)
+        expect([row.line, predicate(row.sub)]).toEqual([row.line, true])
+    }
+    // Bare "resume" has no top-level CLI command (only factory resume); the
+    // rule stays as over-approximation for other binaries. Every verb HELP
+    // documents as a command must show a marker.
+    for (const [name] of HUMAN_VERBS)
+      if (name !== "resume" && rows.some((row) => row.verb === name))
+        expect([name, rows.some((row) => row.marked && row.verb === name)]).toEqual([name, true])
+  })
+
+  test("a literal sub-verb the rule calls human-only is never left unmarked", () => {
+    const rows = commands()
+    const unmarked: string[] = []
+    for (const [name, predicate] of HUMAN_VERBS) {
+      if (predicate === undefined) continue
+      const literalSubs = new Set(
+        rows.filter((row) => row.verb === name && row.sub !== undefined).map((row) => row.sub!),
+      )
+      for (const sub of literalSubs)
+        if (predicate(sub) && !rows.some((row) => row.verb === name && row.sub === sub && row.marked))
+          unmarked.push(`${name} ${sub}`)
+    }
+    expect(unmarked).toEqual([])
+  })
+})
+
 describe("--help (#59)", () => {
   test("`es <command> --help` prints that command's usage; any --help value means help", async () => {
     const reseal = await run(["reseal", "--help"])
@@ -157,6 +219,114 @@ describe("human-only confirmation", () => {
     )
     expect(granted.code).toBe(0)
     expect(granted.out).toContain("granted")
+  })
+
+  test("an edit between preview and sign is refused: the CLI signs what it previewed (ADR 0002 I3)", async () => {
+    await mkdir(path.join(root, ".factory/specs/alpha"), { recursive: true })
+    await writeFile(
+      path.join(root, ".factory/roadmap.json"),
+      JSON.stringify({ version: 1, title: "Greeting", phases: [{ id: "alpha", title: "Phase alpha" }] }),
+    )
+    const goal = path.join(root, ".factory/specs/alpha/GOAL.md")
+    await writeFile(
+      goal,
+      stringifyFrontmatter(
+        {
+          phase: "alpha",
+          title: "Phase alpha",
+          acceptance: [{ kind: "file", id: "impl", description: "implementation exists", path: "src/alpha.ts" }],
+        },
+        "Implement alpha.\n",
+      ),
+    )
+    // A seat edits GOAL.md while the human types the passphrase: the sign
+    // must refuse instead of signing the edit.
+    const output: string[] = []
+    const io: ConfirmIO = {
+      interactive: true,
+      write: (text) => output.push(text),
+      readLine: async () => "",
+      readSecret: async () => {
+        await writeFile(goal, `${await readFile(goal, "utf8")}\n<!-- seat edit -->\n`)
+        return PASSPHRASE
+      },
+    }
+    const result = await run(["approve", "spec"], io)
+    expect(result.code).not.toBe(0)
+    expect(result.out).toContain("What was previewed changed")
+    expect(await readApproval(root, "spec")).toBeUndefined()
+  })
+
+  test("a preview older than 120 s is refused (ADR 0002 I3 TTL)", async () => {
+    await grilledFrontier()
+    const realNow = Date.now
+    let now = 1_700_000_000_000
+    Date.now = () => now
+    try {
+      const io = human()
+      io.readSecret = async () => {
+        now += 121_000
+        return PASSPHRASE
+      }
+      const result = await run(["approve", "frontier"], io)
+      expect(result.code).toBe(1)
+      expect(result.out).toMatch(/expired|again/)
+      expect(await readApproval(root, "frontier")).toBeUndefined()
+    } finally {
+      Date.now = realNow
+    }
+  })
+
+  test("five wrong passphrases lock out the sixth without prompting, audited with channel cli (#143)", async () => {
+    const output: string[] = []
+    let reads = 0
+    const io: ConfirmIO = {
+      interactive: true,
+      write: (text) => output.push(text),
+      readLine: async () => "",
+      readSecret: async () => {
+        reads++
+        return "wrong-passphrase"
+      },
+    }
+    const confirm = () => confirmHuman(io, "Approve spec as tester", [], { stateDir: state, root, stage: "spec" })
+    for (let i = 0; i < 5; i++) expect(await confirm()).toBeUndefined()
+    expect(reads).toBe(5)
+    expect(await confirm()).toBeUndefined()
+    expect(reads).toBe(5)
+    expect(output.join("")).toMatch(/Try again in \d+s/)
+    const lockout = (await recentAuditEntries(root, 10)).find((entry) => entry.action === "approval.lockout")
+    expect(lockout?.payload).toMatchObject({ stage: "spec", channel: "cli" })
+  })
+
+  test("a correct passphrase resets the attempt count", async () => {
+    const output: string[] = []
+    let answer = "wrong-passphrase"
+    const io: ConfirmIO = {
+      interactive: true,
+      write: (text) => output.push(text),
+      readLine: async () => "",
+      readSecret: async () => answer,
+    }
+    const confirm = () => confirmHuman(io, "Approve spec as tester", [], { stateDir: state, root, stage: "spec" })
+    expect(await confirm()).toBeUndefined()
+    expect(await confirm()).toBeUndefined()
+    answer = PASSPHRASE
+    expect(await confirm()).toBeDefined()
+    // The count reset: five more wrongs are needed before the next lockout.
+    answer = "wrong-passphrase"
+    let reads = 0
+    const counting: ConfirmIO = {
+      ...io,
+      readSecret: async () => {
+        reads++
+        return answer
+      },
+    }
+    const confirmCounting = () =>
+      confirmHuman(counting, "Approve spec as tester", [], { stateDir: state, root, stage: "spec" })
+    for (let i = 0; i < 5; i++) expect(await confirmCounting()).toBeUndefined()
+    expect(reads).toBe(5)
   })
 })
 
@@ -255,6 +425,132 @@ describe("research brief and retractions", () => {
     expect(recorded.code).toBe(0)
     expect(recorded.out).toContain("1 claim(s) citing")
     expect((await ClaimStore.load(root)).citing(source).map((claim) => claim.status)).toEqual(["STALE"])
+  })
+
+  test("render is agent-safe: md and html to stdout or a file", async () => {
+    const source = await researched()
+    expect((await run(["research", "render", "--format", "bogus"])).code).toBe(2)
+    const md = await run(["research", "render", "--format", "md"])
+    expect(md.code).toBe(0)
+    expect(md.out).toContain("# Research dossier: cli")
+    expect(md.out).toContain("Briefs are signed.")
+    expect(md.out).toContain(source.slice(0, 12))
+    const html = await run(["research", "render", "--format", "html", "--out", "dossier.html"])
+    expect(html.code).toBe(0)
+    expect(html.out).toContain("Rendered dossier.html (html,")
+    const file = await Bun.file(path.join(root, "dossier.html")).text()
+    expect(file).toContain("<!doctype html>")
+    expect(file).not.toContain("<script")
+    expect((await run(["research", "render"])).code).toBe(0)
+  })
+})
+
+describe("es research deep (headless deep research)", () => {
+  test("usage without side effects; a ceiling needs a terminal", async () => {
+    expect((await run(["research", "deep", "--help"])).code).toBe(0)
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
+    const bare = await run(["research", "deep"])
+    expect([bare.code, bare.out]).toEqual([2, expect.stringContaining("--max-usd N")])
+    const noCeiling = await run(["research", "deep", "what queue", "--output", "out"])
+    expect([noCeiling.code, noCeiling.out]).toEqual([2, expect.stringContaining("--max-usd")])
+    const badModel = await run([
+      "research",
+      "deep",
+      "what queue",
+      "--output",
+      "out",
+      "--max-usd",
+      "5",
+      "--model",
+      "nope",
+    ])
+    expect([badModel.code, badModel.out]).toEqual([2, expect.stringContaining("provider/model")])
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
+    const { DRIVERS } = await import("../src/headless.ts")
+    DRIVERS.fake = {
+      id: "fake",
+      available: async () => true,
+      async *turn(_input: unknown) {
+        yield { text: "unused" }
+        return "ses_fake"
+      },
+    }
+    try {
+      // No TTY: the ceiling confirmation refuses before anything is created.
+      // The fake driver pins the driver check, so this reads the same with
+      // or without a harness binary installed.
+      expect(
+        (await run(["research", "deep", "what queue", "--output", "out", "--max-usd", "5", "--driver", "fake"])).code,
+      ).toBe(3)
+      expect(await exists(path.join(root, "out", ".factory"))).toBe(false)
+    } finally {
+      delete DRIVERS.fake
+    }
+  })
+
+  test("a fake driver plays the coordinator flow to DONE", async () => {
+    const { DRIVERS } = await import("../src/headless.ts")
+    const { Factory, gateRunner, researchTools } = await import("@heretek-ai/es-core")
+    const out = path.join(root, "out")
+    const stubFetch = (async () =>
+      new Response("<p>Queues decouple workers from producers durably.</p>", {
+        headers: { "content-type": "text/html" },
+      })) as unknown as typeof fetch
+    const prompts: string[] = []
+    DRIVERS.fake = {
+      id: "fake",
+      available: async () => true,
+      async *turn({ prompt }: { prompt: string }) {
+        yield { text: "working" }
+        prompts.push(prompt)
+        // Alpha gathers, beta finds nothing, the synthesizer resolves, the
+        // coordinator completes — through the real tools and the real gate.
+        const tools = researchTools({
+          root: out,
+          fetch: stubFetch,
+          stateDir: state,
+          policy: async () => ({ root: out }),
+        })
+        const fetched = await tools
+          .find((tool) => tool.name === "es_research_fetch")!
+          .execute({ url: "https://192.0.2.1/queues" }, { agent: "es-research-alpha" })
+        const sha = /sha256:([0-9a-f]{64})/.exec(fetched)?.[1]
+        await writeFile(
+          path.join(out, ".factory/research/alpha.md"),
+          `# Alpha\n\n- Queues decouple workers [VERIFIED: sha256:${sha} "decouple workers from producers"]\n`,
+        )
+        await writeFile(
+          path.join(out, ".factory/research/beta.md"),
+          "# Beta\n\n- No counter-evidence cached [NEGATIVE_KNOWLEDGE: searched for queue outages]\n",
+        )
+        await writeFile(
+          path.join(out, ".factory/research/REPORT.md"),
+          `# Report\n\n- Queues decouple workers [VERIFIED: sha256:${sha} "decouple workers from producers"]\n`,
+        )
+        await new Factory(out, { gates: gateRunner({ stateDir: state }), stateDir: state }).completeResearch(
+          "deep-researcher",
+        )
+        return "ses_fake"
+      },
+    }
+    try {
+      const driven = await run(
+        ["research", "deep", "what queue", "--output", "out", "--max-usd", "5", "--driver", "fake"],
+        human(),
+      )
+      expect(driven.code).toBe(0)
+      expect(driven.out).toContain("Research run run-")
+      expect(driven.out).toContain("Research complete: out/.factory/research/REPORT.md")
+      expect(prompts[0]).toContain("Deep research: what queue")
+      // The flow is the deep-researcher seat's system prompt (opencode/src/agents.ts);
+      // the message carries only the run, the question and the headless note.
+      expect(prompts[0]).toContain("headless run")
+      expect(prompts[0]).not.toContain((await loadPrompt("deep-researcher")).body.trim())
+      const done = await new Factory(out, { gates: gateRunner({ stateDir: state }), stateDir: state }).read()
+      expect(done).toMatchObject({ mode: "research", stage: "DONE" })
+    } finally {
+      delete DRIVERS.fake
+    }
   })
 })
 
@@ -419,6 +715,263 @@ describe("gates and audit", () => {
   })
 })
 
+describe("es improve harvest (#135)", () => {
+  const improveFixtures = path.join(import.meta.dir, "..", "..", "core", "test", "fixtures", "improve")
+
+  test("harvests fixture runs and evals to --out without touching them", async () => {
+    const out = path.join(root, "telemetry.json")
+    const result = await run([
+      "improve",
+      "harvest",
+      "--runs",
+      `${path.join(improveFixtures, "run-clean")},${path.join(improveFixtures, "run-replan")}`,
+      "--evals",
+      path.join(improveFixtures, "evals"),
+      "--out",
+      out,
+    ])
+    expect(result.code).toBe(0)
+    expect(result.out).toContain("2 run(s) and 2 eval(s)")
+    const parsed = JSON.parse(await readFile(out, "utf8"))
+    expect(parsed.version).toBe(2)
+    expect(parsed.runs.map((run: { id: string }) => run.id)).toEqual(["run-clean", "run-replan"])
+    expect(parsed.evals.map((item: { case: string }) => item.case)).toEqual(["grill", "programmer"])
+  })
+
+  test("needs at least one input dir", async () => {
+    const result = await run(["improve", "harvest", "--out", "telemetry.json"])
+    expect(result.code).toBe(2)
+    expect(result.out).toContain("Usage: es improve harvest")
+  })
+
+  test("unknown sub-verbs print usage", async () => {
+    const result = await run(["improve", "frobnicate"])
+    expect(result.code).toBe(2)
+    expect(result.out).toContain("Usage: es improve harvest")
+  })
+})
+
+describe("es improve distill (#136)", () => {
+  const improveFixtures = path.join(import.meta.dir, "..", "..", "core", "test", "fixtures", "improve")
+
+  async function telemetryFile(): Promise<string> {
+    const out = path.join(root, "telemetry.json")
+    const harvested = await run([
+      "improve",
+      "harvest",
+      "--runs",
+      `${path.join(improveFixtures, "run-clean")},${path.join(improveFixtures, "run-replan")}`,
+      "--evals",
+      path.join(improveFixtures, "evals"),
+      "--out",
+      out,
+    ])
+    expect(harvested.code).toBe(0)
+    return out
+  }
+
+  test("distills all three kinds from fixture telemetry at low thresholds; nothing applied", async () => {
+    const telemetry = await telemetryFile()
+    const out = path.join(root, "proposals")
+    const result = await run([
+      "improve",
+      "distill",
+      "--telemetry",
+      telemetry,
+      "--out",
+      out,
+      "--min-occurrences",
+      "1",
+      "--min-runs",
+      "1",
+    ])
+    expect(result.code).toBe(0)
+    expect(result.out).toContain("Nothing was applied")
+    expect(result.out).toContain("prompt-guidance")
+    expect(result.out).toContain("gate-tuning")
+    expect(result.out).toContain("domain-pack")
+  })
+
+  test("default thresholds stay silent on single occurrences", async () => {
+    const telemetry = await telemetryFile()
+    const result = await run(["improve", "distill", "--telemetry", telemetry, "--out", path.join(root, "p")])
+    expect(result.code).toBe(0)
+    expect(result.out).toContain("0 proposal(s)")
+  })
+
+  test("invalid telemetry and bad thresholds fail cleanly", async () => {
+    const bad = path.join(root, "bad.json")
+    await writeFile(bad, JSON.stringify({ version: 999 }))
+    const invalid = await run(["improve", "distill", "--telemetry", bad, "--out", path.join(root, "p")])
+    expect(invalid.code).toBe(1)
+    expect(invalid.out).toContain("Invalid telemetry")
+    const telemetry = await telemetryFile()
+    const thresholds = await run([
+      "improve",
+      "distill",
+      "--telemetry",
+      telemetry,
+      "--out",
+      path.join(root, "p"),
+      "--min-occurrences",
+      "0",
+    ])
+    expect(thresholds.code).toBe(2)
+    expect(thresholds.out).toContain("Bad --min-occurrences")
+    const missing = await run(["improve", "distill", "--out", path.join(root, "p")])
+    expect(missing.code).toBe(2)
+    expect(missing.out).toContain("Usage: es improve distill")
+  })
+
+  test("--open-pr without a terminal refuses (human-run)", async () => {
+    const telemetry = await telemetryFile()
+    const result = await run([
+      "improve",
+      "distill",
+      "--telemetry",
+      telemetry,
+      "--out",
+      path.join(root, "p"),
+      "--open-pr",
+    ])
+    expect(result.code).toBe(3)
+  })
+
+  test("--open-pr stages only proposals, pushes the topic branch, and drafts against the base", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "es-open-pr-"))
+    const bare = await mkdtemp(path.join(tmpdir(), "es-open-pr-bare-"))
+    const seen: string[][] = []
+    try {
+      const sh = async (args: string[], cwd: string = repo) => {
+        const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" })
+        await proc.exited
+      }
+      await sh(["init", "-q", "-b", "rewrite"], bare)
+      await sh(["init", "-q", "-b", "rewrite"])
+      await sh(["config", "user.email", "t@t"])
+      await sh(["config", "user.name", "t"])
+      await sh(["remote", "add", "origin", bare])
+      await writeFile(path.join(repo, "base.txt"), "base\n")
+      await sh(["add", "base.txt"])
+      await sh(["commit", "-q", "-m", "init"])
+      const proposalDir = path.join(repo, "proposals", "p1")
+      await mkdir(proposalDir, { recursive: true })
+      await writeFile(path.join(proposalDir, "proposal.json"), "{}\n")
+      await writeFile(path.join(repo, "unrelated.txt"), "do not stage me\n")
+      const stub = async (argv: readonly string[]) => {
+        seen.push([...argv])
+        if (argv[1] === "auth") return { code: 0, stdout: "ok", stderr: "" }
+        return { code: 0, stdout: "https://example.test/pr/1\n", stderr: "" }
+      }
+      const { branch, url, staged } = await openProposalsPr(repo, [proposalDir], { run: stub, date: "2026-10-09" })
+      expect(branch).toBe("improve/20261009")
+      expect(url).toBe("https://example.test/pr/1")
+      expect(staged).toEqual([proposalDir])
+      const prCall = seen.find((argv) => argv[1] === "pr")!
+      expect(prCall).toContain("--draft")
+      expect(prCall).toContain("improve/20261009")
+      expect(prCall.slice(prCall.indexOf("--base") + 1, prCall.indexOf("--base") + 2)).toEqual(["rewrite"])
+      // Only the proposal files were committed; the unrelated file stays dirty.
+      const show = Bun.spawn(["git", "show", "--name-only", "--format=", "HEAD"], { cwd: repo, stdout: "pipe" })
+      const names = (await new Response(show.stdout).text()).split("\n").filter(Boolean)
+      expect(names).toEqual(["proposals/p1/proposal.json"])
+      const status = Bun.spawn(["git", "status", "--short"], { cwd: repo, stdout: "pipe" })
+      expect(await new Response(status.stdout).text()).toContain("unrelated.txt")
+    } finally {
+      await rm(repo, { recursive: true, force: true })
+      await rm(bare, { recursive: true, force: true })
+    }
+  })
+
+  test("--open-pr without gh auth fails cleanly", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "es-open-pr-"))
+    try {
+      const proc = Bun.spawn(["git", "init", "-q", "-b", "rewrite"], { cwd: repo, stdout: "pipe" })
+      await proc.exited
+      await expect(
+        openProposalsPr(repo, [path.join(repo, "p")], {
+          run: async () => ({ code: 1, stdout: "", stderr: "no auth" }),
+        }),
+      ).rejects.toThrow("gh is not authenticated")
+    } finally {
+      await rm(repo, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("es factory init --preset self-dogfood (#137)", () => {
+  const realPath = process.env.PATH
+
+  async function stubGh(): Promise<string> {
+    const bin = await mkdtemp(path.join(tmpdir(), "es-gh-"))
+    await writeFile(path.join(bin, "gh"), `#!/bin/sh\necho '{"title":"Stub issue","body":"Stub body."}'\n`, {
+      mode: 0o755,
+    })
+    process.env.PATH = `${bin}:${realPath}`
+    return bin
+  }
+
+  afterEach(async () => {
+    process.env.PATH = realPath
+  })
+
+  test("usage errors write nothing", async () => {
+    for (const argv of [
+      ["factory", "init"],
+      ["factory", "init", "--preset", "nope", "--issue", "137"],
+      ["factory", "init", "--preset", "self-dogfood", "--issue", "0"],
+    ]) {
+      const result = await run(argv)
+      expect(result.code).toBe(2)
+      expect(result.out).toContain("Usage: es factory init")
+    }
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
+  })
+
+  test("without a terminal it refuses before writing (human-only)", async () => {
+    const bin = await stubGh()
+    try {
+      const result = await run(["factory", "init", "--preset", "self-dogfood", "--issue", "137"])
+      expect(result.code).toBe(3)
+      expect(await exists(factoryLayout(root).dir)).toBe(false)
+    } finally {
+      await rm(bin, { recursive: true, force: true })
+    }
+  })
+
+  test("a wrong passphrase cancels with nothing written", async () => {
+    const bin = await stubGh()
+    try {
+      const result = await run(["factory", "init", "--preset", "self-dogfood", "--issue", "137"], human("nope"))
+      expect(result.code).toBe(1)
+      expect(await exists(factoryLayout(root).dir)).toBe(false)
+    } finally {
+      await rm(bin, { recursive: true, force: true })
+    }
+  })
+
+  test("at a terminal it seeds the run and reminds about trust, ceiling and approvals", async () => {
+    const bin = await stubGh()
+    try {
+      const result = await run(["factory", "init", "--preset", "self-dogfood", "--issue", "137"], human())
+      expect(result.code).toBe(0)
+      expect(result.out).toContain(".factory/roadmap.json")
+      expect(result.out).toContain("es trust")
+      expect(result.out).toContain("$15")
+      expect(result.out).toContain("rewrite")
+      const roadmap = JSON.parse(await readFile(factoryLayout(root).roadmap, "utf8"))
+      expect(roadmap.baseBranch).toBe("rewrite")
+      expect(await readFile(path.join(root, ".factory/notes/idea-137.md"), "utf8")).toContain("Stub issue")
+      const entries = await recentAuditEntries(root, 5)
+      const seeded = entries.find((entry) => entry.action === "factory.preset")!
+      expect(seeded.actor).toMatch(/^human:.+/)
+      expect(seeded.actor).not.toBe("human:unknown")
+    } finally {
+      await rm(bin, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("mcp", () => {
   test("lists coarse tools without any human-only tool and calls them with an advisory agent", async () => {
     const server = createMcpServer({ root, stateDir: state })
@@ -468,6 +1021,28 @@ describe("mcp", () => {
       .map((line) => JSON.parse(line))
     expect(lines.map((line) => line.id)).toEqual([1, 2])
     expect(lines[0].result.serverInfo.name).toBe("epistemic-swarm")
+  })
+
+  test("H1: a piped agent argument cannot claim a seat; identity is pinned to the adapter environment", async () => {
+    const call = (server: ReturnType<typeof createMcpServer>, args: Record<string, unknown>) =>
+      server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "complete", arguments: args } })
+    // No adapter identity: the caller is "mcp", which holds no seat, so even
+    // agent:"factory" is refused as mcp at the tool's own seat check.
+    const bare = createMcpServer({ root, stateDir: state, env: {} })
+    const spoofed = await call(bare, { agent: "factory" })
+    expect(spoofed?.result.isError).toBe(true)
+    expect(spoofed?.result.content[0].text).toContain("called by mcp")
+    // The adapter pins one identity per server in its environment: that identity
+    // reaches the tool (here refused as factory at the programmer-only check).
+    const pinned = createMcpServer({ root, stateDir: state, env: { ES_MCP_AGENT: "factory" } })
+    const admitted = await call(pinned, {})
+    expect(admitted?.result.isError).toBe(true)
+    expect(admitted?.result.content[0].text).toContain("called by factory")
+    // The per-call argument is ignored: claiming factory under a QA pin stays refused as QA.
+    const qaPinned = createMcpServer({ root, stateDir: state, env: { ES_MCP_AGENT: "es-qa-functional" } })
+    const ignored = await call(qaPinned, { agent: "factory" })
+    expect(ignored?.result.isError).toBe(true)
+    expect(ignored?.result.content[0].text).toContain("called by es-qa-functional")
   })
 })
 
@@ -904,5 +1479,223 @@ describe("status and runs (1.1.3)", () => {
     expect((await run(["runs", "--all"])).out).toContain("No indexed runs")
     const begun = await begin()
     expect(JSON.parse((await run(["runs", "--json"])).out)[0].runId).toBe(begun.runId)
+  })
+})
+
+describe("headless fleet (#120)", () => {
+  const toolDriver = (onTurn?: () => Promise<void>): HarnessDriver => ({
+    id: "fake",
+    available: async () => true,
+    async *turn() {
+      yield { type: "tool_use", part: { tool: "read", state: { status: "completed", input: { path: "src/a.ts" } } } }
+      yield { type: "tool_use", part: { tool: "edit", state: { status: "failed", input: {}, error: "nope" } } }
+      yield { type: "text", part: { text: "working" } }
+      await onTurn?.()
+      return "ses_fake"
+    },
+  })
+
+  test("the JSONL stream is versioned and schema-validated for every event kind", async () => {
+    const { HeadlessJsonlSchema, toJsonl } = await import("../src/headless.ts")
+    const samples: HeadlessEvent[] = [
+      { type: "start", runId: "run-1", stage: "RESEARCH", driver: "fake", monitor: "m" },
+      { type: "turn", n: 1, stage: "RESEARCH" },
+      { type: "driver", event: { text: "x" } },
+      { type: "progress", headline: "h", seats: [] },
+      { type: "turn-metrics", turn: 1, costUSD: 0, tools: [] },
+      { type: "waiting", reason: "r" },
+      { type: "halted", reason: "r" },
+      { type: "stalled", turns: 3, headline: "h", seats: [] },
+      { type: "turn-cap", turns: 4 },
+      { type: "cancelled", reason: "r" },
+      { type: "done" },
+      { type: "error", message: "m" },
+    ]
+    for (const event of samples) {
+      const envelope = toJsonl("run-1", event)
+      expect(envelope.v).toBe(1)
+      expect(envelope.kind).toBe(event.type)
+      expect(HeadlessJsonlSchema.safeParse(envelope).success).toBe(true)
+    }
+    expect(
+      HeadlessJsonlSchema.safeParse({ v: 2, at: new Date().toISOString(), runId: "r", kind: "x", event: {} }).success,
+    ).toBe(false)
+  })
+
+  test("each turn emits turn-metrics with tool activity and the sealed spend delta", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+    let n = 0
+    const events: HeadlessEvent[] = []
+    for await (const event of runHeadless({
+      root,
+      driver: toolDriver(async () => {
+        n++
+        if (n === 1) await factory.recordSpend(0.05, false)
+      }),
+      maxTurns: 2,
+      stallTurns: 99,
+      stateDir: state,
+      progressMs: 60_000,
+    }))
+      events.push(event)
+    const metrics = events.filter((event) => event.type === "turn-metrics")
+    expect(metrics).toHaveLength(2)
+    expect(metrics[0]).toMatchObject({
+      type: "turn-metrics",
+      turn: 1,
+      tools: [
+        { name: "read", ok: true },
+        { name: "edit", ok: false },
+      ],
+    })
+    expect((metrics[0] as any).costUSD).toBeCloseTo(0.05, 5)
+    expect(metrics[1]).toMatchObject({ type: "turn-metrics", turn: 2, costUSD: 0 })
+  })
+
+  test("an aborted run emits cancelled, writes no halt, and resumes", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const hanging: HarnessDriver = {
+      id: "hang",
+      available: async () => true,
+      async *turn() {
+        // A handle-free hang: no timer, so abandoning the turn ends the test.
+        await new Promise<never>(() => {})
+        yield { text: "never" }
+        return undefined
+      },
+    }
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 100)
+    const events: HeadlessEvent[] = []
+    for await (const event of runHeadless({
+      root,
+      driver: hanging,
+      maxTurns: 5,
+      stateDir: state,
+      signal: controller.signal,
+      progressMs: 60_000,
+    }))
+      events.push(event)
+    expect(events.at(-1)).toMatchObject({ type: "cancelled" })
+    expect(events.some((event) => event.type === "error")).toBe(false)
+    // No halt written, no STOP file: the run is resumable.
+    const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+    expect((await factory.read())?.stage).toBe("RESEARCH")
+    expect(await exists(factoryLayout(root).stop)).toBe(false)
+    const resumed: HeadlessEvent[] = []
+    for await (const event of runHeadless({
+      root,
+      driver: toolDriver(),
+      maxTurns: 1,
+      stallTurns: 99,
+      stateDir: state,
+      progressMs: 60_000,
+    }))
+      resumed.push(event)
+    expect(resumed[0]).toMatchObject({ type: "start" })
+  })
+
+  test("a turn past --turn-timeout ends as a turn-timeout error", async () => {
+    await grilledFrontier()
+    await run(["approve", "frontier"], human())
+    const hanging: HarnessDriver = {
+      id: "hang",
+      available: async () => true,
+      async *turn() {
+        // A handle-free hang: no timer, so abandoning the turn ends the test.
+        await new Promise<never>(() => {})
+        yield { text: "never" }
+        return undefined
+      },
+    }
+    const events: HeadlessEvent[] = []
+    for await (const event of runHeadless({
+      root,
+      driver: hanging,
+      maxTurns: 5,
+      stateDir: state,
+      turnTimeoutMs: 120,
+      progressMs: 60_000,
+    }))
+      events.push(event)
+    expect(events.at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("turn-timeout") })
+  })
+
+  test("headless exit codes: cancelled is 130, failures stay 1, the rest 0", async () => {
+    const { headlessExitCode } = await import("../src/headless.ts")
+    expect(headlessExitCode("cancelled")).toBe(130)
+    for (const type of ["error", "halted", "stalled", "turn-cap"] as const) expect(headlessExitCode(type)).toBe(1)
+    for (const type of ["start", "turn", "driver", "progress", "turn-metrics", "waiting", "done"] as const)
+      expect(headlessExitCode(type)).toBe(0)
+  })
+
+  test("--cwd refuses seat worktrees of active runs and detached HEADs", async () => {
+    const { checkCwd } = await import("../src/headless.ts")
+    // A plain project root is fine (and so is a non-repo dir).
+    expect(await checkCwd(root)).toBeUndefined()
+    // Inside another active run's .factory/worktrees: refused.
+    const proj = await mkdtemp(path.join(tmpdir(), "es-cwd-proj-"))
+    try {
+      await mkdir(path.join(proj, ".factory", "worktrees", "seat-1"), { recursive: true })
+      await mkdir(path.join(proj, ".factory", "runtime"), { recursive: true })
+      await writeFile(path.join(proj, ".factory", "runtime", "state.json"), "{}")
+      const refusal = await checkCwd(path.join(proj, ".factory", "worktrees", "seat-1"))
+      expect(refusal).toContain(".factory/worktrees")
+      // Without a run state it is not an active run: allowed.
+      await rm(path.join(proj, ".factory", "runtime", "state.json"))
+      expect(await checkCwd(path.join(proj, ".factory", "worktrees", "seat-1"))).toBeUndefined()
+    } finally {
+      await rm(proj, { recursive: true, force: true })
+    }
+    // A detached-HEAD worktree is refused; attached is fine.
+    const wt = await mkdtemp(path.join(tmpdir(), "es-cwd-wt-"))
+    try {
+      const proc = Bun.spawn(["git", "worktree", "add", "--detach", wt], { cwd: root, stdout: "pipe", stderr: "pipe" })
+      await proc.exited
+      expect(await checkCwd(wt)).toContain("branch")
+      const proc2 = Bun.spawn(["git", "-C", wt, "checkout", "-q", "-b", "wt-branch"], {
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      await proc2.exited
+      expect(await checkCwd(wt)).toBeUndefined()
+    } finally {
+      const proc = Bun.spawn(["git", "worktree", "remove", "--force", wt], {
+        cwd: root,
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      await proc.exited
+      await rm(wt, { recursive: true, force: true })
+    }
+  })
+
+  test("--events jsonl prints one envelope per line; --events-file redirects it", async () => {
+    const { HeadlessJsonlSchema } = await import("../src/headless.ts")
+    // No run here: a single error envelope on stdout.
+    const streamed = await run(["factory", "run", "--headless", "--events", "jsonl"])
+    expect(streamed.code).toBe(1)
+    const lines = streamed.out.split("\n").filter((line) => line.trim())
+    expect(lines).toHaveLength(1)
+    const parsed = HeadlessJsonlSchema.safeParse(JSON.parse(lines[0]!))
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.kind).toBe("error")
+    expect(await run(["factory", "run", "--headless", "--events", "yaml"])).toMatchObject({ code: 2 })
+    // --events-file: the envelope goes to the file, stdout keeps human lines.
+    const file = path.join(root, "events.jsonl")
+    const filed = await run(["factory", "run", "--headless", "--events", "jsonl", "--events-file", file])
+    expect(filed.code).toBe(1)
+    expect(filed.out.trim()).not.toStartWith("{")
+    const saved = (await readFile(file, "utf8")).split("\n").filter((line) => line.trim())
+    expect(saved).toHaveLength(1)
+    expect(HeadlessJsonlSchema.safeParse(JSON.parse(saved[0]!)).success).toBe(true)
+  })
+
+  test("--turn-timeout validates its value before anything runs", async () => {
+    expect((await run(["factory", "run", "--headless", "--turn-timeout", "soon"])).code).toBe(2)
+    expect((await run(["factory", "run", "--headless", "--turn-timeout", "0"])).code).toBe(2)
   })
 })

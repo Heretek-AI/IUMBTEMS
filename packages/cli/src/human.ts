@@ -2,9 +2,12 @@
 // what will be signed, then requires the human passphrase at a TTY.
 import { userInfo } from "node:os"
 import {
+  ApprovalError,
   type ApprovalStage,
+  type Args,
   applyConfigSet,
   approvalSubject,
+  approveStage,
   ClaimStore,
   ConfigError,
   type ConfigSetPlan,
@@ -12,27 +15,28 @@ import {
   engineKeyPath,
   engineSignedFiles,
   Factory,
-  factoryLayout,
+  flag,
   gateRunner,
   HookEngine,
+  hashJson,
+  initFromPreset,
   isTrusted,
   loadGatesConfig,
   planConfigSet,
-  readJson,
   rebaseline,
-  recordApproval,
   recordRetraction,
   recordWaiver,
-  researchSourcesDir,
-  SourceCache,
+  researchCache,
+  run,
+  SELF_DOGFOOD_BASE_BRANCH,
+  SELF_DOGFOOD_SPEND_CEILING_USD,
   signEngineFile,
   stateDir,
   trustProject,
   verifyControl,
   verifyEngineFile,
-  writeJson,
 } from "@heretek-ai/es-core"
-import { type Args, flag, parseExpiry } from "./args.ts"
+import { parseExpiry } from "./args.ts"
 import { type ConfirmIO, confirmHuman } from "./tty.ts"
 
 export interface HumanContext {
@@ -49,6 +53,17 @@ const factoryFor = (context: HumanContext) =>
     ...(context.stateDir ? { stateDir: context.stateDir } : {}),
   })
 
+/** ADR 0002 I3: a preview older than this is refused instead of signed. */
+export const APPROVAL_PREVIEW_TTL_MS = 120_000
+
+/** Attempt limiting for one human confirm (ADR 0002 I4, per state dir, shared with the TUI). */
+const confirmOptions = (context: HumanContext, stage: string) => ({
+  ...(context.stateDir ? { stateDir: context.stateDir } : {}),
+  root: context.root,
+  stage,
+  channel: "cli",
+})
+
 export async function approve(context: HumanContext, args: Args): Promise<number> {
   const stage = args.positionals[0] as ApprovalStage | undefined
   if (stage !== "frontier" && stage !== "spec") {
@@ -56,31 +71,43 @@ export async function approve(context: HumanContext, args: Args): Promise<number
     return 2
   }
   const subject = await approvalSubject(context.root, stage)
+  // ADR 0002 I3: bind the sign to what was previewed. The hash and the
+  // preview time are captured before the passphrase prompt; approveStage
+  // re-derives the subject and refuses a mismatch, and a stale preview is
+  // refused before anything is signed.
+  const expectedSubjectHash = hashJson(subject.subject)
+  const previewedAt = Date.now()
   const lines = [...subject.summary, "", ...subject.subject.map((item) => `${item.sha256.slice(0, 12)}  ${item.path}`)]
-  const signer = await confirmHuman(context.io, `Approve ${stage} as ${user()}`, lines, context.stateDir)
+  const signer = await confirmHuman(context.io, `Approve ${stage} as ${user()}`, lines, confirmOptions(context, stage))
   if (!signer) {
     context.print("Cancelled; nothing was approved.")
     return 1
   }
-  const record = await recordApproval(context.root, {
-    stage,
-    channel: "cli",
-    signer,
-    ...(context.stateDir ? { stateDir: context.stateDir } : {}),
-  })
-  const pending =
-    (await readJson<Array<{ stage: string }>>(factoryLayout(context.root).pending).catch(() => undefined)) ?? []
-  await writeJson(
-    factoryLayout(context.root).pending,
-    pending.filter((item) => item.stage !== stage),
-  )
-  if (stage === "frontier") {
-    const factory = factoryFor(context)
-    if (!(await factory.read())) await factory.begin(`human:${record.approvedBy}`)
-    if ((await factory.read())?.stage === "GRILL") await factory.beginResearch(`human:${record.approvedBy}`)
+  try {
+    if (Date.now() - previewedAt > APPROVAL_PREVIEW_TTL_MS) {
+      context.print(`The ${stage} preview expired (over 120 s old); run \`es approve ${stage}\` again.`)
+      return 1
+    }
+    // One code path for every surface (#117): the service records, clears
+    // pending and (for frontier) begins research under its own locks.
+    const { record, alreadyApproved } = await approveStage(context.root, {
+      stage,
+      channel: "cli",
+      signer,
+      expectedSubjectHash,
+      ...(context.stateDir ? { stateDir: context.stateDir } : {}),
+    })
+    context.print(
+      `${alreadyApproved ? "Already approved" : "Approved"} ${stage} (${record.subject.length} artifact(s)) as ${record.approvedBy}.`,
+    )
+    return 0
+  } catch (error) {
+    if (!(error instanceof ApprovalError)) throw error
+    context.print(`What was previewed changed; run \`es approve ${stage}\` again.`)
+    return 1
+  } finally {
+    signer.destroy()
   }
-  context.print(`Approved ${stage} (${record.subject.length} artifact(s)) as ${record.approvedBy}.`)
-  return 0
 }
 
 export async function trust(context: HumanContext, args: Args): Promise<number> {
@@ -113,7 +140,7 @@ export async function trust(context: HumanContext, args: Args): Promise<number> 
     context.io,
     "Trust these gate commands and project hooks (they run project code)",
     lines,
-    context.stateDir,
+    confirmOptions(context, "trust"),
   )
   if (!signer) {
     context.print("Cancelled.")
@@ -141,7 +168,7 @@ export async function rebaselineControl(context: HumanContext): Promise<number> 
       context.io,
       `Accept these control-file changes as ${user()}`,
       [...check.violations],
-      context.stateDir,
+      confirmOptions(context, "rebaseline"),
     ))
   ) {
     context.print("Cancelled; the baseline is unchanged.")
@@ -202,7 +229,7 @@ export async function reseal(context: HumanContext, sign: boolean): Promise<numb
       context.io,
       `Re-sign ${problems.size} engine file(s) as ${user()} (review them first: a mismatch can mean tampering)`,
       lines,
-      context.stateDir,
+      confirmOptions(context, "reseal"),
     ))
   ) {
     context.print("Cancelled; nothing was signed.")
@@ -232,7 +259,7 @@ export async function waive(context: HumanContext, args: Args): Promise<number> 
       .replace(/^-|-$/g, "")
       .toLowerCase()}-${Date.now().toString(36)}`.slice(0, 64)
   const lines = [`Rule:    ${rule}`, `Files:   ${files}`, `Reason:  ${reason}`, `Expires: ${expiresAt.toISOString()}`]
-  const signer = await confirmHuman(context.io, `Grant waiver ${id}`, lines, context.stateDir)
+  const signer = await confirmHuman(context.io, `Grant waiver ${id}`, lines, confirmOptions(context, "waive"))
   if (!signer) {
     context.print("Cancelled.")
     return 1
@@ -272,7 +299,7 @@ export async function resume(context: HumanContext, args: Args): Promise<number>
     ...(raise ? [`New spend ceiling: $${raise}`] : []),
     ...(args.flags["extend-runtime"] ? ["Runtime cap restarts now."] : []),
   ]
-  if (!(await confirmHuman(context.io, "Resume the factory", lines, context.stateDir))) {
+  if (!(await confirmHuman(context.io, "Resume the factory", lines, confirmOptions(context, "resume")))) {
     context.print("Cancelled.")
     return 1
   }
@@ -292,9 +319,54 @@ export async function recordPr(context: HumanContext, args: Args): Promise<numbe
     context.print("Usage: es factory pr <url>")
     return 2
   }
-  if (!(await confirmHuman(context.io, "Record the release PR", [url], context.stateDir))) return 1
+  if (!(await confirmHuman(context.io, "Record the release PR", [url], confirmOptions(context, "pr")))) return 1
   const state = await factoryFor(context).recordPr(user(), url)
   context.print(`Recorded ${url}; factory is ${state.stage}.`)
+  return 0
+}
+
+/**
+ * Seed a self-dogfood run from a preset and a GitHub issue (human-only: it
+ * writes factory control files). Pulls the issue body as the idea, writes
+ * `.factory/` from the preset, and reminds the human about trust, the
+ * spend ceiling and the frontier/spec approvals.
+ */
+export async function factoryInit(context: HumanContext, args: Args): Promise<number> {
+  const preset = flag(args, "preset")
+  const issueRaw = flag(args, "issue")
+  const issue = issueRaw !== undefined ? Number(issueRaw) : Number.NaN
+  if (preset !== "self-dogfood" || !Number.isInteger(issue) || issue <= 0) {
+    context.print("Usage: es factory init --preset self-dogfood --issue <n>")
+    return 2
+  }
+  const fetched = await run(["gh", "issue", "view", String(issue), "--json", "title,body"], {
+    cwd: context.root,
+    timeoutMs: 30_000,
+  }).catch(() => undefined)
+  if (fetched?.code !== 0) {
+    context.print(`Cannot read issue #${issue} (gh issue view failed; is gh authenticated?).`)
+    return 1
+  }
+  const { title, body } = JSON.parse(fetched.stdout) as { title: string; body: string }
+  const lines = [
+    `Preset: self-dogfood (release base ${SELF_DOGFOOD_BASE_BRANCH}, gates: bun run check + docs:check)`,
+    `Issue #${issue}: ${title}`,
+    "Writes: .factory/config.json, .factory/gates.json, .factory/roadmap.json, .factory/notes/idea-<n>.md",
+  ]
+  if (
+    !(await confirmHuman(context.io, `Start a self-dogfood run from #${issue}`, lines, confirmOptions(context, "init")))
+  ) {
+    context.print("Cancelled; nothing was written.")
+    return 1
+  }
+  const { written } = await initFromPreset(context.root, preset, { issue, title, body }, { actor: `human:${user()}` })
+  context.print(
+    [
+      `Seeded a self-dogfood run from #${issue} (${written.length} file(s)):`,
+      ...written.map((file) => `  ${file}`),
+      `Next: es trust (gate commands), then /grill with a $${SELF_DOGFOOD_SPEND_CEILING_USD} spend ceiling — keep baseBranch "${SELF_DOGFOOD_BASE_BRANCH}" when the grill rewrites the roadmap — then approve the frontier and spec.`,
+    ].join("\n"),
+  )
   return 0
 }
 
@@ -317,7 +389,7 @@ export async function retract(context: HumanContext, args: Args): Promise<number
   }
   const store = await ClaimStore.load(context.root)
   const affected = store.citing(source)
-  const cached = await new SourceCache(researchSourcesDir(context.root)).get(source)
+  const cached = await researchCache(context.root, context.stateDir ?? stateDir()).get(source)
   const to = event === "RETRACTED" ? "STALE" : "SUSPECT"
   const lines = [
     `Source:  ${source}`,
@@ -327,7 +399,14 @@ export async function retract(context: HumanContext, args: Args): Promise<number
     `Claims citing it: ${affected.length} (they become ${to})`,
     ...affected.slice(0, 10).map((claim) => `  - ${claim.statement.slice(0, 90)}`),
   ]
-  if (!(await confirmHuman(context.io, `Record source ${event.toLowerCase()} as ${user()}`, lines, context.stateDir))) {
+  if (
+    !(await confirmHuman(
+      context.io,
+      `Record source ${event.toLowerCase()} as ${user()}`,
+      lines,
+      confirmOptions(context, "retract"),
+    ))
+  ) {
     context.print("Cancelled; nothing was recorded.")
     return 1
   }
@@ -375,7 +454,7 @@ export async function configSet(context: HumanContext, args: Args): Promise<numb
       : []),
     ...(layer === "project" ? ["The control baseline is re-recorded for .factory/config.json."] : []),
   ]
-  if (!(await confirmHuman(context.io, `Set ${key} as ${user()}`, lines, context.stateDir))) {
+  if (!(await confirmHuman(context.io, `Set ${key} as ${user()}`, lines, confirmOptions(context, "config-set")))) {
     context.print("Cancelled; the config is unchanged.")
     return 1
   }

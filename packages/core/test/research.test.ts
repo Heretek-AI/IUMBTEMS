@@ -4,14 +4,23 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import {
   auditMarkdown,
+  BackendError,
   braveProvider,
   canonicalUrl,
+  directBackend,
+  fetchPage,
   firecrawlProvider,
+  type HostResolver,
   htmlToText,
   isFresh,
+  locateQuote,
+  normalizeForQuote,
+  normalizeWithMap,
   parseTags,
   pruneClaims,
   researchTools,
+  runFetchChain,
+  type SourceBackend,
   SourceCache,
   searxngProvider,
   selectProvider,
@@ -32,6 +41,18 @@ afterEach(() => Promise.all([rm(dir, { recursive: true, force: true }), rm(state
 const SOURCE =
   "Bun is a fast all-in-one JavaScript runtime.\nIt ships a test runner, a bundler, and a package manager — all built in."
 
+/**
+ * Direct fetcher with DNS pinned to public answers. The SSRF guard fails
+ * closed on real lookups, so fake-host tests stay hermetic through this
+ * chain entry instead of the default direct backend.
+ */
+const hermeticDirect = (resolveHost: HostResolver = async () => ["93.184.216.34"]): SourceBackend => ({
+  id: "direct",
+  capabilities: { search: false, fetch: true },
+  available: () => true,
+  fetch: (url, options) => fetchPage(url, { ...options, resolveHost }),
+})
+
 describe("verbatim quotes", () => {
   test("exact after whitespace and typography normalisation; ellipsis fragments in order", () => {
     expect(verifyQuote(SOURCE, "fast all-in-one JavaScript runtime").ok).toBe(true)
@@ -50,6 +71,45 @@ describe("verbatim quotes", () => {
     expect(verifyQuote(SOURCE, "a ... a ... a ... a ... a ... a ... a").reason).toContain("fragment")
     expect(verifyQuote(SOURCE, "Bun is a fast ... manager").ok).toBe(false)
     expect(verifyQuote(SOURCE, "Bun is a fast all-in-one ... a package manager").ok).toBe(true)
+  })
+
+  test("locateQuote returns original-text ranges that normalise to the fragments", () => {
+    const single = locateQuote(SOURCE, "fast all-in-one JavaScript runtime")
+    expect(single).toHaveLength(1)
+    expect(SOURCE.slice(single![0]!.start, single![0]!.end)).toBe("fast all-in-one JavaScript runtime")
+    const curly = locateQuote("He said “hello world, friends”", 'said "hello world, friends"')
+    expect(curly).toHaveLength(1)
+    const curlySlice = "He said “hello world, friends”".slice(curly![0]!.start, curly![0]!.end)
+    expect(curlySlice).toContain("“hello world, friends”")
+    expect(normalizeForQuote(curlySlice)).toBe('said "hello world, friends"')
+    const linked = locateQuote("[Bun](https://bun.sh) is fast and furious", "Bun is fast and furious")
+    expect(linked).toHaveLength(2)
+    expect("[Bun](https://bun.sh) is fast and furious".slice(linked![0]!.start, linked![0]!.end)).toBe("Bun")
+    expect("[Bun](https://bun.sh) is fast and furious".slice(linked![1]!.start, linked![1]!.end)).toBe(
+      " is fast and furious",
+    )
+    const two = locateQuote(SOURCE, "fast all-in-one ... a package manager")
+    expect(two).toHaveLength(2)
+    expect(two![0]!.end).toBeLessThanOrEqual(two![1]!.start)
+    for (const range of two!) expect(SOURCE.slice(range.start, range.end).length).toBeGreaterThan(0)
+  })
+
+  test("locateQuote refuses what verifyQuote refuses", () => {
+    expect(locateQuote(SOURCE, "Bun")).toBeUndefined()
+    expect(locateQuote(SOURCE, "a slow runtime for JavaScript")).toBeUndefined()
+    expect(locateQuote(SOURCE, "a package manager ... fast all-in-one")).toBeUndefined()
+  })
+
+  test("normalizeWithMap agrees with normalizeForQuote character for character", () => {
+    const cases = [
+      SOURCE,
+      "He said “hello” — yes…  really",
+      "[Bun](https://bun.sh) is **fast** and `lean`",
+      "  spaced\t\tout\n\nlines  ",
+      "NBSP here and　fullwidth",
+      "café ﬁligree",
+    ]
+    for (const text of cases) expect(normalizeWithMap(text).text).toBe(normalizeForQuote(text))
   })
 })
 
@@ -196,6 +256,7 @@ describe("providers", () => {
       stateDir: state,
       policy: async () => ({ root: dir }),
       fetch: (async () => new Response(html, { headers: { "content-type": "text/html" } })) as unknown as typeof fetch,
+      chain: [hermeticDirect()],
     })
     const fetchTool = tools.find((tool) => tool.name === "es_research_fetch")!
     const text = await fetchTool.execute({ url: "https://zod.test" }, { agent: "es-research-alpha" })
@@ -248,6 +309,7 @@ describe("the webcache gate (d66328c:skills/epistemic_search/scripts/webcache.py
           headers: { "content-type": "text/html" },
         })
       }) as unknown as typeof fetch,
+      chain: [hermeticDirect()],
     })
     const fetchTool = tools.find((tool) => tool.name === "es_research_fetch")!
     const first = await fetchTool.execute({ url: "https://Limits.test/api?b=2&a=1" }, { agent: "es-research-alpha" })
@@ -261,10 +323,15 @@ describe("the webcache gate (d66328c:skills/epistemic_search/scripts/webcache.py
     expect(second).toContain("Version 1 of the page")
     expect(calls).toBe(1)
     expect(
-      await fetchTool.execute({ url: "https://limits.test/api?a=1&b=2", refresh: true }, { agent: "x" }),
+      await fetchTool.execute(
+        { url: "https://limits.test/api?a=1&b=2", refresh: true },
+        { agent: "es-research-alpha" },
+      ),
     ).toContain("Version 2")
     now = new Date("2026-10-20T00:00:00Z")
-    expect(await fetchTool.execute({ url: "https://limits.test/api?a=1&b=2" }, { agent: "x" })).toContain("Version 3")
+    expect(
+      await fetchTool.execute({ url: "https://limits.test/api?a=1&b=2" }, { agent: "es-research-alpha" }),
+    ).toContain("Version 3")
     expect(calls).toBe(3)
     // A search result cached under the page's URL is a snippet, never served as the page.
     await new SourceCache(path.join(dir, ".factory/research/sources")).put({
@@ -272,6 +339,355 @@ describe("the webcache gate (d66328c:skills/epistemic_search/scripts/webcache.py
       text: "Snippet: limits are documented.",
       provider: "searxng",
     })
-    expect(await fetchTool.execute({ url: "https://limits.test/api?a=1&b=2" }, { agent: "x" })).toContain("Version 4")
+    expect(
+      await fetchTool.execute({ url: "https://limits.test/api?a=1&b=2" }, { agent: "es-research-alpha" }),
+    ).toContain("Version 4")
+  })
+})
+
+describe("research seat checks (#99: the registry grants, not the caller, decide)", () => {
+  const tools = () =>
+    researchTools({
+      root: dir,
+      env: {},
+      stateDir: state,
+      policy: async () => ({ root: dir }),
+    })
+  const tool = (name: string) => tools().find((item) => item.name === name)!
+
+  test("search and fetch refuse seats the registry never grants; granted seats pass the check", async () => {
+    const search = tool("es_research_search")
+    const fetch = tool("es_research_fetch")
+    // The factory seat may audit but never search or fetch.
+    await expect(search.execute({ query: "x" }, { agent: "factory" })).rejects.toThrow(
+      "Only the research and scout seats",
+    )
+    await expect(fetch.execute({ url: "https://x.test" }, { agent: "factory" })).rejects.toThrow(
+      "Only the research and scout seats",
+    )
+    await expect(fetch.execute({ url: "https://x.test" }, { agent: "es-programmer" })).rejects.toThrow(
+      "Only the research and scout seats",
+    )
+    // A granted seat passes the seat check (then fails on the missing provider, before any fetch).
+    await expect(search.execute({ query: "x" }, { agent: "es-research-alpha" })).rejects.toThrow("No search provider")
+    await expect(search.execute({ query: "x" }, { agent: "scout" })).rejects.toThrow("No search provider")
+  })
+
+  test("audit refuses seats the registry never grants; granted seats pass the check", async () => {
+    const audit = tool("es_research_audit")
+    await expect(audit.execute({}, { agent: "scout" })).rejects.toThrow("Only the research seats and factory")
+    await expect(audit.execute({}, { agent: "es-programmer" })).rejects.toThrow("Only the research seats and factory")
+    // A granted seat passes the seat check (then reports the missing report, not a refusal).
+    expect(await audit.execute({}, { agent: "factory" })).toContain("does not exist yet")
+    expect(await audit.execute({}, { agent: "es-research-beta" })).toContain("does not exist yet")
+  })
+})
+
+describe("direct-backend SSRF guard (fail closed, never cached)", () => {
+  const countingFetch = (respond: (url: string) => Response, calls: { count: number }) =>
+    (async (url: string) => {
+      calls.count++
+      return respond(String(url))
+    }) as unknown as typeof fetch
+
+  test("fetchPage refuses loopback, link-local and RFC1918 URLs without fetching", async () => {
+    const internal = [
+      "http://169.254.169.254/latest/meta-data/",
+      "http://127.0.0.1/admin",
+      "http://10.0.0.5/secret",
+      "http://192.168.1.10:8080/secret",
+      "http://172.16.4.9/secret",
+      "http://localhost/secret",
+      "http://[::1]/secret",
+    ]
+    for (const url of internal) {
+      const calls = { count: 0 }
+      const failure = await fetchPage(url, { fetch: countingFetch(() => new Response("x"), calls) }).then(
+        () => "no-throw",
+        (error: unknown) => error,
+      )
+      expect([url, (failure as { code?: string })?.code]).toEqual([url, "blocked"])
+      expect([url, calls.count]).toEqual([url, 0])
+    }
+  })
+
+  test("fetching the metadata URL via direct throws blocked and caches nothing", async () => {
+    const calls = { count: 0 }
+    const fetch = countingFetch(
+      () => new Response("<p>metadata</p>", { headers: { "content-type": "text/html" } }),
+      calls,
+    )
+    const failure = await runFetchChain([directBackend], "http://169.254.169.254/latest/meta-data/", {
+      fetch,
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(failure).toBeInstanceOf(BackendError)
+    expect((failure as BackendError).kind).toBe("blocked")
+    expect(calls.count).toBe(0)
+  })
+
+  test("the loopback allowance admits fixture servers but never the metadata address", async () => {
+    const ok = { count: 0 }
+    const page = await fetchPage("http://127.0.0.1:18381/a", {
+      fetch: countingFetch(() => new Response("<p>fixture</p>", { headers: { "content-type": "text/html" } }), ok),
+      env: { ES_RESEARCH_ALLOW_LOOPBACK: "1" },
+    })
+    expect(page.text).toContain("fixture")
+    expect(ok.count).toBe(1)
+    // Link-local stays refused even with the allowance on, and nothing is fetched.
+    const refused = { count: 0 }
+    const failure = await fetchPage("http://169.254.169.254/latest/meta-data/", {
+      fetch: countingFetch(() => new Response("<p>metadata</p>"), refused),
+      env: { ES_RESEARCH_ALLOW_LOOPBACK: "1" },
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect((failure as { code?: string })?.code).toBe("blocked")
+    expect(refused.count).toBe(0)
+  })
+
+  test("a blocked refusal from an earlier backend stops the chain before direct is attempted", async () => {
+    const calls = { count: 0 }
+    const denyAll: SourceBackend = {
+      id: "deny",
+      capabilities: { search: false, fetch: true },
+      available: () => true,
+      fetch: async () => {
+        throw Object.assign(new Error("denied by policy"), { code: "blocked" })
+      },
+    }
+    const failure = await runFetchChain([denyAll, directBackend], "https://example.com/page", {
+      fetch: countingFetch(() => new Response("<p>ok</p>", { headers: { "content-type": "text/html" } }), calls),
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(failure).toBeInstanceOf(BackendError)
+    expect((failure as BackendError).kind).toBe("blocked")
+    expect(calls.count).toBe(0)
+  })
+
+  test("a redirect onto an internal address is refused and never fetched or cached", async () => {
+    const seen: string[] = []
+    const fetch = (async (url: string) => {
+      seen.push(String(url))
+      return new Response("<p>go inward</p>", {
+        status: 302,
+        headers: { location: "http://169.254.169.254/latest/meta-data/", "content-type": "text/html" },
+      })
+    }) as unknown as typeof fetch
+    const failure = await fetchPage("https://example.com/out", {
+      fetch,
+      resolveHost: async () => ["93.184.216.34"],
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect((failure as { code?: string })?.code).toBe("blocked")
+    expect(seen).toEqual(["https://example.com/out"])
+  })
+
+  test("the fetch tool refuses a metadata URL without fetching or caching it", async () => {
+    const calls = { count: 0 }
+    const tools = researchTools({
+      root: dir,
+      env: {},
+      stateDir: state,
+      policy: async () => ({ root: dir }),
+      fetch: countingFetch(() => new Response("<p>metadata</p>", { headers: { "content-type": "text/html" } }), calls),
+    })
+    const fetchTool = tools.find((tool) => tool.name === "es_research_fetch")!
+    await expect(
+      fetchTool.execute({ url: "http://169.254.169.254/latest/meta-data/" }, { agent: "es-research-alpha" }),
+    ).rejects.toThrow(/non-routable|blocked|SSRF/i)
+    expect(calls.count).toBe(0)
+    expect(
+      await new SourceCache(path.join(dir, ".factory/research/sources"), state).byUrl(
+        "http://169.254.169.254/latest/meta-data/",
+      ),
+    ).toBeUndefined()
+  })
+})
+
+describe("DNS-resolving SSRF guard (S4.1: names, not just literal IPs)", () => {
+  const page = (text: string) => new Response(`<p>${text}</p>`, { headers: { "content-type": "text/html" } })
+  const countingFetch = (respond: (url: string) => Response, calls: { count: number }) =>
+    (async (url: string) => {
+      calls.count++
+      return respond(String(url))
+    }) as unknown as typeof fetch
+  const refused = (error: unknown) => (error as { code?: string })?.code === "blocked"
+
+  test("a name resolving to link-local is refused before any fetch", async () => {
+    const calls = { count: 0 }
+    const failure = await fetchPage("http://metadata.test/latest/meta-data/", {
+      fetch: countingFetch(() => page("metadata"), calls),
+      resolveHost: async () => ["169.254.169.254"],
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(refused(failure)).toBe(true)
+    expect(calls.count).toBe(0)
+  })
+
+  test("a name with any blocked address is refused, even beside a public one", async () => {
+    const calls = { count: 0 }
+    const failure = await fetchPage("http://mixed.test/", {
+      fetch: countingFetch(() => page("mixed"), calls),
+      resolveHost: async () => ["93.184.216.34", "10.0.0.1"],
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(refused(failure)).toBe(true)
+    expect(calls.count).toBe(0)
+  })
+
+  test("a redirect onto a name resolving to RFC1918 is refused and never fetched", async () => {
+    const seen: string[] = []
+    const fetch = (async (url: string) => {
+      seen.push(String(url))
+      if (String(url) === "https://outer.test/out")
+        return new Response("<p>go inward</p>", {
+          status: 302,
+          headers: { location: "http://inner.test/secret", "content-type": "text/html" },
+        })
+      return page("inner")
+    }) as unknown as typeof fetch
+    const failure = await fetchPage("https://outer.test/out", {
+      fetch,
+      resolveHost: async (host: string) => (host === "inner.test" ? ["10.1.2.3"] : ["93.184.216.34"]),
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(refused(failure)).toBe(true)
+    expect(seen).toEqual(["https://outer.test/out"])
+  })
+
+  test("a public-only name is allowed", async () => {
+    const calls = { count: 0 }
+    const fetched = await fetchPage("https://public.test/page", {
+      fetch: countingFetch(() => page("public page body"), calls),
+      resolveHost: async () => ["93.184.216.34"],
+    })
+    expect(fetched.text).toContain("public page body")
+    expect(calls.count).toBe(1)
+  })
+
+  test("a failed lookup fails closed without fetching", async () => {
+    const calls = { count: 0 }
+    const failure = await fetchPage("https://ghost.test/", {
+      fetch: countingFetch(() => page("ghost"), calls),
+      resolveHost: async () => {
+        throw new Error("ENOTFOUND ghost.test")
+      },
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(refused(failure)).toBe(true)
+    expect(calls.count).toBe(0)
+  })
+
+  test("the loopback allowance admits only loopback names", async () => {
+    const allow = { ES_RESEARCH_ALLOW_LOOPBACK: "1" }
+    const ok = { count: 0 }
+    const loopback = await fetchPage("http://loop.test/a", {
+      fetch: countingFetch(() => page("loopback fixture"), ok),
+      env: allow,
+      resolveHost: async () => ["127.0.0.1"],
+    })
+    expect(loopback.text).toContain("loopback fixture")
+    expect(ok.count).toBe(1)
+    // RFC1918 stays refused with the allowance on; loopback is refused without it.
+    const lan = { count: 0 }
+    const lanFailure = await fetchPage("http://lan.test/a", {
+      fetch: countingFetch(() => page("lan"), lan),
+      env: allow,
+      resolveHost: async () => ["10.0.0.1"],
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(refused(lanFailure)).toBe(true)
+    expect(lan.count).toBe(0)
+    const plain = { count: 0 }
+    const plainFailure = await fetchPage("http://loop.test/a", {
+      fetch: countingFetch(() => page("loopback fixture"), plain),
+      env: {},
+      resolveHost: async () => ["127.0.0.1"],
+    }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(refused(plainFailure)).toBe(true)
+    expect(plain.count).toBe(0)
+  })
+})
+
+describe("per-hop fetch budgets (S4.2: one timeout no longer spans every hop)", () => {
+  const delayed = (ms: number, respond: (url: string) => Response) =>
+    (async (url: string, init?: RequestInit) => {
+      const signal = init?.signal
+      if (signal?.aborted) throw new DOMException("the operation was aborted", "AbortError")
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, ms)
+        signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer)
+            reject(new DOMException("the operation was aborted", "AbortError"))
+          },
+          { once: true },
+        )
+      })
+      if (signal?.aborted) throw new DOMException("the operation was aborted", "AbortError")
+      return respond(String(url))
+    }) as unknown as typeof fetch
+  const text = (body: string) => new Response(body, { headers: { "content-type": "text/plain" } })
+
+  test("a hop that exceeds its own budget aborts instead of borrowing the next hop's", async () => {
+    const fetch = delayed(200, () => text("slow page with enough text"))
+    await expect(
+      fetchPage("https://slow.test/page", {
+        fetch,
+        timeoutMs: 50,
+        resolveHost: async () => ["93.184.216.34"],
+      }),
+    ).rejects.toThrow(/abort|timeout/i)
+  })
+
+  test("a slow first hop doesn't starve the next hop's budget", async () => {
+    const fetch = (async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith("/second")) return delayed(60, () => text("second hop page body"))(url, init)
+      return delayed(
+        60,
+        () => new Response("go on", { status: 302, headers: { location: "https://slow.test/second" } }),
+      )(url, init)
+    }) as unknown as typeof fetch
+    // 60 ms + 60 ms exceeds a single 100 ms budget; each hop gets its own.
+    const fetched = await fetchPage("https://slow.test/first", {
+      fetch,
+      timeoutMs: 100,
+      resolveHost: async () => ["93.184.216.34"],
+    })
+    expect(fetched.text).toContain("second hop page body")
+  })
+
+  test("a caller abort still aborts the fetch", async () => {
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      fetchPage("https://public.test/page", {
+        fetch: delayed(10, () => text("never served")),
+        signal: controller.signal,
+        resolveHost: async () => ["93.184.216.34"],
+      }),
+    ).rejects.toThrow(/abort/i)
   })
 })

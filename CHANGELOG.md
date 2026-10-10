@@ -1,5 +1,417 @@
 # Changelog
 
+## 1.6.0 — 2026-10-09
+
+Phase 5 self-improvement: runs already leave rich records (audit chain,
+QA failures, gate rejections, findings, spend, evals) and now the factory
+learns from them. `es improve harvest` aggregates runs and evals into one
+versioned, secret-scrubbed telemetry dataset; `es improve distill` clusters
+recurring failures into reviewable proposals a human applies; the
+`self-dogfood` preset builds this repo from an issue into a draft PR.
+The published trio (core/CLI/plugin) releases in lockstep as 1.6.0.
+It is the first npm release since 1.1.4: 1.1.5 through 1.5.0 below were
+never published on their own and ship here, together with the fixes from
+the 1.0 cutover review (#151, remediated in #152).
+
+**Security.**
+- **ADR 0002 I3: the CLI signs only what it previewed.** `es approve`
+  binds the previewed subject hash and refuses a preview older than
+  120 s; TUI preview tickets are redeemed once and expire after 120 s.
+- **#143: CLI passphrase attempt limiting.** Every CLI human verb shares
+  the TUI's 5-per-10-minute limit per state dir, with audited lockouts.
+- **Human-only verbs.** `es factory run` (a spend-bearing headless run)
+  and `es-fleet status --token` (the bus bearer token) are refused from
+  agent shells.
+- **#99: no "human" agent name bypass.** Research tools trust a human
+  operator only when the CLI builds them with `operator: "human"`; an
+  agent named `human` gets the registry check like any other.
+- **#111: one REPORT.md writer per run mode,** read from sealed run
+  state; when the mode cannot be read, neither seat may write it.
+- **SSRF guard resolves DNS.** Every fetch hop, redirects included,
+  resolves its host and refuses when any address is non-routable (fail
+  closed); each hop gets its own timeout.
+- **#135: secret values are scrubbed,** not just secret-named keys:
+  `NAME=value` pairs, `Bearer` credentials, known token shapes (dashed
+  `sk-proj-…` bodies included) and PEM private keys.
+- **Control files.** `.factory/improve/**` is deny-write for agents; the
+  self-dogfood preset writes its control files atomically under lock,
+  then rebaselines and audits.
+- **Fleet.** Request headers parse into a `Map` (CodeQL #84, prototype
+  pollution); package-boundary gaps closed (web→core and plugin→fleet
+  imports, inline `type` imports that still load at runtime).
+
+**Behaviour changes.**
+- Headless turn metrics print only at `--log-level debug` or to
+  `--events jsonl`; default output is unchanged from before #120.
+- `es-fleet start` asks for confirmation with `--foreground` too; a
+  background start waits for the daemon's pidfile before reporting.
+- A seat whose configured model is missing on the host is refused on
+  every tool call, primaries included (#96).
+
+**New.**
+- **#135: telemetry harvester over runs and evals.** Read-only
+  `es improve harvest --runs <dir>[,<dir>] [--evals <dir>[,<dir>]] --out <file>`
+  (agent-safe) producing the versioned `TelemetrySchema` dataset: phases
+  with replans and failure counts, halts with reasons, spend, gate
+  rejections by rule, audit findings by kind/severity, eval results with
+  `modelLimited`, and the audit-chain verification. A broken chain is
+  reported, never repaired; env-like values are scrubbed and state-dir
+  paths collapsed. Schemas render to `schemas/` and `docs/SCHEMAS.md`.
+- **#136: distillation into reviewable proposals.** Deterministic
+  clustering keyed on (kind, label) with defaults of 3 occurrences across
+  2 runs; each surviving cluster becomes one proposal under
+  `.factory/improve/proposals/<id>/` — `prompt-guidance` (a version-bumped
+  patch that passes `git apply --check` and the assets drift check),
+  `gate-tuning` (an explanation only; `gates.json` stays a human-applied
+  control file) or `domain-pack` (validated against `DomainPackSchema`).
+  The "code disposes" gate drops proposals whose evidence is not a
+  verbatim harvester quote or whose model numerals the telemetry never
+  recorded. `es improve distill --telemetry <file> --out <dir>` is
+  agent-safe; `--open-pr` is human-run (refused without a terminal) and
+  drafts from a topic branch without pushing the base.
+- **#137: self-dogfood preset.** `es factory init --preset self-dogfood
+  --issue <n>` (human-only) seeds `.factory/` from versioned preset
+  assets — project config (`audit.phase: required`), the real merge gate
+  (`bun install --frozen-lockfile`, `bun run check`, `bun run docs:check`),
+  a roadmap seed pinning `baseBranch: rewrite`, and the issue as the idea
+  note — then reminds about `es trust`, the $15 spend ceiling and the
+  frontier/spec approvals. `docs/SELF-DOGFOOD.md` is the runbook
+  (prerequisites, flow, review, abort); one human-run validation session
+  to a draft PR is tracked on #137.
+- **#138: release 1.6.0.** Version bump, changelog and status line; draft
+  release PR from `integration/phase-5` to `rewrite`.
+
+**Fixes.**
+- **#122:** a plain `es-fleet start` now daemonizes; the detached child
+  used to fail the TTY check while the parent printed "starting".
+- **#147:** a failed landing merge aborts only a real conflict and keeps
+  the original error otherwise.
+- **Fleet worktrees:** `gc` can no longer remove a worktree mid-allocation,
+  and a second allocator of the same task refuses instead of dropping the
+  first one's record.
+- **#137:** a preset run's release base is pinned end to end (the grill
+  cannot drop it, and the PR opener refuses `--base main`).
+- **#120:** tool metrics carry `ms` and `seat`.
+- **#130:** the web task page shows run liveness (headline, stage, seats,
+  research progress).
+- **#136:** clusters key on (seat, failure kind, rule or category) with
+  evidence links; dropped proposals are reported with their reason.
+- **#109:** the darkharvest grader reads the run the case produced;
+  loopback is allowed only for fixture-server eval cases.
+- **#111:** `es research deep` and `/research deep` no longer send the
+  deep-researcher prompt twice.
+
+## 1.5.0 — 2026-10-09
+
+Phase 4 web control plane: the fleet daemon serves a browser UI on
+loopback behind a one-time URL — a fleet dashboard, frontier/spec
+approvals in the browser (ADR 0002 option b), a preview-only config
+editor, and an evidence explorer with range-highlighted quotes and seal
+statuses. `packages/web` stays private and is served from the repo (the
+fleet daemon is private too, so no asset-shipping decision is needed);
+the published trio (core/CLI/plugin) release in lockstep as 1.5.0.
+
+**Security.**
+- **#129: the web UI is localhost-only behind a single-use ticket
+  exchange.** `es-fleet web` (human-only, refused under `ES_SANDBOX`)
+  mints a 32-byte ticket (TTL 120 s, atomic-rename claim) that the first
+  load redeems for an `HttpOnly; SameSite=Strict` session cookie; wrong
+  Host (DNS-rebinding defense) and non-loopback Origin are refused, and
+  every web response carries a strict CSP (`default-src 'self'`, no
+  inline scripts, `frame-ancestors 'none'`).
+- **#131: browser approvals sign only what was previewed.** Preview
+  returns the subject, files and hashes with a single-use ticket bound
+  to `hashJson(subject)`; submit needs the session cookie, a loopback
+  Origin and the session CSRF token, then re-derives the subject
+  (409 on mismatch), unlocks the sealed key in-process, records with
+  channel `web`, and destroys the signer. Five wrong passphrases lock
+  the web surface with an audited `approval.lockout`; the passphrase
+  lives in one page-local variable and appears in no log, event,
+  response or state file (probed). The ADR 0002 adversarial-review
+  checklist for the browser path passes 9/9 applicable probes (posted
+  on #131); I8 stays user-confirmable (option b implemented).
+  Trust, waive, resume, key seal, config set and export are untouched
+  and stay terminal-only.
+- **#133: hostile source text is inert.** Quotes render through text
+  nodes split by verified ranges into `<mark>` spans (never HTML
+  parsing, probed with `<script>`/event-handler payloads); seal status
+  (sealed/unsealed/invalid/unknown) shows on every source, with
+  tampered bytes refused by their content hash.
+
+**Behaviour changes.**
+- `fleet.status` pending entries now carry the approvable `stage`,
+  enriched from each worktree's pending list (#131); snapshot tasks
+  carry `title` and `deps` for the DAG (#130).
+- `bun run test` runs the web suite first under browser conditions
+  (the client Solid build), then every other package (#130).
+
+**New.**
+- **#129: `packages/web` (private, never published).** SolidJS + Vite
+  (ADR 0003: shared signals with the TUI, 15 kB hello build), served by
+  the daemon from the bus port; declared `deps.ts` boundaries and a
+  path-filtered CI job.
+- **#130: fleet dashboard.** Columns-by-depth task DAG, task table,
+  spend against the ceiling, pending list, per-task pages and a live WS
+  stream with reconnect refetch and a 5 s stale banner — read-only
+  throughout, status always in words beside colour.
+- **#131: approvals pages.** `#/approvals` list and
+  `#/approve/<task>/<stage>` page (masked, non-reactive input cleared
+  on submit; remaining-attempt and lockout-delay alerts).
+- **#132: config editor, preview-only.** Project/gates tabs with
+  strict-schema validation, exact hash diffs and copyable terminal
+  commands over read-only `fleet.config.get`/`fleet.config.plan`; the
+  bus has no apply method and the UI no apply button. Browser apply is
+  deferred to #145 (needs #131's pattern plus the user's ADR 0002
+  extension).
+- **#133: evidence explorer.** Claim/source graph with tag/status/tier
+  filters, inspector (rank explanation, retractions, history), source
+  viewer with verified quote highlights, and Markdown/HTML dossier
+  exports through the #112 renderers — read-only, capped payloads.
+  Core gains `locateQuote` (index-mapped ranges, self-checked).
+
+**Evals and CI.**
+- Web tests render with the client Solid build under happy-dom
+  (`bun --conditions=browser test packages/web`).
+- Full `bun run test`: the same 8 pre-existing bwrap-overlay sandbox
+  failures as 1.4.0 (identical set fails on the base; green in CI
+  where bwrap works).
+
+**Dependencies.**
+- `packages/web` shares the TUI's `solid-js` 1.9.15 lockfile entry; new
+  stock npm needs are `vite`, `vite-plugin-solid` and dev-only
+  `happy-dom`. Zero vendored code in the phase.
+
+## 1.4.0 — 2026-10-09
+
+Phase 3 fleet: concurrent task DAGs run on one machine under a human-only
+`es-fleet` daemon — a deterministic scheduler, isolated git worktrees per
+task with gated landings onto an integration branch, one headless run per
+task with per-task spend ceilings, and a read-only localhost telemetry bus
+with an `es-fleet watch` dashboard. `@heretek-ai/es-fleet` ships from the
+repo only (private) until its RPC is stable; the published trio
+(core/CLI/plugin) release in lockstep as 1.4.0.
+
+**Security.**
+- **#122: starting or stopping the fleet is human-only, by policy and in
+  the binary.** The policy's binary matcher knows `es-fleet`, and the whole
+  binary is human-only except `status`/`--help` (fail-closed flag
+  resolution); `start` additionally refuses agent sandboxes, requires a TTY
+  plus a typed confirmation, and takes a mandatory fleet-wide spend ceiling.
+  Fleet state lives under the sandbox-masked state dir.
+- **#124: task worktrees are isolated by policy.** `.fleet/` is deny-write
+  for every agent outside its own task worktree, and seats may not name
+  other tasks' `.fleet/` paths in the shell. The base branch is never
+  checked out, reset or merged — asserted in every worktree test.
+- **#126: the telemetry bus is read-only, localhost-only and
+  token-authenticated.** Host allowlist (DNS-rebinding defense), Origin
+  checks on WebSocket upgrades, strict schemas that reject extra fields,
+  and payload scrubbing (secret keys and known secret values never appear).
+
+**Behaviour changes.**
+- `es-fleet` refuses to start without a positive `--max-usd` ceiling, which
+  caps the summed task ceilings.
+- `es factory run --headless` takes no `--max-usd` (verified): workers
+  provision each task's ceiling into its run state, where the factory guard
+  enforces it.
+- A landing conflict reopens the task as `waiting-human` — the one
+  transition allowed out of `done` — and the daemon retries it after human
+  repair.
+
+**New.**
+- **#122: `packages/fleet` (`@heretek-ai/es-fleet`, private).** State
+  helpers, inode-bound socket guard, pidfile lifecycle with stale recovery,
+  `es-fleet start/stop/status`, boundaries in `scripts/deps.ts` and a
+  path-filtered CI job.
+- **#123: task model and deterministic DAG scheduler.** `all_success` /
+  `one_success` triggers, mandatory ceilings, `fail` / `retry(n)` /
+  `replan` policies, `waiting-human` capacity relief, pure `schedule()`
+  with a property test over random DAGs, `es-fleet task add/list/cancel`.
+- **#124: worktree coordinator and gated integration branch.**
+  Two-phase allocation, salvage refs, orphan `gc`, transactional landing
+  (gates first, `--no-ff` merge in a throwaway worktree, verified rollback
+  on conflict) onto `fleet/integration/<dag>`.
+- **#125: workers.** Argv-only headless runs, event folding with spend and
+  token tracking, no-double-start supervision with restart recovery,
+  StillDown + mass-death circuit breaker, and the daemon tick loop
+  (`schedule → allocate → launch → land → release`) with a SIGTERM kill
+  switch recording resumable cancellations.
+- **#126: telemetry bus and `es-fleet watch`.** Strict-schema RPC
+  (`fleet.status/task/pending/events` with monotonic backlog replay),
+  coalesced WebSocket stream, 0600 token, TTY dashboard.
+- **#127: merge-blocking fleet integration suite.** A→B+C on the real host
+  with the fake model proving ordering, overlap, output ownership (and no
+  `.factory/` leakage across branches), failure/retry/cancel, conflict
+  repair and stop/salvage/gc — plus break probes proving the suite bites.
+
+**Evals and CI.**
+- #127 runs in `bun run check` (~10 s, 5/5 deterministic locally).
+- Full `bun run test`: 8 failures are the pre-existing bwrap-overlay
+  sandbox failures of containers (identical set fails on the base; green in
+  CI where bwrap works).
+
+## 1.3.0 — 2026-10-09
+
+Phase 2 approvals everywhere: frontier and spec approvals complete in the
+OpenCode TUI as well as the CLI, through one shared core service, under
+the threat model and invariants of ADR 0002. The headless runner gains
+the fleet entrypoint: a versioned JSONL event stream with per-turn
+metrics, graceful cancellation and turn timeouts, and worktree validation.
+
+**Security.**
+- **#116: ADR 0002 (proposed) puts approvals on every surface.**
+  Threat model (5 actors), normative invariants I1–I8, a 25-row inventory
+  of terminal-only enforcement points, and the adversarial-review checklist
+  gating the TUI (#119) and browser (#131) builds. Trust, waive, resume,
+  key seal, config set and export stay terminal-only.
+- **#119: frontier and spec approvals complete in the OpenCode TUI.**
+  A masked passphrase dialog (plaintext only in a closure-scoped buffer,
+  zeroed on submit/cancel) unlocks the sealed human key and signs
+  in-process through the core `approveStage` service (`channel: "tui"`).
+  No passphrase and no approval cross RPC (no approve/trust/resume RPC
+  exists); previews bind the signed subject through a single-use ticket
+  (TTL ≤ 120 s); 5 wrong passphrases per 10 minutes lock the TUI surface
+  out with an audited lockout. The masked-input spike (#118) verdict is GO
+  with headless-renderer evidence.
+- **#117: one approval code path in core.** `approveStage` re-derives the
+  subject with a preview-hash check, signs, clears pending and begins
+  research under its locks; re-approval of an unchanged subject is a
+  side-effect-ensuring no-op. `HumanSigner.destroy()` ends signing.
+  `ChannelSchema` is now `cli | tui | web`, shared by approvals and waivers.
+
+**Behaviour changes.**
+- Approval status messages name `/es-approve` first; the TUI pending panel
+  and the liveness lines point at the TUI with the terminal as the fallback.
+- `schemas/approval-channel.schema.json` is replaced by
+  `schemas/channel.schema.json` (same shape, plus `web`).
+- Headless runs without the new flags print as before, plus a
+  `turn-metrics` line per turn at info level and above.
+
+**New.**
+- **#120: fleet-ready headless runner.** `--events jsonl` (versioned
+  envelope per line: `JsonlEnvelope`/`HeadlessJsonlSchema` exported from
+  the CLI; `--events-file` redirects to a file), per-turn `turn-metrics`
+  (sealed spend delta, tool activity, opportunistic tokens),
+  SIGINT/SIGTERM cancellation (exit 130, resumable), `--turn-timeout`,
+  and `--cwd` validation (other runs' seat worktrees and detached HEADs
+  refused; the root is indexed). See `docs/HEADLESS.md`.
+
+## 1.2.0 — 2026-10-09
+
+Phase 1 epistemic layer: research, brainstorm and harvest work outside the
+fixed factory flow. Backends fail over with the gateway leading, the grill
+and the factory fan out brainstorms and verdict-check harvest targets
+themselves, deep research runs thesis/antithesis/synthesis to a grounded
+report anywhere, dossiers render to Markdown and HTML, and domain-pack tiers
+weight the score. A merge-blocking research-fires suite pins the whole loop.
+
+**Security.**
+- **#106: provider API keys are masked in seat sandboxes.**
+  `BRAVE_API_KEY` and `FIRECRAWL_API_KEY` join `SECRET_ENV`, so agent shells
+  never see them; backends run in the plugin process.
+- **#107: the gateway token never leaves its header.** It comes only from
+  `ES_SCRAPER_SWARM_TOKEN`, is masked in sandboxes, and never reaches
+  `.factory/`, logs or error messages.
+
+**Behaviour changes.**
+- Research completion in research-mode runs ends at DONE (build runs still
+  move to SPEC); deferred frontier facts are required only in build runs.
+- `FETCHED` snapshots are capability-derived (fetch-capable backends count);
+  legacy `fetch`/`webfetch` entries still do.
+- Prior-art records are keyed per brainstorm run; legacy global records
+  satisfy any run.
+- Brainstorm and harvest artifacts live under `runs/<run>/` (the human's
+  flows stay the `default` run); legacy top-level files still read.
+
+**New.**
+- **#106: ordered source-backend failover** (`SourceBackend`,
+  `research.backends`, per-backend cooldowns with 429 Retry-After;
+  `blocked` safety refusals never fail over; `searchProvider` kept as an
+  alias).
+- **#107: Scraper-Swarm gateway backend** (JSON-RPC `web_search`/`fetch_page`
+  over `POST /mcp`, contract v1 with `content_sha256` verification, leading
+  the default order when configured; recorded-fixture contract tests).
+- **#108: callable brainstorm fan-out** (run-scoped store, grill/factory
+  callers at depth 1, shortlist JSON, lean budgets).
+- **#109: callable harvest target and shared prior art**
+  (`es_harvest_target` verdicts for grill/factory/scout/harvester,
+  run-scoped harvest plans, `PriorArtSearchSchema`).
+- **#110: research-only runs** (`beginResearchRun`, objective + ceiling, no
+  frontier/approvals/git needed).
+- **#111: deep-research coordinator** (`deep-researcher` + synthesizer seats,
+  human-only `es research deep`, interactive `/research deep`).
+- **#112: dossier renders** (deterministic Markdown + self-contained HTML,
+  XSS-tested; agent-safe `es research render`).
+- **#113: domain-pack tiers reach claims** (deterministic source
+  classification sealed in `SourceMeta`, `ClaimSchema.tier`, tier-weighted
+  scores; unknowns stay `__default__`).
+
+**Evals and CI.**
+- **#114: merge-blocking research-fires suite** (grounded quotes, failover,
+  sealing, degradation, renders; break-probe verified) plus a
+  reported-never-blocking `deep-research` eval case.
+
+## 1.1.5 — 2026-10-09
+
+Phase 0 hardening: every trust boundary the 1.1.x series left soft is now
+sealed, pinned or tested — source-cache seals on every reader, MCP caller
+identity, CLI/policy argv parity, a registry-generated scoping suite,
+fail-closed seat models, and consistency cleanup. No human-only verb changed.
+
+**Security.**
+- **#98: every source-cache reader verifies seals.** Scout advisories,
+  brief export, retract and audit dossiers went through unsealed caches, so
+  planted entries read as evidence. All constructions now go through the
+  sealed constructor, planted entries are refused, and a misuse-guard test
+  fails any new unsealed construction.
+- **#99: MCP caller identity is pinned, research tools gain core seat
+  checks.** A piped `agent` argument could claim any seat over `es mcp`;
+  identity now comes from the adapter environment (`ES_MCP_AGENT`, else
+  legacy `ES_AGENT`), defaulting to seat-less `mcp`. `es_research_search`,
+  `es_research_fetch` and `es_research_audit` enforce the registry grants in
+  core. The research tools are not on the MCP surface at all.
+
+**Behaviour changes.**
+- **#96: seat models fail closed.** Malformed refs and unknown
+  `models.agents` keys are rejected at config load; a configured model
+  missing on the host refuses that seat at launch with remediation (naming
+  the key and `es config set`) and shows in `es_status`. Unset tiers still
+  inherit the session default, explicitly.
+- **#101: `es_request_approval` admits factory and grill only.** The manager
+  seat was accepted against the registry's grants.
+- **#97 precision:** known boolean flags read single-way in the human-only
+  rule, cutting false denials with zero lost denials (property-gated).
+
+**New.**
+- **#100: registry-generated permission matrix and bypass probes**
+  (`packages/opencode/test/scoping.test.ts`). OpenCode's
+  `Permission.evaluate` + `Wildcard.match` (MIT) are vendored into the
+  testkit; every seat's compiled rules are asserted against its registry
+  spec, and each restriction class is probed on the real host, including the
+  post-#99 MCP pin.
+- **#102: one workspace package list** (`bun scripts/packages.ts`):
+  the typecheck loop, `pack-smoke.sh`, `publish.yml` and `deps.ts` read it;
+  new packages declare `esRelease.order` and `BOUNDARIES`.
+
+**Fixes.**
+- **#101 registry consistency:** factory tool union equals `ALL_ES_TOOLS`
+  with single registration (tested both halves); `confirmationCode` and the
+  ignored `recordApproval` `stateDir` removed; waivers comment corrected to
+  Ed25519; subagent `spawns` stay empty (depth 1, tested).
+- **#139: the `auditor-thesis` eval stages an open audit run**, graded
+  deterministically on the verdict record instead of narration luck.
+- **#103 hygiene:** `.claude/CLAUDE.md` is a pointer to AGENTS.md (dead
+  `runner/` paths gone); README and DOGFOOD gain the 0.7 options note.
+
+**Evals and CI.**
+- Seeded argv-parity property (3 × 2,000 cases) plus HELP-marker parity,
+  both with recorded break probes (#97).
+- `docs/CONFIG.md` documents the nested `models.*` keys (#96).
+- CI pattern for future packages documented in ADR 0001 (path-filtered
+  workflows; `check` stays unfiltered) (#102).
+
+**Dependencies.** `@opentui/core` + `@opentui/solid` 0.5.14 → 0.5.17: the
+nested `@babel/core` 7.28.0 pin is gone (7.29.7).
+
 ## 1.1.4 — 2026-10-08
 
 A security fix for the human-only shell rule, plus the E2E feedback fixes

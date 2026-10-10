@@ -26,7 +26,9 @@ export const FACTORY_CONTROL = [
   // Engine-owned brainstorm/harvest/design state: only the es_* tools write it
   // (through core), so no seat can hand-edit what a gated tool reads back.
   ".factory/brainstorm/*.{json,md}",
+  ".factory/brainstorm/runs/**",
   ".factory/harvest/*.{json,md}",
+  ".factory/harvest/runs/**",
   ".factory/harvest/*/profile.json",
   ".factory/harvest/clean-room/**",
   ".factory/design/*.{json,css,md}",
@@ -39,6 +41,9 @@ export const FACTORY_CONTROL = [
   ".factory/research/sources/**",
   ".factory/research/{coverage,dossier,brief.pcrb}.json",
   ".factory/claims/**",
+  // Self-improvement proposals: only the es_improve_* tools write them
+  // (through core), so no seat can hand-edit what a gated tool reads back.
+  ".factory/improve/**",
   // Code-audit records, dossiers and reports; scout plan, profiles and results.
   ".factory/audits/**",
   ".factory/scout/*.{json,md}",

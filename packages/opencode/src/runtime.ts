@@ -13,6 +13,7 @@ import {
   loadEsConfig,
   type PolicyContext,
 } from "@heretek-ai/es-core"
+import type { ModelProblem } from "./agents.ts"
 import { ghPrOpener } from "./pr.ts"
 
 /** Plugin options from opencode.json, split into config keys and the rest. */
@@ -47,6 +48,8 @@ export interface Runtime {
   readonly stateDir: string
   readonly factory: Factory
   readonly lsp: LspManager
+  /** Seats whose configured model is missing on the host (fail-closed, #96). */
+  readonly modelProblems: Map<string, ModelProblem>
   policy(): Promise<PolicyContext>
 }
 
@@ -83,9 +86,18 @@ export async function createRuntime(root: string, parsed: ParsedOptions): Promis
     stateDir,
     factory,
     lsp,
+    modelProblems: new Map(),
     async policy() {
       const worktree = await factory.activeWorktree().catch(() => undefined)
-      return { root, stateDir, ...(worktree ? { worktree } : {}) }
+      // S1.7: the mode-aware REPORT.md grant needs the sealed run mode. Read
+      // it from the sealed run state; when it cannot be read (no run, a
+      // missing or forged seal) leave it absent so both writers stay denied
+      // (fail closed, trust/policy.ts).
+      const runMode = await factory
+        .read()
+        .then((state) => state?.mode)
+        .catch(() => undefined)
+      return { root, stateDir, ...(worktree ? { worktree } : {}), ...(runMode ? { runMode } : {}) }
     },
   }
 }

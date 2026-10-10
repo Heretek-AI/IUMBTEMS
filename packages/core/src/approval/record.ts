@@ -1,7 +1,8 @@
 // Human-only approvals. Callers never name the artifact: the subject is
 // derived from the factory layout for the stage, validated, hashed and signed
 // with the human key, which only the human's passphrase unlocks (1.1.1). Only
-// the CLI (a TTY + the passphrase) calls recordApproval; no agent tool, MCP
+// the approval service (`approval/service.ts`, called by every surface after
+// a passphrase unlock) calls recordApproval; no agent tool, MCP
 // tool or RPC does. Transitions call verifyApproval, which re-hashes
 // the current artifacts, so editing a spec after approval blocks the build.
 import { readFile } from "node:fs/promises"
@@ -9,7 +10,7 @@ import { hostname, userInfo } from "node:os"
 import path from "node:path"
 import { appendAuditEntry, auditHead } from "../audit/chain.ts"
 import { factoryLayout, stateDir } from "../layout.ts"
-import { type Approval, type ApprovalChannel, ApprovalSchema, type ApprovalStage } from "../schema/approval.ts"
+import { type Approval, ApprovalSchema, type ApprovalStage, type Channel } from "../schema/approval.ts"
 import { type Frontier, FrontierSchema } from "../schema/frontier.ts"
 import { type ParsedGoal, parseGoalMarkdown } from "../schema/goal.ts"
 import { type Roadmap, RoadmapSchema } from "../schema/roadmap.ts"
@@ -105,7 +106,7 @@ export async function approvalSubject(root: string, stage: ApprovalStage): Promi
 
 export interface RecordApprovalInput {
   readonly stage: ApprovalStage
-  readonly channel: ApprovalChannel
+  readonly channel: Channel
   /** Defaults to the OS user running the CLI/TUI. */
   readonly approvedBy?: string
   readonly notes?: string

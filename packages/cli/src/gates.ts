@@ -1,8 +1,8 @@
 // `es gates`: run the gates from a terminal or git hook, and opt-in git hooks.
 import { chmod, mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
+import type { Args } from "@heretek-ai/es-core"
 import { formatReport, git, runGates } from "@heretek-ai/es-core"
-import type { Args } from "./args.ts"
 import type { HumanContext } from "./human.ts"
 import { confirmHuman } from "./tty.ts"
 

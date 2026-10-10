@@ -25,6 +25,23 @@ describe("agent assets", () => {
     for (const agent of AGENTS) for (const skill of agent.skills) expect(names).toContain(skill)
   })
 
+  test("the deep-researcher prompt carries the coordinator flow both surfaces load", async () => {
+    // The headless job (cli/jobs.ts) and /research (opencode/server.ts)
+    // single-source this flow from core instead of pasting it twice.
+    const { body } = await loadPrompt("deep-researcher")
+    for (const marker of [
+      "plan note",
+      "es-research-alpha",
+      "es-research-beta",
+      "in parallel",
+      "foreground",
+      "es-research-synthesizer",
+      "es_research_audit",
+      "es_research_complete",
+    ])
+      expect(body).toContain(marker)
+  })
+
   test("prompt snapshot: a changed prompt must bump its version", async () => {
     const snapshot = Object.fromEntries(
       await Promise.all(

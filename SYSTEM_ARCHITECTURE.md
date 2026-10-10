@@ -32,6 +32,14 @@ the run halts. `.factory/STOP` halts every seat tool (except `es_status` when
 halted by spend/runtime); resuming is human-only. The spend ceiling is
 mandatory and raising it is a human act.
 
+**Research-only runs** (`mode: "research"`) answer one objective outside the
+software flow: `beginResearchRun({objective, ceilingUSD})` enters RESEARCH
+directly with no frontier, no approvals and no git repo required, and
+`completeResearch` ends at DONE (deferred frontier facts are not required;
+the dossier takes the run's objective). Spend tracking, STOP, halts, liveness,
+`es status`/`es watch`/`es runs` and the sealed evidence cache are the same
+machinery. The completing seat is the research coordinator (#111).
+
 ## 2. Seats
 
 Seats are what the trust policy reasons about; the registry is
@@ -81,18 +89,29 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
   HMAC-SHA256 seal from a key kept in the masked private state dir
   (`engine.key`), so a planted entry an agent drops into
   `.factory/research/sources/` is refused on read.
+- Sources arrive through an ordered backend chain (`research.backends`,
+  default Scraper-Swarm gateway → Brave → Firecrawl → SearXNG → direct; `searchProvider` still works
+  as a one-element alias). Failures classify as unavailable, auth,
+  rate-limited (429 Retry-After sets the cooldown), upstream or timeout and
+  fail over to the next backend, which is recorded in `SourceMeta.provider`;
+  a `blocked` safety refusal stops the chain instead of routing around it.
 - The design tree (`frontier.json`) is the same shape for humans: nodes are
   decisions or deferred facts, saves are diff-checked (no deletions, no silent
   edits, no round regress), and the tree is the single source for the idea.
 
 ## 4. Trust model (non-negotiable invariants)
 
-1. **Approvals, waivers, trust and resume are human-only** — terminal
-   passphrase confirmation unlocks the passphrase-sealed Ed25519 human key
+1. **Approvals are human-only; trust, waivers and resume stay terminal-only**
+   — passphrase confirmation (terminal echo-off, TUI masked dialog, or
+   loopback browser input per ADR 0002) unlocks the passphrase-sealed
+   Ed25519 human key
    (scrypt + AES-256-GCM; `es key seal` once, `es key status` shows the
    fingerprint), which signs the record; agents may request
    (`es_request_approval`) but never grant. The approve/trust/resume RPCs no
-   longer exist; the TUI previews, then points at the terminal command. v1
+   longer exist; approvals complete in the TUI (masked dialog, in-process
+   signing, channel `tui`), in the browser (preview ticket bound to the
+   subject hash, passphrase over loopback, channel `web`) as well as the CLI, while trust
+   and resume preview in the TUI and sign at the terminal. v1
    HMAC records are refused and must be re-recorded.
 2. **Control files are deny-write for every agent**: gates, config, frontier,
    approvals, waivers, runtime state, the research evidence, claim ledger,
@@ -120,7 +139,10 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
    a signed sidecar (HMAC under the masked engine key); reads refuse a
    missing or forged seal, and only a human re-signs reviewed files
    (`es reseal --sign`, terminal passphrase confirm; agents have no reseal
-   path — no tool, shell verb denied). Verifiers never create the engine key:
+   path — no tool, shell verb denied). Every source-cache reader verifies
+   seals: scout witnessing, brief export and retract all read through the
+   sealed constructor, so unsealed legacy entries are refused until the
+   human re-fetches the source. Verifiers never create the engine key:
    a reader that cannot see it (an agent sandbox, another state dir) reports
    a missing key, not a forged seal.
 9. **Seats run in the foreground, one writer per research file.** A seat's
@@ -134,10 +156,12 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
 
 ## 5. Evaluations
 
-- **Merge-blocking (deterministic):** five fire suites on the real in-process
+- **Merge-blocking (deterministic):** six fire suites on the real in-process
   host — `grill-fires`, `factory-gate`, `darkharvest-fires`, `audit-fires`,
-  `scout-fires` (`packages/opencode/test/fires*.test.ts`), plus the drift
-  canary (`packages/core/test/drift.test.ts`).
+  `scout-fires`, `research-fires` (`packages/opencode/test/fires*.test.ts`),
+  plus the drift canary (`packages/core/test/drift.test.ts`), plus the fleet
+  integration suite (`packages/fleet/test/integration.test.ts`: a task DAG on
+  the real host with the fake model proving concurrency without interference).
 - **Nightly (model-backed, cost-capped):** `evals/cases/*.json` run against a
   real model with the same graders (`bun run evals`).
 - **Capability matrix:** every ENFORCED row names a test or spike that exists;
@@ -155,6 +179,8 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
 | `packages/opencode/src/` | plugin: agents, policy, tools, commands, panels |
 | `packages/cli/src/` | `es` CLI, human-only commands, headless jobs |
 | `packages/testkit/` | real-host `boot`, scripted fake model |
+| `packages/fleet/` | `es-fleet` daemon: task DAGs, isolated worktrees, per-task ceilings (private) |
+| `packages/web/` | the web control plane (private, never published): dashboard, browser approvals, config editor, evidence explorer — SolidJS, served by `es-fleet` on loopback |
 
 The queereye designer domain is `packages/core/src/queereye/`; the
 `.factory/design/` tree holds `interview.json`, `tokens.*`, `probes.json`,

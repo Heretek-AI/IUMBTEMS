@@ -2,16 +2,20 @@
 // used / not used, and error events, over an `opencode run --format json` stream.
 import { describe, expect, test } from "bun:test"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import path from "node:path"
 import {
   caseStepCap,
   DEFAULT_CASE_STEPS,
   gradeAuditFire,
+  gradeFireCase,
   gradeHarvestFire,
   gradeOutput,
   gradeScoutFire,
   gradeTranscript,
   readTranscript,
+  writeHarvestResult,
 } from "../src/index.ts"
 
 describe("the eval grader", () => {
@@ -237,6 +241,60 @@ describe("fire graders", () => {
     ])
     expect(gradeHarvestFire(matrix([cell("mit", "depend")]), want).failures).toEqual(["no matrix cell for gpl"])
   })
+
+  test("a completed harvest run grades as pass, whatever the run id (#109: no silent default)", async () => {
+    const profile = (id: string) => ({
+      version: 1 as const,
+      id,
+      name: id,
+      license: {
+        spdx: "MIT",
+        family: "permissive" as const,
+        source: "license-file" as const,
+        verified: true,
+        confidence: "high" as const,
+      },
+      languages: { JavaScript: 1 },
+      dependencies: { runtime: [], dev: [] as string[] },
+      size: { files: 1, bytes: 10, tokens: 3 },
+      graph: { internalEdges: 0, external: 0, parsers: { treeSitter: 0, regex: 0 } },
+      provenance: {},
+      warnings: [],
+      scannedAt: "t",
+    })
+    const matrix = {
+      version: 1 as const,
+      candidates: ["mit"],
+      rows: [{ feature: "f", cells: [{ candidate: "mit", verdict: "depend" as const }] }],
+      licensePolicy: { whitelist: ["MIT"], failClosed: true as const },
+      builtAt: "t",
+    }
+    const rendered = { report: "# Harvest\n", vendorPlan: "plan", cleanRoom: [] }
+    const want = [{ candidate: "mit", verdict: "depend" }]
+    const root = await mkdtemp(path.join(tmpdir(), "es-harvest-grade-"))
+    try {
+      // The harvester completes run "harvest", not the default run: naming it grades it.
+      await writeHarvestResult(root, "objective", [profile("mit")], matrix, rendered, "harvest")
+      expect(await gradeFireCase({ kind: "harvest", expected: want, run: "harvest" }, root)).toMatchObject({
+        pass: true,
+        caught: ["mit"],
+      })
+      // Without a named run the single completed run is graded, not a silent default.
+      expect(await gradeFireCase({ kind: "harvest", expected: want }, root)).toMatchObject({ pass: true })
+      // A named run that never completed fails naming the run.
+      expect(await gradeFireCase({ kind: "harvest", expected: want, run: "missing" }, root)).toMatchObject({
+        pass: false,
+      })
+      // Two completed runs with no named run fail explicitly instead of grading one silently.
+      await writeHarvestResult(root, "objective", [profile("mit")], matrix, rendered, "default")
+      const ambiguous = await gradeFireCase({ kind: "harvest", expected: want }, root)
+      expect(ambiguous.pass).toBe(false)
+      expect(ambiguous.failures.join("; ")).toContain("harvest")
+      expect(ambiguous.failures.join("; ")).toContain("several harvest runs completed (default, harvest)")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("eval cases (evals/cases)", () => {
@@ -276,6 +334,69 @@ describe("eval cases (evals/cases)", () => {
     const audit = cases.find((item) => item.file === "audit-fires.json")!.body
     const state = FactoryStateSchema.parse(JSON.parse(audit.files[".factory/runtime/state.json"]))
     expect(state.audits.map((item) => [item.id, item.status])).toEqual([["audit-01", "open"]])
+  })
+
+  test("the staged thesis state is a valid v2 run with audit-01 open on src (#139)", async () => {
+    const { FactoryStateSchema } = await import("../src/factory/state.ts")
+    const thesis = cases.find((item) => item.file === "auditor-thesis.json")!.body
+    const state = FactoryStateSchema.parse(JSON.parse(thesis.files[".factory/runtime/state.json"]))
+    expect(state.audits.map((item) => [item.id, item.status, item.target])).toEqual([
+      ["audit-01", "open", { kind: "path", path: "src" }],
+    ])
+    expect(thesis.checks.toolsUsed).toContain("es_audit_verdict")
+    expect(thesis.fire).toMatchObject({ kind: "audit", audit: "audit-01" })
+    expect(thesis.prompt).toContain("audit-01")
+  })
+
+  test("the staged thesis fixture admits a verdict graded deterministically (#139)", async () => {
+    const { mkdtemp, rm, mkdir, writeFile } = await import("node:fs/promises")
+    const { tmpdir } = await import("node:os")
+    const { Factory, codeAuditTools, gateRunner, gradeAuditFire, readAuditRecords } = await import("../src/index.ts")
+    const { signEngineFile } = await import("../src/trust/sidecar.ts")
+    const thesis = cases.find((item) => item.file === "auditor-thesis.json")!.body
+    const root = await mkdtemp(path.join(tmpdir(), "es-thesis-fixture-"))
+    const state = await mkdtemp(path.join(tmpdir(), "es-thesis-fixture-state-"))
+    try {
+      for (const [file, content] of Object.entries(thesis.files as Record<string, string>)) {
+        const target = path.join(root, file)
+        await mkdir(path.dirname(target), { recursive: true })
+        await writeFile(target, content)
+      }
+      await signEngineFile(path.join(root, ".factory/runtime/state.json"), state)
+      const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+      const verdict = codeAuditTools({ root, factory, stateDir: state }).find(
+        (tool) => tool.name === "es_audit_verdict",
+      )!
+      const excerpt =
+        'const query = "SELECT * FROM users WHERE name = \'" + username + "\' AND pass = \'" + password + "\'"'
+      const out = await verdict.execute(
+        {
+          audit: "audit-01",
+          verdict: "fail",
+          findings: [
+            {
+              kind: "vulnerability",
+              title: "SQL injection in login",
+              severity: "critical",
+              cwe: "CWE-89",
+              file: "src/login.ts",
+              lines: [2, 2],
+              excerpt,
+              detail: "username and password concatenate into the query",
+              remediation: "use parameterised queries",
+            },
+          ],
+          notes: "CWE-89 in src/login.ts",
+        },
+        { agent: "es-auditor-thesis" },
+      )
+      expect(out).toContain("Recorded fail for audit-01")
+      const grade = gradeAuditFire(await readAuditRecords(root, "audit-01"), thesis.fire.plants)
+      expect(grade).toMatchObject({ pass: true, caught: ["sql-injection"] })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(state, { recursive: true, force: true })
+    }
   })
 
   test("the seeded programmer state is a valid v2 BUILD run with a worktree", async () => {

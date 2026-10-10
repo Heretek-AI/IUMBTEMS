@@ -12,6 +12,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
+  approveStage,
   Factory,
   factoryLayout,
   gateRunner,
@@ -148,8 +149,7 @@ describe("pipeline A", () => {
         { id: "compat", kind: "fact", question: "Does bun test run a single file?", status: "deferred", round: 1 },
       ],
     })
-    await recordApproval(h.directory, { stage: "frontier", channel: "cli", approvedBy: "tester", signer })
-    await factory().beginResearch("human:tester")
+    await approveStage(h.directory, { stage: "frontier", channel: "cli", signer, stateDir: state })
     const cache = new SourceCache(researchSourcesDir(h.directory), state)
     const source = await cache.put({
       url: "https://example.test/bun-test",

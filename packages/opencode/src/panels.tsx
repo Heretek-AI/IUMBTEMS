@@ -127,8 +127,8 @@ const FactoryPanel = (props: PanelProps) => {
             </Show>
             <Show when={data().pending.length}>
               <text>
-                Waiting on you: approve {data().pending.join(", ")}: run `es approve {data().pending[0]}` in a terminal
-                (/es-approve previews it)
+                Waiting on you: approve {data().pending.join(", ")} with /es-approve (or `es approve {data().pending[0]}
+                `)
               </text>
             </Show>
             <Show when={data().seats.length}>
@@ -255,6 +255,11 @@ const BrainstormPanel = (props: PanelProps) => {
         {(data: () => any) => (
           <Show when={data().active} fallback={<text>No brainstorm in .factory/brainstorm yet. Run /brainstorm.</text>}>
             <text>Brief: {data().brief}</text>
+            <Show when={data().runs?.length > 1}>
+              <text>
+                Run {data().run} ({data().runs.length} runs: {data().runs.join(", ")} — `es brainstorm show [run]`)
+              </text>
+            </Show>
             <text>
               {data().ideas} idea(s) · {data().duplicates} duplicate(s) · {data().scored} scored ·{" "}
               {data().complete ? "complete" : "in progress"}

@@ -49,6 +49,29 @@ export const weightFor = (constitution: Constitution, tier: string | undefined):
     ? constitution.tierWeights[tier]
     : constitution.tierWeights.__default__) ?? 1
 
+/**
+ * The tier evidence composes at (#113): the highest-weighted tier wins, ties
+ * keep the first listed, and no tier means __default__. Claims built from one
+ * cited source carry that source's tier; multi-source evidence (scout/audit
+ * modes) resolves through here under the active pack.
+ */
+export function highestTier(
+  tiers: readonly (string | undefined)[],
+  constitution: Constitution = LEGACY_CONSTITUTION,
+): string | undefined {
+  let best: string | undefined
+  let bestWeight = -Infinity
+  for (const tier of tiers) {
+    if (tier === undefined) continue
+    const weight = weightFor(constitution, tier)
+    if (weight > bestWeight) {
+      best = tier
+      bestWeight = weight
+    }
+  }
+  return best
+}
+
 const PACKS = fileURLToPath(new URL("../../assets/domain-packs/", import.meta.url))
 
 /**

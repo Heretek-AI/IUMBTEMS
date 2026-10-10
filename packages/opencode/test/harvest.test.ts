@@ -41,16 +41,27 @@ afterAll(async () => {
 })
 
 describe("darkharvest on the real host", () => {
-  test("only the harvester seat is advertised the harvest tools", async () => {
+  test("only the harvester seat is advertised the teardown tools; callable seats get target and prior art", async () => {
     await h.run("hello")
     const plain = (lastAgentRequest(h.llm.requests)?.tools ?? []).map((tool) => tool.function.name)
     expect(plain).not.toContain("es_harvest_plan")
+    expect(plain).not.toContain("es_harvest_target")
     await h.run("hello", { agent: "harvester" })
     const tools = (lastAgentRequest(h.llm.requests)?.tools ?? []).map((tool) => tool.function.name)
     expect(tools).toContain("es_harvest_plan")
     expect(tools).toContain("es_harvest_scan")
     expect(tools).toContain("es_harvest_matrix")
     expect(tools).toContain("es_harvest_complete")
+    expect(tools).toContain("es_harvest_target")
+    await h.run("hello", { agent: "grill" })
+    const grill = (lastAgentRequest(h.llm.requests)?.tools ?? []).map((tool) => tool.function.name)
+    expect(grill).toContain("es_harvest_target")
+    expect(grill).toContain("es_harvest_prior_art")
+    expect(grill).not.toContain("es_harvest_plan")
+    await h.run("hello", { agent: "scout" })
+    const scout = (lastAgentRequest(h.llm.requests)?.tools ?? []).map((tool) => tool.function.name)
+    expect(scout).toContain("es_harvest_target")
+    expect(scout).not.toContain("es_harvest_prior_art")
   })
 
   test("the loop enforces licences and writes the report", async () => {
@@ -94,15 +105,40 @@ describe("darkharvest on the real host", () => {
     expect((await readProfile(h.directory, "gizmo"))?.license).toMatchObject({ spdx: "GPL-3.0", verified: true })
   })
 
+  test("#109: the grill gets a clean-room verdict for a GPL target, as JSON", async () => {
+    await write(h.directory, "gpl-target/LICENSE", GPL3)
+    await write(h.directory, "gpl-target/src/b.ts", "export const b = 2\n")
+    const { tools } = await h.run(
+      call("es_harvest_target", { objective: "can we depend on the widget", targets: ["local:gpl-target"] }),
+      { agent: "grill" },
+    )
+    expect(tools[0]?.status).toBe("completed")
+    const json = /--- verdicts \(JSON\) ---\n(\[[\s\S]*\])[\s]*$/.exec(tools[0]?.text ?? "")?.[1]
+    expect(json).toBeDefined()
+    const verdicts = JSON.parse(json!) as Array<{
+      target: string
+      license: { spdx: string; family: string; verified: boolean }
+      verdict: string
+      provenance: { origin: string }
+    }>
+    expect(verdicts).toHaveLength(1)
+    expect(verdicts[0]).toMatchObject({
+      target: "local:gpl-target",
+      license: { spdx: "GPL-3.0", family: "copyleft", verified: true },
+      verdict: "clean-room",
+    })
+    expect(typeof verdicts[0]?.provenance.origin).toBe("string")
+  })
+
   test("the harvester cannot hand-edit engine state or plan outside the project", async () => {
-    const before = await Bun.file(path.join(h.directory, ".factory/harvest/matrix.json")).text()
+    const before = await Bun.file(path.join(h.directory, ".factory/harvest/runs/default/matrix.json")).text()
     const edit = await h.run(
-      `${call("write", { path: ".factory/harvest/matrix.json", content: "{}" })} ${call("write", { path: ".factory/harvest/notes/teardown.md", content: "notes" })}`,
+      `${call("write", { path: ".factory/harvest/runs/default/matrix.json", content: "{}" })} ${call("write", { path: ".factory/harvest/notes/teardown.md", content: "notes" })}`,
       { agent: "harvester" },
     )
     expect(edit.tools[0]?.status).toBe("error")
     expect(edit.tools[1]?.status).toBe("completed")
-    expect(await Bun.file(path.join(h.directory, ".factory/harvest/matrix.json")).text()).toBe(before)
+    expect(await Bun.file(path.join(h.directory, ".factory/harvest/runs/default/matrix.json")).text()).toBe(before)
     const outside = await h.run(
       call("es_harvest_plan", { objective: "x", candidates: [{ name: "s", source: `local:${state}` }], force: true }),
       { agent: "harvester" },

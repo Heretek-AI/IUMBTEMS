@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { renderEvalPrompt, resolveServePath, startServeFixtures } from "../src/evals/serve.ts"
+import { renderEvalPrompt, resolveServePath, startServeFixtures, usesFixtureServer } from "../src/evals/serve.ts"
 
 describe("eval fixture server", () => {
   let dir = ""
@@ -36,5 +36,11 @@ describe("eval fixture server", () => {
       "Fetch http://127.0.0.1:9/page.txt now",
     )
     expect(renderEvalPrompt("No placeholder here", "http://127.0.0.1:9")).toBe("No placeholder here")
+  })
+
+  test("only fixture-server cases need the loopback allowance (S4.4)", () => {
+    expect(usesFixtureServer("Fetch {{SERVE_URL}}/handoff.txt with es_research_fetch")).toBe(true)
+    expect(usesFixtureServer("Tear down these local candidates")).toBe(false)
+    expect(usesFixtureServer("")).toBe(false)
   })
 })

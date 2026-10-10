@@ -7,8 +7,8 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "bun test ./packages",
-    "typecheck": "for p in core testkit opencode cli; do tsc -p packages/$p/tsconfig.json --noEmit --composite false || exit 1; done",
+    "test": "bun --conditions=browser test $(bun scripts/packages.ts --browser | sed 's|^|packages/|') && bun test $(bun scripts/packages.ts --no-browser | sed 's|^|packages/|')",
+    "typecheck": "for p in $(bun scripts/packages.ts --tsconfig); do tsc -p packages/$p/tsconfig.json --noEmit --composite false || exit 1; done",
     "lint": "biome check .",
     "deps:check": "bun scripts/deps.ts",
     "evals": "bun scripts/evals.ts",

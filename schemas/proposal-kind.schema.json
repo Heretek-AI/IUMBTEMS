@@ -2,7 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "string",
   "enum": [
-    "cli",
-    "tui"
+    "prompt-guidance",
+    "gate-tuning",
+    "domain-pack"
   ]
 }

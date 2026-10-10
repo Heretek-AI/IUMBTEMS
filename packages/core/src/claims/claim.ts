@@ -20,6 +20,8 @@ export interface ClaimInput {
   readonly query?: string
   readonly finding?: string
   readonly severity?: Claim["severity"]
+  /** Source-quality tier; carried through, never part of the claim id (#113). */
+  readonly tier?: string
 }
 
 /** The claim is malformed; the message says why (model- and human-facing). */
@@ -42,8 +44,8 @@ const cap = (text: string, max = NK_MAX_FIELD) => {
   return points.length > max ? points.slice(0, max).join("") : text
 }
 
-/** Content fields only: status and witness change over time, the claim does not. */
-export function claimId(claim: Omit<Claim, "id" | "status" | "witness">): string {
+/** Content fields only: status, witness and tier change over time, the claim does not. */
+export function claimId(claim: Omit<Claim, "id" | "status" | "witness" | "tier">): string {
   const { tag, statement, source, location, parents, reasoning, falsification, query, finding, nkKey, severity } = claim
   return hashJson({
     tag,
@@ -119,6 +121,7 @@ export function normalizeClaim(raw: ClaimInput): Claim {
     ...(raw.falsification?.trim() ? { falsification: raw.falsification.trim() } : {}),
     ...(tag === "NEGATIVE_KNOWLEDGE" ? { query, finding, ...(nkKey ? { nkKey } : {}) } : {}),
     ...(raw.severity ? { severity: raw.severity } : {}),
+    ...(raw.tier?.trim() ? { tier: raw.tier.trim() } : {}),
   }
   const parsed = ClaimSchema.safeParse({ id: claimId(content), status: "LIVE", ...content })
   if (!parsed.success)

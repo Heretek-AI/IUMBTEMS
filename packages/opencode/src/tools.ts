@@ -14,6 +14,7 @@ import {
   scoutTools,
 } from "@heretek-ai/es-core"
 import { Error as ToolError } from "@opencode/plugin/promise/tool"
+import { modelProblemLines } from "./agents.ts"
 import type { Runtime } from "./runtime.ts"
 
 export function registerTools(editor: { add(tool: any): void }, runtime: Runtime) {
@@ -64,7 +65,10 @@ export function registerTools(editor: { add(tool: any): void }, runtime: Runtime
       },
       execute: async (input: unknown, context: { agent: string; sessionID: string; signal: AbortSignal }) => {
         try {
-          return { content: await def.execute(input ?? {}, context) }
+          const content = await def.execute(input ?? {}, context)
+          if (def.name !== "es_status" || runtime.modelProblems.size === 0 || typeof content !== "string")
+            return { content }
+          return { content: [content, ...modelProblemLines(runtime.modelProblems)].join("\n") }
         } catch (error) {
           if (error instanceof ToolError) throw error
           throw new ToolError({ message: error instanceof Error ? error.message : String(error) })

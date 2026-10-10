@@ -42,6 +42,7 @@ import { sha256 } from "../util/hash.ts"
 import { run, splitCommand } from "../util/proc.ts"
 import * as Git from "../worktree/git.ts"
 import { once } from "./journal.ts"
+import { readPresetSeed, SELF_DOGFOOD_BASE_BRANCH, SELF_DOGFOOD_PRESET } from "./preset.ts"
 import { indexRun } from "./runs.ts"
 import {
   type Audit,
@@ -61,6 +62,7 @@ import { deferredFacts, diffFrontier, readFrontier, reopenedNodes, treeCounts } 
 
 /** The operation was refused; state is unchanged. */
 export class FactoryError extends Error {}
+
 /** The factory is halted; only a human can resume it. */
 export class FactoryHalted extends FactoryError {}
 
@@ -104,6 +106,8 @@ export interface PrRequest {
   readonly base: string
   readonly title: string
   readonly body: string
+  /** Preset that seeded the run, if any: the opener pins the base for preset runs. */
+  readonly preset?: string
 }
 
 export interface PrOpener {
@@ -239,6 +243,7 @@ export class Factory {
       version: FACTORY_STATE_VERSION,
       runId: newRunId(this.now()),
       stage: "GRILL",
+      mode: "build",
       createdAt: at,
       updatedAt: at,
       spend: { usd: 0, estimated: false, events: 0 },
@@ -355,6 +360,10 @@ export class Factory {
       async (state) => {
         if (state.stage !== "GRILL" || state.phases.length)
           throw new FactoryError(`A run already exists (${state.runId}, ${state.stage}).`)
+        // A preset-seeded run carries its seed into sealed run state, so the
+        // base-branch pin below survives the grill rewriting the roadmap.
+        const seed = await readPresetSeed(this.root).catch(() => undefined)
+        if (seed) state.preset = seed.preset
         await this.audit(actor, "factory.begin", { runId: state.runId })
         return state
       },
@@ -431,13 +440,54 @@ export class Factory {
     })
   }
 
+  /**
+   * Start a research-only run (#110, Option A): no frontier, no approvals, no
+   * git repo needed. The run enters RESEARCH directly with an objective and a
+   * mandatory spend ceiling, and completes at DONE. Spend tracking, STOP,
+   * halts, liveness and the run index are the factory machinery, unchanged.
+   * Setting the ceiling is human-only: the CLI and the headless verb pass
+   * `--max-usd`, never an agent.
+   */
+  async beginResearchRun(input: { objective: string; ceilingUSD: number }, actor = "system"): Promise<FactoryState> {
+    const objective = String(input.objective ?? "").trim()
+    if (!objective) throw new FactoryError("A research run needs an objective: what question is it answering?")
+    if (!Number.isFinite(input.ceilingUSD) || !(input.ceilingUSD > 0))
+      throw new FactoryError(
+        "A research run needs a spend ceiling in USD (--max-usd <USD>); seats halt when the spend reaches it.",
+      )
+    return this.mutate(
+      actor,
+      async (state) => {
+        if (await exists(this.layout.state))
+          throw new FactoryError(`A run already exists (${state.runId}, ${state.stage}).`)
+        state.mode = "research"
+        state.objective = objective
+        state.spendCeilingUSD = input.ceilingUSD
+        state.stage = "RESEARCH"
+        await this.audit(actor, "research.begin", {
+          runId: state.runId,
+          objective,
+          spendCeilingUSD: state.spendCeilingUSD,
+        })
+        return state
+      },
+      { create: true },
+    )
+  }
+
   // ------------------------------------------------------------ research → spec
 
   async completeResearch(agentId: string | undefined): Promise<FactoryState> {
-    this.requireSeat(agentId, "factory")
+    // Build runs complete through the factory; research runs complete through
+    // the deep-researcher coordinator (#111). The factory seat stays admitted
+    // in research mode for tests and human-driven completion.
+    this.requireSeat(agentId, "factory", "deep-researcher")
     return this.mutate(`agent:${agentId}`, async (state) => {
       this.requireStage(state, "RESEARCH")
       this.requireAuditsClear(state)
+      if (state.mode !== "research" && seatOf(agentId) !== "factory")
+        throw new FactoryError("Only the factory seat may complete a build run.")
+      const researchMode = state.mode === "research"
       const report = await readFile(this.layout.researchReport, "utf8").catch(() => undefined)
       if (report === undefined)
         throw new FactoryError("Research is not done: .factory/research/REPORT.md does not exist.")
@@ -454,18 +504,21 @@ export class Factory {
         )
       // Facts the grill could not settle from the repo are research's to answer:
       // each deferred fact node must be cited on a (grounded) claim line.
+      // Research runs have no frontier, so there is nothing to require.
       const frontier = await readFrontier(this.root).catch(() => undefined)
-      const unanswered = (frontier ? deferredFacts(frontier) : []).filter(
-        (fact) => !audit.claims.some((claim) => claim.text.includes(`(fact:${fact.id})`)),
-      )
-      if (unanswered.length)
-        throw new FactoryError(
-          `Research must answer every fact the grill deferred to it. Missing: ${unanswered
-            .map((fact) => `${fact.id} — ${fact.question}`)
-            .join(
-              "; ",
-            )}. Answer each on a tagged claim line in REPORT.md marked (fact:<id>), e.g. "- Postgres 16 is supported (fact:db) [VERIFIED: …]".`,
+      if (!researchMode) {
+        const unanswered = (frontier ? deferredFacts(frontier) : []).filter(
+          (fact) => !audit.claims.some((claim) => claim.text.includes(`(fact:${fact.id})`)),
         )
+        if (unanswered.length)
+          throw new FactoryError(
+            `Research must answer every fact the grill deferred to it. Missing: ${unanswered
+              .map((fact) => `${fact.id} — ${fact.question}`)
+              .join(
+                "; ",
+              )}. Answer each on a tagged claim line in REPORT.md marked (fact:<id>), e.g. "- Postgres 16 is supported (fact:db) [VERIFIED: …]".`,
+          )
+      }
       // The report's claims become the research dossier (witnessed again on
       // write). With a domain pack active, its constitution vets every claim
       // and gates the report by the pack's accept threshold; no pack leaves
@@ -500,7 +553,7 @@ export class Factory {
         this.layout.researchDossier,
         buildDossier({
           mode: "research",
-          subject: frontier?.idea ?? "research",
+          subject: frontier?.idea ?? state.objective ?? "research",
           claims,
           now: this.now(),
         }),
@@ -516,8 +569,9 @@ export class Factory {
         ...store.all().flatMap((claim) => (claim.source ? [claim.source.sha256] : [])),
       ])
       const removed = await cache.prune(cited)
-      state.stage = "SPEC"
-      await this.audit(`agent:${agentId}`, "stage.spec", {
+      // A research run ends here; a build run moves on to SPEC.
+      state.stage = researchMode ? "DONE" : "SPEC"
+      await this.audit(`agent:${agentId}`, researchMode ? "stage.done" : "stage.spec", {
         reportHash: sha256(report),
         coverage: audit.coverage,
         prunedSources: removed.length,
@@ -542,6 +596,14 @@ export class Factory {
       const roadmap = RoadmapSchema.parse(JSON.parse(await readFile(this.layout.roadmap, "utf8")))
       if (roadmap.phases.length > this.limits.maxPhases)
         throw new FactoryError(`Roadmap exceeds ${this.limits.maxPhases} phases.`)
+      // A preset-seeded run pins its release base: the grill must have kept
+      // baseBranch when it rewrote the roadmap, otherwise the run would
+      // silently release onto the wrong branch (falling back to the checkout
+      // or "main"). Refuse to advance instead.
+      if (state.preset === SELF_DOGFOOD_PRESET && roadmap.baseBranch !== SELF_DOGFOOD_BASE_BRANCH)
+        throw new FactoryError(
+          `Preset "${SELF_DOGFOOD_PRESET}" requires roadmap.baseBranch "${SELF_DOGFOOD_BASE_BRANCH}" (the grill must keep it when rewriting the roadmap); found ${roadmap.baseBranch === undefined ? "no baseBranch" : `"${roadmap.baseBranch}"`}. Restore it, then start the build again.`,
+        )
       const hashes = new Map(check.record.subject.map((item) => [item.path, item.sha256]))
       state.phases = roadmap.phases.map((phase) => ({
         id: phase.id,
@@ -1139,6 +1201,13 @@ export class Factory {
       throw new FactoryError(
         `Gates are green on ${runBranch}, but no PR opener is available. Push the branch, open a PR to ${state.baseBranch}, then run \`es factory pr <url>\`.`,
       )
+    // Defence in depth for preset runs: the base was pinned at startBuild,
+    // and the opener pins it again — never release a preset run elsewhere.
+    const preset = state.preset
+    if (preset === SELF_DOGFOOD_PRESET && state.baseBranch !== SELF_DOGFOOD_BASE_BRANCH)
+      throw new FactoryError(
+        `Preset "${SELF_DOGFOOD_PRESET}" releases onto "${SELF_DOGFOOD_BASE_BRANCH}", not "${state.baseBranch}".`,
+      )
     const body = await this.prBody(state)
     const opened = await once(this.root, `${state.runId}:pr`, () =>
       pr.open({
@@ -1150,6 +1219,7 @@ export class Factory {
           .join("; ")
           .slice(0, 200)}`,
         body,
+        ...(preset !== undefined ? { preset } : {}),
       }),
     )
     return this.mutate(`agent:${agentId}`, async (current) => {

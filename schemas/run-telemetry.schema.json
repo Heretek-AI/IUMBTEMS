@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "type": "string"
+    },
+    "stage": {
+      "type": "string"
+    },
+    "halt": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "from"
+      ],
+      "additionalProperties": false
+    },
+    "spend": {
+      "type": "object",
+      "properties": {
+        "usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "estimated": {
+          "type": "boolean"
+        },
+        "events": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "usd",
+        "estimated",
+        "events"
+      ],
+      "additionalProperties": false
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "minLength": 1
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "replans": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "seat": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "kind": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "rule": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "category": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "attempts",
+          "replans",
+          "failures"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "gateRejections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "rule": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "logs": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "rule",
+          "count",
+          "logs"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "auditFindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "sources": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "severity",
+          "count",
+          "sources"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "auditChain": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string"
+        },
+        "trail": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "seq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "hash": {
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64
+              },
+              "action": {
+                "type": "string",
+                "minLength": 1
+              },
+              "phase": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "seq",
+              "hash",
+              "action"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "entries",
+        "valid",
+        "trail"
+      ],
+      "additionalProperties": false
+    },
+    "seal": {
+      "type": "object",
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "valid"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "id",
+    "mode",
+    "stage",
+    "spend",
+    "phases",
+    "gateRejections",
+    "auditFindings",
+    "auditChain",
+    "seal"
+  ],
+  "additionalProperties": false
+}

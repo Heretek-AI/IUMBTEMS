@@ -56,7 +56,10 @@ Answer the interview (one question at a time). Set the **spend ceiling**
 explicitly — the run cannot start without it. When the design tree is settled,
 approve it:
 
-- TUI: `/es-approve` previews what you are approving, then points at the terminal; or
+- TUI: `/es-approve` previews what you are approving, asks for your passphrase (masked), and records it; or
+- browser: `es-fleet web` prints a one-time URL (from a checkout:
+  `bun packages/fleet/bin/es-fleet.js web` — `es-fleet` is private, never
+  published to npm); the approvals page previews the subject and hashes, then asks for your passphrase (masked) and records with channel `web`; or
 - terminal: `es approve frontier` (asks for your passphrase)
 
 ## 3. Research and spec
@@ -71,8 +74,9 @@ unattended run. Either way the factory drives RESEARCH and then SPEC:
 
 Seats run in the foreground, so a research turn can take minutes. That is
 work, not a stall: see "Watching a run" below. When the spec is ready,
-approve it the same way (`/es-approve` previews it; `es approve spec` records
-it).
+approve it the same way (`/es-approve` records it in the TUI, the approvals
+page records it in the browser, `es approve spec` records
+it in a terminal).
 
 ## 4. Autonomous build
 
@@ -104,6 +108,10 @@ long ago it acted.
     waits on you.
   - A toast announces stage changes, and also a paused factory after three
     turns without progress (run `/factory` to continue).
+- **Web** (`es-fleet web` prints a one-time loopback URL — from a
+  checkout: `bun packages/fleet/bin/es-fleet.js web`): the fleet
+  overview and per-task pages across the whole fleet — DAG, spend against
+  the ceiling, pending approvals, live updates with a stale banner (#130).
 - **Headless**: `es factory run --headless` prints JSON lines.
   - It emits a `progress` event every 30 s while a turn runs.
   - `stalled` carries its evidence (the headline, last activity, running
@@ -112,6 +120,11 @@ long ago it acted.
     - `quiet`: lifecycle and progress only;
     - `info`: one line per tool call;
     - `debug`: raw harness events with long strings clipped.
+  - `--events jsonl` replaces the human lines with a versioned envelope per
+    line (`turn-metrics` after every turn: spend delta + tool activity);
+    `--events-file <path>` writes the envelopes to a file instead.
+    SIGINT/SIGTERM cancel the run (exit 130, resumable);
+    `--turn-timeout S` aborts a hung turn. See `docs/HEADLESS.md`.
 
 `es status` from an agent's shell cannot verify the run (the private state
 dir is masked there); agents call the `es_status` tool, which shows the same
@@ -129,10 +142,24 @@ the run exposed (those are M6 bugs to fix, not waivers). The run's artifacts
 live under `.factory/` (specs and roadmap tracked; runtime, runs and worktrees
 ignored).
 
+## 7. Deep research (no build)
+
+For a question with no code to build, skip the factory: `es research deep
+"<question>" --output <dir> --max-usd N` (or `/research deep <question>
+--max-usd N` in the TUI) starts a research-only run and drives the
+deep-researcher headlessly. Watch it with `es status` in the output dir:
+thesis (`alpha.md`), antithesis (`beta.md`), then the synthesizer's
+`REPORT.md`, completing at DONE. Same ceiling/STOP/halt discipline, same
+sealed evidence.
+
 ## Notes
 
 - Provider keys come from the environment or the harness store; they are never
   written into `.factory/`.
+- Upgrading from 0.7: the plugin options `search_engine`, `max_iterations`
+  and `mode` were removed in 1.0 — a config that still carries them warns
+  once (`Ignored unknown plugin options: …`) and otherwise loads. Delete
+  those keys; only `models` per tier is needed (see §1).
 - Budgets use host-reported usage where exposed; estimates are labelled
   "estimated".
 - A failed run is evidence: fix the harness, re-grill if the design changed,

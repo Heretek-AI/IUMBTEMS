@@ -1,0 +1,47 @@
+{
+  "name": "@heretek-ai/es-fleet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Epistemic Swarm fleet daemon: concurrent task DAGs in isolated worktrees with per-task spend ceilings (human-only; ships from the repo only until its RPC is stable).",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Heretek-AI/IUMBTEMS.git",
+    "directory": "packages/fleet"
+  },
+  "bin": {
+    "es-fleet": "./bin/es-fleet.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./src/*.ts",
+      "bun": "./src/*.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "files": [
+    "bin",
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@heretek-ai/es-core": "workspace:*",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@heretek-ai/es-testkit": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

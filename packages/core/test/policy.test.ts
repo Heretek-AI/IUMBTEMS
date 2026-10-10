@@ -7,9 +7,12 @@ import {
   evaluateRead,
   evaluateShell,
   evaluateWrite,
+  HUMAN_VERBS,
+  invokesHumanOnly,
   rebaseline,
   verifyControl,
 } from "../src/trust/index.ts"
+import { BOOLEAN_FLAGS, parseArgs } from "../src/util/args.ts"
 
 let root: string
 let state: string
@@ -29,6 +32,12 @@ afterAll(async () => {
 })
 
 const ctx = () => ({ root, worktree, stateDir: state })
+const ctxMode = (runMode: "build" | "research" | undefined) => ({
+  root,
+  worktree,
+  stateDir: state,
+  ...(runMode === undefined ? {} : { runMode }),
+})
 const effect = (decision: { effect: string }) => decision.effect
 
 describe("control classification", () => {
@@ -68,6 +77,21 @@ describe("write policy", () => {
     }
   })
 
+  test("fleet isolation: .fleet/ is deny-write outside the seat's own task worktree (#124)", () => {
+    // Nobody — seats or the user's own agents — writes fleet state directly.
+    for (const agent of [undefined, "build", "factory", "es-programmer", "es-manager", "qa"]) {
+      for (const target of [".fleet/worktrees/task-b/src/x.ts", ".fleet/admin.lock", ".fleet"]) {
+        expect([agent, target, effect(evaluateWrite(ctx(), agent, target))]).toEqual([agent, target, "deny"])
+      }
+    }
+    // Inside its own task worktree, a worktree-scoped seat writes normally.
+    const taskCtx = () => ({ root, worktree: path.join(root, ".fleet/worktrees/task-a"), stateDir: state })
+    expect(effect(evaluateWrite(taskCtx(), "es-programmer", ".fleet/worktrees/task-a/src/x.ts"))).toBe("allow")
+    // ...but not a sibling task's worktree, and not .git inside its own.
+    expect(effect(evaluateWrite(taskCtx(), "es-programmer", ".fleet/worktrees/task-b/src/x.ts"))).toBe("deny")
+    expect(effect(evaluateWrite(taskCtx(), "es-programmer", ".fleet/worktrees/task-a/.git/config"))).toBe("deny")
+  })
+
   test("the project config is a control file for every agent, in the editor and the shell", () => {
     for (const agent of [undefined, "build", "factory", "es-manager", "harvester"])
       expect(effect(evaluateWrite(ctx(), agent, ".factory/config.json"))).toBe("deny")
@@ -82,8 +106,14 @@ describe("write policy", () => {
       ".factory/harvest/widget/profile.json",
       ".factory/harvest/VENDOR-PLAN.md",
       ".factory/harvest/clean-room/widget-search.md",
+      ".factory/harvest/runs/grill-1/plan.json",
+      ".factory/harvest/runs/grill-1/widget/profile.json",
+      ".factory/harvest/runs/grill-1/HARVEST.md",
       ".factory/brainstorm/scores.json",
       ".factory/brainstorm/ideas.json",
+      ".factory/brainstorm/runs/grill-1/plan.json",
+      ".factory/brainstorm/runs/grill-1/ideas.json",
+      ".factory/brainstorm/runs/grill-1/BRAINSTORM.md",
       ".factory/design/tokens.json",
       ".factory/design/STYLE_GUIDE.md",
     ]
@@ -111,14 +141,14 @@ describe("write policy", () => {
     for (const agent of [undefined, "build", "factory", "es-research-alpha", "es-research-beta", "es-manager"])
       for (const file of evidence)
         expect([agent, file, effect(evaluateWrite(ctx(), agent, file))]).toEqual([agent, file, "deny"])
-    expect(effect(evaluateWrite(ctx(), "factory", ".factory/research/REPORT.md"))).toBe("allow")
+    // REPORT.md is not evidence: its writer is the run mode (see below).
+    expect(effect(evaluateWrite(ctxMode("build"), "factory", ".factory/research/REPORT.md"))).toBe("allow")
   })
 
-  test("one writer per research file: alpha its notes, beta its notes, the factory the report (#60)", () => {
+  test("one writer per research file: alpha its notes, beta its notes (#60)", () => {
     const owner: Record<string, string> = {
       ".factory/research/alpha.md": "es-research-alpha",
       ".factory/research/beta.md": "es-research-beta",
-      ".factory/research/REPORT.md": "factory",
     }
     for (const [file, writer] of Object.entries(owner))
       for (const agent of ["es-research-alpha", "es-research-beta", "factory"])
@@ -129,6 +159,51 @@ describe("write policy", () => {
         ])
     // Seats keep no other files under research/.
     expect(effect(evaluateWrite(ctx(), "es-research-alpha", ".factory/research/notes.md"))).toBe("deny")
+  })
+
+  test("REPORT.md has one writer per run mode: the factory in build runs, the synthesizer in research runs (#111)", () => {
+    const report = ".factory/research/REPORT.md"
+    // Build runs: factory-docs seats write it, research-report seats do not.
+    for (const agent of ["factory", "es-manager"])
+      expect(["build", agent, effect(evaluateWrite(ctxMode("build"), agent, report))]).toEqual([
+        "build",
+        agent,
+        "allow",
+      ])
+    for (const agent of ["es-research-synthesizer", "deep-researcher", "es-research-alpha", "es-research-beta"])
+      expect(["build", agent, effect(evaluateWrite(ctxMode("build"), agent, report))]).toEqual(["build", agent, "deny"])
+    // Research runs: only the synthesizer writes it.
+    expect(effect(evaluateWrite(ctxMode("research"), "es-research-synthesizer", report))).toBe("allow")
+    for (const agent of ["factory", "es-manager", "deep-researcher", "es-research-alpha", "es-research-beta"])
+      expect(["research", agent, effect(evaluateWrite(ctxMode("research"), agent, report))]).toEqual([
+        "research",
+        agent,
+        "deny",
+      ])
+    // An unreadable mode denies both writers (fail closed).
+    for (const agent of ["factory", "es-manager", "es-research-synthesizer", "deep-researcher"])
+      expect(["unknown", agent, effect(evaluateWrite(ctxMode(undefined), agent, report))]).toEqual([
+        "unknown",
+        agent,
+        "deny",
+      ])
+    // Non-seat agents keep host semantics in every mode.
+    for (const mode of ["build", "research", undefined] as const)
+      for (const agent of [undefined, "build"])
+        expect([mode, agent, effect(evaluateWrite(ctxMode(mode), agent, report))]).toEqual([mode, agent, "allow"])
+  })
+
+  test("research runs: the synthesizer alone writes the report, the coordinator plans in notes/ (#111)", () => {
+    // The mode split is read from the sealed run state (PolicyContext.runMode).
+    expect(effect(evaluateWrite(ctxMode("build"), "factory", ".factory/research/REPORT.md"))).toBe("allow")
+    expect(effect(evaluateWrite(ctxMode("build"), "deep-researcher", ".factory/research/REPORT.md"))).toBe("deny")
+    expect(effect(evaluateWrite(ctxMode("research"), "es-research-synthesizer", ".factory/research/REPORT.md"))).toBe(
+      "allow",
+    )
+    expect(effect(evaluateWrite(ctx(), "es-research-synthesizer", ".factory/research/alpha.md"))).toBe("deny")
+    expect(effect(evaluateWrite(ctx(), "deep-researcher", ".factory/research/notes/plan.md"))).toBe("allow")
+    expect(effect(evaluateWrite(ctxMode("research"), "deep-researcher", ".factory/research/REPORT.md"))).toBe("deny")
+    expect(effect(evaluateWrite(ctx(), "es-research-alpha", ".factory/research/notes/plan.md"))).toBe("deny")
   })
 
   test("manager cannot escape docs/ with ..", () => {
@@ -216,6 +291,13 @@ describe("shell policy", () => {
     expect(shell("build", "es audit verify").effect).toBe("allow")
     expect(shell("build", "es audit show").effect).toBe("allow")
     expect(shell("build", "es scout show").effect).toBe("allow")
+    // Deep-research runs drive a harness CLI too: human-only, like audit/scout.
+    expect(shell("build", "es research deep 'what queue' --output /tmp/r --max-usd 5").effect).toBe("deny")
+    expect(shell("factory", "es research deep 'what queue' --output /tmp/r --max-usd 5").effect).toBe("deny")
+    expect(shell("build", "es research search x").effect).toBe("allow")
+    // Rendering signs nothing: any seat may render, but export/retract stay human-only.
+    expect(shell("build", "es research render --format html").effect).toBe("allow")
+    expect(shell("factory", "es research render --format md --out /tmp/r.md").effect).toBe("allow")
     // The 1.1.0 audit (#44, #39): quoting, package runners and interpreters.
     for (const command of [
       "es 'approve' spec",
@@ -232,6 +314,22 @@ describe("shell policy", () => {
       expect([command, shell("build", command).effect]).toEqual([command, "deny"])
   })
 
+  test("es factory run is human-only: launching a headless run spends money like audit/scout runs", () => {
+    for (const command of [
+      "es factory run --headless",
+      "es --json factory run",
+      "es factory --max-turns 3 run",
+      "es factory --cwd . run --headless",
+      "es --cwd . factory run",
+    ])
+      for (const agent of ["build", "es-programmer", "factory"])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // The neighbouring factory verbs keep their grants.
+    expect(shell("build", "es factory status").effect).toBe("allow")
+    expect(shell("build", "es factory begin").effect).toBe("allow")
+    expect(shell("build", "es factory stop").effect).toBe("allow")
+  })
+
   test("a flag or `--` before the verb still reads as that verb, as the CLI parser does (#88)", () => {
     for (const command of [
       "es --cwd . approve spec",
@@ -245,6 +343,8 @@ describe("shell policy", () => {
       "es gates --cwd=. install-git",
       "es --cwd . audit src --max-usd 5",
       "es --cwd . config set models.deep x/y",
+      "es --cwd . research deep 'what queue' --output /tmp/r --max-usd 5",
+      "es research --output /tmp/r deep 'what queue' --max-usd 5",
       "npx @heretek-ai/es-cli --cwd . approve spec",
     ])
       for (const agent of ["build", "es-programmer"])
@@ -258,6 +358,104 @@ describe("shell policy", () => {
       "es --cwd . factory status",
     ])
       expect([command, shell("build", command).effect]).toEqual([command, "allow"])
+  })
+
+  test("a boolean flag with an inline value still reads as that verb (--bool=value, #97)", () => {
+    for (const command of [
+      "es --json=1 config set models.deep x/y",
+      "es --json=x approve frontier",
+      "es --json=1 trust",
+      "es --json=x waive lint/check --reason y",
+      "es --json=1 audit src --max-usd 5",
+      'es --json=1 scout "a parser"',
+      "es --json=1 reseal --sign",
+      "es --cwd=. --json=x approve frontier",
+    ])
+      for (const agent of ["build", "es-programmer"])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // Reads keep working with an inline boolean value.
+    for (const command of ["es --json=1 status", "es --json=x config show", "es --json=1 audit verify"])
+      expect([command, shell("build", command).effect]).toEqual([command, "allow"])
+  })
+
+  test("the fleet binary is human-only except status and --help (#122)", () => {
+    // Starting or stopping the fleet spends or kills money: never from an agent.
+    for (const command of [
+      "es-fleet start --max-usd 10",
+      "es-fleet stop",
+      "es-fleet task add --file dag.json",
+      "es-fleet task list",
+      "es-fleet task cancel t1",
+      "es-fleet watch",
+      "es-fleet gc",
+      "es-fleet",
+      "es-fleet --max-usd 10",
+      "es-fleet 'start' --max-usd 10",
+      "npx -y @heretek-ai/es-fleet start --max-usd 10",
+      "bunx @heretek-ai/es-fleet@0.1.0 stop",
+      "node ./node_modules/@heretek-ai/es-fleet/bin/es-fleet.js start --max-usd 10",
+      `bun -e "Bun.spawn(['es-fleet','stop'])"`,
+      "sh -c 'es-fleet start --max-usd 10'",
+    ])
+      for (const agent of ["build", "factory", "es-programmer", undefined])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // Flags (and `--`) before the verb still read as that verb (#88 shapes).
+    for (const command of [
+      "es-fleet --state-dir /tmp/s start --max-usd 10",
+      "es-fleet --state-dir=/tmp/s stop",
+      "es-fleet -- stop",
+      "es-fleet --max-usd 10 start",
+      "es-fleet --json task list",
+      "es-fleet --bogus-flag status --verbose",
+    ])
+      for (const agent of ["build", "es-programmer"])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // Status is a read: agents may poll it (and read --help) in any flag shape.
+    for (const command of [
+      "es-fleet status",
+      "es-fleet --state-dir /tmp/s status",
+      "es-fleet --state-dir=/tmp/s status",
+      "es-fleet --json status",
+      "es-fleet -- status",
+      "es-fleet status --json",
+      "es-fleet --help",
+      "es-fleet status --help",
+    ])
+      for (const agent of ["build", "factory", "es-programmer", undefined])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "allow"])
+  })
+
+  test("es-fleet status --token is human-only: the flag leaks the bus bearer token (#126)", () => {
+    for (const command of [
+      "es-fleet status --token",
+      "es-fleet --state-dir x status --token",
+      "es-fleet status --token=x",
+    ])
+      for (const agent of ["build", "factory", "es-programmer", undefined])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // Plain status stays a read.
+    for (const command of ["es-fleet status", "es-fleet --state-dir x status"])
+      for (const agent of ["build", "factory", "es-programmer", undefined])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "allow"])
+  })
+
+  test("fleet isolation: seats may name only their own task worktree in the shell (#124)", () => {
+    const own = path.join(root, ".fleet/worktrees/task-a")
+    const ownCtx = { root, worktree: own, stateDir: state }
+    const ownShell = (agent: string | undefined, command: string) =>
+      evaluateShell(ownCtx, agent, command, { sandboxAvailable: true })
+    // Another task's paths are denied, however wrapped.
+    for (const command of [
+      "git -C .fleet/worktrees/task-b status",
+      "cat .fleet/worktrees/task-b/out.txt",
+      `cat ${path.join(root, ".fleet/worktrees/task-b/out.txt")}`,
+      "ls .fleet/worktrees",
+      "git worktree list",
+    ])
+      expect([command, ownShell("es-programmer", command).effect]).toEqual([command, "deny"])
+    // Its own worktree is fine.
+    for (const command of [`ls ${own}`, `cat ${path.join(own, "out.txt")}`, "git status"])
+      expect([command, ownShell("es-programmer", command).effect]).toEqual([command, "allow"])
   })
 
   test("a verb only mentioned in text is still denied, and the refusal points at passing the text by file (#86)", () => {
@@ -391,4 +589,113 @@ describe("control baseline", () => {
     await writeFile(path.join(root, ".factory/config.json"), '{"afterEdit":"fast"}')
     expect((await verifyControl(root)).violations.join("\n")).toContain(".factory/config.json changed")
   })
+})
+
+// ------------------------------------------------------------------ argv parity (#97)
+//
+// One grammar for the CLI and the human-only rule. The CLI dispatches on
+// parseArgs(argv, BOOLEAN_FLAGS).positionals; the shell policy reads the same
+// words quote-blind. This property pins the denial direction: whatever argv
+// the CLI would dispatch to a human-only verb, the policy must deny.
+
+/** Deterministic PRNG (mulberry32): the seed prints on failure, no dependency. */
+const mulberry32 = (seed: number) => () => {
+  seed |= 0
+  seed = (seed + 0x6d2b79f5) | 0
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+}
+
+const BINARIES: readonly string[][] = [
+  ["es"],
+  ["epistemic-swarm"],
+  ["npx", "@heretek-ai/es-cli"],
+  ["bunx", "@heretek-ai/es-cli@1.1.4"],
+  ["node", "./bin/es.js"],
+]
+const GLOBAL_FLAGS: readonly string[][] = [
+  ["--cwd", "."],
+  ["--run", "r1"],
+  ["--json"],
+  ["--json=1"],
+  ["--json=x"],
+  ["--full=yes"],
+  ["--x=y"],
+  ["--"],
+  ["--cwd=."],
+  ["--verbose"],
+  ["--tag", "v1"],
+]
+const TRAILING: readonly string[] = [
+  "x",
+  "frontier",
+  "spec",
+  "--max-usd",
+  "5",
+  "models.deep",
+  "lint/check",
+  "audit-01",
+  "--reason",
+  "why",
+  "extra",
+  "--force",
+]
+/** Sub-verbs per HUMAN_VERBS entry: [satisfying..., failing...]. */
+const SUBS: Readonly<Record<string, readonly [readonly string[], readonly string[]]>> = {
+  factory: [
+    ["resume", "pr", "init", "run"],
+    ["begin", "stop", "status"],
+  ],
+  gates: [["install-git"], ["run"]],
+  lsp: [["install"], ["status", "diagnostics"]],
+  config: [["set"], ["show"]],
+  research: [
+    ["retract", "export"],
+    ["search", "fetch", "audit", "verify-brief"],
+  ],
+  audit: [
+    ["src", "dismiss", "./src", "audit-01"],
+    ["verify", "show"],
+  ],
+  scout: [["leftpad"], ["show"]],
+}
+
+describe("argv parity: the policy denies whatever the CLI would run as human-only (#97)", () => {
+  for (const seed of [20261008, 97, 881]) {
+    test(`seed ${seed}: 2,000 generated argv, zero missed denials`, () => {
+      const rand = mulberry32(seed)
+      const pick = <T>(items: readonly T[]): T => items[Math.floor(rand() * items.length)]!
+      const missed: string[] = []
+      for (let i = 0; i < 2000; i++) {
+        const binary = pick(BINARIES)
+        const pre = Array.from({ length: Math.floor(rand() * 4) }, () => pick(GLOBAL_FLAGS)).flat()
+        const [verb] = pick(HUMAN_VERBS)
+        const subs = SUBS[verb!]
+        // Bare verbs, satisfying and failing sub-verbs all occur; flags may
+        // sit between the verb and its sub-verb (the #88 shape).
+        const mid = Array.from({ length: Math.floor(rand() * 3) }, () => pick(GLOBAL_FLAGS)).flat()
+        const roll = rand()
+        const sub =
+          subs === undefined
+            ? roll < 0.5
+              ? [pick(TRAILING)]
+              : []
+            : roll < 0.4
+              ? [pick(subs[0])]
+              : roll < 0.7
+                ? [pick(subs[1])]
+                : []
+        const trailing = Array.from({ length: Math.floor(rand() * 4) }, () => pick(TRAILING))
+        const rest = [...pre, verb!, ...mid, ...sub, ...trailing]
+        const [command, next] = parseArgs(rest, BOOLEAN_FLAGS).positionals
+        const rule = HUMAN_VERBS.find(([name]) => name === command)
+        const humanOnly = rule !== undefined && (rule[1] === undefined || rule[1](next))
+        if (humanOnly && !invokesHumanOnly([...binary, ...rest].join(" ")))
+          missed.push(`case ${i}: ${[...binary, ...rest].join(" ")}`)
+        if (missed.length > 4) break
+      }
+      expect(missed).toEqual([])
+    })
+  }
 })
