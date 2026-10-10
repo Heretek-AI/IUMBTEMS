@@ -60,14 +60,9 @@ import {
 import { factorySummary } from "./summary.ts"
 import { deferredFacts, diffFrontier, readFrontier, reopenedNodes, treeCounts } from "./tree.ts"
 
-/** A run seeded by `es factory init --preset`: the marker lives in sealed run state (see save/readUnsafe). */
-export type PresetRunState = FactoryState & { preset?: string }
-
 /** The operation was refused; state is unchanged. */
 export class FactoryError extends Error {}
 
-/** Read the seeding preset carried in sealed run state, if any. */
-const runPreset = (state: FactoryState): string | undefined => (state as PresetRunState).preset
 /** The factory is halted; only a human can resume it. */
 export class FactoryHalted extends FactoryError {}
 
@@ -228,7 +223,7 @@ export class Factory {
 
   /** Read + verify without taking the state lock (the caller holds it). */
   private async readUnsafe(): Promise<FactoryState | undefined> {
-    const raw = await readJson<{ version?: unknown; preset?: unknown }>(this.layout.state)
+    const raw = await readJson<{ version?: unknown }>(this.layout.state)
     if (raw === undefined) return undefined
     if (raw.version !== FACTORY_STATE_VERSION)
       throw new FactoryError(
@@ -239,12 +234,7 @@ export class Factory {
     // re-signs it (`es reseal --sign`) after reviewing what changed.
     const problem = await verifyEngineFile(this.layout.state, this.deps.stateDir)
     if (problem) throw new FactoryError(sealProblemMessage(problem, this.deps.stateDir))
-    const state = FactoryStateSchema.parse(raw)
-    if (typeof raw.preset === "string" && raw.preset) {
-      const out: Record<string, unknown> = { ...state, preset: raw.preset }
-      return out as FactoryState
-    }
-    return state
+    return FactoryStateSchema.parse(raw)
   }
 
   private fresh(): FactoryState {
@@ -264,14 +254,7 @@ export class Factory {
 
   private async save(state: FactoryState) {
     state.updatedAt = this.now().toISOString()
-    const parsed = FactoryStateSchema.parse(state)
-    // The preset seed marker is not part of the schema, so a plain parse
-    // would strip it: persist it alongside the parsed state. It stays sealed
-    // (written and read under the state lock with the engine sidecar).
-    const out: Record<string, unknown> = { ...parsed }
-    const preset = runPreset(state)
-    if (preset !== undefined) out.preset = preset
-    await writeJson(this.layout.state, out)
+    await writeJson(this.layout.state, FactoryStateSchema.parse(state))
     await signEngineFile(this.layout.state, this.deps.stateDir)
     await this.indexRun(state)
   }
@@ -380,7 +363,7 @@ export class Factory {
         // A preset-seeded run carries its seed into sealed run state, so the
         // base-branch pin below survives the grill rewriting the roadmap.
         const seed = await readPresetSeed(this.root).catch(() => undefined)
-        if (seed) (state as PresetRunState).preset = seed.preset
+        if (seed) state.preset = seed.preset
         await this.audit(actor, "factory.begin", { runId: state.runId })
         return state
       },
@@ -617,7 +600,7 @@ export class Factory {
       // baseBranch when it rewrote the roadmap, otherwise the run would
       // silently release onto the wrong branch (falling back to the checkout
       // or "main"). Refuse to advance instead.
-      if (runPreset(state) === SELF_DOGFOOD_PRESET && roadmap.baseBranch !== SELF_DOGFOOD_BASE_BRANCH)
+      if (state.preset === SELF_DOGFOOD_PRESET && roadmap.baseBranch !== SELF_DOGFOOD_BASE_BRANCH)
         throw new FactoryError(
           `Preset "${SELF_DOGFOOD_PRESET}" requires roadmap.baseBranch "${SELF_DOGFOOD_BASE_BRANCH}" (the grill must keep it when rewriting the roadmap); found ${roadmap.baseBranch === undefined ? "no baseBranch" : `"${roadmap.baseBranch}"`}. Restore it, then start the build again.`,
         )
@@ -1220,7 +1203,7 @@ export class Factory {
       )
     // Defence in depth for preset runs: the base was pinned at startBuild,
     // and the opener pins it again — never release a preset run elsewhere.
-    const preset = runPreset(state)
+    const preset = state.preset
     if (preset === SELF_DOGFOOD_PRESET && state.baseBranch !== SELF_DOGFOOD_BASE_BRANCH)
       throw new FactoryError(
         `Preset "${SELF_DOGFOOD_PRESET}" releases onto "${SELF_DOGFOOD_BASE_BRANCH}", not "${state.baseBranch}".`,

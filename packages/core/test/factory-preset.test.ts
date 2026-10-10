@@ -8,6 +8,7 @@ import path from "node:path"
 import {
   buildPrArgs,
   EsConfigSchema,
+  FactoryStateSchema,
   factoryLayout,
   GatesConfigSchema,
   initFromPreset,
@@ -179,6 +180,20 @@ describe("preset-seeded runs pin the release base (S2.2)", () => {
     expect(() =>
       buildPrArgs({ branch: "factory/x/integration", base: "other", title: "t", body: "b", preset: "self-dogfood" }),
     ).toThrow(/rewrite/)
+  })
+
+  test("the seed marker is part of the run-state schema, not a field the parse strips", () => {
+    const state = {
+      version: 2,
+      runId: "run-x",
+      stage: "GRILL",
+      createdAt: "2026-10-09T00:00:00.000Z",
+      updatedAt: "2026-10-09T00:00:00.000Z",
+      preset: "self-dogfood",
+    }
+    expect(FactoryStateSchema.parse(state).preset).toBe("self-dogfood")
+    expect(FactoryStateSchema.safeParse({ ...state, preset: "" }).success).toBe(false)
+    expect(FactoryStateSchema.parse({ ...state, preset: undefined }).preset).toBeUndefined()
   })
 })
 
