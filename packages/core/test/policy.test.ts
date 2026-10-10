@@ -282,6 +282,18 @@ describe("shell policy", () => {
     expect(shell(undefined, "cd x && epistemic-swarm waive lint/check").effect).toBe("deny")
     expect(shell("build", "es config set models.deep x/y").effect).toBe("deny")
     expect(shell("factory", `es research retract ${"c".repeat(64)} --event retracted`).effect).toBe("deny")
+    // #255: export is human-only like retract and deep: a direct named denial for every agent kind.
+    for (const agent of [
+      undefined,
+      "build",
+      "factory",
+      "es-research-alpha",
+      "es-research-beta",
+      "es-research-synthesizer",
+      "deep-researcher",
+      "es-programmer",
+    ])
+      expect([agent, shell(agent, "es research export").effect]).toEqual([agent, "deny"])
     expect(shell("build", "es config show").effect).toBe("allow")
     // Audit and scout runs drive a harness CLI: never from an agent's shell.
     expect(shell("build", "es audit src --max-usd 5").effect).toBe("deny")
