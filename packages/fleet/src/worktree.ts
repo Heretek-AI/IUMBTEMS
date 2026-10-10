@@ -172,11 +172,14 @@ export interface AllocateOptions {
   /** Stamp override (tests, determinism). */
   readonly now?: string
   /**
-   * Test-only interleaving hooks (repair-151 S5.1): `afterAdd` runs after
-   * `addWorktree` (repo lock released) and before the `allocated` commit, so
-   * a test can run `gc` in exactly that window. Production callers pass none.
+   * Test-only interleaving hooks (repair-151 S5.1): `beforePreRegister` runs
+   * after the early check and before the `allocating` pre-register, so a test
+   * can make two allocators of one task pass the check together; `afterAdd`
+   * runs after `addWorktree` (repo lock released) and before the `allocated`
+   * commit, so a test can run `gc` in exactly that window. Production callers
+   * pass none.
    */
-  readonly hooks?: { readonly afterAdd?: () => Promise<void> }
+  readonly hooks?: { readonly beforePreRegister?: () => Promise<void>; readonly afterAdd?: () => Promise<void> }
 }
 
 /**
@@ -196,15 +199,9 @@ export async function allocateWorktree(
   const dir = fleetWorktreeDir(repoRoot, taskId)
   const branch = fleetBranch(taskId)
   const now = options.now ?? new Date().toISOString()
-  // Phase 1: check (a fresh `allocating` record means another allocator is
-  // in flight; a stale one is abandoned and may be taken over).
+  // Phase 1: an early check, so a taken task fails before any disk work.
   await withLock(paths.lock, async () => {
-    const registry = (await loadRegistry(stateRoot)) ?? emptyRegistry()
-    const current = registry.worktrees[taskId]
-    if (current?.status === "allocated")
-      throw new FleetError(`Task ${JSON.stringify(taskId)} already has a worktree allocated.`)
-    if (current?.status === "allocating" && !allocatingStale(current, Date.now()))
-      throw new FleetError(`Task ${JSON.stringify(taskId)} is already being allocated concurrently.`)
+    refuseTaken(((await loadRegistry(stateRoot)) ?? emptyRegistry()).worktrees[taskId], taskId)
   })
   try {
     await lstat(dir)
@@ -215,13 +212,15 @@ export async function allocateWorktree(
   }
   // Pre-register under the fleet lock, before any git work: gc treats
   // `allocating` as live, so it can neither orphan the new worktree nor
-  // persist a registry without this record.
+  // persist a registry without this record. The check is repeated in this
+  // same critical section: two allocators of one task can both pass phase 1,
+  // and the second must refuse here, before it can overwrite the first's
+  // record (and later drop it on its own failed `addWorktree`).
   const base = options.base ?? (await git(repoRoot, ["rev-parse", "HEAD"])).stdout.trim()
+  await options.hooks?.beforePreRegister?.()
   await withLock(paths.lock, async () => {
     const registry = (await loadRegistry(stateRoot)) ?? emptyRegistry()
-    const current = registry.worktrees[taskId]
-    if (current?.status === "allocated")
-      throw new FleetError(`Task ${JSON.stringify(taskId)} already has a worktree allocated.`)
+    refuseTaken(registry.worktrees[taskId], taskId)
     const record: WorktreeRecord = { taskId, dir, branch, base, createdAt: now, status: "allocating" }
     await persistRegistry(paths, { v: REGISTRY_VERSION, worktrees: { ...registry.worktrees, [taskId]: record } })
   })
@@ -260,6 +259,18 @@ export async function allocateWorktree(
 /** True when an `allocating` record is older than the stale threshold. */
 const allocatingStale = (record: WorktreeRecord, nowMs: number): boolean =>
   nowMs - Date.parse(record.createdAt) >= ALLOCATING_STALE_MS
+
+/**
+ * Refuse a task that is already taken: an `allocated` record, or a fresh
+ * `allocating` one (another allocator is in flight). A stale `allocating`
+ * record is abandoned and may be taken over. Callers hold the fleet lock.
+ */
+function refuseTaken(current: WorktreeRecord | undefined, taskId: string): void {
+  if (current?.status === "allocated")
+    throw new FleetError(`Task ${JSON.stringify(taskId)} already has a worktree allocated.`)
+  if (current?.status === "allocating" && !allocatingStale(current, Date.now()))
+    throw new FleetError(`Task ${JSON.stringify(taskId)} is already being allocated concurrently.`)
+}
 
 /** Remove our own `allocating` pre-registration (failed `addWorktree`). */
 async function dropAllocating(

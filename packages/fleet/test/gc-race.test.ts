@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { git as coreGit } from "@heretek-ai/es-core"
-import { allocateWorktree, gcWorktrees, loadRegistry } from "../src/worktree.ts"
+import { allocateWorktree, type GcReport, gcWorktrees, loadRegistry, type WorktreeRecord } from "../src/worktree.ts"
 
 const git = (cwd: string, ...args: string[]) => coreGit(cwd, args, { allowFail: true })
 
@@ -80,6 +80,52 @@ describe("gc race (S5.1)", () => {
       )
       const report = await gcWorktrees(root, state)
       expect(report.dropped).toContain("task-stale")
+      expect(await tip(root, "main")).toBe(base)
+    } finally {
+      await cleanup()
+      await rm(state, { recursive: true, force: true })
+    }
+  })
+
+  test("two allocators of one task: the loser never drops the winner's record (gc in the window keeps it)", async () => {
+    const { root, base, cleanup } = await fixture()
+    const state = await stateRoot()
+    try {
+      // Both allocators pass the early check before either pre-registers.
+      let arrived = 0
+      let release!: () => void
+      const bothChecked = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const beforePreRegister = async () => {
+        arrived += 1
+        if (arrived === 2) release()
+        await bothChecked
+      }
+      const calls: Array<Promise<WorktreeRecord>> = []
+      let report: GcReport | undefined
+      // The winner waits for the loser to give up, then gc runs in its window.
+      const hooks = (self: number) => ({
+        beforePreRegister,
+        afterAdd: async () => {
+          await calls[1 - self]!.then(
+            () => undefined,
+            () => undefined,
+          )
+          report = await gcWorktrees(root, state)
+        },
+      })
+      calls.push(allocateWorktree(root, state, "task-twin", { base, hooks: hooks(0) }))
+      calls.push(allocateWorktree(root, state, "task-twin", { base, hooks: hooks(1) }))
+      const results = await Promise.allSettled(calls)
+      const won = results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []))
+      const lost = results.flatMap((result) => (result.status === "rejected" ? [String(result.reason)] : []))
+      expect(won).toHaveLength(1)
+      expect(lost).toHaveLength(1)
+      expect(lost[0]).toContain("is already being allocated concurrently")
+      expect(report?.removed).toEqual([])
+      expect((await git(root, "worktree", "list", "--porcelain")).stdout).toContain(won[0]!.dir)
+      expect((await loadRegistry(state))?.worktrees["task-twin"]?.status).toBe("allocated")
       expect(await tip(root, "main")).toBe(base)
     } finally {
       await cleanup()
