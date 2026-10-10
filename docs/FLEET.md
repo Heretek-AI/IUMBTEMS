@@ -102,7 +102,13 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
   a background start spawns a detached child over an IPC channel with a
   one-time start grant, waits for its pidfile-written report, and prints
   the child's error otherwise — a TTY-less child without the grant exits
-  non-zero. `es-fleet status --token` (human-only, needs a TTY) prints the
+  non-zero. The grant is a plain IPC message, not a secret: it proves only
+  that the spawner opened an IPC channel, so any process able to spawn
+  `bin.js` that way can start the fleet without the confirmation. It is
+  defense in depth, like the TTY check before it (which `script` could fake).
+  The boundaries that hold are the human-only shell policy on `es-fleet`
+  (`trust/policy.ts`) and the `ES_SANDBOX` refusal in `assertHumanStart`.
+  `es-fleet status --token` (human-only, needs a TTY) prints the
   bus bearer token.
 
 ## Telemetry bus and watch (#126)
