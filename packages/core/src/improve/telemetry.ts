@@ -455,7 +455,12 @@ const SCRUBBED = "[redacted]"
  * `GITHUB_TOKEN=[redacted]` (S3.1, #135).
  */
 const SECRET_PAIR = new RegExp(
-  `([A-Za-z0-9_.-]*${SECRET_KEY.source}[A-Za-z0-9_.-]*\\s*[:=]\\s*)(['"]?)([^\\s'";,]+)`,
+  // (?<!…) pins each attempt to a word start. Without it, every start
+  // position inside a long word rescanned the word looking for the keyword
+  // (O(n²): a 250KB word took ~120s). Equivalent: a trailing giveback can
+  // never rescue a failed separator ([:=] can't match a word char), so the
+  // name is always the maximal run and success never depends on the start.
+  `(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]*${SECRET_KEY.source}[A-Za-z0-9_.-]*\\s*[:=]\\s*)(['"]?)([^\\s'";,]+)`,
   "gi",
 )
 
@@ -470,8 +475,13 @@ const BEARER_TOKEN = /\b([Bb][Ee][Aa][Rr][Ee][Rr]\s+)[A-Za-z0-9\-._~+/=]+/g
 const TOKEN_SHAPE =
   /\b(?:github_pat_[A-Za-z0-9_]+|gh[oprsu]_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]+|xox[abprs]-[A-Za-z0-9-]+|AKIA[0-9A-Z]{16})\b/g
 
-/** PEM private-key blocks, whole. */
-const PEM_BLOCK = /-----BEGIN [^-]*PRIVATE KEY[^-]*-----[\s\S]*?-----END [^-]*PRIVATE KEY[^-]*-----/g
+/**
+ * PEM private-key blocks, whole. The label is bounded ({0,40}) and pinned by
+ * backreference so hostile input can't backtrack polynomially between
+ * open-ended runs on both sides of PRIVATE KEY (#85). Real labels (RSA, EC,
+ * OPENSSH, ENCRYPTED, …) are far shorter; lowercase labels no longer match.
+ */
+const PEM_BLOCK = /-----BEGIN ([A-Z0-9 ]{0,40}?)PRIVATE KEY-----[\s\S]*?-----END \1PRIVATE KEY-----/g
 
 /** Replace secret-looking values and private-state-dir paths, preserving shape. */
 export function scrubSecrets<T>(value: T, options: { stateDir?: string } = {}): T {
