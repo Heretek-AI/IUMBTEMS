@@ -283,6 +283,19 @@ describe("S3.1 scrubSecrets redacts secret values, not just keys", () => {
     expect(scrubbed.plain).toBe("phase p1 failed 5 times")
   })
 
+  test("token shapes with inner dashes or underscores are redacted whole, not just their prefix", () => {
+    const scrubbed = scrubSecrets({
+      project: "leaked sk-proj-AbC123_def-456XYZtail in prose",
+      service: "sk-svcacct-Qq9_Rr8-Ss7end rejected",
+      userToServer: "ghu_UserToServer123abc",
+      refresh: "ghr_RefreshToken456def",
+    })
+    const text = JSON.stringify(scrubbed)
+    for (const fragment of ["AbC123", "456XYZtail", "Qq9_Rr8", "Ss7end", "UserToServer123abc", "RefreshToken456def"])
+      expect(text).not.toContain(fragment)
+    expect(scrubbed.project).toBe("leaked [redacted] in prose")
+  })
+
   test("a halt reason carrying NAME=value harvests scrubbed and schema-valid", async () => {
     const sealed = await sealedCopy("run-replan", (state) => {
       ;(state.halt as Record<string, unknown>).reason = "phase p1 failed: GITHUB_TOKEN=ghp_harvestSecret001"

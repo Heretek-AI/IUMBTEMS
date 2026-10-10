@@ -462,9 +462,13 @@ const SECRET_PAIR = new RegExp(
 /** `Bearer <token>`: the scheme stays, the credential goes. */
 const BEARER_TOKEN = /\b([Bb][Ee][Aa][Rr][Ee][Rr]\s+)[A-Za-z0-9\-._~+/=]+/g
 
-/** Known token shapes standing bare in prose. */
+/**
+ * Known token shapes standing bare in prose. Bodies take `-` and `_` too:
+ * `sk-proj-…`/`sk-svcacct-…` keys carry inner dashes, and a body that stops
+ * at the first one would redact only the prefix and leak the rest.
+ */
 const TOKEN_SHAPE =
-  /\b(?:github_pat_[A-Za-z0-9_]+|sk-ant-[A-Za-z0-9_-]+|gho_[A-Za-z0-9]+|ghs_[A-Za-z0-9_]+|ghp_[A-Za-z0-9]+|sk-[A-Za-z0-9]+|xox[abprs]-[A-Za-z0-9-]+|AKIA[0-9A-Z]{16})\b/g
+  /\b(?:github_pat_[A-Za-z0-9_]+|gh[oprsu]_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]+|xox[abprs]-[A-Za-z0-9-]+|AKIA[0-9A-Z]{16})\b/g
 
 /** PEM private-key blocks, whole. */
 const PEM_BLOCK = /-----BEGIN [^-]*PRIVATE KEY[^-]*-----[\s\S]*?-----END [^-]*PRIVATE KEY[^-]*-----/g
