@@ -11,7 +11,6 @@ import {
   formatReport,
   git,
   livenessLines,
-  loadPrompt,
   loadSkills,
   parseArgs,
   parseAuditTarget,
@@ -303,9 +302,9 @@ export default Plugin.define({
           await ctx.session.prompt({
             ...prompt,
             sessionID,
-            // The coordinator flow is single-sourced from the seat's prompt in
-            // core; this only adds the run state.
-            text: `${await runtime.factory.summary()}\nDeep research runs adversarially, with no human answering questions mid-flow:\n\n${(await loadPrompt("deep-researcher")).body}`,
+            // The coordinator flow is the deep-researcher seat's system prompt
+            // (single-sourced in core); this only adds the run state.
+            text: `${await runtime.factory.summary()}\nDeep research runs adversarially, with no human answering questions mid-flow; follow your Flow through es_research_complete.`,
             delivery,
           } as any)
         },

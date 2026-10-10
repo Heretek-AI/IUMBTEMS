@@ -8,6 +8,7 @@ import {
   factoryLayout,
   gateRunner,
   HUMAN_VERBS,
+  loadPrompt,
   parseArgs,
   readApproval,
   recentAuditEntries,
@@ -541,7 +542,10 @@ describe("es research deep (headless deep research)", () => {
       expect(driven.out).toContain("Research run run-")
       expect(driven.out).toContain("Research complete: out/.factory/research/REPORT.md")
       expect(prompts[0]).toContain("Deep research: what queue")
-      expect(prompts[0]).toContain("es-research-alpha")
+      // The flow is the deep-researcher seat's system prompt (opencode/src/agents.ts);
+      // the message carries only the run, the question and the headless note.
+      expect(prompts[0]).toContain("headless run")
+      expect(prompts[0]).not.toContain((await loadPrompt("deep-researcher")).body.trim())
       const done = await new Factory(out, { gates: gateRunner({ stateDir: state }), stateDir: state }).read()
       expect(done).toMatchObject({ mode: "research", stage: "DONE" })
     } finally {

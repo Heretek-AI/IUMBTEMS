@@ -14,7 +14,6 @@ import {
   factoryLayout,
   flag,
   gateRunner,
-  loadPrompt,
   parseAuditTarget,
   parseModelRef,
   readAssessments,
@@ -376,9 +375,10 @@ export async function researchDeepCommand(context: HumanContext, args: Args): Pr
       {
         agent: "deep-researcher",
         prompt: async () =>
-          // The coordinator flow is single-sourced from the seat's prompt in
-          // core; this only adds the run-specific question and headless note.
-          `${await factory.summary()}\nDeep research: ${query}. This is a headless run: no human will answer questions.\n\n${(await loadPrompt("deep-researcher")).body}`,
+          // The coordinator flow is the deep-researcher seat's system prompt
+          // (single-sourced in core); this only adds the run-specific question
+          // and the headless note.
+          `${await factory.summary()}\nDeep research: ${query}. This is a headless run: no human will answer questions; follow your Flow through es_research_complete.`,
         finished: async (current) =>
           current.stage === "DONE" ? { type: "done", report: path.relative(context.root, report) } : undefined,
         progress: async (current) => {
