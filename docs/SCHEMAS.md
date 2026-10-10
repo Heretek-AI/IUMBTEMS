@@ -23,6 +23,7 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | brainstorm-score | `schemas/brainstorm-score.schema.json` |
 | brainstorm-shortlist-entry | `schemas/brainstorm-shortlist-entry.schema.json` |
 | brief | `schemas/brief.schema.json` |
+| chain-trail-entry | `schemas/chain-trail-entry.schema.json` |
 | channel | `schemas/channel.schema.json` |
 | check-status | `schemas/check-status.schema.json` |
 | claim-location | `schemas/claim-location.schema.json` |
@@ -40,6 +41,7 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | dossier | `schemas/dossier.schema.json` |
 | es-config | `schemas/es-config.schema.json` |
 | eval-telemetry | `schemas/eval-telemetry.schema.json` |
+| failure-entry | `schemas/failure-entry.schema.json` |
 | frontier-node | `schemas/frontier-node.schema.json` |
 | frontier | `schemas/frontier.schema.json` |
 | gate-budgets | `schemas/gate-budgets.schema.json` |
@@ -72,6 +74,7 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | roadmap-phase | `schemas/roadmap-phase.schema.json` |
 | roadmap | `schemas/roadmap.schema.json` |
 | run-phase-telemetry | `schemas/run-phase-telemetry.schema.json` |
+| run-state-seal | `schemas/run-state-seal.schema.json` |
 | run-telemetry | `schemas/run-telemetry.schema.json` |
 | scout-advisory | `schemas/scout-advisory.schema.json` |
 | scout-assessment | `schemas/scout-assessment.schema.json` |

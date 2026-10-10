@@ -9,10 +9,48 @@ versioned, secret-scrubbed telemetry dataset; `es improve distill` clusters
 recurring failures into reviewable proposals a human applies; the
 `self-dogfood` preset builds this repo from an issue into a draft PR.
 The published trio (core/CLI/plugin) releases in lockstep as 1.6.0.
+It is the first npm release since 1.1.4: 1.1.5 through 1.5.0 below were
+never published on their own and ship here, together with the fixes from
+the 1.0 cutover review (#151, remediated in #152).
+
+**Security.**
+- **ADR 0002 I3: the CLI signs only what it previewed.** `es approve`
+  binds the previewed subject hash and refuses a preview older than
+  120 s; TUI preview tickets are redeemed once and expire after 120 s.
+- **#143: CLI passphrase attempt limiting.** Every CLI human verb shares
+  the TUI's 5-per-10-minute limit per state dir, with audited lockouts.
+- **Human-only verbs.** `es factory run` (a spend-bearing headless run)
+  and `es-fleet status --token` (the bus bearer token) are refused from
+  agent shells.
+- **#99: no "human" agent name bypass.** Research tools trust a human
+  operator only when the CLI builds them with `operator: "human"`; an
+  agent named `human` gets the registry check like any other.
+- **#111: one REPORT.md writer per run mode,** read from sealed run
+  state; when the mode cannot be read, neither seat may write it.
+- **SSRF guard resolves DNS.** Every fetch hop, redirects included,
+  resolves its host and refuses when any address is non-routable (fail
+  closed); each hop gets its own timeout.
+- **#135: secret values are scrubbed,** not just secret-named keys:
+  `NAME=value` pairs, `Bearer` credentials, known token shapes (dashed
+  `sk-proj-…` bodies included) and PEM private keys.
+- **Control files.** `.factory/improve/**` is deny-write for agents; the
+  self-dogfood preset writes its control files atomically under lock,
+  then rebaselines and audits.
+- **Fleet.** Request headers parse into a `Map` (CodeQL #84, prototype
+  pollution); package-boundary gaps closed (web→core and plugin→fleet
+  imports, inline `type` imports that still load at runtime).
+
+**Behaviour changes.**
+- Headless turn metrics print only at `--log-level debug` or to
+  `--events jsonl`; default output is unchanged from before #120.
+- `es-fleet start` asks for confirmation with `--foreground` too; a
+  background start waits for the daemon's pidfile before reporting.
+- A seat whose configured model is missing on the host is refused on
+  every tool call, primaries included (#96).
 
 **New.**
 - **#135: telemetry harvester over runs and evals.** Read-only
-  `es improve harvest --runs <dir>... --evals <dir>... --out <file>`
+  `es improve harvest --runs <dir>[,<dir>] [--evals <dir>[,<dir>]] --out <file>`
   (agent-safe) producing the versioned `TelemetrySchema` dataset: phases
   with replans and failure counts, halts with reasons, spend, gate
   rejections by rule, audit findings by kind/severity, eval results with
@@ -42,6 +80,26 @@ The published trio (core/CLI/plugin) releases in lockstep as 1.6.0.
   to a draft PR is tracked on #137.
 - **#138: release 1.6.0.** Version bump, changelog and status line; draft
   release PR from `integration/phase-5` to `rewrite`.
+
+**Fixes.**
+- **#122:** a plain `es-fleet start` now daemonizes; the detached child
+  used to fail the TTY check while the parent printed "starting".
+- **#147:** a failed landing merge aborts only a real conflict and keeps
+  the original error otherwise.
+- **Fleet worktrees:** `gc` can no longer remove a worktree mid-allocation,
+  and a second allocator of the same task refuses instead of dropping the
+  first one's record.
+- **#137:** a preset run's release base is pinned end to end (the grill
+  cannot drop it, and the PR opener refuses `--base main`).
+- **#120:** tool metrics carry `ms` and `seat`.
+- **#130:** the web task page shows run liveness (headline, stage, seats,
+  research progress).
+- **#136:** clusters key on (seat, failure kind, rule or category) with
+  evidence links; dropped proposals are reported with their reason.
+- **#109:** the darkharvest grader reads the run the case produced;
+  loopback is allowed only for fixture-server eval cases.
+- **#111:** `es research deep` and `/research deep` no longer send the
+  deep-researcher prompt twice.
 
 ## 1.5.0 — 2026-10-09
 

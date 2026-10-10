@@ -167,4 +167,36 @@ describe("daemon tick", () => {
       await cleanup()
     }
   })
+
+  test("a gate failure marks the task failed and moves no branch", async () => {
+    const { root, state, base, cleanup } = await fixture()
+    try {
+      await saveDag(state, addTask(emptyDag(), taskInput("a"), STAMP))
+      const daemon = new FleetDaemon({
+        repoRoot: root,
+        stateRoot: state,
+        esBin: "/stub/es.js",
+        fleetCeilingUsd: 100,
+        checkGates: () => Promise.resolve({ ok: false as const, reason: "test gate failure" }),
+        spawnWorker: fakeSpawner().spawner,
+      })
+      await daemon.tick()
+      await daemon.foldReport("a", { outcome: "done", spendUsd: 1 })
+      await daemon.tick()
+      const dag = (await loadDag(state))!
+      expect(dag.tasks.a.status).toBe("failed")
+      expect(dag.tasks.a.reason).toMatch(/test gate failure/)
+      const integration = await coreGit(
+        root,
+        ["show-ref", "--verify", "--quiet", "refs/heads/fleet/integration/fleet"],
+        {
+          allowFail: true,
+        },
+      )
+      expect(integration.code).not.toBe(0)
+      expect((await coreGit(root, ["rev-parse", "main"])).stdout.trim()).toBe(base)
+    } finally {
+      await cleanup()
+    }
+  })
 })

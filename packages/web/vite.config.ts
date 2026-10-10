@@ -11,9 +11,9 @@ export default defineConfig({
     sourcemap: true,
   },
   server: {
-    // Local dev only: proxy the bus so the UI can run against a live daemon.
-    proxy: {
-      "/fleet": "http://127.0.0.1:0",
-    },
+    // Local dev only: point ES_FLEET_PROXY at a live daemon (e.g.
+    // http://127.0.0.1:8471) so the UI can run against it. Unset by
+    // default: there is no dead proxy to 127.0.0.1:0.
+    proxy: process.env.ES_FLEET_PROXY ? { "/fleet": process.env.ES_FLEET_PROXY } : undefined,
   },
 })

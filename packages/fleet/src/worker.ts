@@ -5,7 +5,7 @@
 import { type ChildProcess, spawn } from "node:child_process"
 import { createInterface } from "node:readline"
 import { Factory, gateRunner, readJson, run, writeJson } from "@heretek-ai/es-core"
-import { FleetError } from "./lifecycle.ts"
+import { FleetError, isPidAlive } from "./lifecycle.ts"
 import type { TaskReport } from "./scheduler.ts"
 import { fleetPaths } from "./state.ts"
 
@@ -305,15 +305,6 @@ export class WorkerSupervisor {
       }
     }
     return { reattached, failed }
-  }
-}
-
-const isPidAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error: any) {
-    return error?.code === "EPERM"
   }
 }
 

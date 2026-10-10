@@ -38,7 +38,7 @@ directly with no frontier, no approvals and no git repo required, and
 `completeResearch` ends at DONE (deferred frontier facts are not required;
 the dossier takes the run's objective). Spend tracking, STOP, halts, liveness,
 `es status`/`es watch`/`es runs` and the sealed evidence cache are the same
-machinery. The completing seat will be the research coordinator (#111).
+machinery. The completing seat is the research coordinator (#111).
 
 ## 2. Seats
 
@@ -90,7 +90,7 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
   (`engine.key`), so a planted entry an agent drops into
   `.factory/research/sources/` is refused on read.
 - Sources arrive through an ordered backend chain (`research.backends`,
-  default Brave → Firecrawl → SearXNG → direct; `searchProvider` still works
+  default Scraper-Swarm gateway → Brave → Firecrawl → SearXNG → direct; `searchProvider` still works
   as a one-element alias). Failures classify as unavailable, auth,
   rate-limited (429 Retry-After sets the cooldown), upstream or timeout and
   fail over to the next backend, which is recorded in `SourceMeta.provider`;
@@ -180,6 +180,7 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
 | `packages/cli/src/` | `es` CLI, human-only commands, headless jobs |
 | `packages/testkit/` | real-host `boot`, scripted fake model |
 | `packages/fleet/` | `es-fleet` daemon: task DAGs, isolated worktrees, per-task ceilings (private) |
+| `packages/web/` | the web control plane (private, never published): dashboard, browser approvals, config editor, evidence explorer — SolidJS, served by `es-fleet` on loopback |
 
 The queereye designer domain is `packages/core/src/queereye/`; the
 `.factory/design/` tree holds `interview.json`, `tokens.*`, `probes.json`,

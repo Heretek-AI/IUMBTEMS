@@ -94,6 +94,8 @@ export const FactoryStateSchema = z.object({
   }),
   baseBranch: z.string().optional(),
   runBranch: z.string().optional(),
+  /** Preset that seeded the run (`es factory init --preset`): preset runs pin their release base (#137). */
+  preset: z.string().min(1).optional(),
   phases: z.array(PhaseRuntimeSchema).default([]),
   activePhase: z.string().optional(),
   /** Audits not tied to a phase (a path in the project). */

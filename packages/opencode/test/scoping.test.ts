@@ -5,10 +5,25 @@
 // OpenCode v2 Permission.evaluate + Wildcard.match, MIT), so a matrix verdict
 // means what the host enforces.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { AGENTS, type AgentSpec, ALL_ES_TOOLS, bwrapAvailable } from "@heretek-ai/es-core"
+import {
+  AGENTS,
+  type AgentSpec,
+  ALL_ES_TOOLS,
+  approveStage,
+  bwrapAvailable,
+  Factory,
+  factoryLayout,
+  gateRunner,
+  type HumanSigner,
+  researchSourcesDir,
+  SourceCache,
+  sealHumanKey,
+  stringifyFrontmatter,
+  unlockHumanKey,
+} from "@heretek-ai/es-core"
 import { boot, directiveScript, evaluatePermission, type Harness, matchWildcard } from "@heretek-ai/es-testkit"
 import { createMcpServer } from "../../cli/src/mcp.ts"
 import { HOST_WEB_TOOLS, permissionRules } from "../src/agents.ts"
@@ -160,15 +175,22 @@ describe("bypass probes on the real host (fake model)", () => {
     expect(tools[0]?.text).toContain("private state dir")
   })
 
-  test("the server password never reaches a shell", async () => {
-    // End to end: the secret sits in the host's own environment, and even the
-    // user's shell must not see it (hook strips it, bwrap unsets it).
+  test("the server password never reaches a seat shell", async () => {
+    // End to end: the secret sits in the host's own environment, and even a
+    // seat's sandboxed shell must not see it (hook strips it, bwrap unsets it).
     const saved = process.env.OPENCODE_SERVER_PASSWORD
     process.env.OPENCODE_SERVER_PASSWORD = "probe-secret"
     try {
       const { tools } = await h.run(`leak ${call("shell", { command: "echo pw=$OPENCODE_SERVER_PASSWORD" })}`, {
-        agent: "build",
+        agent: "es-programmer",
       })
+      if (!bwrapAvailable()) {
+        // Without the sandbox a seat shell never runs at all: still no leak.
+        expect(tools.map((tool) => `${tool.name}:${tool.status}`)).toEqual(["shell:error"])
+        expect(tools[0]?.text).toContain("bubblewrap")
+        expect(tools[0]?.text).not.toContain("probe-secret")
+        return
+      }
       expect(tools.map((tool) => `${tool.name}:${tool.status}`)).toEqual(["shell:completed"])
       expect(tools[0]?.text).toContain("pw=")
       expect(tools[0]?.text).not.toContain("probe-secret")
@@ -219,6 +241,103 @@ describe("bypass probes on the real host (fake model)", () => {
       { agent: "es-qa-functional" },
     )
     expect(tools.map((tool) => `${tool.name}:${tool.status}`)).toEqual(["subagent:error"])
+  })
+})
+
+describe("programmer worktree scoping with an active phase worktree (#100)", () => {
+  let work: Harness
+  let workState: string
+  let signer: HumanSigner
+
+  const write = async (root: string, file: string, text: string) => {
+    await mkdir(path.dirname(path.join(root, file)), { recursive: true })
+    await writeFile(path.join(root, file), text)
+  }
+  const workFactory = () =>
+    new Factory(work.directory, { gates: gateRunner({ stateDir: workState }), stateDir: workState })
+
+  beforeAll(async () => {
+    workState = await mkdtemp(path.join(tmpdir(), "es-scoping-work-"))
+    await sealHumanKey("test-passphrase-1234", workState)
+    signer = await unlockHumanKey("test-passphrase-1234", workState)
+    work = await boot({
+      git: true,
+      script: directiveScript,
+      plugins: [{ path: pluginDir, options: { stateDir: workState, pr: "off" } }],
+      files: { "README.md": "# scoping worktree\n" },
+    })
+    // Walk the pipeline to BUILD so a phase worktree exists.
+    const factory = workFactory()
+    await factory.provisionRun("tester", 10)
+    await factory.writeFrontier("grill", {
+      version: "1.1",
+      idea: "a session handoff feature",
+      spendCeiling: { currency: "USD", maxAmount: 10 },
+      round: 1,
+      settled: true,
+      nodes: [{ id: "scope", question: "Which harness first?", status: "settled", answer: "opencode", round: 1 }],
+    })
+    await approveStage(work.directory, {
+      stage: "frontier",
+      channel: "cli",
+      approvedBy: "tester",
+      signer,
+      stateDir: workState,
+    })
+    const cache = new SourceCache(researchSourcesDir(work.directory), workState)
+    const source = await cache.put({
+      url: "https://example.test/handoff",
+      text: "Session handoff writes a file the next agent reads.",
+      provider: "fetch",
+    })
+    const layout = factoryLayout(work.directory)
+    await write(
+      work.directory,
+      path.relative(work.directory, layout.researchReport),
+      `- Handoff is file-based [VERIFIED: sha256:${source.meta.sha256} "file the next agent reads"]\n`,
+    )
+    await factory.completeResearch("factory")
+    await write(
+      work.directory,
+      ".factory/roadmap.json",
+      JSON.stringify({ version: 1, title: "Handoff", phases: [{ id: "alpha", title: "Phase alpha" }] }, null, 2),
+    )
+    await write(
+      work.directory,
+      ".factory/specs/alpha/GOAL.md",
+      stringifyFrontmatter(
+        {
+          phase: "alpha",
+          title: "Phase alpha",
+          acceptance: [{ kind: "file", id: "impl", description: "implementation exists", path: "src/alpha.ts" }],
+        },
+        "Implement alpha as a vertical slice.\n",
+      ),
+    )
+    await approveStage(work.directory, {
+      stage: "spec",
+      channel: "cli",
+      approvedBy: "tester",
+      signer,
+      stateDir: workState,
+    })
+    const started = await work.run(call("es_build_start", {}), { agent: "factory" })
+    expect(started.tools[0]?.status).toBe("completed")
+    expect((await workFactory().read())?.stage).toBe("BUILD")
+  }, 180_000)
+  afterAll(async () => {
+    await work?.close()
+    await rm(workState, { recursive: true, force: true })
+  })
+
+  test("the programmer cannot write outside its worktree when one is active", async () => {
+    // `write` (not `edit`) takes raw content, so a removed guard lets the
+    // call through instead of failing on arguments.
+    const { tools } = await work.run(`write ${call("write", { path: "PROBE-OUTSIDE.md", content: "x" })}`, {
+      agent: "es-programmer",
+    })
+    expect(tools.map((tool) => `${tool.name}:${tool.status}`)).toEqual(["write:error"])
+    expect(tools[0]?.text).toContain("may only write inside its phase worktree")
   })
 })
 

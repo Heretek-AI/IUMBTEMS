@@ -25,13 +25,18 @@
     },
     "modelLimited": {
       "type": "boolean"
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
     }
   },
   "required": [
     "case",
     "pass",
     "failures",
-    "steps"
+    "steps",
+    "source"
   ],
   "additionalProperties": false
 }

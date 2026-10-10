@@ -14,6 +14,7 @@ const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
 })
 const str = { type: "string" }
 const strArray = { type: "array", items: str }
+const num = { type: "number" }
 
 const Preview = obj(
   {
@@ -24,6 +25,8 @@ const Preview = obj(
     token: str,
     /** ADR 0002 I3: hashJson of the previewed approval subject (present on approval previews). */
     subjectHash: str,
+    /** ADR 0002 I3: when the preview was issued (present on approval previews). */
+    issuedAt: num,
   },
   ["ok", "title", "lines", "problems"],
 )
@@ -49,6 +52,16 @@ export const EsRpc = Rpc.define({
     previewApproval: {
       input: obj({ stage: { type: "string", enum: ["frontier", "spec"] } }, ["stage"]),
       output: Preview,
+    },
+    /** Validate-only redeem of an approval preview ticket: single-use + TTL, signs nothing. */
+    redeemApproval: {
+      input: obj({ stage: { type: "string", enum: ["frontier", "spec"] }, token: str, subjectHash: str }, [
+        "stage",
+        "token",
+        "subjectHash",
+      ]),
+      output: obj({ ok: { type: "boolean" } }, ["ok"]),
+      errors: { refused: obj({ reason: str }, ["reason"]) },
     },
     previewTrust: { input: obj({}), output: Preview },
     previewResume: { input: obj({}), output: Preview },

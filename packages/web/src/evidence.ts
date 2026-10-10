@@ -11,10 +11,11 @@ import type {
   EvidenceExport,
   EvidenceFilter,
   EvidenceSource,
+  Tag,
 } from "./api.ts"
 import { h, svgEl } from "./dom.ts"
 
-export type Tag = "VERIFIED" | "INFERRED" | "HYPOTHESIS" | "NEGATIVE_KNOWLEDGE"
+export type { Tag }
 
 const TAG_COLOUR: Record<string, string> = {
   VERIFIED: "#2f9e6e",

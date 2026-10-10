@@ -32,6 +32,12 @@ afterAll(async () => {
 })
 
 const ctx = () => ({ root, worktree, stateDir: state })
+const ctxMode = (runMode: "build" | "research" | undefined) => ({
+  root,
+  worktree,
+  stateDir: state,
+  ...(runMode === undefined ? {} : { runMode }),
+})
 const effect = (decision: { effect: string }) => decision.effect
 
 describe("control classification", () => {
@@ -135,14 +141,14 @@ describe("write policy", () => {
     for (const agent of [undefined, "build", "factory", "es-research-alpha", "es-research-beta", "es-manager"])
       for (const file of evidence)
         expect([agent, file, effect(evaluateWrite(ctx(), agent, file))]).toEqual([agent, file, "deny"])
-    expect(effect(evaluateWrite(ctx(), "factory", ".factory/research/REPORT.md"))).toBe("allow")
+    // REPORT.md is not evidence: its writer is the run mode (see below).
+    expect(effect(evaluateWrite(ctxMode("build"), "factory", ".factory/research/REPORT.md"))).toBe("allow")
   })
 
-  test("one writer per research file: alpha its notes, beta its notes, the factory the report (#60)", () => {
+  test("one writer per research file: alpha its notes, beta its notes (#60)", () => {
     const owner: Record<string, string> = {
       ".factory/research/alpha.md": "es-research-alpha",
       ".factory/research/beta.md": "es-research-beta",
-      ".factory/research/REPORT.md": "factory",
     }
     for (const [file, writer] of Object.entries(owner))
       for (const agent of ["es-research-alpha", "es-research-beta", "factory"])
@@ -155,15 +161,48 @@ describe("write policy", () => {
     expect(effect(evaluateWrite(ctx(), "es-research-alpha", ".factory/research/notes.md"))).toBe("deny")
   })
 
+  test("REPORT.md has one writer per run mode: the factory in build runs, the synthesizer in research runs (#111)", () => {
+    const report = ".factory/research/REPORT.md"
+    // Build runs: factory-docs seats write it, research-report seats do not.
+    for (const agent of ["factory", "es-manager"])
+      expect(["build", agent, effect(evaluateWrite(ctxMode("build"), agent, report))]).toEqual([
+        "build",
+        agent,
+        "allow",
+      ])
+    for (const agent of ["es-research-synthesizer", "deep-researcher", "es-research-alpha", "es-research-beta"])
+      expect(["build", agent, effect(evaluateWrite(ctxMode("build"), agent, report))]).toEqual(["build", agent, "deny"])
+    // Research runs: only the synthesizer writes it.
+    expect(effect(evaluateWrite(ctxMode("research"), "es-research-synthesizer", report))).toBe("allow")
+    for (const agent of ["factory", "es-manager", "deep-researcher", "es-research-alpha", "es-research-beta"])
+      expect(["research", agent, effect(evaluateWrite(ctxMode("research"), agent, report))]).toEqual([
+        "research",
+        agent,
+        "deny",
+      ])
+    // An unreadable mode denies both writers (fail closed).
+    for (const agent of ["factory", "es-manager", "es-research-synthesizer", "deep-researcher"])
+      expect(["unknown", agent, effect(evaluateWrite(ctxMode(undefined), agent, report))]).toEqual([
+        "unknown",
+        agent,
+        "deny",
+      ])
+    // Non-seat agents keep host semantics in every mode.
+    for (const mode of ["build", "research", undefined] as const)
+      for (const agent of [undefined, "build"])
+        expect([mode, agent, effect(evaluateWrite(ctxMode(mode), agent, report))]).toEqual([mode, agent, "allow"])
+  })
+
   test("research runs: the synthesizer alone writes the report, the coordinator plans in notes/ (#111)", () => {
-    // The factory keeps its build-run grant; the mode split is enforced by who
-    // launches the synthesizer (only the deep-researcher, only in research runs).
-    expect(effect(evaluateWrite(ctx(), "factory", ".factory/research/REPORT.md"))).toBe("allow")
-    expect(effect(evaluateWrite(ctx(), "deep-researcher", ".factory/research/REPORT.md"))).toBe("deny")
-    expect(effect(evaluateWrite(ctx(), "es-research-synthesizer", ".factory/research/REPORT.md"))).toBe("allow")
+    // The mode split is read from the sealed run state (PolicyContext.runMode).
+    expect(effect(evaluateWrite(ctxMode("build"), "factory", ".factory/research/REPORT.md"))).toBe("allow")
+    expect(effect(evaluateWrite(ctxMode("build"), "deep-researcher", ".factory/research/REPORT.md"))).toBe("deny")
+    expect(effect(evaluateWrite(ctxMode("research"), "es-research-synthesizer", ".factory/research/REPORT.md"))).toBe(
+      "allow",
+    )
     expect(effect(evaluateWrite(ctx(), "es-research-synthesizer", ".factory/research/alpha.md"))).toBe("deny")
     expect(effect(evaluateWrite(ctx(), "deep-researcher", ".factory/research/notes/plan.md"))).toBe("allow")
-    expect(effect(evaluateWrite(ctx(), "deep-researcher", ".factory/research/REPORT.md"))).toBe("deny")
+    expect(effect(evaluateWrite(ctxMode("research"), "deep-researcher", ".factory/research/REPORT.md"))).toBe("deny")
     expect(effect(evaluateWrite(ctx(), "es-research-alpha", ".factory/research/notes/plan.md"))).toBe("deny")
   })
 
@@ -275,6 +314,22 @@ describe("shell policy", () => {
       expect([command, shell("build", command).effect]).toEqual([command, "deny"])
   })
 
+  test("es factory run is human-only: launching a headless run spends money like audit/scout runs", () => {
+    for (const command of [
+      "es factory run --headless",
+      "es --json factory run",
+      "es factory --max-turns 3 run",
+      "es factory --cwd . run --headless",
+      "es --cwd . factory run",
+    ])
+      for (const agent of ["build", "es-programmer", "factory"])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // The neighbouring factory verbs keep their grants.
+    expect(shell("build", "es factory status").effect).toBe("allow")
+    expect(shell("build", "es factory begin").effect).toBe("allow")
+    expect(shell("build", "es factory stop").effect).toBe("allow")
+  })
+
   test("a flag or `--` before the verb still reads as that verb, as the CLI parser does (#88)", () => {
     for (const command of [
       "es --cwd . approve spec",
@@ -366,6 +421,20 @@ describe("shell policy", () => {
       "es-fleet --help",
       "es-fleet status --help",
     ])
+      for (const agent of ["build", "factory", "es-programmer", undefined])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "allow"])
+  })
+
+  test("es-fleet status --token is human-only: the flag leaks the bus bearer token (#126)", () => {
+    for (const command of [
+      "es-fleet status --token",
+      "es-fleet --state-dir x status --token",
+      "es-fleet status --token=x",
+    ])
+      for (const agent of ["build", "factory", "es-programmer", undefined])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "deny"])
+    // Plain status stays a read.
+    for (const command of ["es-fleet status", "es-fleet --state-dir x status"])
       for (const agent of ["build", "factory", "es-programmer", undefined])
         expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "allow"])
   })
@@ -575,8 +644,8 @@ const TRAILING: readonly string[] = [
 /** Sub-verbs per HUMAN_VERBS entry: [satisfying..., failing...]. */
 const SUBS: Readonly<Record<string, readonly [readonly string[], readonly string[]]>> = {
   factory: [
-    ["resume", "pr", "init"],
-    ["begin", "run", "stop", "status"],
+    ["resume", "pr", "init", "run"],
+    ["begin", "stop", "status"],
   ],
   gates: [["install-git"], ["run"]],
   lsp: [["install"], ["status", "diagnostics"]],

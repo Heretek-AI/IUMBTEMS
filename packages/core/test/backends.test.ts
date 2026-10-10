@@ -13,12 +13,22 @@ import {
 } from "../src/research/backends/index.ts"
 import { SourceCache } from "../src/research/cache.ts"
 import { researchTools } from "../src/research/ops.ts"
+import { fetchPage, type HostResolver } from "../src/research/providers.ts"
 
 const okSearch = (id: string, available = true): SourceBackend => ({
   id,
   capabilities: { search: true, fetch: false },
   available: () => available,
   search: async (query: string) => [{ url: `https://${id}.test/${query}`, title: id, snippet: `via ${id}` }],
+})
+
+// Hermetic fetch backend (S4.1): the SSRF guard fails closed on real DNS, so
+// tool-level tests resolve through a stub like research.test.ts does.
+const hermeticDirect = (resolveHost: HostResolver = async () => ["93.184.216.34"]): SourceBackend => ({
+  id: "direct",
+  capabilities: { search: false, fetch: true },
+  available: () => true,
+  fetch: (url, options) => fetchPage(url, { ...options, resolveHost }),
 })
 
 describe("ordered failover", () => {
@@ -278,6 +288,7 @@ describe("the chain through the research tools", () => {
       env: {},
       stateDir: state,
       policy: async () => ({ root: dir }),
+      chain: [hermeticDirect()],
       fetch: (async () => {
         calls++
         return new Response("refetched", { headers: { "content-type": "text/plain" } })

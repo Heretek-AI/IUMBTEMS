@@ -142,7 +142,7 @@ export async function stopFleet(
   const raw = await readJson(paths.pid).catch(() => undefined)
   const pidfile = PidfileSchema(raw)
   if (!pidfile || !isPidAlive(pidfile.pid)) {
-    await rm(paths.pid, { force: true })
+    await withLock(paths.lock, () => rm(paths.pid, { force: true }))
     return { stopped: false }
   }
   try {
@@ -162,7 +162,7 @@ export async function stopFleet(
     }
     if (cleared) return { stopped: true }
     if (!isPidAlive(pidfile.pid)) {
-      await rm(paths.pid, { force: true })
+      await withLock(paths.lock, () => rm(paths.pid, { force: true }))
       return { stopped: true }
     }
     if (Date.now() > deadline) return { stopped: true }

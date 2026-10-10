@@ -18,6 +18,7 @@ type Preview = {
   problems: string[]
   token?: string
   subjectHash?: string
+  issuedAt?: number
 }
 
 export default Plugin.define({
@@ -85,7 +86,7 @@ export default Plugin.define({
       const terminalAlert = () =>
         context.ui.dialog.alert({
           title: preview.title,
-          message: `${preview.lines.join("\n")}\n\nRun \`es approve ${stage}\` at a terminal with your passphrase (1.1.1: approvals need the sealed human key).`,
+          message: `${preview.lines.join("\n")}\n\nRun \`es approve ${stage}\` at a terminal with your passphrase (approvals need the sealed human key).`,
         })
       if (!preview.subjectHash) {
         await terminalAlert()
@@ -95,6 +96,13 @@ export default Plugin.define({
         root: location().directory,
         stage,
         expectedSubjectHash: preview.subjectHash,
+        // ADR 0002 I3: the preview ticket is redeemed exactly once inside
+        // approveInTui (single-use + 120 s TTL). The redeem is validate-only:
+        // signing stays in-process below (#49).
+        ...(token ? { previewToken: token } : {}),
+        ...(preview.issuedAt !== undefined ? { previewIssuedAt: preview.issuedAt } : {}),
+        redeemPreview: (previewToken) =>
+          call("redeemApproval", { stage, token: previewToken, subjectHash: preview.subjectHash }),
         approvedBy: user,
         readPassphrase: (title) => readMaskedPassphrase(context.ui.dialog, title),
       })

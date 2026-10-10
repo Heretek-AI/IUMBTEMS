@@ -4,11 +4,14 @@
 // onto an integration branch. The base branch is never checked out, reset,
 // or merged into: every assertion the suite makes is `tip(main)`-stable.
 //
-// Concurrency discipline: the registry lock serializes check-then-act in two
-// phases (check under lock, git work under the per-repo admin lock, commit
-// under lock with a re-check), and all `git worktree` administration takes
-// the per-repo lock so concurrent allocators cannot corrupt the worktree
-// index.
+// Concurrency discipline: one lock order, repo -> fleet. The allocator
+// pre-registers `allocating` under the fleet lock before `addWorktree` and
+// flips it to `allocated` afterwards, never holding both locks at once; `gc`
+// holds the fleet lock for its entire read -> decide -> persist nested inside
+// the per-repo admin lock, so it can neither remove a just-allocated worktree
+// as an orphan nor overwrite the registry without the new record. All other
+// `git worktree` administration takes the per-repo lock so concurrent
+// allocators cannot corrupt the worktree index.
 import { lstat, mkdir, readdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises"
 import path from "node:path"
 import {
@@ -52,8 +55,11 @@ export const fleetWorktreeDir = (repoRoot: string, taskId: string): string => {
   return path.join(repoRoot, ".fleet", "worktrees", taskId)
 }
 
-export const WorktreeStatusSchema = z.enum(["allocated", "merged", "abandoned"])
+export const WorktreeStatusSchema = z.enum(["allocating", "allocated", "merged", "abandoned"])
 export type WorktreeStatus = z.infer<typeof WorktreeStatusSchema>
+
+/** An `allocating` record older than this with no dir or branch is stale: gc drops it. */
+export const ALLOCATING_STALE_MS = 5 * 60_000
 
 export const WorktreeRecordSchema = z.object({
   taskId: z.string().min(1),
@@ -165,12 +171,22 @@ export interface AllocateOptions {
   readonly base?: string
   /** Stamp override (tests, determinism). */
   readonly now?: string
+  /**
+   * Test-only interleaving hooks (repair-151 S5.1): `beforePreRegister` runs
+   * after the early check and before the `allocating` pre-register, so a test
+   * can make two allocators of one task pass the check together; `afterAdd`
+   * runs after `addWorktree` (repo lock released) and before the `allocated`
+   * commit, so a test can run `gc` in exactly that window. Production callers
+   * pass none.
+   */
+  readonly hooks?: { readonly beforePreRegister?: () => Promise<void>; readonly afterAdd?: () => Promise<void> }
 }
 
 /**
- * Allocate a task worktree: two-phase under the registry lock (check, then
- * git work under the repo lock, then commit with a re-check). A live record
- * or an existing dir refuses with FleetError.
+ * Allocate a task worktree: pre-register `allocating` under the fleet lock,
+ * do the git work under the repo lock (never holding both at once), then
+ * flip to `allocated` under the fleet lock. A live record or an existing dir
+ * refuses with FleetError; a stale `allocating` record may be taken over.
  */
 export async function allocateWorktree(
   repoRoot: string,
@@ -183,11 +199,9 @@ export async function allocateWorktree(
   const dir = fleetWorktreeDir(repoRoot, taskId)
   const branch = fleetBranch(taskId)
   const now = options.now ?? new Date().toISOString()
-  // Phase 1: check.
+  // Phase 1: an early check, so a taken task fails before any disk work.
   await withLock(paths.lock, async () => {
-    const registry = (await loadRegistry(stateRoot)) ?? emptyRegistry()
-    if (registry.worktrees[taskId]?.status === "allocated")
-      throw new FleetError(`Task ${JSON.stringify(taskId)} already has a worktree allocated.`)
+    refuseTaken(((await loadRegistry(stateRoot)) ?? emptyRegistry()).worktrees[taskId], taskId)
   })
   try {
     await lstat(dir)
@@ -196,13 +210,32 @@ export async function allocateWorktree(
     if (error instanceof FleetError) throw error
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error
   }
-  // Git work under the per-repo admin lock.
+  // Pre-register under the fleet lock, before any git work: gc treats
+  // `allocating` as live, so it can neither orphan the new worktree nor
+  // persist a registry without this record. The check is repeated in this
+  // same critical section: two allocators of one task can both pass phase 1,
+  // and the second must refuse here, before it can overwrite the first's
+  // record (and later drop it on its own failed `addWorktree`).
   const base = options.base ?? (await git(repoRoot, ["rev-parse", "HEAD"])).stdout.trim()
-  await withRepoLock(repoRoot, async () => {
-    await addWorktree(repoRoot, dir, branch, base)
+  await options.hooks?.beforePreRegister?.()
+  await withLock(paths.lock, async () => {
+    const registry = (await loadRegistry(stateRoot)) ?? emptyRegistry()
+    refuseTaken(registry.worktrees[taskId], taskId)
+    const record: WorktreeRecord = { taskId, dir, branch, base, createdAt: now, status: "allocating" }
+    await persistRegistry(paths, { v: REGISTRY_VERSION, worktrees: { ...registry.worktrees, [taskId]: record } })
   })
+  // Git work under the per-repo admin lock (the fleet lock is not held).
+  try {
+    await withRepoLock(repoRoot, async () => {
+      await addWorktree(repoRoot, dir, branch, base)
+    })
+  } catch (error) {
+    await dropAllocating(paths, stateRoot, taskId, dir)
+    throw error
+  }
+  await options.hooks?.afterAdd?.()
   await rebaseSymlinks(dir, repoRoot)
-  // Phase 2: commit with a re-check (a concurrent allocator may have won).
+  // Phase 2: flip to `allocated` with a re-check (a concurrent allocator may have won).
   let record: WorktreeRecord | undefined
   await withLock(paths.lock, async () => {
     const registry = (await loadRegistry(stateRoot)) ?? emptyRegistry()
@@ -221,6 +254,40 @@ export async function allocateWorktree(
     throw new FleetError(`Task ${JSON.stringify(taskId)} was allocated concurrently; refusing a second worktree.`)
   }
   return record!
+}
+
+/** True when an `allocating` record is older than the stale threshold. */
+const allocatingStale = (record: WorktreeRecord, nowMs: number): boolean =>
+  nowMs - Date.parse(record.createdAt) >= ALLOCATING_STALE_MS
+
+/**
+ * Refuse a task that is already taken: an `allocated` record, or a fresh
+ * `allocating` one (another allocator is in flight). A stale `allocating`
+ * record is abandoned and may be taken over. Callers hold the fleet lock.
+ */
+function refuseTaken(current: WorktreeRecord | undefined, taskId: string): void {
+  if (current?.status === "allocated")
+    throw new FleetError(`Task ${JSON.stringify(taskId)} already has a worktree allocated.`)
+  if (current?.status === "allocating" && !allocatingStale(current, Date.now()))
+    throw new FleetError(`Task ${JSON.stringify(taskId)} is already being allocated concurrently.`)
+}
+
+/** Remove our own `allocating` pre-registration (failed `addWorktree`). */
+async function dropAllocating(
+  paths: ReturnType<typeof fleetPaths>,
+  stateRoot: string,
+  taskId: string,
+  dir: string,
+): Promise<void> {
+  await withLock(paths.lock, async () => {
+    const registry = (await loadRegistry(stateRoot)) ?? emptyRegistry()
+    const current = registry.worktrees[taskId]
+    if (current?.status === "allocating" && current.dir === dir) {
+      const next = { ...registry.worktrees }
+      delete next[taskId]
+      await persistRegistry(paths, { v: REGISTRY_VERSION, worktrees: next })
+    }
+  }).catch(() => undefined)
 }
 
 const registryHadRaced = (record: WorktreeRecord, taskId: string, dir: string): boolean =>
@@ -253,7 +320,10 @@ export async function releaseWorktree(
     }
     if (kind === "abandoned") {
       await salvageBranch(repoRoot, current.branch, taskId)
-      await git(repoRoot, ["branch", "-D", current.branch])
+      // The daemon's own cleanup may have won the race and removed the
+      // branch already (CI flake: branch -D "not found" failing case 4).
+      // Salvage already anchored whatever was there; only delete when present.
+      if (await branchExists(repoRoot, current.branch)) await git(repoRoot, ["branch", "-D", current.branch])
     }
   })
   await withLock(paths.lock, async () => {
@@ -285,7 +355,13 @@ export type GateCheck = (worktreeDir: string) => Promise<{ ok: true } | { ok: fa
 
 export type LandResult =
   | { readonly landed: true; readonly integration: string; readonly tip: string }
-  | { readonly landed: false; readonly reason: string; readonly conflict?: boolean }
+  | {
+      readonly landed: false
+      readonly reason: string
+      readonly conflict?: boolean
+      /** Gates rejected the work: nothing was merged, nothing needs aborting. */
+      readonly gateFailed?: boolean
+    }
 
 /**
  * Land a task branch onto the integration branch, transactionally:
@@ -306,7 +382,7 @@ export async function landTask(
   if (record?.status !== "allocated")
     return { landed: false, reason: `no allocated worktree for task ${JSON.stringify(taskId)}` }
   const gates = await checkGates(record.dir)
-  if (!gates.ok) return { landed: false, reason: gates.reason ?? "gates failed" }
+  if (!gates.ok) return { landed: false, reason: gates.reason ?? "gates failed", gateFailed: true }
   const integration = integrationBranch(dagId)
   return withRepoLock(repoRoot, async () => {
     if (!(await branchExists(repoRoot, integration))) await git(repoRoot, ["branch", integration, record.base])
@@ -320,10 +396,24 @@ export async function landTask(
       await addWorktree(repoRoot, tmp, `_fleet-land-${taskId}`, integration)
       const merged = await gitRun(tmp, ["merge", "--no-ff", "--no-edit", record.branch], { allowFail: true })
       if (merged.code !== 0) {
-        await git(tmp, ["merge", "--abort"])
+        const reason = (merged.stderr || merged.stdout).trim() || `merge of ${record.branch} onto ${integration} failed`
+        // Classify the failure before touching anything: only an in-progress
+        // merge (MERGE_HEAD present) may be aborted, and only unmerged paths
+        // count as a conflict. A non-conflict failure (bad identity, hook,
+        // disk) reports its original reason and never throws from --abort.
+        const mergeHead = await gitRun(tmp, ["rev-parse", "-q", "--verify", "MERGE_HEAD"], { allowFail: true })
+        const unmerged = await gitRun(tmp, ["diff", "--name-only", "--diff-filter=U"], { allowFail: true })
+        const conflicted = unmerged.stdout.trim().length > 0
+        if (mergeHead.code === 0) await git(tmp, ["merge", "--abort"])
         const rolledBack = await revParse(repoRoot, integration)
         if (rolledBack !== before) await git(repoRoot, ["update-ref", `refs/heads/${integration}`, before])
-        return { landed: false, reason: `merge conflict landing ${record.branch} onto ${integration}`, conflict: true }
+        if (conflicted)
+          return {
+            landed: false,
+            reason: `merge conflict landing ${record.branch} onto ${integration}`,
+            conflict: true,
+          }
+        return { landed: false, conflict: false, reason }
       }
       // The temp worktree's HEAD is the merge; fast-forward the real branch.
       const mergedTip = await headCommit(tmp)
@@ -366,9 +456,17 @@ async function listedWorktrees(repoRoot: string): Promise<Array<{ dir: string; b
 }
 
 /**
- * Collect orphans: worktree dirs under `.fleet/worktrees/` with no allocated
- * record are salvaged (when their branch has commits) and removed; records
- * whose dir and branch are both gone are dropped. The base branch never moves.
+ * Collect orphans: worktree dirs under `.fleet/worktrees/` with no live
+ * (`allocated` or `allocating`) record are salvaged (when their branch has
+ * commits) and removed; stale records are dropped — `allocated` ones whose
+ * dir and branch are both gone, `allocating` ones older than
+ * ALLOCATING_STALE_MS whose dir and branch are both gone. The base branch
+ * never moves.
+ *
+ * Lock order is repo -> fleet: the fleet lock is held for the entire read
+ * -> decide -> persist nested inside the per-repo admin lock, so a
+ * concurrent allocator's pre-registered record is always seen and never
+ * overwritten by a stale copy.
  */
 export async function gcWorktrees(repoRoot: string, stateRoot: string): Promise<GcReport> {
   const paths = fleetPaths(stateRoot)
@@ -376,43 +474,49 @@ export async function gcWorktrees(repoRoot: string, stateRoot: string): Promise<
   const salvaged: string[] = []
   const dropped: string[] = []
   await withRepoLock(repoRoot, async () => {
-    const registry = (await loadRegistry(stateRoot)) ?? emptyRegistry()
-    const live = new Set(
-      Object.values(registry.worktrees)
-        .filter((record) => record.status === "allocated")
-        .map((record) => record.dir),
-    )
-    for (const entry of await listedWorktrees(repoRoot)) {
-      const inside = path.relative(path.join(repoRoot, ".fleet", "worktrees"), entry.dir)
-      if (inside === "" || inside.startsWith("..") || path.isAbsolute(inside)) continue
-      if (!live.has(entry.dir)) {
-        const taskId = entry.branch.replace(/^fleet\//, "")
-        if (SLUG.test(taskId) && (await branchExists(repoRoot, entry.branch))) {
-          const tip = await salvageBranch(repoRoot, entry.branch, taskId)
-          if (tip) salvaged.push(entry.branch)
-          await git(repoRoot, ["branch", "-D", entry.branch]).catch(() => undefined)
+    await withLock(paths.lock, async () => {
+      const registry = (await loadRegistry(stateRoot)) ?? emptyRegistry()
+      const live = new Set(
+        Object.values(registry.worktrees)
+          .filter((record) => record.status === "allocated" || record.status === "allocating")
+          .map((record) => record.dir),
+      )
+      const listed = await listedWorktrees(repoRoot)
+      for (const entry of listed) {
+        const inside = path.relative(path.join(repoRoot, ".fleet", "worktrees"), entry.dir)
+        if (inside === "" || inside.startsWith("..") || path.isAbsolute(inside)) continue
+        if (!live.has(entry.dir)) {
+          const taskId = entry.branch.replace(/^fleet\//, "")
+          if (SLUG.test(taskId) && (await branchExists(repoRoot, entry.branch))) {
+            const tip = await salvageBranch(repoRoot, entry.branch, taskId)
+            if (tip) salvaged.push(entry.branch)
+            await git(repoRoot, ["branch", "-D", entry.branch]).catch(() => undefined)
+          }
+          await git(repoRoot, ["worktree", "remove", "--force", entry.dir])
+          removed.push(entry.dir)
         }
-        await git(repoRoot, ["worktree", "remove", "--force", entry.dir])
-        removed.push(entry.dir)
       }
-    }
-    // Drop records whose dir is gone from git and disk and whose branch is gone.
-    const next = { ...registry.worktrees }
-    for (const [id, record] of Object.entries(registry.worktrees)) {
-      if (record.status !== "allocated") continue
-      const dirGone = !(await listedWorktrees(repoRoot)).some((entry) => entry.dir === record.dir)
-      let onDisk = true
-      try {
-        await lstat(record.dir)
-      } catch {
-        onDisk = false
+      // Drop records whose dir is gone from git and disk and whose branch is gone.
+      const listedDirs = new Set(listed.map((entry) => entry.dir))
+      const nowMs = Date.now()
+      const next = { ...registry.worktrees }
+      for (const [id, record] of Object.entries(registry.worktrees)) {
+        if (record.status !== "allocated" && record.status !== "allocating") continue
+        if (record.status === "allocating" && !allocatingStale(record, nowMs)) continue
+        const dirGone = !listedDirs.has(record.dir)
+        let onDisk = true
+        try {
+          await lstat(record.dir)
+        } catch {
+          onDisk = false
+        }
+        if (dirGone && !onDisk && !(await branchExists(repoRoot, record.branch))) {
+          delete next[id]
+          dropped.push(id)
+        }
       }
-      if (dirGone && !onDisk && !(await branchExists(repoRoot, record.branch))) {
-        delete next[id]
-        dropped.push(id)
-      }
-    }
-    await withLock(paths.lock, () => persistRegistry(paths, { v: REGISTRY_VERSION, worktrees: next }))
+      await persistRegistry(paths, { v: REGISTRY_VERSION, worktrees: next })
+    })
   })
   return { removed, salvaged, dropped }
 }

@@ -10,6 +10,7 @@ import {
   type Args,
   compareStrings,
   type DistillThresholds,
+  disposedWithReasons,
   distillProposals,
   factoryLayout,
   flag,
@@ -22,6 +23,7 @@ import {
   TelemetrySchema,
   undisposed,
   type WrittenProposal,
+  writeDropped,
   writeProposals,
 } from "@heretek-ai/es-core"
 import type { ConfirmIO } from "./tty.ts"
@@ -157,14 +159,22 @@ const renderStanding = async (
   telemetry: Telemetry,
   thresholds: DistillThresholds,
   out: string,
-): Promise<{ proposals: Proposal[]; standing: Proposal[]; written: WrittenProposal[] }> => {
+): Promise<{
+  proposals: Proposal[]
+  standing: Proposal[]
+  dropped: Array<{ proposal: Proposal; reasons: string[] }>
+  written: WrittenProposal[]
+  droppedFile: string
+}> => {
   const proposals = await distillProposals(telemetry, thresholds)
   const standing = undisposed(proposals, telemetry)
+  const dropped = disposedWithReasons(proposals, telemetry)
   const rendered = new Map<string, Record<string, string>>()
   const files = await Promise.all(standing.map((proposal) => renderProposalFiles(proposal.cluster)))
   for (const [index, proposal] of standing.entries()) rendered.set(proposal.id, files[index]!.files)
   const written = await writeProposals(out, standing, rendered)
-  return { proposals, standing, written }
+  const droppedFile = await writeDropped(out, dropped)
+  return { proposals, standing, dropped, written, droppedFile }
 }
 
 const openPr = async (
@@ -213,11 +223,23 @@ export async function improveDistill(args: Args, io: ImproveIO, root: string): P
     return 2
   }
   const out = flag(args, "out") ? path.resolve(io.cwd, flag(args, "out")!) : factoryLayout(root).improveProposals
-  const { proposals, standing, written } = await renderStanding(telemetry, thresholds, out)
+  const { proposals, standing, dropped, written, droppedFile } = await renderStanding(telemetry, thresholds, out)
   const disposed = proposals.length - standing.length
   const lines = [
     `Distilled ${proposals.length} proposal(s) (${standing.length} standing, ${disposed} disposed by the gate):`,
     ...written.map((item) => `  ${item.kind} ${item.id} (${item.cluster.occurrences}× ${item.cluster.key})`),
+    // Dropped proposals are never silent: each is reported with its reason,
+    // and `dropped.json` records them all (S3.5, #136).
+    ...(dropped.length > 0
+      ? [
+          `Disposed by the gate (${dropped.length}):`,
+          ...dropped.map(
+            (entry) =>
+              `  ${entry.proposal.kind} ${entry.proposal.id} (${entry.proposal.cluster.key}): ${entry.reasons.join("; ")}`,
+          ),
+          `Dropped details: ${path.relative(io.cwd, droppedFile) || droppedFile}.`,
+        ]
+      : []),
     `Wrote ${written.length} proposal(s) under ${path.relative(io.cwd, out) || out}. Nothing was applied.`,
   ]
   try {

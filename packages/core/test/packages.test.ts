@@ -39,11 +39,23 @@ describe("workspace packages", () => {
       opencode: { name: "@heretek-ai/epistemic-swarm", esRelease: { order: 3 } },
       core: { name: "@heretek-ai/es-core", esRelease: { order: 1 } },
       cli: { name: "@heretek-ai/es-cli", esRelease: { order: 2 } },
-      testkit: { name: "@heretek-ai/es-testkit" },
+      testkit: { name: "@heretek-ai/es-testkit", private: true },
       secret: { name: "@heretek-ai/secret", private: true, esRelease: { order: 4 } },
     })
     try {
       expect((await releasePackages(root)).map((pkg) => pkg.dir)).toEqual(["core", "cli", "opencode"])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("a public package without esRelease.order fails loudly", async () => {
+    const root = await fixture({
+      core: { name: "@heretek-ai/es-core", esRelease: { order: 1 } },
+      unordered: { name: "@heretek-ai/unordered" },
+    })
+    try {
+      await expect(releasePackages(root)).rejects.toThrow("has no esRelease.order")
     } finally {
       await rm(root, { recursive: true, force: true })
     }

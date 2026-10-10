@@ -8,11 +8,14 @@ import {
   factoryLayout,
   gateRunner,
   HUMAN_VERBS,
+  loadPrompt,
   parseArgs,
   readApproval,
+  recentAuditEntries,
   researchSourcesDir,
   SourceCache,
   sealHumanKey,
+  stringifyFrontmatter,
 } from "@heretek-ai/es-core"
 import { parseExpiry } from "../src/args.ts"
 import { type HarnessDriver, type HeadlessEvent, presentEvent, runHeadless } from "../src/headless.ts"
@@ -217,6 +220,114 @@ describe("human-only confirmation", () => {
     expect(granted.code).toBe(0)
     expect(granted.out).toContain("granted")
   })
+
+  test("an edit between preview and sign is refused: the CLI signs what it previewed (ADR 0002 I3)", async () => {
+    await mkdir(path.join(root, ".factory/specs/alpha"), { recursive: true })
+    await writeFile(
+      path.join(root, ".factory/roadmap.json"),
+      JSON.stringify({ version: 1, title: "Greeting", phases: [{ id: "alpha", title: "Phase alpha" }] }),
+    )
+    const goal = path.join(root, ".factory/specs/alpha/GOAL.md")
+    await writeFile(
+      goal,
+      stringifyFrontmatter(
+        {
+          phase: "alpha",
+          title: "Phase alpha",
+          acceptance: [{ kind: "file", id: "impl", description: "implementation exists", path: "src/alpha.ts" }],
+        },
+        "Implement alpha.\n",
+      ),
+    )
+    // A seat edits GOAL.md while the human types the passphrase: the sign
+    // must refuse instead of signing the edit.
+    const output: string[] = []
+    const io: ConfirmIO = {
+      interactive: true,
+      write: (text) => output.push(text),
+      readLine: async () => "",
+      readSecret: async () => {
+        await writeFile(goal, `${await readFile(goal, "utf8")}\n<!-- seat edit -->\n`)
+        return PASSPHRASE
+      },
+    }
+    const result = await run(["approve", "spec"], io)
+    expect(result.code).not.toBe(0)
+    expect(result.out).toContain("What was previewed changed")
+    expect(await readApproval(root, "spec")).toBeUndefined()
+  })
+
+  test("a preview older than 120 s is refused (ADR 0002 I3 TTL)", async () => {
+    await grilledFrontier()
+    const realNow = Date.now
+    let now = 1_700_000_000_000
+    Date.now = () => now
+    try {
+      const io = human()
+      io.readSecret = async () => {
+        now += 121_000
+        return PASSPHRASE
+      }
+      const result = await run(["approve", "frontier"], io)
+      expect(result.code).toBe(1)
+      expect(result.out).toMatch(/expired|again/)
+      expect(await readApproval(root, "frontier")).toBeUndefined()
+    } finally {
+      Date.now = realNow
+    }
+  })
+
+  test("five wrong passphrases lock out the sixth without prompting, audited with channel cli (#143)", async () => {
+    const output: string[] = []
+    let reads = 0
+    const io: ConfirmIO = {
+      interactive: true,
+      write: (text) => output.push(text),
+      readLine: async () => "",
+      readSecret: async () => {
+        reads++
+        return "wrong-passphrase"
+      },
+    }
+    const confirm = () => confirmHuman(io, "Approve spec as tester", [], { stateDir: state, root, stage: "spec" })
+    for (let i = 0; i < 5; i++) expect(await confirm()).toBeUndefined()
+    expect(reads).toBe(5)
+    expect(await confirm()).toBeUndefined()
+    expect(reads).toBe(5)
+    expect(output.join("")).toMatch(/Try again in \d+s/)
+    const lockout = (await recentAuditEntries(root, 10)).find((entry) => entry.action === "approval.lockout")
+    expect(lockout?.payload).toMatchObject({ stage: "spec", channel: "cli" })
+  })
+
+  test("a correct passphrase resets the attempt count", async () => {
+    const output: string[] = []
+    let answer = "wrong-passphrase"
+    const io: ConfirmIO = {
+      interactive: true,
+      write: (text) => output.push(text),
+      readLine: async () => "",
+      readSecret: async () => answer,
+    }
+    const confirm = () => confirmHuman(io, "Approve spec as tester", [], { stateDir: state, root, stage: "spec" })
+    expect(await confirm()).toBeUndefined()
+    expect(await confirm()).toBeUndefined()
+    answer = PASSPHRASE
+    expect(await confirm()).toBeDefined()
+    // The count reset: five more wrongs are needed before the next lockout.
+    answer = "wrong-passphrase"
+    let reads = 0
+    const counting: ConfirmIO = {
+      ...io,
+      readSecret: async () => {
+        reads++
+        return answer
+      },
+    }
+    const confirmCounting = () =>
+      confirmHuman(counting, "Approve spec as tester", [], { stateDir: state, root, stage: "spec" })
+    for (let i = 0; i < 5; i++) expect(await confirmCounting()).toBeUndefined()
+    expect(reads).toBe(5)
+  })
 })
 
 describe("es key", () => {
@@ -402,7 +513,7 @@ describe("es research deep (headless deep research)", () => {
         })
         const fetched = await tools
           .find((tool) => tool.name === "es_research_fetch")!
-          .execute({ url: "https://x.test/queues" }, { agent: "es-research-alpha" })
+          .execute({ url: "https://192.0.2.1/queues" }, { agent: "es-research-alpha" })
         const sha = /sha256:([0-9a-f]{64})/.exec(fetched)?.[1]
         await writeFile(
           path.join(out, ".factory/research/alpha.md"),
@@ -431,7 +542,10 @@ describe("es research deep (headless deep research)", () => {
       expect(driven.out).toContain("Research run run-")
       expect(driven.out).toContain("Research complete: out/.factory/research/REPORT.md")
       expect(prompts[0]).toContain("Deep research: what queue")
-      expect(prompts[0]).toContain("es-research-alpha")
+      // The flow is the deep-researcher seat's system prompt (opencode/src/agents.ts);
+      // the message carries only the run, the question and the headless note.
+      expect(prompts[0]).toContain("headless run")
+      expect(prompts[0]).not.toContain((await loadPrompt("deep-researcher")).body.trim())
       const done = await new Factory(out, { gates: gateRunner({ stateDir: state }), stateDir: state }).read()
       expect(done).toMatchObject({ mode: "research", stage: "DONE" })
     } finally {
@@ -619,7 +733,7 @@ describe("es improve harvest (#135)", () => {
     expect(result.code).toBe(0)
     expect(result.out).toContain("2 run(s) and 2 eval(s)")
     const parsed = JSON.parse(await readFile(out, "utf8"))
-    expect(parsed.version).toBe(1)
+    expect(parsed.version).toBe(2)
     expect(parsed.runs.map((run: { id: string }) => run.id)).toEqual(["run-clean", "run-replan"])
     expect(parsed.evals.map((item: { case: string }) => item.case)).toEqual(["grill", "programmer"])
   })
@@ -848,6 +962,10 @@ describe("es factory init --preset self-dogfood (#137)", () => {
       const roadmap = JSON.parse(await readFile(factoryLayout(root).roadmap, "utf8"))
       expect(roadmap.baseBranch).toBe("rewrite")
       expect(await readFile(path.join(root, ".factory/notes/idea-137.md"), "utf8")).toContain("Stub issue")
+      const entries = await recentAuditEntries(root, 5)
+      const seeded = entries.find((entry) => entry.action === "factory.preset")!
+      expect(seeded.actor).toMatch(/^human:.+/)
+      expect(seeded.actor).not.toBe("human:unknown")
     } finally {
       await rm(bin, { recursive: true, force: true })
     }

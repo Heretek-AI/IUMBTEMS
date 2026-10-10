@@ -15,7 +15,7 @@ import { cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { gradeFireCase } from "../packages/core/src/evals/fires.ts"
 import { caseStepCap, type EvalCase, evalWorkspace, runEvalCase } from "../packages/core/src/evals/run.ts"
-import { renderEvalPrompt, startServeFixtures } from "../packages/core/src/evals/serve.ts"
+import { renderEvalPrompt, startServeFixtures, usesFixtureServer } from "../packages/core/src/evals/serve.ts"
 import { exists } from "../packages/core/src/util/fs.ts"
 import { sealHumanKey, unlockHumanKey } from "../packages/core/src/approval/keystore.ts"
 import { detectGates } from "../packages/core/src/gates/detect.ts"
@@ -127,7 +127,19 @@ for (const file of files) {
     }
   }
   try {
-    const ran = await runEvalCase(testCase, workspace, { binary, maxSteps, timeoutMs, budgetUSD: remaining })
+    // Fixture-server cases fetch loopback pages the SSRF guard refuses by
+    // default: allow loopback for just this case's seat environment, never
+    // globally and never for cases that reach the public web.
+    const env = usesFixtureServer(testCase.prompt)
+      ? { ...process.env, ES_RESEARCH_ALLOW_LOOPBACK: "1" }
+      : undefined
+    const ran = await runEvalCase(testCase, workspace, {
+      binary,
+      maxSteps,
+      timeoutMs,
+      budgetUSD: remaining,
+      ...(env ? { env } : {}),
+    })
     spentUSD += ran.transcript.costUSD
     // A fire is scored by the same deterministic grader the CI suites use.
     const fire = testCase.fire ? await gradeFireCase(testCase.fire, workspace.dir) : undefined

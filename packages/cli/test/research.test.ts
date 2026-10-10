@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { researchTools } from "@heretek-ai/es-core"
 import { main } from "../src/main.ts"
 
 let root: string
@@ -57,8 +58,33 @@ describe("es research as human operator (#99)", () => {
       new Response("<html><head><title>T</title></head><body><p>Human fetchable content here.</p></body></html>", {
         headers: { "content-type": "text/html" },
       })) as unknown as typeof fetch
-    const result = await run(["research", "fetch", "https://example.test/page"])
+    const result = await run(["research", "fetch", "https://192.0.2.1/page"])
     expect(result.code).toBe(0)
     expect(result.out).toContain("sha256:")
+  })
+})
+
+describe("plugin-built tools never trust an agent named human (#99)", () => {
+  test("{ agent: 'human' } is refused without the explicit CLI operator", async () => {
+    const tools = researchTools({ root, stateDir: state, policy: async () => ({ root }) })
+    const byName = (name: string) => tools.find((tool) => tool.name === name)!
+    // The audit tool needs no provider: it reaches the seat check first.
+    await expect(byName("es_research_audit").execute({}, { agent: "human" })).rejects.toThrow(
+      "Only the research seats and factory",
+    )
+    await expect(byName("es_research_search").execute({ query: "x" }, { agent: "human" })).rejects.toThrow(
+      "Only the research and scout seats",
+    )
+    await expect(
+      byName("es_research_fetch").execute({ url: "https://example.test" }, { agent: "human" }),
+    ).rejects.toThrow("Only the research and scout seats")
+    // Seats keep their grants through the same instance.
+    await expect(byName("es_research_audit").execute({}, { agent: "factory" })).resolves.toContain("does not exist yet")
+  })
+
+  test("the CLI operator flag admits a non-seat agent label", async () => {
+    const tools = researchTools({ root, stateDir: state, policy: async () => ({ root }), operator: "human" })
+    const byName = (name: string) => tools.find((tool) => tool.name === name)!
+    await expect(byName("es_research_audit").execute({}, { agent: "cli" })).resolves.toContain("does not exist yet")
   })
 })

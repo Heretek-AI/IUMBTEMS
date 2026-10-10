@@ -375,7 +375,10 @@ export async function researchDeepCommand(context: HumanContext, args: Args): Pr
       {
         agent: "deep-researcher",
         prompt: async () =>
-          `${await factory.summary()}\nDeep research: ${query}. This is a headless run: no human will answer questions, so write the plan note, launch es-research-alpha and es-research-beta in parallel (both subagent calls in one message, in the foreground), then es-research-synthesizer with the disputes, then es_research_audit and es_research_complete.`,
+          // The coordinator flow is the deep-researcher seat's system prompt
+          // (single-sourced in core); this only adds the run-specific question
+          // and the headless note.
+          `${await factory.summary()}\nDeep research: ${query}. This is a headless run: no human will answer questions; follow your Flow through es_research_complete.`,
         finished: async (current) =>
           current.stage === "DONE" ? { type: "done", report: path.relative(context.root, report) } : undefined,
         progress: async (current) => {

@@ -4,13 +4,17 @@
 // human reviews. `initFromPreset` is human-only at the CLI (it writes factory
 // control files no agent may touch); the preset files themselves are read-only
 // assets validated against their schemas here.
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { appendAuditEntry } from "../audit/chain.ts"
 import { PROJECT_FORBIDDEN_KEYS } from "../config.ts"
+import { factoryLayout } from "../layout.ts"
 import { EsConfigSchema } from "../schema/config.ts"
 import { GatesConfigSchema } from "../schema/gates.ts"
 import { RoadmapSchema } from "../schema/roadmap.ts"
+import { rebaseline } from "../trust/control.ts"
+import { atomicWrite, readJson, withLock, writeJson } from "../util/fs.ts"
 
 const PRESETS = fileURLToPath(new URL("../../assets/presets/", import.meta.url))
 
@@ -78,12 +82,20 @@ export interface PresetIdea {
  * roadmap seed pinning the release base branch, and the issue as the idea
  * note. The grill still owns the roadmap and frontier from here — it must
  * keep `baseBranch` when it rewrites the roadmap.
+ *
+ * Every write is atomic and lock-protected (`withLock` + `writeJson` /
+ * `atomicWrite`), as the `.factory/` runtime invariant requires. Afterwards
+ * the control baseline is re-recorded and the seeding is audit-logged, so a
+ * project with a prior baseline reports no drift. `actor` is the human
+ * caller (the CLI threads `human:<user>` through).
  */
 export async function initFromPreset(
   root: string,
   preset: string,
   idea: PresetIdea,
+  options: { actor?: string } = {},
 ): Promise<{ written: string[]; baseBranch: string }> {
+  const actor = options.actor ?? "human:unknown"
   const files = await readPreset(preset)
   const roadmap = RoadmapSchema.parse({
     version: 1,
@@ -91,26 +103,56 @@ export async function initFromPreset(
     baseBranch: SELF_DOGFOOD_BASE_BRANCH,
     phases: [{ id: "dogfood", title: `Build issue #${idea.issue}` }],
   })
-  const written: Array<{ rel: string; content: string }> = [
-    { rel: ".factory/config.json", content: `${JSON.stringify(JSON.parse(files.config), null, 2)}\n` },
-    { rel: ".factory/gates.json", content: `${JSON.stringify(JSON.parse(files.gates), null, 2)}\n` },
-    { rel: ".factory/roadmap.json", content: `${JSON.stringify(roadmap, null, 2)}\n` },
-    {
-      rel: `.factory/notes/idea-${idea.issue}.md`,
-      content: `# #${idea.issue}: ${idea.title}\n\n${idea.body.trim()}\n`,
-    },
-  ]
-  await Promise.all(
-    written.map(async (file) => {
-      await mkdir(path.dirname(path.join(root, file.rel)), { recursive: true })
-      await writeFile(path.join(root, file.rel), file.content)
-    }),
-  )
-  return { written: written.map((file) => file.rel), baseBranch: SELF_DOGFOOD_BASE_BRANCH }
+  const layout = factoryLayout(root)
+  const noteRel = `.factory/notes/idea-${idea.issue}.md`
+  const noteFile = path.join(root, noteRel)
+  await Promise.all([
+    withLock(layout.config, () => writeJson(layout.config, JSON.parse(files.config))),
+    withLock(layout.gates, () => writeJson(layout.gates, JSON.parse(files.gates))),
+    withLock(layout.roadmap, () => writeJson(layout.roadmap, roadmap)),
+    withLock(noteFile, () => atomicWrite(noteFile, `# #${idea.issue}: ${idea.title}\n\n${idea.body.trim()}\n`)),
+    writePresetSeed(root, { preset, issue: idea.issue, baseBranch: SELF_DOGFOOD_BASE_BRANCH }),
+  ])
+  await rebaseline(root, `${actor} (es factory init --preset ${preset})`)
+  await appendAuditEntry(root, { actor, action: "factory.preset", payload: { preset, issue: idea.issue } })
+  return {
+    written: [".factory/config.json", ".factory/gates.json", ".factory/roadmap.json", noteRel],
+    baseBranch: SELF_DOGFOOD_BASE_BRANCH,
+  }
 }
 
-/** The exact `gh` argv a self-dogfood release drafts with (base pinned, never `main`). */
-export function selfDogfoodPrArgs(options: { branch: string; title: string; body: string }): string[] {
+/** Which preset seeded a run: written at init, consumed into sealed run state at begin. */
+export interface PresetSeed {
+  readonly preset: string
+  readonly issue: number
+  readonly baseBranch: string
+}
+
+const seedFile = (root: string) => path.join(factoryLayout(root).runtime, "preset.json")
+
+/** Record the seeding preset (atomic, lock-protected; runtime state is agent deny-write). */
+export const writePresetSeed = (root: string, seed: PresetSeed): Promise<void> =>
+  withLock(seedFile(root), () => writeJson(seedFile(root), seed))
+
+/** The seeding preset, if this project was started with `es factory init --preset`. */
+export const readPresetSeed = (root: string): Promise<PresetSeed | undefined> => readJson<PresetSeed>(seedFile(root))
+
+/**
+ * The single argv builder every PR opener uses for `gh pr create --draft`.
+ * For a preset-seeded run the base is pinned: `--base main` (or anything
+ * other than the preset's base) is refused here, before anything is pushed.
+ */
+export function buildPrArgs(options: {
+  branch: string
+  base: string
+  title: string
+  body: string
+  preset?: string
+}): string[] {
+  if (options.preset === SELF_DOGFOOD_PRESET && options.base !== SELF_DOGFOOD_BASE_BRANCH)
+    throw new Error(
+      `refusing --base "${options.base}" for a preset "${SELF_DOGFOOD_PRESET}" run (release PRs target "${SELF_DOGFOOD_BASE_BRANCH}", never "main")`,
+    )
   return [
     "gh",
     "pr",
@@ -119,7 +161,7 @@ export function selfDogfoodPrArgs(options: { branch: string; title: string; body
     "--head",
     options.branch,
     "--base",
-    SELF_DOGFOOD_BASE_BRANCH,
+    options.base,
     "--title",
     options.title,
     "--body",

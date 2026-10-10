@@ -5,12 +5,13 @@
 // worktrees, driven by the real FleetDaemon tick loop, landed by the real
 // gated landing, and observed over the real telemetry bus.
 //
-// Three cases plus two break probes:
+// Four cases plus break probes:
 //  1. happy DAG (A, then B and C in parallel): ordering, overlap, ownership,
 //     gated merges, base stability, bus event order;
 //  2. failure: error, retry(1), cancellation of dependents, merge conflict
 //     repair (conflict -> waiting-human, tip stable);
 //  3. cancellation and cleanup: mid-run stop, resumable record, salvage, gc.
+//  4. gate failure: gates reject the landing, the task fails, no branch moves.
 // Probes prove the suite bites: a shared worktree and an early start both
 // fail the ownership/ordering checks.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
@@ -421,6 +422,44 @@ describe("fleet integration (real host, fake model)", () => {
       await rm(dagState, { recursive: true, force: true })
     }
   }, 120_000)
+
+  test("case 4: a gate failure marks the task failed and moves no branch", async () => {
+    const root = h.directory
+    const dagState = await mkdtemp(path.join(tmpdir(), "es-fleet-int-4-"))
+    const marks = await mkdtemp(path.join(tmpdir(), "es-fleet-int-4-marks-"))
+    try {
+      let dag: DagState = emptyDag()
+      dag = addTask(dag, taskInput("int4-gated"), STAMP)
+      await saveDag(dagState, dag)
+      const intTip = async (): Promise<string | undefined> => {
+        try {
+          return await tip(root, "fleet/integration/fleet")
+        } catch {
+          return undefined
+        }
+      }
+      const before = await intTip()
+      const { bus } = await busFor(dagState)
+      const daemon = daemonFor(h, dagState, bus, {
+        marks,
+        checkGates: () => Promise.resolve({ ok: false as const, reason: "int4 test gate failure" }),
+      })
+      try {
+        await drive(daemon, async () => (await dagStatus(dagState, "int4-gated")) === "failed", 90_000, "GATED to fail")
+        const final = (await loadDag(dagState))!
+        expect(final.tasks["int4-gated"]?.status).toBe("failed")
+        expect(final.tasks["int4-gated"]?.reason).toMatch(/int4 test gate failure/)
+        expect(await intTip()).toBe(before)
+        expect(await tip(root, "main")).toBe(base)
+      } finally {
+        await bus.stop().catch(() => undefined)
+        await releaseAll(root, dagState)
+      }
+    } finally {
+      await rm(dagState, { recursive: true, force: true })
+      await rm(marks, { recursive: true, force: true })
+    }
+  }, 150_000)
 
   test("break probes: shared worktrees and early starts fail the checks", async () => {
     const root = h.directory

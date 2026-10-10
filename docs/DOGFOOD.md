@@ -57,7 +57,9 @@ explicitly — the run cannot start without it. When the design tree is settled,
 approve it:
 
 - TUI: `/es-approve` previews what you are approving, asks for your passphrase (masked), and records it; or
-- browser: `es-fleet web` prints a one-time URL; the approvals page previews the subject and hashes, then asks for your passphrase (masked) and records with channel `web`; or
+- browser: `es-fleet web` prints a one-time URL (from a checkout:
+  `bun packages/fleet/bin/es-fleet.js web` — `es-fleet` is private, never
+  published to npm); the approvals page previews the subject and hashes, then asks for your passphrase (masked) and records with channel `web`; or
 - terminal: `es approve frontier` (asks for your passphrase)
 
 ## 3. Research and spec
@@ -106,7 +108,8 @@ long ago it acted.
     waits on you.
   - A toast announces stage changes, and also a paused factory after three
     turns without progress (run `/factory` to continue).
-- **Web** (`es-fleet web` prints a one-time loopback URL): the fleet
+- **Web** (`es-fleet web` prints a one-time loopback URL — from a
+  checkout: `bun packages/fleet/bin/es-fleet.js web`): the fleet
   overview and per-task pages across the whole fleet — DAG, spend against
   the ceiling, pending approvals, live updates with a stale banner (#130).
 - **Headless**: `es factory run --headless` prints JSON lines.

@@ -1,12 +1,16 @@
-// Bus event client (#130): live WS delivery, replay on connect, refetch on
-// reconnect, malformed frames dropped. The live test runs against a real
-// TelemetryServer; the reconnect test uses an injected socket.
+// Bus event client contract (#130): live WS delivery, replay on connect,
+// refetch on reconnect, malformed frames dropped. This is the test-only
+// exception to the web leaf-surface rule (AGENTS.md, docs/FLEET.md): it
+// runtime-imports the fleet server harness, so it lives in `test/` —
+// `src/` holds only shipped code with type-only fleet imports. The live
+// test runs against a real TelemetryServer; the reconnect test uses an
+// injected socket.
 import { describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { type BusEvent, type FleetSnapshot, fleetPaths, TelemetryServer } from "@heretek-ai/es-fleet"
-import { type BusSocket, connectBus } from "./bus.ts"
+import { type BusSocket, connectBus } from "../src/bus.ts"
 
 const TOKEN = "bus-test-token-with-enough-length"
 

@@ -48,18 +48,27 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
   on branch `fleet/<taskId>`, from a recorded base commit. Absolute symlinks
   pointing into the repo are rebased to the worktree on allocation.
 - The registry (`<stateDir>/fleet/worktrees.json`) maps taskId → dir,
-  branch, base, createdAt, status (`allocated`/`merged`/`abandoned`), under
-  the shared fleet lock. Allocation is two-phase (check, git work under the
-  per-repo admin lock, commit with re-check); a double allocation is refused.
+  branch, base, createdAt, status
+  (`allocating`/`allocated`/`merged`/`abandoned`), under
+  the shared fleet lock. Allocation pre-registers `allocating` before the
+  git work and flips to `allocated` after (never holding both locks); `gc`
+  holds the fleet lock for its whole read → decide → persist inside the
+  repo lock (one lock order, repo → fleet), treats `allocating` as live,
+  and drops only stale `allocating` records whose dir and branch are gone.
+  A double allocation is refused.
 - Release removes the checkout and marks the record. Abandoned branches are
   anchored at `refs/fleet-salvage/<taskId>` before deletion; merged branches
   are kept. `es-fleet gc` (human-only) salvages and removes orphaned
   worktrees and drops stale records.
 - Landing (`landTask`) is transactional: gates run in the task worktree
-  first (no state change on failure), then a `--no-ff` merge onto
+  first — a gate failure marks the task `failed` with the gate reason and
+  merges nothing — then a `--no-ff` merge onto
   `fleet/integration/<dagId>` inside a throwaway worktree with the pre-merge
-  tip captured — a conflict aborts, verifies the rollback, and reports
-  `conflict: true` so the caller marks the task `waiting-human`.
+  tip captured. A merge failure aborts only with `MERGE_HEAD` present and
+  reports `conflict: true` only with unmerged paths; any other failure
+  returns its original reason with `conflict: false`. A conflict aborts,
+  verifies the rollback, and reports `conflict: true` so the caller marks
+  the task `waiting-human`.
 - The base branch is never checked out, reset, or merged: the suite asserts
   its ref is stable across every operation.
 - Policy: `.fleet/` is deny-write for every agent outside its own task
@@ -89,7 +98,18 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
 - `FleetDaemon.tick` (idempotent) wires it together: schedule → allocate →
   prepare → launch → fold reports → land done tasks → release; `stop` is the
   kill switch. `es-fleet start --foreground` runs the loop (`--repo`,
-  `--es-bin`, `--interval-ms`).
+  `--es-bin`, `--interval-ms`). Starting always asks for confirmation;
+  a background start spawns a detached child over an IPC channel with a
+  one-time start grant, waits for its pidfile-written report, and prints
+  the child's error otherwise — a TTY-less child without the grant exits
+  non-zero. The grant is a plain IPC message, not a secret: it proves only
+  that the spawner opened an IPC channel, so any process able to spawn
+  `bin.js` that way can start the fleet without the confirmation. It is
+  defense in depth, like the TTY check before it (which `script` could fake).
+  The boundaries that hold are the human-only shell policy on `es-fleet`
+  (`trust/policy.ts`) and the `ES_SANDBOX` refusal in `assertHumanStart`.
+  `es-fleet status --token` (human-only, needs a TTY) prints the
+  bus bearer token.
 
 ## Telemetry bus and watch (#126)
 
@@ -97,7 +117,9 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
   recorded in `telemetry.json`; bearer token in `token`, 0600, readable only
   by the human outside any sandbox):
   - `POST /fleet/rpc`: strict-schema JSON-RPC — `fleet.status`,
-    `fleet.task {id}`, `fleet.pending`, `fleet.events {since}` (monotonic
+    `fleet.task {id}`, `fleet.task.liveness {id}` (per-task run liveness:
+    headline, stage, seats, research progress), `fleet.pending`,
+    `fleet.events {since}` (monotonic
     backlog replay over the persisted `events.jsonl`).
   - `GET /fleet/ws`: WebSocket stream of `changed` and `liveness` events,
     coalesced to at most one emit per channel per second (notifySoon),
@@ -141,17 +163,19 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
   Status is always words beside colour (1.3 vocabulary: running→working,
   waiting-human→waiting on you, etc.), and every task is a link, so the UI
   stays navigable by keyboard and readable without colour.
-- Liveness is fleet-level: the bus serves per-task status, reason, spend
-  and deps, not per-run seats/stages/research — the detail page shows the
-  server-rendered reason string, spend, deps and recent bus events for the
-  task. (Full run liveness would need a per-run RPC the #126 bus does not
-  define; the dashboard stays within the read-only bus by design.)
+- Liveness is per task: `fleet.task.liveness {id}` serves the run's
+  headline, stage, seat lines and research progress (`TaskLiveness`, a
+  `import type`-only payload for the web dashboard), computed in fleet from
+  the task worktree's factory state with core's `factory/liveness.ts`.
+  Unknown tasks error; every call leaves all files untouched.
 - Live updates: WS events refetch the snapshot; a reconnect refetches too.
   No data for 5 s shows a stale banner (`role="status"`).
 - Tests run with `bun --conditions=browser test packages/web`: the web
-  suite renders with the client Solid build (components use `solid-js/html`
-  templates — no JSX transform exists for bun's runner), against fixture
+  suite renders with the client Solid build, against fixture
   data plus a real TelemetryServer for the WS integration test.
+  Test-only exception: `packages/web/test/bus.contract.test.ts` runtime-imports
+  `TelemetryServer`/`fleetPaths` for that WS contract test; shipped `src/`
+  code uses `import type` only.
 
 ## Browser approvals (#131, ADR 0002 option b)
 
@@ -233,5 +257,7 @@ isolated worktrees under the real daemon loop, landing and bus.
   transition allowed out of `done`) while the tip stays stable.
 - Case 3: mid-run `shutdown()` SIGTERMs the worker (exit signal maps to
   `cancelled`/resumable), the abandoned branch is salvaged, `gc` is clean.
+- Case 4: gates fail — the task is marked `failed` with the gate reason,
+  the integration tip never moves, `main` never moves.
 - Break probes: a shared worktree and a pre-dep start both fail the
   ownership/ordering checks, proving the suite bites.

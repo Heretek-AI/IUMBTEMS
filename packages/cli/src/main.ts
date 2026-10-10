@@ -108,7 +108,7 @@ Factory
   watch [--interval S]          es status, redrawn every S seconds (default 2); q quits   [terminal]
   factory begin                 Start a run (normally done by /grill)
   factory init --preset <name> --issue <n>   Seed a preset run from a GitHub issue   [human, TTY]
-  factory run --headless        Drive the factory through a harness CLI, emitting JSON lines
+  factory run --headless        Drive the factory through a harness CLI, emitting JSON lines   [human]
         [--driver opencode] [--max-turns N] [--log-level quiet|info|debug]
         [--events jsonl] [--events-file <path>] [--turn-timeout S]
   factory stop [reason]         Create .factory/STOP (kill switch)
@@ -280,7 +280,12 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
             [
               `Signs the brief with the human key (${outFile ? path.relative(root, outFile) : ".factory/research/brief.pcrb.json"}).`,
             ],
-            io.stateDir,
+            {
+              ...(io.stateDir ? { stateDir: io.stateDir } : {}),
+              root,
+              stage: "export",
+              channel: "cli",
+            },
           )
           if (!signer) {
             io.print("Cancelled; nothing was exported.")
@@ -338,20 +343,23 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           ...(config ? researchOptions(config) : {}),
           stateDir: io.stateDir,
           policy: () => Promise.resolve({ root, ...(io.stateDir ? { stateDir: io.stateDir } : {}) }),
+          // Explicit construction-time operator (#99): the per-call agent is
+          // never trusted for this, so the CLI names it "cli", not "human".
+          operator: "human",
         })
         const tool = (name: string) => tools.find((item) => item.name === name)!
         if (sub === "search" && rest.length) {
-          io.print(await tool("es_research_search").execute({ query: rest.join(" ") }, { agent: "human" }))
+          io.print(await tool("es_research_search").execute({ query: rest.join(" ") }, { agent: "cli" }))
           return 0
         }
         if (sub === "fetch" && rest[0]) {
-          io.print((await tool("es_research_fetch").execute({ url: rest[0] }, { agent: "human" })).split("\n---\n")[0]!)
+          io.print((await tool("es_research_fetch").execute({ url: rest[0] }, { agent: "cli" })).split("\n---\n")[0]!)
           return 0
         }
         if (sub === "audit") {
           const text = await tool("es_research_audit").execute(
             { ...(rest[0] ? { path: rest[0] } : {}), prune: args.flags.prune === true },
-            { agent: "human" },
+            { agent: "cli" },
           )
           io.print(text)
           return /Audit passed/.test(text) || /Pruned/.test(text) ? 0 : 1
@@ -653,7 +661,15 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
               ...server.install.packages.map((pkg) => `${pkg.name}@${pkg.version}  ${pkg.integrity}`),
               "Verified against the pinned sha512; installed with scripts disabled.",
             ]
-            if (!(await confirmHuman(io.confirm, `Install the ${id} language server`, lines, io.stateDir))) return 1
+            if (
+              !(await confirmHuman(io.confirm, `Install the ${id} language server`, lines, {
+                ...(io.stateDir ? { stateDir: io.stateDir } : {}),
+                root,
+                stage: "lsp-install",
+                channel: "cli",
+              }))
+            )
+              return 1
             await recordConsent(id!, true, io.stateDir)
             io.print(`Installed ${await installServer(server, io.stateDir ? { stateDir: io.stateDir } : {})}`)
             return 0

@@ -122,6 +122,24 @@ describe("release and salvage", () => {
       await rm(state, { recursive: true, force: true })
     }
   })
+
+  test("abandoning a record whose branch is already gone still releases (CI flake)", async () => {
+    const { root, base, cleanup } = await fixture()
+    const state = await stateRoot()
+    try {
+      const record = await allocateWorktree(root, state, "task-a", { base })
+      // The daemon's own cleanup won the race: the branch ref is gone while
+      // the registry record still says allocated.
+      await git(root, "update-ref", "-d", `refs/heads/${record.branch}`)
+      await expect(releaseWorktree(root, state, "task-a", "abandoned")).resolves.toEqual({ released: true })
+      const registry = (await loadRegistry(state))!
+      expect(registry.worktrees["task-a"]!.status).toBe("abandoned")
+      expect(await tip(root, "main")).toBe(base)
+    } finally {
+      await cleanup()
+      await rm(state, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("gated landing", () => {
@@ -164,6 +182,29 @@ describe("gated landing", () => {
       const result = await landTask(root, state, "task-b", "dag-1", gatesOk)
       expect(result).toMatchObject({ landed: false, conflict: true })
       expect(await tip(root, "fleet/integration/dag-1")).toBe(integrationTip)
+      expect(await tip(root, "main")).toBe(base)
+    } finally {
+      await cleanup()
+      await rm(state, { recursive: true, force: true })
+    }
+  })
+
+  test("a non-conflict merge failure returns its reason and skips --abort", async () => {
+    const { root, base, cleanup } = await fixture()
+    const state = await stateRoot()
+    try {
+      const record = await allocateWorktree(root, state, "task-a", { base })
+      await writeFile(path.join(record.dir, "work.txt"), "x\n")
+      await git(record.dir, "add", "-A")
+      await git(record.dir, "commit", "--no-verify", "-m", "x")
+      // Hermetic missing-identity: an empty repo-local identity makes the
+      // landing merge itself unable to commit (no global config is read for
+      // this: the empty local value wins over any global one).
+      await git(root, "config", "user.name", "")
+      await git(root, "config", "user.email", "")
+      const result = await landTask(root, state, "task-a", "dag-1", gatesOk)
+      expect(result).toMatchObject({ landed: false, conflict: false })
+      expect("reason" in result && result.reason).toMatch(/ident/i)
       expect(await tip(root, "main")).toBe(base)
     } finally {
       await cleanup()

@@ -228,3 +228,28 @@ export function reportTask(
     }
   }
 }
+
+/**
+ * Gate rejection fails a done task (#127, repair-151 S5.7): the work is
+ * complete but unlandable, so the task goes terminal-failed carrying the
+ * gate reason. Only done -> failed; any other status is unchanged. This is
+ * the one done-exit besides landing conflicts, and it is daemon-initiated —
+ * worker reports for terminal tasks stay ignored (at-least-once delivery).
+ */
+export function markGateFailed(
+  dag: DagState,
+  id: string,
+  reason: string,
+  now: string,
+): { dag: DagState; changed: boolean } {
+  const task = dag.tasks[id]
+  if (!task) throw new FleetError(`Unknown task ${JSON.stringify(id)}.`)
+  if (task.status !== "done") return { dag, changed: false }
+  return {
+    dag: {
+      v: dag.v,
+      tasks: { ...dag.tasks, [id]: { ...task, status: "failed", reason, updatedAt: now } },
+    },
+    changed: true,
+  }
+}

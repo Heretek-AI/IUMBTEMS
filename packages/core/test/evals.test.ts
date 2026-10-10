@@ -2,16 +2,20 @@
 // used / not used, and error events, over an `opencode run --format json` stream.
 import { describe, expect, test } from "bun:test"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import path from "node:path"
 import {
   caseStepCap,
   DEFAULT_CASE_STEPS,
   gradeAuditFire,
+  gradeFireCase,
   gradeHarvestFire,
   gradeOutput,
   gradeScoutFire,
   gradeTranscript,
   readTranscript,
+  writeHarvestResult,
 } from "../src/index.ts"
 
 describe("the eval grader", () => {
@@ -236,6 +240,60 @@ describe("fire graders", () => {
       "gpl: depend, expected clean-room",
     ])
     expect(gradeHarvestFire(matrix([cell("mit", "depend")]), want).failures).toEqual(["no matrix cell for gpl"])
+  })
+
+  test("a completed harvest run grades as pass, whatever the run id (#109: no silent default)", async () => {
+    const profile = (id: string) => ({
+      version: 1 as const,
+      id,
+      name: id,
+      license: {
+        spdx: "MIT",
+        family: "permissive" as const,
+        source: "license-file" as const,
+        verified: true,
+        confidence: "high" as const,
+      },
+      languages: { JavaScript: 1 },
+      dependencies: { runtime: [], dev: [] as string[] },
+      size: { files: 1, bytes: 10, tokens: 3 },
+      graph: { internalEdges: 0, external: 0, parsers: { treeSitter: 0, regex: 0 } },
+      provenance: {},
+      warnings: [],
+      scannedAt: "t",
+    })
+    const matrix = {
+      version: 1 as const,
+      candidates: ["mit"],
+      rows: [{ feature: "f", cells: [{ candidate: "mit", verdict: "depend" as const }] }],
+      licensePolicy: { whitelist: ["MIT"], failClosed: true as const },
+      builtAt: "t",
+    }
+    const rendered = { report: "# Harvest\n", vendorPlan: "plan", cleanRoom: [] }
+    const want = [{ candidate: "mit", verdict: "depend" }]
+    const root = await mkdtemp(path.join(tmpdir(), "es-harvest-grade-"))
+    try {
+      // The harvester completes run "harvest", not the default run: naming it grades it.
+      await writeHarvestResult(root, "objective", [profile("mit")], matrix, rendered, "harvest")
+      expect(await gradeFireCase({ kind: "harvest", expected: want, run: "harvest" }, root)).toMatchObject({
+        pass: true,
+        caught: ["mit"],
+      })
+      // Without a named run the single completed run is graded, not a silent default.
+      expect(await gradeFireCase({ kind: "harvest", expected: want }, root)).toMatchObject({ pass: true })
+      // A named run that never completed fails naming the run.
+      expect(await gradeFireCase({ kind: "harvest", expected: want, run: "missing" }, root)).toMatchObject({
+        pass: false,
+      })
+      // Two completed runs with no named run fail explicitly instead of grading one silently.
+      await writeHarvestResult(root, "objective", [profile("mit")], matrix, rendered, "default")
+      const ambiguous = await gradeFireCase({ kind: "harvest", expected: want }, root)
+      expect(ambiguous.pass).toBe(false)
+      expect(ambiguous.failures.join("; ")).toContain("harvest")
+      expect(ambiguous.failures.join("; ")).toContain("several harvest runs completed (default, harvest)")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
 

@@ -42,6 +42,7 @@ import { sha256 } from "../util/hash.ts"
 import { run, splitCommand } from "../util/proc.ts"
 import * as Git from "../worktree/git.ts"
 import { once } from "./journal.ts"
+import { readPresetSeed, SELF_DOGFOOD_BASE_BRANCH, SELF_DOGFOOD_PRESET } from "./preset.ts"
 import { indexRun } from "./runs.ts"
 import {
   type Audit,
@@ -61,6 +62,7 @@ import { deferredFacts, diffFrontier, readFrontier, reopenedNodes, treeCounts } 
 
 /** The operation was refused; state is unchanged. */
 export class FactoryError extends Error {}
+
 /** The factory is halted; only a human can resume it. */
 export class FactoryHalted extends FactoryError {}
 
@@ -104,6 +106,8 @@ export interface PrRequest {
   readonly base: string
   readonly title: string
   readonly body: string
+  /** Preset that seeded the run, if any: the opener pins the base for preset runs. */
+  readonly preset?: string
 }
 
 export interface PrOpener {
@@ -356,6 +360,10 @@ export class Factory {
       async (state) => {
         if (state.stage !== "GRILL" || state.phases.length)
           throw new FactoryError(`A run already exists (${state.runId}, ${state.stage}).`)
+        // A preset-seeded run carries its seed into sealed run state, so the
+        // base-branch pin below survives the grill rewriting the roadmap.
+        const seed = await readPresetSeed(this.root).catch(() => undefined)
+        if (seed) state.preset = seed.preset
         await this.audit(actor, "factory.begin", { runId: state.runId })
         return state
       },
@@ -588,6 +596,14 @@ export class Factory {
       const roadmap = RoadmapSchema.parse(JSON.parse(await readFile(this.layout.roadmap, "utf8")))
       if (roadmap.phases.length > this.limits.maxPhases)
         throw new FactoryError(`Roadmap exceeds ${this.limits.maxPhases} phases.`)
+      // A preset-seeded run pins its release base: the grill must have kept
+      // baseBranch when it rewrote the roadmap, otherwise the run would
+      // silently release onto the wrong branch (falling back to the checkout
+      // or "main"). Refuse to advance instead.
+      if (state.preset === SELF_DOGFOOD_PRESET && roadmap.baseBranch !== SELF_DOGFOOD_BASE_BRANCH)
+        throw new FactoryError(
+          `Preset "${SELF_DOGFOOD_PRESET}" requires roadmap.baseBranch "${SELF_DOGFOOD_BASE_BRANCH}" (the grill must keep it when rewriting the roadmap); found ${roadmap.baseBranch === undefined ? "no baseBranch" : `"${roadmap.baseBranch}"`}. Restore it, then start the build again.`,
+        )
       const hashes = new Map(check.record.subject.map((item) => [item.path, item.sha256]))
       state.phases = roadmap.phases.map((phase) => ({
         id: phase.id,
@@ -1185,6 +1201,13 @@ export class Factory {
       throw new FactoryError(
         `Gates are green on ${runBranch}, but no PR opener is available. Push the branch, open a PR to ${state.baseBranch}, then run \`es factory pr <url>\`.`,
       )
+    // Defence in depth for preset runs: the base was pinned at startBuild,
+    // and the opener pins it again — never release a preset run elsewhere.
+    const preset = state.preset
+    if (preset === SELF_DOGFOOD_PRESET && state.baseBranch !== SELF_DOGFOOD_BASE_BRANCH)
+      throw new FactoryError(
+        `Preset "${SELF_DOGFOOD_PRESET}" releases onto "${SELF_DOGFOOD_BASE_BRANCH}", not "${state.baseBranch}".`,
+      )
     const body = await this.prBody(state)
     const opened = await once(this.root, `${state.runId}:pr`, () =>
       pr.open({
@@ -1196,6 +1219,7 @@ export class Factory {
           .join("; ")
           .slice(0, 200)}`,
         body,
+        ...(preset !== undefined ? { preset } : {}),
       }),
     )
     return this.mutate(`agent:${agentId}`, async (current) => {

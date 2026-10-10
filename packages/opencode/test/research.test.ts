@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { boot, directiveScript, type Harness } from "@heretek-ai/es-testkit"
+import { parseDeepResearchArgs } from "../src/server.ts"
 
 const pluginDir = path.resolve(import.meta.dir, "..")
 const call = (name: string, args: Record<string, unknown> = {}) => `@@CALL ${name} ${JSON.stringify(args)}@@`
@@ -375,4 +376,30 @@ describe("#111: the deep-research coordinator on the real host", () => {
       await deep.close()
     }
   }, 120_000)
+})
+
+describe("the /research deep argument grammar (core parseArgs, not a regex)", () => {
+  test("--max-usd N and --max-usd=N both parse; the flag never leaks into the question", () => {
+    expect(parseDeepResearchArgs("deep Do gates hold? --max-usd 5")).toEqual({
+      query: "Do gates hold?",
+      ceiling: "5",
+    })
+    expect(parseDeepResearchArgs("deep Do gates hold? --max-usd=5")).toEqual({
+      query: "Do gates hold?",
+      ceiling: "5",
+    })
+  })
+
+  test("a missing or unusable ceiling asks for one", () => {
+    expect(parseDeepResearchArgs("deep Do gates hold? --max-usd")).toEqual({ error: "ceiling" })
+    expect(parseDeepResearchArgs("deep Do gates hold?")).toEqual({ error: "ceiling" })
+    expect(parseDeepResearchArgs("deep Do gates hold? --max-usd lots")).toEqual({ error: "ceiling" })
+    expect(parseDeepResearchArgs("deep Do gates hold? --max-usd 0")).toEqual({ error: "ceiling" })
+  })
+
+  test("without deep and a question it is a usage error", () => {
+    expect(parseDeepResearchArgs("deep --max-usd 5")).toEqual({ error: "usage" })
+    expect(parseDeepResearchArgs("Do gates hold? --max-usd 5")).toEqual({ error: "usage" })
+    expect(parseDeepResearchArgs("")).toEqual({ error: "usage" })
+  })
 })
