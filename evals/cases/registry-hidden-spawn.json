@@ -1,0 +1,8 @@
+{
+  "id": "registry-hidden-spawn",
+  "description": "The factory delegates a status check to the hidden es-qa-functional seat by id (hidden seats are unlisted from the subagent menu but invocable from an allowed parent), then replies DELEGATED.",
+  "agent": "factory",
+  "prompt": "Delegate a status check to the es-qa-functional seat with the subagent tool (description \"status check\", prompt \"Check the factory run status with es_status and report back in one sentence\"). When it returns, reply with exactly the single word DELEGATED and nothing else.",
+  "maxSteps": 8,
+  "checks": { "toolsUsed": ["subagent"], "contains": ["DELEGATED"] }
+}
