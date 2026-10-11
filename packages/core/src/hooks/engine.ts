@@ -6,6 +6,7 @@
 // missing trust; observers fail open, as Claude Code does. Every executed
 // handler is written to the audit log.
 import { appendAuditEntry } from "../audit/chain.ts"
+import type { SandboxSpec } from "../trust/sandbox.ts"
 import { isTrusted } from "../trust/store.ts"
 import { type HookSource, hookSources, type LoadedHooks, loadHooks } from "./load.ts"
 import { ifMatches, matcherMatches } from "./match.ts"
@@ -19,6 +20,16 @@ export interface HookEngineOptions {
   readonly sources?: HookSource[]
   readonly generate?: (prompt: string, model?: string) => Promise<string>
   readonly audit?: boolean
+  /**
+   * Sandbox for hook command subprocesses (#265). Absent runs unsandboxed
+   * with the parent environment (Claude Code parity; project hooks are
+   * trusted code). "readonly" makes everything read-only; a spec runs with
+   * one writable directory. Without bwrap the run errors and gates fail
+   * closed while observers fail open.
+   */
+  readonly sandbox?: "none" | "readonly" | Omit<SandboxSpec, "cwd">
+  /** No network inside the sandbox (only meaningful with `sandbox`). */
+  readonly offline?: boolean
 }
 
 export interface BaseInput {
@@ -188,6 +199,15 @@ export class HookEngine {
   }
 
   private async execute(event: string, items: SourcedHandler[], input: Record<string, unknown>): Promise<Ran[]> {
+    // The sandbox knob rides every handler run (#265); per-handler timeout
+    // and x-es-offline are honored in run.ts.
+    const sandboxContext =
+      this.options.sandbox !== undefined || this.options.offline !== undefined
+        ? {
+            ...(this.options.sandbox !== undefined ? { sandbox: this.options.sandbox } : {}),
+            ...(this.options.offline !== undefined ? { offline: this.options.offline } : {}),
+          }
+        : {}
     const ran = await Promise.all(
       items.map(async (item): Promise<Ran> => {
         const project = !item.source.startsWith("user:")
@@ -205,6 +225,7 @@ export class HookEngine {
             root: this.options.root,
             event,
             input,
+            ...sandboxContext,
             ...(this.options.generate ? { generate: this.options.generate } : {}),
           })
           return { item, outcome: { status: "ok", durationMs: 0 } }
@@ -213,6 +234,7 @@ export class HookEngine {
           root: this.options.root,
           event,
           input,
+          ...sandboxContext,
           ...(this.options.generate ? { generate: this.options.generate } : {}),
         })
         return { item, outcome }
@@ -388,7 +410,17 @@ export class HookEngine {
   ): Promise<{ additionalContext: string[]; notices: string[] }> {
     const items = this.select("SessionStart", [source])
     const result = { additionalContext: [] as string[], notices: [] as string[] }
-    if (!items.length) return result
+    if (!items.length) {
+      // An unmatched source is an explicit notice, never a silent no-op
+      // (#289): the bridge fires only startup + compact, so a hook filtered
+      // to resume/clear/fork would otherwise sit inert with no sign. Silent
+      // only when no SessionStart hook is registered at all.
+      if (this.loaded.handlers.some((item) => item.event === "SessionStart"))
+        result.notices.push(
+          `SessionStart: hook(s) registered but none match source "${source}" (the bridge fires startup + compact)`,
+        )
+      return result
+    }
     const ran = await this.execute("SessionStart", items, { ...this.common("SessionStart", base), source })
     for (const { item, outcome } of ran) {
       this.failure(item, outcome, result.notices)

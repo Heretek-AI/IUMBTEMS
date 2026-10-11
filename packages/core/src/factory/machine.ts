@@ -319,7 +319,10 @@ export class Factory {
     // (CI-only es_build_start refusal). Real transitions still enforce it.
     if (!options.skipControl) {
       const control = await verifyControl(this.root)
-      if (!control.clean) return halt(`control files changed outside a human action: ${control.violations.join("; ")}`)
+      if (!control.clean)
+        return halt(
+          `control files changed outside a human action (integrity/control-drift): ${control.violations.join("; ")}. The structured finding is in .factory/runs/${state.runId}/gates/*/summary.json; a human must review and rebaseline.`,
+        )
     }
     if (state.spendCeilingUSD !== undefined && state.spend.usd >= state.spendCeilingUSD)
       return halt(
@@ -433,6 +436,10 @@ export class Factory {
       this.requireAuditsClear(state)
       const check = await verifyApproval(this.root, "frontier", { stateDir: this.deps.stateDir })
       if (!check.ok) throw new FactoryError(check.reason)
+      if (check.record.spendCeilingUSD === undefined)
+        throw new FactoryError(
+          "The frontier approval carries no spend ceiling; a human must approve it again (`es approve frontier`).",
+        )
       state.spendCeilingUSD = check.record.spendCeilingUSD
       state.stage = "RESEARCH"
       await this.audit(actor, "stage.research", { spendCeilingUSD: state.spendCeilingUSD })
@@ -684,7 +691,8 @@ export class Factory {
   /** Record a gate run made during BUILD (red test runs are the failing-test-first evidence). */
   async recordGateRun(agentId: string | undefined, result: GateRunLike): Promise<void> {
     await this.mutate(`agent:${agentId}`, (state) => {
-      if (state.stage !== "BUILD") return
+      if (state.stage !== "BUILD")
+        throw new FactoryError(`Gate runs record during BUILD only (current stage: ${state.stage}).`)
       const phase = this.active(state)
       const failed = result.failedTests ?? []
       const red = failed.length > 0 || result.testsFailed === true
@@ -1233,7 +1241,7 @@ export class Factory {
   private async prBody(state: FactoryState) {
     const spec = await readApproval(this.root, "spec")
     const lines = [
-      `Built by the Epistemic Swarm factory (run \`${state.runId}\`). A human reviews and merges; the factory never merges.`,
+      `Built by the Epistemic Swarm factory (run \`${state.runId}\`). A human reviews and merges; the factory never merges into the release/base branch.`,
       "",
       "## Phases",
       ...state.phases.map(

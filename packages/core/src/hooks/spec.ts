@@ -35,6 +35,8 @@ export const CommandHookSchema = z.looseObject({
   async: z.boolean().optional(),
   asyncRewake: z.boolean().optional(),
   shell: z.enum(["bash", "powershell"]).optional(),
+  /** No network for this command when run sandboxed (#265; needs the engine sandbox). */
+  "x-es-offline": z.boolean().optional(),
   ...common,
 })
 

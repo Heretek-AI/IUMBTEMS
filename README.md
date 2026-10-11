@@ -37,8 +37,10 @@
   scanning, OSV, budgets (diff size, file length, complexity, dependency
   justification, test-with-behaviour), with structured `file:line:rule`
   findings and signed, expiring waivers.
-- **Evidence-first research.** Content-addressed source cache, a pure verbatim
-  quote verifier, and an epistemic auditor that downgrades ungrounded claims.
+- **Evidence-first research.** Content-addressed source cache, a quote
+  verifier that is verbatim after documented normalisation (NFKC, typography
+  folds, markdown stripping, whitespace collapse), and an epistemic auditor
+  that flags, prunes and refuses ungrounded claims.
   Web sources come through an ordered backend chain (Scraper-Swarm gateway,
   Brave, Firecrawl, SearXNG, direct fetch) with per-backend cooldowns: one
   provider's outage or rate limit fails over to the next, while a safety
@@ -171,11 +173,11 @@ bun install
 bun run check        # biome + tsc + bun test (all packages)
 bun run docs:gen     # regenerate schemas/ + docs/ after schema changes
 bun run docs:check   # CI drift check
-scripts/pack-smoke.sh   # build, pack and install the packages; run them under Node and Bun
+scripts/pack-smoke.sh   # build, pack and install the packages; run the CLI under Node and the plugin server under Bun
 scripts/v2-head.sh   # run the real-host suite against OpenCode v2 HEAD
 ```
 
-Platform: Linux, Node ≥ 22 or Bun. No Python.
+Platform: Linux (CI runs ubuntu-latest), CLI under Node 22, plugin server under Bun. No Python.
 
 ## Documentation
 

@@ -102,8 +102,9 @@ export function evaluateWrite(context: PolicyContext, agentId: string | undefine
   if (!spec) return allow
   if (relative === undefined) return deny(`Factory seat "${spec.id}" may not write outside the project: ${absolute}`)
 
-  // REPORT.md has one writer per run mode (#111): the synthesizer is the
-  // only writer in research runs, the factory in build runs (AGENTS.md).
+  // REPORT.md has one writer scope per run mode (#111, #220): factory-docs
+  // seats (the factory and the manager share the scope) in build runs, the
+  // research synthesizer alone in research runs (AGENTS.md).
   // The mode comes from the sealed run state; when it cannot be read both
   // writers are denied (fail closed).
   if (relative === ".factory/research/REPORT.md") {
@@ -329,7 +330,7 @@ const MENTION_HINT =
   " If it only names the verb in text (a here-doc, a commit message, a `--body` argument), the rule still reads a call: write the text to a file with the edit tool and pass the file (`gh … --body-file`, `git commit -F`)."
 
 const CONTROL_MENTION =
-  /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|audits\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design|scout)\/[^\s'"]*\.json)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/i
+  /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|audits\b|improve\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design|scout)\/(?!notes\/)[^\s'"]*)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/i
 /** Any mention of the factory dir (a `cd .factory` reaches control files without naming them). */
 const FACTORY_MENTION = /(^|[\s/=:])\.factory(\/|[\s;|&]|$)/i
 /** Any mention of fleet isolation state (task worktrees live under `.fleet/`). */

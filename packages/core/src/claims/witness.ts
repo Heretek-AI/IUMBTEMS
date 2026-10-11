@@ -4,7 +4,8 @@
 //     refusing get + the one quote law, research/quote.ts);
 //   - a code location against the file on disk: inside the target root, the
 //     line range within the file and at most MAX_LOCATION_LINES long, the
-//     excerpt one contiguous verbatim span of those lines.
+//     excerpt one contiguous span of those lines, verbatim after documented
+//     normalisation.
 // Legacy never checked code locations at all (its "hallucinated line" check
 // was the generic quote check), so the location rule is new in 1.1.
 import path from "node:path"

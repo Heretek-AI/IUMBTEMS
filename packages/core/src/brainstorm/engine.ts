@@ -240,7 +240,9 @@ export const OUTLIER_THRESHOLD = 0.35
  * Greedy diversified selection: quality plus distance from what is already
  * picked. The last slot is forced to an outlier — the best idea whose maximum
  * similarity to the shortlist is below the outlier threshold, or the most
- * dissimilar idea when none is far enough.
+ * dissimilar idea when none is far enough — whenever the shortlist has ≥2
+ * slots (and at least two ideas are ranked; a single-idea shortlist carries
+ * `outlier: false`).
  */
 export function selectShortlist(
   ranked: readonly RankedIdea[],

@@ -155,7 +155,7 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
     {
       name: "es_research_fetch",
       description:
-        'Fetch a URL, cache its text content-addressed, and return the sha256 to cite: [VERIFIED: sha256:<hash> "verbatim quote"]. A fresh cached copy is served without a network request (refresh:true fetches again).',
+        'Fetch a URL, cache its text content-addressed, and return the sha256 to cite: [VERIFIED: sha256:<hash> "quote, verbatim after documented normalisation"]. A fresh cached copy is served without a network request (refresh:true fetches again).',
       input: object(
         {
           url: { type: "string" },
@@ -223,7 +223,7 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
     {
       name: "es_research_audit",
       description:
-        "Audit a research artifact: every claim needs an epistemic tag, and every VERIFIED quote must appear verbatim in its cached source. prune:true moves failing claims to a 'Pruned claims' section.",
+        "Audit a research artifact: every claim needs an epistemic tag, and every VERIFIED quote must appear verbatim after documented normalisation in its cached source. prune:true moves failing claims to a 'Pruned claims' section.",
       input: object({
         path: { type: "string", description: "Default .factory/research/REPORT.md" },
         prune: { type: "boolean" },

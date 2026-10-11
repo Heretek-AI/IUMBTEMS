@@ -177,7 +177,8 @@ export const AGENTS: readonly AgentSpec[] = [
     mode: "primary",
     hidden: false,
     tier: "deep",
-    description: "Fans out divergent lenses on an idea and returns a diversified shortlist.",
+    description:
+      "Fans out divergent lenses (eight-lens registry; six by default, four lean for callable runs) on an idea and distills a diversified shortlist.",
     prompt: "brainstormer",
     tools: [
       "es_status",

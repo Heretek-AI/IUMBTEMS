@@ -87,7 +87,14 @@ export function controlClass(relative: string): ControlClass | undefined {
 
 export const isControlPath = (relative: string) => controlClass(relative) !== undefined
 
-/** Files whose hashes the baseline pins (existing, tracked control artifacts). */
+/**
+ * Files whose hashes the baseline pins (existing, tracked control artifacts).
+ * Project-root only by design (#240.3): the user-global layer
+ * (globalConfigFile, under XDG_CONFIG_HOME) is machine-scoped and shared
+ * across projects — pinning it here would drift whenever the human edits
+ * global settings for another project. Global writes stay guarded by the
+ * human-only `es config set --global` gate instead.
+ */
 const PINNED = (root: string) => {
   const layout = factoryLayout(root)
   return [layout.gates, layout.frontier, layout.config]

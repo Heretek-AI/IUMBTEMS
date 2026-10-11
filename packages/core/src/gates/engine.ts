@@ -31,7 +31,7 @@ import { validateArtifacts } from "./artifacts.ts"
 import { checkBudgets, isTestFile } from "./budgets.ts"
 import { detectGates } from "./detect.ts"
 import { parseOutput } from "./parsers.ts"
-import { scanForSecrets } from "./secrets.ts"
+import { scanFileForSecrets } from "./secrets.ts"
 import { DEPENDENCY_FILES, gitleaks, osvFindings } from "./security.ts"
 import { isWaived, loadWaivers } from "./waivers.ts"
 
@@ -402,10 +402,7 @@ export async function runGates(options: RunGatesOptions): Promise<GateReport> {
   if (config.security.secrets)
     await timed("secrets", async () => {
       const out: GateFinding[] = []
-      for (const file of present) {
-        const text = await readFile(path.join(dir, file), "utf8").catch(() => "")
-        if (text.length <= 2_000_000) out.push(...scanForSecrets(text, file))
-      }
+      for (const file of present) out.push(...(await scanFileForSecrets(dir, file)))
       return out
     })
   if (config.security.gitleaks === "auto") await timed("gitleaks", () => gitleaks(dir, present.slice(0, 200)))

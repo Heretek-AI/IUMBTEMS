@@ -1,0 +1,3 @@
+The evidence cache seals every source with an engine key. Mechanical gates
+catch regressions before review, which keeps autonomous agents honest.
+Quote the gate sentence verbatim; a paraphrase is not evidence.

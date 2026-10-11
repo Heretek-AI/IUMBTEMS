@@ -166,11 +166,12 @@ describe("xss corpus", () => {
 describe("renderResearchRun", () => {
   test("reads the run (report, dossier, retractions, cache) in either mode", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "es-render-"))
+    const state = await mkdtemp(path.join(tmpdir(), "es-render-state-"))
     try {
       const { SourceCache, researchSourcesDir } = await import("../src/research/cache.ts")
       const { buildDossier, writeDossier } = await import("../src/claims/dossier.ts")
       const { normalizeClaim } = await import("../src/claims/claim.ts")
-      const cache = new SourceCache(researchSourcesDir(dir), undefined)
+      const cache = new SourceCache(researchSourcesDir(dir), state)
       const source = await cache.put({
         url: "https://example.test/q",
         text: "Queues decouple workers from producers durably.",
@@ -197,10 +198,11 @@ describe("renderResearchRun", () => {
       expect(html).toContain("Queues decouple workers.")
       // A source pruned after the dossier was written is shown, never hidden.
       const { SourceCache: Cache, researchSourcesDir: sourcesDir } = await import("../src/research/cache.ts")
-      await new Cache(sourcesDir(dir), undefined).prune(new Set())
+      await new Cache(sourcesDir(dir), state).prune(new Set())
       expect(await renderResearchRun(dir, { format: "md" })).toContain("not in the cache")
     } finally {
       await rm(dir, { recursive: true, force: true })
+      await rm(state, { recursive: true, force: true })
     }
   })
 

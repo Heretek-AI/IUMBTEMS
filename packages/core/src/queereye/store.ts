@@ -167,13 +167,15 @@ export async function checkDrift(root: string): Promise<DriftReport> {
   const paths = designPaths(root)
   const tokens = await readTokens(root)
   if (tokens === undefined) return { drifted: [], missing: [path.basename(paths.tokens)], tokenErrors: [] }
-  const probes = (await readProbes(root)) ?? []
+  // A missing probes.json is a gap, never a silent empty-probes render (#270):
+  // without probes the contrast QA below would pass vacuously.
+  const probes = await readProbes(root)
+  const missing: string[] = probes === undefined ? [path.basename(paths.probes)] : []
   const expected = new Map<string, string>([
     [paths.css, compileToCssVars(tokens)],
-    [paths.guide, renderGuide(tokens, probes)],
+    [paths.guide, renderGuide(tokens, probes ?? [])],
   ])
   const drifted: string[] = []
-  const missing: string[] = []
   for (const [file, content] of expected) {
     const existing = await readFile(file, "utf8").catch(() => undefined)
     if (existing === undefined) missing.push(path.basename(file))

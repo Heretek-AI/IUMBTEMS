@@ -182,7 +182,8 @@ export async function verifyBrief(
       `signed by key ${brief.signature.keyId}, which this machine does not hold; only integrity can be checked (allow unverifiable to accept that)`,
     )
 
-  // 4. Quotes: every claim the brief calls witnessed must quote its bundled source verbatim.
+  // 4. Quotes: every claim the brief calls witnessed must quote its bundled
+  // source verbatim after documented normalisation (research/quote.ts).
   let quotesVerified = 0
   let quotesFailed = 0
   for (const claim of brief.claims as Claim[]) {
