@@ -41,6 +41,7 @@ import { appendLine, exists, readJson, relativeInside, withLock, writeJson } fro
 import { sha256 } from "../util/hash.ts"
 import { run, splitCommand } from "../util/proc.ts"
 import * as Git from "../worktree/git.ts"
+import { pruneWorktrees } from "../worktree/lease.ts"
 import { once } from "./journal.ts"
 import { readPresetSeed, SELF_DOGFOOD_BASE_BRANCH, SELF_DOGFOOD_PRESET } from "./preset.ts"
 import { indexRun } from "./runs.ts"
@@ -358,6 +359,9 @@ export class Factory {
   // ------------------------------------------------------------ grill
 
   async begin(actor = "system"): Promise<FactoryState> {
+    // Factory startup garbage-collects crashed runs' human-process worktrees
+    // (#160): best-effort, so a corrupt lease can never block a new run.
+    await pruneWorktrees(this.root).catch(() => undefined)
     return this.mutate(
       actor,
       async (state) => {
