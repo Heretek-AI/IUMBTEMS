@@ -22,7 +22,7 @@ const frontier = {
   nodes: [{ id: "lang", question: "Language?", answer: "TypeScript", status: "settled" }],
 }
 
-async function rig() {
+async function rig(extra: { approveTicketTtlMs?: number } = {}) {
   const state = await mkdtemp(path.join(tmpdir(), "es-approve-"))
   const repo = await mkdtemp(path.join(tmpdir(), "es-approve-repo-"))
   await mkdir(path.join(repo, ".factory"), { recursive: true })
@@ -56,6 +56,7 @@ async function rig() {
     stateRoot: state,
     port: 0,
     token: TOKEN,
+    ...extra,
     getSnapshot: (): FleetSnapshot => ({
       daemon: { running: true, pid: 1, maxUsd: 10, concurrency: 1 },
       tasks: [],
@@ -299,6 +300,49 @@ describe("approve submit", () => {
       await server.stop()
       await rm(state, { recursive: true, force: true })
     }
+  })
+
+  test("checklist 4b: an expired preview ticket fails the submit (#283.2)", async () => {
+    const { state, repo, server } = await rig({ approveTicketTtlMs: 0 })
+    try {
+      const cookie = await session(server.port, state)
+      const origin = `http://127.0.0.1:${server.port}`
+      const preview = json(
+        (
+          await post(
+            server.port,
+            "/fleet/approve/preview",
+            { runId: "t1", stage: "frontier" },
+            { Cookie: cookie, Origin: origin },
+          )
+        ).body,
+      )
+      // A zero TTL expires the ticket before the submit even runs: no sleep needed.
+      const res = await approveAs(server.port, cookie, preview.csrf as string, {
+        ticket: preview.ticket,
+        passphrase: PASS,
+      })
+      expect(res.status).toBe(403)
+      expect(res.body).toContain("expired")
+      const { readApproval } = await import("@heretek-ai/es-core")
+      expect(await readApproval(repo, "frontier")).toBeUndefined()
+    } finally {
+      await server.stop()
+      await rm(state, { recursive: true, force: true })
+      await rm(repo, { recursive: true, force: true })
+    }
+  })
+
+  test("approve tickets expire by TTL at unit level (#283.2)", async () => {
+    const { ApproveTickets } = await import("../src/approve.ts")
+    const expired = new ApproveTickets(0)
+    expect(
+      expired.redeem(expired.issue({ repoDir: "r", stage: "frontier", subjectHash: "h" })),
+    ).toBeUndefined()
+    const live = new ApproveTickets()
+    const ticket = live.issue({ repoDir: "r", stage: "frontier", subjectHash: "h" })
+    expect(live.redeem(ticket)).toEqual({ repoDir: "r", stage: "frontier", subjectHash: "h" })
+    expect(live.redeem(ticket)).toBeUndefined()
   })
 
   test("checklist 5: an artifact changed after the preview refuses the sign", async () => {
