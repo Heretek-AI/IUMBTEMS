@@ -9,6 +9,8 @@
 // seat-checked tool refuses. Only a registry agent id (`factory`,
 // `es-manager`, `es-programmer`, …) holds a seat: any other pinned string is
 // still the caller, but a seat-less one, refused the same way as "mcp".
+
+import type { SeatModelMap } from "@heretek-ai/es-core"
 import { checkStopFile, stateDir as defaultStateDir, esTools, Factory, gateRunner } from "@heretek-ai/es-core"
 import { VERSION } from "./version.ts"
 
@@ -21,6 +23,8 @@ export interface McpOptions {
   readonly version?: string
   /** Server environment for the pinned identity (defaults to process.env). */
   readonly env?: NodeJS.ProcessEnv
+  /** Effective config models for the heterogeneous-model policy (#170); unset skips the check. */
+  readonly models?: SeatModelMap
 }
 
 type Json = Record<string, any>
@@ -35,6 +39,7 @@ export function createMcpServer(options: McpOptions) {
   const factory = new Factory(options.root, {
     gates: gateRunner(options.stateDir ? { stateDir: options.stateDir } : {}),
     ...(options.stateDir ? { stateDir: options.stateDir } : {}),
+    ...(options.models ? { models: options.models } : {}),
   })
   const tools = esTools({ root: options.root, factory, stateDir: options.stateDir ?? defaultStateDir() })
   const byName = new Map(tools.map((tool) => [tool.name.replace(/^es_/, ""), tool]))
