@@ -119,7 +119,8 @@ prompt-injected agent acting through a seat or user-agent shell.
   (TTL ≤ 120 s) binds the preview to `hashJson(subject)`, and signing
   re-derives the subject and refuses a mismatch.
 - **I4** Attempts are limited: at most N wrong passphrases per M minutes per
-  surface (recommended 5 per 10 min), then a lockout and an audit entry.
+  state dir (recommended 5 per 10 min; the CLI and the TUI share one bucket),
+  then a lockout and an audit entry.
 - **I5** The channel is recorded (`cli`, `tui` or `web`) and audited.
 - **I6** Mutating approval endpoints are unreachable from agent contexts: no
   agent tool and no MCP tool; the TUI path requires the TUI process's dialog;
