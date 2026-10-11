@@ -49,23 +49,22 @@ const MAX_SOURCE_BYTES = 400_000
 
 export class SourceCache {
   /**
-   * When `stateDir` is set, entries are sealed with the engine key on write
-   * (#52) and unsealed entries are refused on read. Without it the cache keeps
-   * its legacy behaviour (tests and auxiliary readers).
+   * Entries are sealed with the engine key on write (#52) and unsealed
+   * entries are refused on read. `stateDir` is required: there is no
+   * legacy unsealed mode (#251) — tests that need untrusted bytes write
+   * them to disk directly instead of constructing a cache without a key.
    */
   constructor(
     readonly dir: string,
-    readonly stateDir?: string,
+    readonly stateDir: string,
   ) {}
 
   private async seal(meta: SourceMeta): Promise<SourceMeta> {
-    if (!this.stateDir) return meta
     const key = await ensureEngineKey(this.stateDir)
     return { ...meta, seal: sealMeta(meta as unknown as Record<string, unknown>, key) }
   }
 
   private async sealed(meta: SourceMeta): Promise<boolean> {
-    if (!this.stateDir) return true
     // Never mint a key to verify: without the engine's key nothing verifies (#59).
     const key = await readEngineKey(this.stateDir)
     return key !== undefined && verifyMetaSeal(meta as unknown as Record<string, unknown>, key)
@@ -84,14 +83,12 @@ export class SourceCache {
    */
   private async writeIndex(index: Record<string, string>): Promise<void> {
     await atomicWrite(this.indexFile(), `${JSON.stringify(index, null, 2)}\n`)
-    if (!this.stateDir) return
     const key = await ensureEngineKey(this.stateDir)
     await atomicWrite(this.indexSealFile(), `${sealMeta(index as unknown as Record<string, unknown>, key)}\n`)
   }
 
   private async readIndex(): Promise<Record<string, string>> {
     const index = (await readJson<Record<string, string>>(this.indexFile())) ?? {}
-    if (!this.stateDir) return index
     const seal = (await readFile(this.indexSealFile(), "utf8").catch(() => undefined))?.trim()
     if (seal === undefined || seal === "") return index
     const key = await readEngineKey(this.stateDir)

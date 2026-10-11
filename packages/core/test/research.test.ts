@@ -15,6 +15,7 @@ import {
   isFresh,
   locateQuote,
   normalizeForQuote,
+  normalizeSourceText,
   normalizeWithMap,
   parseTags,
   pruneClaims,
@@ -24,6 +25,7 @@ import {
   SourceCache,
   searxngProvider,
   selectProvider,
+  sha256,
   ttlDays,
   verifyQuote,
 } from "../src/index.ts"
@@ -33,8 +35,8 @@ let cache: SourceCache
 let state: string
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "es-research-"))
-  cache = new SourceCache(path.join(dir, "sources"))
   state = await mkdtemp(path.join(tmpdir(), "es-research-state-"))
+  cache = new SourceCache(path.join(dir, "sources"), state)
 })
 afterEach(() => Promise.all([rm(dir, { recursive: true, force: true }), rm(state, { recursive: true, force: true })]))
 
@@ -149,25 +151,25 @@ describe("source cache", () => {
     expect((await sealed.get(entry.meta.sha256))?.text).toBe(SOURCE)
     expect((await sealed.byUrl("https://s.test"))?.meta.sha256).toBe(entry.meta.sha256)
     // A forged entry planted before the factory dir existed has no seal.
+    // No constructor can produce unsealed bytes anymore (#251), so the
+    // fixture is written to disk directly, laid out exactly as put() would
+    // leave it minus the seal.
     const planted = new SourceCache(path.join(dir, "planted"), state)
-    const forged = await new SourceCache(path.join(dir, "forged")).put({
-      url: "https://evil.test",
-      text: SOURCE,
-      provider: "fetch",
-    })
     const { atomicWrite } = await import("../src/util/fs.ts")
-    const { sha256 } = await import("../src/util/hash.ts")
-    const { readFile } = await import("node:fs/promises")
-    await atomicWrite(path.join(dir, "planted", `${forged.meta.sha256}.md`), await readFile(forged.path, "utf8"))
+    const normal = normalizeSourceText(SOURCE)
+    const forgedHash = sha256(normal)
+    await atomicWrite(path.join(dir, "planted", `${forgedHash}.md`), normal)
     await atomicWrite(
-      path.join(dir, "planted", `${forged.meta.sha256}.json`),
-      `${JSON.stringify({ ...forged.meta, sha256: forged.meta.sha256 })}\n`,
+      path.join(dir, "planted", `${forgedHash}.json`),
+      `${JSON.stringify({ sha256: forgedHash, url: "https://evil.test", retrieved: new Date().toISOString(), provider: "fetch", bytes: Buffer.byteLength(normal) })}\n`,
     )
-    expect(sha256(SOURCE)).toBe(forged.meta.sha256)
-    expect(await planted.get(forged.meta.sha256)).toBeUndefined()
+    expect(sha256(SOURCE)).toBe(forgedHash)
+    expect(await planted.get(forgedHash)).toBeUndefined()
     expect(await planted.byUrl("https://evil.test")).toBeUndefined()
-    // Legacy readers without a state dir keep the old behaviour.
-    expect((await new SourceCache(path.join(dir, "forged")).get(forged.meta.sha256))?.text).toBe(SOURCE)
+    // Even an index entry pointing at the forged bytes cannot launder them:
+    // byUrl resolves the mapping, then get() still refuses the bytes.
+    await writeFile(path.join(dir, "planted", "index.json"), JSON.stringify({ "https://evil.test": forgedHash }))
+    expect(await planted.byUrl("https://evil.test")).toBeUndefined()
   })
 })
 

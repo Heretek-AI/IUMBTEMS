@@ -24,7 +24,7 @@ const put2 = async (cache: SourceCache) => {
 }
 
 describe("sealed URL index (#251.2)", () => {
-  test("a sealed cache writes an HMAC sidecar next to index.json; an unsealed one does not", async () => {
+  test("a sealed cache writes an HMAC sidecar next to index.json", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "es-index-"))
     const state = await mkdtemp(path.join(tmpdir(), "es-index-state-"))
     try {
@@ -32,9 +32,6 @@ describe("sealed URL index (#251.2)", () => {
       await put2(sealed)
       const seal = await Bun.file(path.join(dir, "sealed", "index.seal")).text()
       expect(seal.trim()).toMatch(/^[0-9a-f]{64}$/)
-      const plain = new SourceCache(path.join(dir, "plain"))
-      await put2(plain)
-      expect(await Bun.file(path.join(dir, "plain", "index.seal")).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
       await rm(state, { recursive: true, force: true })

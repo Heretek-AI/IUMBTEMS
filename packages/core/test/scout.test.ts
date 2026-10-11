@@ -198,7 +198,7 @@ describe("the scout tools", () => {
     )
     expect(osvCalls).toEqual([{ package: { name: "mit-lib", ecosystem: "npm" }, version: "1.0.0" }])
     const hash = /sha256:([0-9a-f]{64})/.exec(advisories)![1]!
-    expect((await new SourceCache(researchSourcesDir(root)).get(hash))?.meta.provider).toBe("osv")
+    expect((await new SourceCache(researchSourcesDir(root), state).get(hash))?.meta.provider).toBe("osv")
     for (const name of NAMES) {
       await tool("es_scout_scan").execute({ candidate: name }, scout)
       // mit carries real advisories; the rest record an explicit skip (#257).
