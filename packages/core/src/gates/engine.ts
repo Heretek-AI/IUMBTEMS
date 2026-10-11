@@ -28,8 +28,17 @@ import { parseJsonc } from "../util/jsonc.ts"
 import { bwrapAvailable, findExecutable, type RunResult, run, splitCommand } from "../util/proc.ts"
 import { changedFiles, diffStats, git } from "../worktree/git.ts"
 import { validateArtifacts } from "./artifacts.ts"
-import { checkBudgets, isTestFile } from "./budgets.ts"
+import { checkBudgets, isSourceFile, isTestFile } from "./budgets.ts"
 import { detectGates } from "./detect.ts"
+import {
+  cacheHashesEqual,
+  evaluateMutations,
+  generateMutants,
+  type MutationCacheState,
+  type MutationOutcome,
+  mutationFindings,
+  mutationFingerprint,
+} from "./mutation.ts"
 import { parseOutput } from "./parsers.ts"
 import { scanFileForSecrets } from "./secrets.ts"
 import { DEPENDENCY_FILES, gitleaks, osvFindings } from "./security.ts"
@@ -335,6 +344,173 @@ async function runCommandCheck(
   }
 }
 
+/** Sources the mutation gate can mutate: JS/TS (the operators are JS-shaped). */
+const MUTATABLE = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]
+
+const mutationCacheFile = (stateDir: string) => path.join(stateDir, "mutation-cache.json")
+
+/**
+ * The AST mutation check (#169). Each eligible touched source is mutated
+ * (condition/arithmetic/call/return mutants, capped per file) and the test
+ * checks rerun per mutant with the file restored afterwards. A mutant the
+ * suite still passes survived; below-threshold kill rates fail closed with a
+ * `mutation/kill-rate` error. Files whose content hash matches the cache
+ * reuse their stored outcome without rerunning the suite.
+ */
+/** Cached verdicts replayed as outcomes without touching the suite. */
+function cachedMutationOutcomes(
+  file: string,
+  source: string,
+  entry: { killed: readonly string[]; total: number },
+): MutationOutcome[] {
+  const killed = new Set(entry.killed)
+  const outcomes: MutationOutcome[] = []
+  for (let index = 0; index < entry.total; index++)
+    outcomes.push({
+      mutant: {
+        id: `${file}#${index + 1}`,
+        file,
+        line: 1,
+        kind: "condition",
+        description: "cached",
+        mutated: source,
+      },
+      killed: killed.has(`${file}#${index + 1}`),
+    })
+  return outcomes
+}
+
+interface MutantRun {
+  readonly killed: boolean
+  readonly error?: string
+}
+
+/**
+ * Apply one mutant, run every test suite until one fails, then restore the
+ * source. A failing suite kills the mutant; a runner error is reported, not
+ * mistaken for a kill.
+ */
+async function applyMutantAndRun(
+  context: {
+    dir: string
+    root: string
+    scope: "touched" | "full"
+    logDir: string
+    sandbox: "required" | "preferred"
+    stateDir: string
+    signal?: AbortSignal
+  },
+  file: string,
+  absolute: string,
+  source: string,
+  mutant: { id: string; mutated: string },
+  suites: readonly CommandCheck[],
+): Promise<MutantRun> {
+  await writeFile(absolute, mutant.mutated)
+  try {
+    for (const suite of suites) {
+      const outcome = await runCommandCheck(suite, {
+        dir: context.dir,
+        root: context.root,
+        scope: context.scope,
+        files: [file],
+        logDir: context.logDir,
+        sandbox: context.sandbox,
+        stateDir: context.stateDir,
+        ...(context.signal ? { signal: context.signal } : {}),
+      })
+      if (outcome.report.status === "fail") return { killed: true }
+      if (outcome.report.status === "error")
+        return { killed: false, error: `${mutant.id}: ${outcome.report.note ?? "runner error"}` }
+    }
+    return { killed: false }
+  } finally {
+    await writeFile(absolute, source)
+  }
+}
+
+async function runMutationCheck(
+  check: {
+    dir: string
+    root: string
+    scope: "touched" | "full"
+    files: readonly string[]
+    logDir: string
+    sandbox: "required" | "preferred"
+    stateDir: string
+    signal?: AbortSignal
+  },
+  config: GatesConfig,
+): Promise<GateFinding[] | undefined> {
+  const eligible = check.files.filter((file) => isSourceFile(file) && MUTATABLE.some((ext) => file.endsWith(ext)))
+  const suites = config.commands.filter((item) => item.kind === "test")
+  if (!eligible.length || !suites.length) return undefined
+  let cache: MutationCacheState = {}
+  try {
+    cache = JSON.parse(await readFile(mutationCacheFile(check.stateDir), "utf8")) as MutationCacheState
+  } catch {
+    cache = {}
+  }
+  const next: Record<string, MutationCacheState[string]> = { ...cache }
+  const outcomes: MutationOutcome[] = []
+  const runnerErrors: string[] = []
+  for (const file of eligible) {
+    const absolute = path.join(check.dir, file)
+    const source = await readFile(absolute, "utf8").catch(() => undefined)
+    if (source === undefined) continue
+    const hash = await mutationFingerprint(
+      (candidate) => readFile(path.join(check.dir, candidate), "utf8").catch(() => undefined),
+      file,
+      source,
+      check.files.filter((candidate) => isTestFile(candidate)),
+    )
+    const entry = next[file]
+    if (entry && cacheHashesEqual(entry.hash, hash)) {
+      outcomes.push(...cachedMutationOutcomes(file, source, entry))
+      continue
+    }
+    const killedIds: string[] = []
+    const mutants = generateMutants(file, source, config.mutation.maxMutants)
+    for (const [position, mutant] of mutants.entries()) {
+      const mutantLogDir = path.join(check.logDir, "mutation", `${position + 1}`)
+      await mkdir(mutantLogDir, { recursive: true })
+      const result = await applyMutantAndRun(
+        {
+          dir: check.dir,
+          root: check.root,
+          scope: check.scope,
+          logDir: mutantLogDir,
+          sandbox: check.sandbox,
+          stateDir: check.stateDir,
+          ...(check.signal ? { signal: check.signal } : {}),
+        },
+        file,
+        absolute,
+        source,
+        mutant,
+        suites,
+      )
+      outcomes.push({ mutant, killed: result.killed })
+      if (result.killed) killedIds.push(mutant.id)
+      if (result.error) runnerErrors.push(result.error)
+    }
+    next[file] = { hash, killed: killedIds, total: mutants.length }
+  }
+  await writeFile(mutationCacheFile(check.stateDir), JSON.stringify(next, null, 2)).catch(() => undefined)
+  const evaluated = evaluateMutations(outcomes, config.mutation.threshold)
+  const findings = mutationFindings({ ...evaluated, threshold: config.mutation.threshold }, eligible)
+  for (const error of runnerErrors.slice(0, 3))
+    findings.push({
+      file: eligible[0]!,
+      rule: "mutation/runner-error",
+      severity: "error",
+      message: `mutation runner failed (${error}): the kill rate is unproven`,
+      fixHint: "Fix the test command, then run the gates again.",
+      check: "mutation",
+    })
+  return findings
+}
+
 export async function runGates(options: RunGatesOptions): Promise<GateReport> {
   const root = options.root
   const dir = options.dir ?? root
@@ -494,6 +670,22 @@ export async function runGates(options: RunGatesOptions): Promise<GateReport> {
         findings.push(...outcome.findings)
         failedTests.push(...outcome.failedTests)
       }
+      if (config.mutation.enabled)
+        await timed("mutation", () =>
+          runMutationCheck(
+            {
+              dir,
+              root,
+              scope: options.scope,
+              files: present,
+              logDir,
+              sandbox: options.sandbox ?? "preferred",
+              stateDir: options.stateDir ?? defaultStateDir(),
+              ...(options.signal ? { signal: options.signal } : {}),
+            },
+            config,
+          ),
+        )
     }
   }
 

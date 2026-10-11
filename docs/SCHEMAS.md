@@ -46,6 +46,7 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | frontier | `schemas/frontier.schema.json` |
 | gate-budgets | `schemas/gate-budgets.schema.json` |
 | gate-finding | `schemas/gate-finding.schema.json` |
+| gate-mutation | `schemas/gate-mutation.schema.json` |
 | gate-rejection | `schemas/gate-rejection.schema.json` |
 | gate-security | `schemas/gate-security.schema.json` |
 | gates-config | `schemas/gates-config.schema.json` |
