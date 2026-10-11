@@ -26,6 +26,16 @@ describe("the opencode triple-pin moves together", () => {
     expect(new Set(cliPins).size).toBe(1)
     expect(cliPins[0]).toBe(plugin)
   })
+
+  test("no opencode peer range: no such npm package exists to peer on (#212a)", async () => {
+    // Verified 2026-10-11: `npm view opencode` is a registry 404 — the host
+    // ships as @opencode/*-scoped packages and platform binaries, so a peer
+    // on a bare `opencode` id could never resolve. The triple-pin above is
+    // the mechanism; this pins the decision against a future peer addition.
+    const opencode = await manifest("opencode")
+    for (const field of ["dependencies", "devDependencies", "peerDependencies"] as const)
+      expect(Object.keys(opencode[field] ?? {})).not.toContain("opencode")
+  })
 })
 
 describe("release tarball allowlists", () => {
@@ -45,6 +55,29 @@ describe("release tarball allowlists", () => {
     for (const dir of ["fleet", "web"]) {
       expect(all.find((pkg) => pkg.dir === dir)?.private).toBe(true)
     }
+  })
+
+  test("no test files sit under a released package's src dir (#212c)", async () => {
+    // The allowlists include whole `src` trees, so a stray src/*.test.ts
+    // would ship silently; the manifest-string check above cannot see it.
+    // (fleet and web are private and never packed; pack-smoke.sh 2026-10-11
+    // additionally proved the tarballs ship no test files.)
+    const { readdir } = await import("node:fs/promises")
+    const strays: string[] = []
+    for (const pkg of await releasePackages(root)) {
+      const walk = async (rel: string): Promise<void> => {
+        const entries = await readdir(path.join(root, "packages", pkg.dir, rel), { withFileTypes: true }).catch(
+          () => [],
+        )
+        for (const entry of entries) {
+          const child = `${rel}/${entry.name}`
+          if (entry.isDirectory()) await walk(child)
+          else if (/\.test\.[cm]?[jt]s$|\.spec\.[cm]?[jt]s$|__tests__/.test(child)) strays.push(`${pkg.dir}/${child}`)
+        }
+      }
+      await walk("src")
+    }
+    expect(strays).toEqual([])
   })
 })
 
