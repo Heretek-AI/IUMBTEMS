@@ -41,7 +41,8 @@ export const DEFAULT_CASE_STEPS = 6
  * makes one call per step), bounded by the run-wide ceiling.
  */
 export function caseStepCap(caseMaxSteps: number | undefined, ceiling: number): number {
-  return Math.min(caseMaxSteps ?? DEFAULT_CASE_STEPS, ceiling)
+  const own = typeof caseMaxSteps === "number" && Number.isFinite(caseMaxSteps) ? caseMaxSteps : DEFAULT_CASE_STEPS
+  return Math.min(own, ceiling)
 }
 
 export interface EvalWorkspace {
@@ -140,6 +141,11 @@ export async function runEvalCase(
   workspace: EvalWorkspace,
   options: EvalRunOptions,
 ): Promise<EvalResult> {
+  // Fail closed on flag injection (#211): the prompt is a positional argv, so
+  // a leading dash would parse as a CLI flag. Cases are repo files, but the
+  // runner must not depend on their goodwill.
+  if (testCase.prompt.startsWith("-"))
+    throw new Error(`Refusing eval case "${testCase.id}": the prompt must not start with "-".`)
   const child = spawn(
     options.binary,
     ["run", "--standalone", "--format", "json", "--agent", testCase.agent, testCase.prompt],
@@ -167,7 +173,8 @@ export async function runEvalCase(
         child.kill("SIGKILL")
       }
       if (event.type === "step_finish" && typeof event.part?.cost === "number" && Number.isFinite(event.part.cost)) {
-        spent += event.part.cost
+        // Clamp hostile negatives: a negative cost must never unbind spend (#211).
+        spent += Math.max(0, event.part.cost)
         if (options.budgetUSD !== undefined && spent > options.budgetUSD && !overBudget) {
           overBudget = true
           child.kill("SIGKILL")

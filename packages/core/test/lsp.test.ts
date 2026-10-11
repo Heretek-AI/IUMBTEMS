@@ -1,7 +1,7 @@
 // LSP runtime against real language servers (native TypeScript 7 `tsc --lsp`,
 // gopls) plus config resolution and the pinned installer.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
@@ -137,5 +137,93 @@ describe("pinned installer", () => {
     await recordConsent("fake-ls", true, state)
     expect(await consent("fake-ls", state)).toBe(true)
     await expect(installServer(server, { stateDir: state, npm: fakeNpm })).rejects.toThrow("integrity mismatch")
+  })
+
+  test("the fetch/install mitigation stack is pinned: SRI, scripts-disabled, scrubbed env, confined cwd (#275.2)", async () => {
+    // Installs are not bwrap-sandboxed (the fetch needs the network), so the
+    // narrower stack — consent, exact pins, --ignore-scripts, scrubbed env,
+    // scratch/target confinement — is pinned here instead of assumed.
+    const genuine = new TextEncoder().encode("genuine-tarball-bytes")
+    const fakeNpm = path.join(state, "npm-pin")
+    await writeFile(
+      fakeNpm,
+      [
+        "#!/bin/sh",
+        'here=$(dirname "$0")',
+        'if [ "$1" = pack ]; then',
+        '  printf "%s\\n" "$@" > "$here/pack-args.log"',
+        '  printf "PWD=%s\\n" "$PWD" >> "$here/pack-args.log"',
+        '  env | sort > "$here/pack.env"',
+        "  dest=$4",
+        '  printf "genuine-tarball-bytes" > "$dest/pkg-1.0.0.tgz"',
+        '  echo \'[{"filename":"pkg-1.0.0.tgz"}]\'',
+        "  exit 0",
+        "fi",
+        'if [ "$1" = install ]; then',
+        '  printf "%s\\n" "$@" > "$here/install-args.log"',
+        '  printf "PWD=%s\\n" "$PWD" >> "$here/install-args.log"',
+        '  env | sort > "$here/install.env"',
+        '  prefix=""',
+        '  prev=""',
+        '  for arg in "$@"; do',
+        '    if [ "$prev" = "--prefix" ]; then prefix=$arg; fi',
+        "    prev=$arg",
+        "  done",
+        '  mkdir -p "$prefix/node_modules/.bin"',
+        '  printf "#!/bin/sh\\nexit 0\\n" > "$prefix/node_modules/.bin/fake-pin"',
+        '  chmod +x "$prefix/node_modules/.bin/fake-pin"',
+        "  exit 0",
+        "fi",
+        "exit 1",
+        "",
+      ].join("\n"),
+    )
+    await chmod(fakeNpm, 0o755)
+    const server: ServerSpec = {
+      id: "fake-pin",
+      command: ["fake-pin"],
+      extensions: [".fake"],
+      rootMarkers: [],
+      install: {
+        kind: "npm",
+        packages: [{ name: "pkg", version: "1.0.0", integrity: sri(genuine) }],
+        bin: "fake-pin",
+      },
+      source: "builtin",
+    }
+    await recordConsent("fake-pin", true, state)
+    // A canary the scrubbed env must not leak; a registry override must pass through.
+    process.env.ES_LSP_PIN_EVIL = "leak-me"
+    process.env.NPM_CONFIG_REGISTRY = "https://registry.test/"
+    let bin: string
+    try {
+      bin = await installServer(server, { stateDir: state, npm: fakeNpm })
+    } finally {
+      delete process.env.ES_LSP_PIN_EVIL
+      delete process.env.NPM_CONFIG_REGISTRY
+    }
+    expect(bin).toContain(path.join("lsp", "fake-pin-1.0.0"))
+    const read = (name: string) => readFile(path.join(state, name), "utf8")
+
+    const packArgs = await read("pack-args.log")
+    expect(packArgs).toContain("pkg@1.0.0")
+    // pack runs confined to a scratch dir, not the project root.
+    const packPwd = /PWD=(.*)/.exec(packArgs)![1]!
+    expect(path.basename(packPwd)).toMatch(/^es-lsp-/)
+    expect(packPwd).not.toBe(root)
+    const packEnv = await read("pack.env")
+    expect(packEnv).not.toContain("ES_LSP_PIN_EVIL")
+    expect(packEnv).toContain("NPM_CONFIG_REGISTRY=https://registry.test/")
+
+    const installArgs = await read("install-args.log")
+    for (const flag of ["--no-save", "--ignore-scripts", "--no-audit", "--no-fund"]) expect(installArgs).toContain(flag)
+    expect(installArgs).toContain("--prefix")
+    expect(installArgs).toContain("pkg-1.0.0.tgz")
+    // install runs with cwd inside the state-dir target it writes.
+    const installPwd = /PWD=(.*)/.exec(installArgs)![1]!
+    expect(installPwd).toContain(path.join(state, "lsp", "fake-pin-1.0.0"))
+    const installEnv = await read("install.env")
+    expect(installEnv).not.toContain("ES_LSP_PIN_EVIL")
+    expect(installEnv).toContain("NPM_CONFIG_REGISTRY=https://registry.test/")
   })
 })

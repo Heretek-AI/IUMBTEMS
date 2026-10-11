@@ -37,6 +37,21 @@ export const ScoutAdvisorySchema = z.object({
 })
 export type ScoutAdvisory = z.infer<typeof ScoutAdvisorySchema>
 
+/** The OSV coordinates a candidate's advisories were actually queried at (#257). */
+export const ScoutAdvisoryQuerySchema = z.object({
+  ecosystem: z.string(),
+  package: z.string(),
+  version: z.string().optional(),
+})
+export type ScoutAdvisoryQuery = z.infer<typeof ScoutAdvisoryQuerySchema>
+
+/** The per-candidate advisories artifact: what was queried, and what came back. */
+export const ScoutAdvisoriesFileSchema = z.object({
+  query: ScoutAdvisoryQuerySchema,
+  advisories: z.array(ScoutAdvisorySchema),
+})
+export type ScoutAdvisoriesFile = z.infer<typeof ScoutAdvisoriesFileSchema>
+
 export const ScoutAssessmentSchema = z.object({
   candidate: z.string(),
   stars: z.number().int().nonnegative().optional(),

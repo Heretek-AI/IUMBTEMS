@@ -1,6 +1,7 @@
 // Brainstorm artifacts: the plan (lenses and caps), recorded ideas, rubric
 // scores, and the completed result (duplicate collapsing, ranking, and a
-// diversified shortlist with a forced outlier slot).
+// diversified shortlist with a forced outlier whenever the shortlist has
+// ≥2 slots).
 import { z } from "zod"
 
 export const BRAINSTORM_VERSION = 1 as const
@@ -21,7 +22,7 @@ export const BrainstormPlanSchema = z.object({
   ideasPerLens: z.number().int().min(1).max(10),
   /** Hard cap of characters per idea text. */
   maxIdeaChars: z.number().int().min(120),
-  /** Shortlist size, including the forced outlier slot. */
+  /** Shortlist size, including the forced outlier slot (whenever the shortlist has ≥2 slots). */
   shortlistSize: z.number().int().min(2).max(12),
   /** Similarity at or above which an idea is collapsed as a duplicate. */
   dedupeThreshold: z.number().min(0.5).max(0.95),

@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
   exists,
   Factory,
+  type FactoryState,
   factoryLayout,
   gateRunner,
   HUMAN_VERBS,
   loadPrompt,
   parseArgs,
+  type RunIndexEntry,
   readApproval,
   recentAuditEntries,
   researchSourcesDir,
@@ -22,6 +24,7 @@ import { type HarnessDriver, type HeadlessEvent, presentEvent, runHeadless } fro
 import { openProposalsPr } from "../src/improve.ts"
 import { commandHelp, main } from "../src/main.ts"
 import { createMcpServer } from "../src/mcp.ts"
+import { otherRunHint, runsCommand, statusCommand } from "../src/status.ts"
 import { type ConfirmIO, confirmHuman, NotInteractive } from "../src/tty.ts"
 import { VERSION } from "../src/version.ts"
 
@@ -330,6 +333,147 @@ describe("human-only confirmation", () => {
   })
 })
 
+describe("per-verb pipe refusal (#221.2)", () => {
+  // approve, rebaseline and reseal already have dedicated non-TTY pipe
+  // tests above. Every other verb in the confirmHuman funnel refuses the
+  // same way: exit 3 comes only from the NotInteractive catch in main, so
+  // asserting it proves the test reached the terminal gate — and each test
+  // also proves nothing was written. Each argv below is shaped to pass
+  // every check before the confirmation (usage → 2 and early-returns → 0/1
+  // would fail the assertion instead of passing vacuously).
+  test("es trust refuses without a terminal and trusts nothing", async () => {
+    await mkdir(path.dirname(factoryLayout(root).gates), { recursive: true })
+    await writeFile(
+      factoryLayout(root).gates,
+      JSON.stringify({ version: 1, commands: [{ id: "probe", kind: "test", command: "touch PROBE" }] }),
+    )
+    expect((await run(["trust"])).code).toBe(3)
+    expect(await exists(path.join(state, "trust.json"))).toBe(false)
+  })
+
+  test("es waive refuses without a terminal and records nothing", async () => {
+    const result = await run(["waive", "lint/*", "--reason", "legacy code under migration"])
+    expect(result.code).toBe(3)
+    expect(await exists(factoryLayout(root).waivers)).toBe(false)
+  })
+
+  test("es factory resume refuses without a terminal and stays halted", async () => {
+    const halted = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+    await halted.begin("human:tester")
+    await halted.halt("system", "test halt")
+    expect((await run(["factory", "resume"])).code).toBe(3)
+    expect((await halted.read())?.stage).toBe("HALTED")
+  })
+
+  test("es factory pr refuses without a terminal and records nothing", async () => {
+    const result = await run(["factory", "pr", "https://github.com/example/repo/pull/1"])
+    expect(result.code).toBe(3)
+    expect(await exists(factoryLayout(root).config)).toBe(false)
+  })
+
+  test("es gates install-git refuses without a terminal and installs nothing", async () => {
+    const result = await run(["gates", "install-git"])
+    expect(result.code).toBe(3)
+    expect(await exists(path.join(root, ".factory", "git-hooks"))).toBe(false)
+  })
+
+  test("es lsp install refuses without a terminal before consent or install", async () => {
+    const result = await run(["lsp", "install", "typescript"])
+    expect(result.code).toBe(3)
+    expect(await exists(path.join(state, "lsp-consent.json"))).toBe(false)
+  })
+
+  test("es audit open refuses without a terminal and provisions nothing", async () => {
+    const result = await run(["audit", "src", "--max-usd", "5", "--open-only"])
+    expect(result.code).toBe(3)
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
+  })
+})
+
+describe("status and runs are read-only; other-run hints (#248)", () => {
+  // File list + sizes + content hashes under .factory and the state dir.
+  // Directory mtimes are excluded on purpose: the state lock legitimately
+  // mkdirs+removes its lock dir on reads, churning the parent mtime.
+  const snapshot = async () => {
+    const entries: string[] = []
+    for (const [label, dir] of [
+      ["root", path.join(root, ".factory")],
+      ["state", state],
+    ] as const) {
+      const walk = async (rel: string): Promise<void> => {
+        const names = await readdir(path.join(dir, rel)).catch(() => [] as string[])
+        for (const name of names) {
+          const child = rel ? `${rel}/${name}` : name
+          const info = await stat(path.join(dir, child))
+          if (info.isDirectory()) await walk(child)
+          else if (info.isFile())
+            entries.push(`${label}/${child}:${info.size}:${Bun.hash(await readFile(path.join(dir, child)))}`)
+        }
+      }
+      await walk("")
+    }
+    return entries.sort()
+  }
+
+  test("status and runs (text, --json, --all) write nothing", async () => {
+    const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+    const begun = await factory.begin("human:tester")
+    const printed: string[] = []
+    const context = { root, stateDir: state, print: (text: string) => printed.push(text) }
+    const before = await snapshot()
+    expect(await statusCommand(context, { positionals: ["status"], flags: {} })).toBe(0)
+    expect(await statusCommand(context, { positionals: ["status"], flags: { json: true } })).toBe(0)
+    expect(await runsCommand(context, { positionals: ["runs"], flags: {} })).toBe(0)
+    expect(await runsCommand(context, { positionals: ["runs"], flags: { all: true, json: true } })).toBe(0)
+    // The commands really ran (not an early return): the GRILL headline and
+    // the begun run are in the output.
+    expect(printed.join("\n")).toContain("grill")
+    expect(printed.join("\n")).toContain(begun.runId)
+    expect(await snapshot()).toEqual(before)
+  })
+
+  test("otherRunHint: window boundary, DONE and equal-timestamp edges", async () => {
+    const NOW = new Date("2026-10-08T02:10:00.000Z")
+    const iso = (ms: number) => new Date(NOW.getTime() + ms).toISOString()
+    const entry = (overrides: Partial<RunIndexEntry> = {}): RunIndexEntry => ({
+      runId: "run-other",
+      root: "/elsewhere",
+      stage: "BUILD",
+      createdAt: iso(-3_600_000),
+      updatedAt: iso(-60_000),
+      ...overrides,
+    })
+    const here = (updatedAt: string): FactoryState => ({
+      version: 2,
+      runId: "run-here",
+      stage: "BUILD",
+      createdAt: iso(-3_600_000),
+      updatedAt,
+      spend: { usd: 1, estimated: true, events: 1 },
+      phases: [],
+      audits: [],
+    })
+    const hint = (runs: RunIndexEntry[], updatedAt: string | undefined) =>
+      otherRunHint(runs, { root, state: updatedAt === undefined ? undefined : here(updatedAt) }, NOW)
+
+    // A more recently active run elsewhere is named; without a local run the
+    // copy points at it directly.
+    expect(hint([entry()], iso(-120_000))).toContain("run-other")
+    expect(hint([entry()], undefined)).toContain("A run is active elsewhere")
+    // The window is ten minutes: just inside counts, exactly at it and
+    // outside do not (OTHER_RUN_WINDOW_MS is pinned behaviorally here).
+    expect(hint([entry({ updatedAt: iso(-599_000) })], iso(-3_600_000))).toContain("run-other")
+    expect(hint([entry({ updatedAt: iso(-600_000) })], iso(-3_600_000))).toBeUndefined()
+    expect(hint([entry({ updatedAt: iso(-601_000) })], iso(-3_600_000))).toBeUndefined()
+    // DONE runs never hint, however fresh; an equally-fresh run is not
+    // "more recently active"; our own root is skipped; a stale local run is.
+    expect(hint([entry({ stage: "DONE" })], iso(-120_000))).toBeUndefined()
+    expect(hint([entry({ updatedAt: iso(-120_000) })], iso(-120_000))).toBeUndefined()
+    expect(hint([entry({ root })], iso(-120_000))).toBeUndefined()
+    expect(hint([entry()], iso(-30_000))).toBeUndefined()
+  })
+})
+
 describe("es key", () => {
   test("seal asks twice, refuses short or mismatched passphrases, and status shows the fingerprint", async () => {
     const { humanKeyId } = await import("@heretek-ai/es-core")
@@ -354,6 +498,9 @@ describe("es key", () => {
       }
       expect((await runIn(["key", "seal"], seq(["short", "short"]))).code).toBe(1)
       expect((await runIn(["key", "seal"], seq(["long-enough-pass", "different-pass"]))).code).toBe(1)
+      expect(await humanKeyId(fresh)).toBeUndefined()
+      // A pipe cannot seal either: keySeal throws NotInteractive (exit 3) before reading.
+      expect((await runIn(["key", "seal"], pipe)).code).toBe(3)
       expect(await humanKeyId(fresh)).toBeUndefined()
       expect((await runIn(["key", "seal"], seq(["a-long-test-passphrase", "a-long-test-passphrase"]))).code).toBe(0)
       expect(await humanKeyId(fresh)).toBeDefined()
@@ -1351,7 +1498,20 @@ describe("es audit and es scout (headless jobs)", () => {
       )
       await tool("es_scout_scan").execute({ candidate: "tiny" }, scout)
       await tool("es_scout_record").execute(
-        { candidate: "tiny", maintenance: "slow", proposal: "adopt", rationale: "small enough to keep", claims: [] },
+        {
+          candidate: "tiny",
+          maintenance: "slow",
+          proposal: "adopt",
+          rationale: "small enough to keep",
+          claims: [
+            {
+              tag: "NEGATIVE_KNOWLEDGE",
+              statement: "OSV advisories were not queried for tiny",
+              query: "OSV advisories for tiny",
+              finding: "skipped: a local fixture with no published package",
+            },
+          ],
+        },
         scout,
       )
       await tool("es_scout_complete").execute({}, scout)

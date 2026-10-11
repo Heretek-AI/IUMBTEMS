@@ -88,14 +88,17 @@ export function createPolicyHooks(runtime: Runtime, seats?: SeatTracker) {
     }
     if (seat && event.tool === "subagent") guardSeatLaunch({ agent: event.agent, input }, seats)
     if (seat && event.sessionID) await seats?.onTool(event.sessionID, event.agent, event.tool)
-    if (seat || event.tool.startsWith("es_")) {
+    // STOP halts seats, es_* tools, and seat launches whoever fires them (#227):
+    // a user agent must not route around the kill-switch via `subagent`.
+    if (seat || event.tool.startsWith("es_") || event.tool === "subagent") {
       const stop = await checkStopFile(runtime.root)
       if (stop.stopped)
         deny(`The factory is stopped (.factory/STOP: ${stop.reason}). A human must remove it and resume.`)
     }
     // A halted run (spend ceiling, runtime cap, drift, STOP) stops every seat
     // tool except es_status, so no seat keeps spending through its own es_* tools.
-    if (seat && event.tool !== "es_status") {
+    // Seat launches count as seat tools whoever fires them (#227).
+    if ((seat || event.tool === "subagent") && event.tool !== "es_status") {
       const state = await runtime.factory.read().catch(() => undefined)
       if (state?.stage === "HALTED")
         deny(`The factory is halted: ${state.halt?.reason}. Stop and report; a human must resume.`)
@@ -174,7 +177,10 @@ export function createPolicyHooks(runtime: Runtime, seats?: SeatTracker) {
           ? patchTargets(input.patchText)
           : []
     if (!files.length) return
-    if (runtime.options.lspAfterEdit !== false) {
+    // The post-edit diagnostics are a language-server channel (#277.2): seats
+    // scoped to `lsp: "none"` never get them (their tool rules already hide
+    // `lsp_*`). Navigating seats and the user's own agents keep the channel.
+    if (runtime.options.lspAfterEdit !== false && agentSpec(event.agent)?.lsp !== "none") {
       const lines: string[] = []
       for (const file of files) {
         const absolute = path.resolve(runtime.root, file)
@@ -222,6 +228,8 @@ export function createPolicyHooks(runtime: Runtime, seats?: SeatTracker) {
   }) => {
     const seat = seatOf(event.agent)
     const context = await runtime.policy()
+    // The host's patch tool asks for `edit` too, once, with every target of
+    // the patch as a resource: there is no `patch` action to branch on (#220).
     if (event.action === "edit" || event.action === "read") {
       const decisions = event.resources.map((resource) =>
         event.action === "edit"

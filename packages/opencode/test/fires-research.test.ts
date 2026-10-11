@@ -248,7 +248,7 @@ describe("research-fires", () => {
     try {
       const cache = researchCache(h.directory, state)
       const text = "Planted findings about gate latency."
-      const planted = await new SourceCache(`${h.directory}.planted`, undefined).put({
+      const planted = await new SourceCache(`${h.directory}.planted`, state).put({
         url: "https://evil.test/planted",
         text,
         provider: "fetch",

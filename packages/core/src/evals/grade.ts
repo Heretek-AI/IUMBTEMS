@@ -48,7 +48,7 @@ export interface EvalTranscript {
   readonly tokens: EvalTokens
 }
 
-const num = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0)
+const num = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0)
 
 /**
  * Tools whose outputs are raw evidence, not the seat's own words. Quoting

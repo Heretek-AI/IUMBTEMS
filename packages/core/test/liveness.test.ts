@@ -9,6 +9,7 @@ import {
   livenessLines,
   progressPrint,
   readLiveness,
+  researchLine,
   STALE_AFTER_MS,
 } from "../src/factory/liveness.ts"
 import { Factory } from "../src/factory/machine.ts"
@@ -180,6 +181,31 @@ describe("headline", () => {
     const qa = state({ stage: "QA", activePhase: "p1" })
     expect(headline(qa, await live(qa, T0))).toStartWith("QA on p1 in progress")
   })
+
+  test("STALE_AFTER_MS is ten minutes; the stuck hint starts exactly at the boundary (#248)", async () => {
+    expect(STALE_AFTER_MS).toBe(600_000)
+    const current = state()
+    const atBoundary = new Date(T0.getTime() + STALE_AFTER_MS)
+    expect(headline(current, await live(current, atBoundary))).toContain("No activity for 10m in RESEARCH")
+    const justUnder = new Date(T0.getTime() + STALE_AFTER_MS - 1_000)
+    expect(headline(current, await live(current, justUnder))).toBe(
+      "Research in progress: no seat is running; last activity 9m ago.",
+    )
+  })
+
+  test("done without a PR, SPEC and RELEASE wording (#248)", async () => {
+    const done = state({ stage: "DONE" })
+    expect(headline(done, await live(done, T0))).toBe("Done: the run is complete.")
+    const spec = state({ stage: "SPEC", runId: "run-20261008-020000-spec1" })
+    await updateSeats(fx.root, spec.runId, (seats) => {
+      seats.push(seat({ lastActivityAt: T0.toISOString() }))
+    })
+    expect(headline(spec, await live(spec, T0))).toBe("Spec writing is running: es-research-alpha started 0s ago.")
+    const release = state({ stage: "RELEASE", runId: "run-20261008-020000-rel1", updatedAt: T0.toISOString() })
+    expect(headline(release, await live(release, T0))).toBe(
+      "Release in progress: no seat is running; last activity 0s ago.",
+    )
+  })
 })
 
 describe("formatHuman", () => {
@@ -210,6 +236,24 @@ describe("formatHuman", () => {
     expect(text).toContain("es-research-alpha  running  es_research_fetch 10s ago  ses_ee6b70e18ffe")
     expect(text).toContain("es-research-beta  completed  50s ago  ses_beta")
     expect(text).toContain("research: 0 sources · alpha.md — · beta.md — · REPORT.md — · coverage not checked")
+    // The dashboard leads with the headline, then the run header (#248):
+    // order, not just containment.
+    expect(text.indexOf("Research is running: es-research-alpha")).toBeLessThan(
+      text.indexOf(`run run-20261008-020000-ab12 · RESEARCH · ${fx.root}`),
+    )
+  })
+
+  test("non-RESEARCH stages print no research line (#248)", async () => {
+    const current = state({ stage: "BUILD", activePhase: "p1", updatedAt: at(20).toISOString() })
+    const live = await readLiveness(fx.root, current, { now: at(60) })
+    expect(researchLine(live)).toBeUndefined()
+    const text = formatHuman(
+      current,
+      live,
+      "<factory-state>\nrun run-20261008-020000-ab12 · stage BUILD\nbuild phase p1\n</factory-state>",
+    )
+    expect(text).toContain("Building p1 in progress")
+    expect(text).not.toContain("research:")
   })
 })
 

@@ -1,8 +1,9 @@
 // Per-location runtime shared by the plugin's hooks, tools, commands and RPC.
-// Options are layered: the canonical config (global file → project file) with
-// plugin options as the most specific override. Plugin options are config
-// keys validated by the same strict schema; unknown keys are ignored with a
-// warning the TUI shows once.
+// The server only wires option layering (parseOptions → createRuntime); the
+// merge itself lives in core (loadEsConfig/mergeConfig): the canonical config
+// (global file → project file) with plugin options as the most specific
+// override. Plugin options are config keys validated by the same strict
+// schema; unknown keys are ignored with a warning the TUI shows once.
 import {
   stateDir as defaultStateDir,
   type EsConfig,
@@ -68,6 +69,9 @@ export async function createRuntime(root: string, parsed: ParsedOptions): Promis
     ...(config.searchProvider ? { searchProvider: config.searchProvider } : {}),
   }
   const stateDir = options.stateDir ?? defaultStateDir()
+  // One manager per project (#275.1): servers start lazily per (server, root)
+  // and are reaped by the idle sweeper between sessions, stopping only on
+  // plugin unload (see server.ts) — long-lived servers outlive sessions.
   const lsp = new LspManager({ root, stateDir })
   const factory = new Factory(root, {
     gates: gateRunner({ stateDir }),

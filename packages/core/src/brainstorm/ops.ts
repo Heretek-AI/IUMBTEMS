@@ -113,7 +113,8 @@ export function brainstormTools(context: BrainstormOpsContext): EsToolDef[] {
           ideasPerLens: { type: "number", description: "Ideas per lens (1-10, default 5)." },
           shortlistSize: {
             type: "number",
-            description: "Shortlist size including the forced outlier (2-12, default 7).",
+            description:
+              "Shortlist size (2-12, default 7); the last slot is a forced outlier whenever the shortlist has ≥2 slots.",
           },
           dedupe: {
             type: "string",
@@ -176,7 +177,7 @@ export function brainstormTools(context: BrainstormOpsContext): EsToolDef[] {
           "   Give each one the brief (and constraints) plus how many ideas you expect.",
           `2. Record each lens's ideas with es_brainstorm_record (one call per lens, run "${run}").`,
           "3. Launch es-brainstorm-critic with the surviving idea ids and texts; it scores each with es_brainstorm_score.",
-          `4. Call es_brainstorm_complete with run "${run}". Dedupe, ranking and the shortlist (with one forced outlier) are computed there.`,
+          `4. Call es_brainstorm_complete with run "${run}". Dedupe, ranking and the shortlist (with one forced outlier whenever the shortlist has ≥2 slots) are computed there.`,
           "",
           `Rubric (1-5 each): ${RUBRIC.map((item) => item.id).join(", ")}.`,
         ].join("\n")
@@ -344,7 +345,7 @@ export function brainstormTools(context: BrainstormOpsContext): EsToolDef[] {
     {
       name: "es_brainstorm_complete",
       description:
-        "Brainstormer, grill or factory: collapse duplicates, rank the scored ideas and write the diversified shortlist with a forced outlier slot. Returns the shortlist as JSON the caller can parse.",
+        "Brainstormer, grill or factory: collapse duplicates, rank the scored ideas and write the diversified shortlist with a forced outlier slot (whenever the shortlist has ≥2 slots). Returns the shortlist as JSON the caller can parse.",
       input: object({
         run: { type: "string", description: "Run id from es_brainstorm_plan." },
         allowPartial: {
