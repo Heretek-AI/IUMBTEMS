@@ -390,9 +390,9 @@ async function resolveRound(
 ): Promise<{ resolved: string[]; empty?: true } | { reason: string }> {
   const stages = await readConflictStages(worktree, files)
   const merged = new Map<string, string>()
-  for (let i = 0; i < files.length; i++) {
-    const stage = stages[i]
-    if (!stage) return { reason: `conflict in ${files[i]}: stages unreadable` }
+  for (const [index, file] of files.entries()) {
+    const stage = stages[index]
+    if (!stage) return { reason: `conflict in ${file}: stages unreadable` }
     const text = resolveConflict(stage.file, stage.ours, stage.theirs)
     if (text === undefined)
       return { reason: `unresolvable conflict in ${files.join(", ")}: a human must rebase by hand` }
