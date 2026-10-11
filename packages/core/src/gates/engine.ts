@@ -35,8 +35,8 @@ import {
   generateMutants,
   type MutationCacheState,
   type MutationOutcome,
-  mutantCacheKey,
   mutationFindings,
+  mutationFingerprint,
 } from "./mutation.ts"
 import { parseOutput } from "./parsers.ts"
 import { scanFileForSecrets } from "./secrets.ts"
@@ -385,7 +385,12 @@ async function runMutationCheck(
     const absolute = path.join(check.dir, file)
     const source = await readFile(absolute, "utf8").catch(() => undefined)
     if (source === undefined) continue
-    const hash = mutantCacheKey(file, source)
+    const hash = await mutationFingerprint(
+      (candidate) => readFile(path.join(check.dir, candidate), "utf8").catch(() => undefined),
+      file,
+      source,
+      check.files.filter((candidate) => isTestFile(candidate)),
+    )
     const entry = next[file]
     if (entry?.hash === hash) {
       const killed = new Set(entry.killed)

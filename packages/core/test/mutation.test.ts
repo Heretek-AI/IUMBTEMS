@@ -148,4 +148,29 @@ describe("runMutationGate", () => {
     expect(mutantCacheKey("src/a.ts", "a + b")).not.toBe(mutantCacheKey("src/a.ts", "a - b"))
     expect(mutantCacheKey("src/a.ts", "same")).toBe(mutantCacheKey("src/a.ts", "same"))
   })
+
+  test("changing a test file invalidates the cache: the suite reruns", async () => {
+    let suite = "strong"
+    let runs = 0
+    const options = {
+      files: ["src/sum.ts"],
+      readFile: async (file: string) =>
+        file === "src/sum.ts" ? "export function sum(a: number, b: number): number {\n  return a + b\n}\n" : suite,
+      runTests: async () => {
+        runs++
+        return { killed: true }
+      },
+      testFiles: ["test/sum.test.ts"],
+    }
+    const first = await runMutationGate(options)
+    expect(runs).toBeGreaterThan(0)
+    // Same tests: cached, no rerun.
+    await runMutationGate({ ...options, cache: first.cache })
+    expect(runs).toBe(first.cache["src/sum.ts"]!.total)
+    // Weakened tests: the fingerprint changes, so the suite reruns.
+    suite = "weakened"
+    const third = await runMutationGate({ ...options, cache: first.cache })
+    expect(third.cached).not.toContain("src/sum.ts")
+    expect(runs).toBeGreaterThan(first.cache["src/sum.ts"]!.total)
+  })
 })

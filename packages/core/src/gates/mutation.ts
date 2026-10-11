@@ -142,6 +142,27 @@ export function mutantCacheKey(file: string, content: string): string {
   return sha256(`${file}\n${content}`)
 }
 
+/**
+ * Cache fingerprint for one source file: its own content plus the content of
+ * the in-scope test files. Weakening (or strengthening) the tests changes
+ * the fingerprint, so a stale verdict can never green-light edited tests —
+ * the suite reruns.
+ */
+export async function mutationFingerprint(
+  readFile: (file: string) => Promise<string | undefined>,
+  file: string,
+  source: string,
+  testFiles: readonly string[],
+): Promise<string> {
+  const tests: string[] = []
+  for (const candidate of testFiles) {
+    if (candidate === file) continue
+    const content = await readFile(candidate)
+    if (content !== undefined) tests.push(`${candidate}\n${content}`)
+  }
+  return mutantCacheKey(file, `${source}\n${tests.join("\n")}`)
+}
+
 export function evaluateMutations(
   outcomes: readonly MutationOutcome[],
   threshold = MUTATION_KILL_THRESHOLD,
@@ -186,6 +207,8 @@ export interface MutationGateOptions {
   readonly runTests: (mutant: Mutant) => Promise<{ killed: boolean }>
   /** Reused across runs: unchanged files skip the suite. */
   readonly cache?: MutationCacheState
+  /** Test files whose content joins the cache fingerprint (edited tests rerun the suite). */
+  readonly testFiles?: readonly string[]
   readonly threshold?: number
   readonly maxPerFile?: number
 }
@@ -203,7 +226,7 @@ export async function runMutationGate(options: MutationGateOptions): Promise<Mut
   for (const file of options.files) {
     const source = await options.readFile(file)
     if (source === undefined) continue
-    const hash = mutantCacheKey(file, source)
+    const hash = await mutationFingerprint(options.readFile, file, source, options.testFiles ?? [])
     const entry = cache[file]
     if (entry && entry.hash === hash) {
       cached.push(file)
