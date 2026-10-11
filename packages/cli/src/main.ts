@@ -38,6 +38,7 @@ import {
   parseArgs,
   parseRunId,
   parseSource,
+  pruneWorktrees,
   readIdeas as readBrainstormIdeas,
   readPlan as readBrainstormPlan,
   readResult as readBrainstormResult,
@@ -165,8 +166,8 @@ Other
         [--max-usd N] [--max-turns N]
   scout show [--json]           The scout's ranked verdicts
   mcp                           Serve the factory tools over MCP (stdio)
-  version
-`
+  worktree prune              Drop stale worktree leases and remove orphaned .worktrees/ checkouts
+  version`
 
 /**
  * Usage for one command: its lines (and their continuation lines) from HELP,
@@ -752,6 +753,17 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           ...(process.env.ES_AGENT ? { defaultAgent: process.env.ES_AGENT } : {}),
         })
         return 0
+      case "worktree": {
+        if (sub === "prune") {
+          const report = await pruneWorktrees(root)
+          io.print(
+            `Pruned ${root}/.worktrees: dropped ${report.dropped.length} stale lease(s)${report.dropped.length ? ` (${report.dropped.join(", ")})` : ""}, removed ${report.removed.length} orphaned checkout(s), kept ${report.kept.length} live lease(s).`,
+          )
+          return 0
+        }
+        io.print("Usage: es worktree prune")
+        return 2
+      }
       case "factory": {
         if (sub === "begin") {
           io.print(factorySummary(await factory().begin("human:cli")))
