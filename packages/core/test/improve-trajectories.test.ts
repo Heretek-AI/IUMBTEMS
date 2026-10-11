@@ -21,7 +21,9 @@ import {
 const GH_TOKEN = `ghp_${"harvestTest001AAAABBBBCCCCDDDDEEEEFFFF"}`
 const SK = `sk-ant-${"harvestTest0000AAAAAAAAAAAAAAAAAAAA"}`
 const AKIA = `AKIA${"IOSFODNN7EXAMPLE"}`
-const PASSWORD = `hunter2-${"secret"}`
+// Split name and value alike: static scanners must not see `password = "..."`.
+const PLANTED_CRED = `hunter2-${"secret"}`
+const CRED_LINE = `${"password"} = "${PLANTED_CRED}"`
 const BEARER = `eyJhbGciOiJIUzI1NiJ9.${"payload"}.${"sig"}`
 const KEY_BEGIN = `-----BEGIN PRIVATE ${"KEY-----"}`
 const KEY_END = `-----END PRIVATE ${"KEY-----"}`
@@ -51,7 +53,7 @@ describe("scrubSecretsText", () => {
       `token ${GH_TOKEN}`,
       `key ${SK}`,
       AKIA,
-      `password = "${PASSWORD}"`,
+      CRED_LINE,
       KEY_BEGIN,
       "aGVsbG8td29ybGQta2V5LWJvZHk=",
       KEY_END,
@@ -61,7 +63,7 @@ describe("scrubSecretsText", () => {
     expect(text).not.toContain(GH_TOKEN)
     expect(text).not.toContain(SK)
     expect(text).not.toContain(AKIA)
-    expect(text).not.toContain(PASSWORD)
+    expect(text).not.toContain(PLANTED_CRED)
     expect(text).not.toContain("PRIVATE")
     expect(redactions).toBeGreaterThanOrEqual(5)
   })
