@@ -16,7 +16,7 @@ import { formatReport, runGates } from "../gates/engine.ts"
 import { factoryLayout } from "../layout.ts"
 import type { GateFinding } from "../schema/gates.ts"
 import { relativeTo } from "../trust/paths.ts"
-import { writeJson } from "../util/fs.ts"
+import { withLock, writeJson } from "../util/fs.ts"
 
 export type EsToolContext = { readonly agent: string; readonly sessionID?: string; readonly signal?: AbortSignal }
 export interface EsToolDef {
@@ -121,9 +121,14 @@ export function esTools(ops: OpsContext): EsToolDef[] {
             `Not ready for approval: ${error.message}${missing ? " Run /grill (or `es factory begin` + grill flow) to record the frontier, then request approval again." : ""}`,
           )
         })
-        const pending = (await pendingApprovals(root)).filter((item) => item.stage !== stage)
-        pending.push({ stage, requestedBy: context.agent, at: new Date().toISOString(), ...(note ? { note } : {}) })
-        await writeJson(factoryLayout(root).pending, pending)
+        const pendingFile = factoryLayout(root).pending
+        // Locked against concurrent requests and the human approve path
+        // (which clears under the same state lock): #219 lost-update.
+        await withLock(factoryLayout(root).state, async () => {
+          const pending = (await pendingApprovals(root)).filter((item) => item.stage !== stage)
+          pending.push({ stage, requestedBy: context.agent, at: new Date().toISOString(), ...(note ? { note } : {}) })
+          await writeJson(pendingFile, pending)
+        })
         await appendAuditEntry(root, {
           actor: `agent:${context.agent}`,
           action: "approval.request",

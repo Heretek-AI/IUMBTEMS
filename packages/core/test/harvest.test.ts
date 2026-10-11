@@ -83,7 +83,7 @@ describe("SPDX detection", () => {
     ["JSON", "unknown", "unknown", false],
     ["MIT-0", "unknown", "unknown", false],
     ["X11", "unknown", "unknown", false],
-    ["BSD-4-Clause", "BSD-4-Clause", "permissive", false],
+    ["BSD-4-Clause", "BSD-4-Clause", "unknown", false],
     ["BUSL-1.1", "BUSL-1.1", "unknown", false],
     ["Elastic-2.0", "Elastic-2.0", "unknown", false],
   ])("%s text → %s (%s, verified %p)", (file, spdx, family, verified) => {
@@ -165,6 +165,53 @@ describe("SPDX detection", () => {
     await write(root, "package.json", "{}")
     const unknown = await detectLicense(root)
     expect(unknown).toMatchObject({ spdx: "unknown", verified: false })
+  })
+
+  test("a single file holding MIT+GPL reads as GPL-3.0, not LGPL (#264.1)", () => {
+    // The GPL-3.0 tail names the Lesser GPL, which used to win the date-line
+    // rules before the GPL-3.0 rule. The earliest license title in the bytes
+    // decides among the GPL family now.
+    expect(identifyLicenseText(`${MIT}\n${GPL3}`)).toMatchObject({
+      spdx: "GPL-3.0",
+      family: "copyleft",
+      verified: true,
+    })
+    expect(identifyLicenseText(`${GPL3}\n${MIT}`)).toMatchObject({ spdx: "GPL-3.0", family: "copyleft" })
+  })
+
+  test("mixed and header-only findings still fail closed at the policy (#264.2)", async () => {
+    // MIT+GPL in one file labels GPL-3.0 (copyleft), and a header-only Apache
+    // project labels Apache-2.0 unverified: both end up clean-room, never
+    // depend/vendor. The enforced property is mixed/unverified → clean-room.
+    const mixed = {
+      ...identifyLicenseText(`${MIT}\n${GPL3}`)!,
+      source: "license-file" as const,
+      confidence: "high" as const,
+    }
+    expect(checkVerdict("depend", mixed, DEFAULT_LICENSE_WHITELIST).verdict).toBe("clean-room")
+    const header = await tmp("es-spdx-headeronly-")
+    await write(header, "src/a.ts", "// SPDX-License-Identifier: Apache-2.0\n export const x = 1\n")
+    const fromHeader = await detectLicense(header)
+    expect(fromHeader).toMatchObject({ spdx: "Apache-2.0", verified: false })
+    expect(checkVerdict("depend", fromHeader, DEFAULT_LICENSE_WHITELIST).verdict).toBe("clean-room")
+  })
+
+  test("BSD-4-Clause labels unknown, not permissive (#264.3)", () => {
+    // The advertising clause is an obligation the whitelist does not cover,
+    // so the family must not read as safe next to verified:false.
+    expect(identifyLicenseText(fixture("BSD-4-Clause"))).toMatchObject({
+      spdx: "BSD-4-Clause",
+      family: "unknown",
+      verified: false,
+    })
+  })
+
+  test("a top-level NOTICE without a license file warns about the blind spot (#264.4)", async () => {
+    const root = await tmp("es-spdx-notice-")
+    await write(root, "NOTICE", "Copyright 2026 Example Corp. All rights reserved.\n")
+    const noticed = await detectLicense(root)
+    expect(noticed).toMatchObject({ spdx: "unknown", verified: false })
+    expect(noticed.note ?? "").toContain("NOTICE")
   })
 })
 
@@ -349,6 +396,27 @@ describe("the fail-closed licence policy", () => {
     expect(mit).toMatchObject({ verdict: "depend", attribution: expect.stringContaining("SPDX:MIT") })
     expect(gpl).toMatchObject({ verdict: "clean-room", downgraded: expect.stringContaining("copyleft") })
     expect(built.downgrades).toHaveLength(1)
+  })
+
+  test("model-supplied evidence is scrubbed of code spans before it reaches the spec (#267)", () => {
+    // matrix.ts used to spread cell.evidence verbatim into the clean-room
+    // spec, so a harvester pasting upstream code contaminated it
+    // mechanically. The scrub is the enforcement behind the "do not copy"
+    // instruction.
+    const profiles = new Map([["mit", profileFor(license({}), "mit")]])
+    const pasted = `rebuild the parser\n\`\`\`ts\nexport const stolen = 1\n\`\`\`\nsee \`internal()\` for details ${"x".repeat(600)}`
+    const built = buildMatrix(
+      ["mit"],
+      profiles,
+      [{ feature: "parse", cells: [{ candidate: "mit", verdict: "clean-room", evidence: pasted }] }],
+      DEFAULT_LICENSE_WHITELIST,
+    )
+    const evidence = built.matrix.rows[0]!.cells[0]!.evidence!
+    expect(evidence).toContain("rebuild the parser")
+    expect(evidence).not.toContain("```")
+    expect(evidence).not.toContain("`")
+    expect(evidence).not.toContain("stolen")
+    expect(evidence.length).toBeLessThanOrEqual(500)
   })
 })
 

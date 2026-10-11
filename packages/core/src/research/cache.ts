@@ -49,26 +49,51 @@ const MAX_SOURCE_BYTES = 400_000
 
 export class SourceCache {
   /**
-   * When `stateDir` is set, entries are sealed with the engine key on write
-   * (#52) and unsealed entries are refused on read. Without it the cache keeps
-   * its legacy behaviour (tests and auxiliary readers).
+   * Entries are sealed with the engine key on write (#52) and unsealed
+   * entries are refused on read. `stateDir` is required: there is no
+   * legacy unsealed mode (#251) — tests that need untrusted bytes write
+   * them to disk directly instead of constructing a cache without a key.
    */
   constructor(
     readonly dir: string,
-    readonly stateDir?: string,
+    readonly stateDir: string,
   ) {}
 
   private async seal(meta: SourceMeta): Promise<SourceMeta> {
-    if (!this.stateDir) return meta
     const key = await ensureEngineKey(this.stateDir)
     return { ...meta, seal: sealMeta(meta as unknown as Record<string, unknown>, key) }
   }
 
   private async sealed(meta: SourceMeta): Promise<boolean> {
-    if (!this.stateDir) return true
     // Never mint a key to verify: without the engine's key nothing verifies (#59).
     const key = await readEngineKey(this.stateDir)
     return key !== undefined && verifyMetaSeal(meta as unknown as Record<string, unknown>, key)
+  }
+
+  private indexFile = () => path.join(this.dir, "index.json")
+  private indexSealFile = () => path.join(this.dir, "index.seal")
+
+  /**
+   * The URL index sealed with the engine key (#251.2): without integrity the
+   * index could remap a URL onto another sealed entry's bytes and `byUrl`
+   * would serve them. Writes store an HMAC sidecar; reads refuse a
+   * present-but-forged sidecar and keep serving a missing one (caches
+   * written before sidecars stay readable). Per-entry seals still apply at
+   * `get`, so the sidecar only guards the mapping, never the bytes.
+   */
+  private async writeIndex(index: Record<string, string>): Promise<void> {
+    await atomicWrite(this.indexFile(), `${JSON.stringify(index, null, 2)}\n`)
+    const key = await ensureEngineKey(this.stateDir)
+    await atomicWrite(this.indexSealFile(), `${sealMeta(index as unknown as Record<string, unknown>, key)}\n`)
+  }
+
+  private async readIndex(): Promise<Record<string, string>> {
+    const index = (await readJson<Record<string, string>>(this.indexFile())) ?? {}
+    const seal = (await readFile(this.indexSealFile(), "utf8").catch(() => undefined))?.trim()
+    if (seal === undefined || seal === "") return index
+    const key = await readEngineKey(this.stateDir)
+    if (key === undefined) return index
+    return verifyMetaSeal({ ...index, seal }, key) ? index : {}
   }
 
   async put(input: {
@@ -98,9 +123,9 @@ export class SourceCache {
     const file = path.join(this.dir, `${hash}.md`)
     await atomicWrite(file, text)
     await atomicWrite(path.join(this.dir, `${hash}.json`), `${JSON.stringify(meta, null, 2)}\n`)
-    const index = (await readJson<Record<string, string>>(path.join(this.dir, "index.json"))) ?? {}
+    const index = await this.readIndex()
     index[canonicalUrl(input.url) ?? input.url] = hash
-    await atomicWrite(path.join(this.dir, "index.json"), `${JSON.stringify(index, null, 2)}\n`)
+    await this.writeIndex(index)
     return { meta, text, path: file }
   }
 
@@ -125,7 +150,7 @@ export class SourceCache {
   }
 
   async byUrl(url: string): Promise<CachedSource | undefined> {
-    const index = (await readJson<Record<string, string>>(path.join(this.dir, "index.json"))) ?? {}
+    const index = await this.readIndex()
     // Canonical key first; raw keys are what 1.0 caches recorded.
     const hash = index[canonicalUrl(url) ?? url] ?? index[url]
     return hash ? this.get(hash) : undefined
@@ -147,9 +172,9 @@ export class SourceCache {
         removed.push(hash)
       }
     if (removed.length) {
-      const index = (await readJson<Record<string, string>>(path.join(this.dir, "index.json"))) ?? {}
+      const index = await this.readIndex()
       for (const [url, hash] of Object.entries(index)) if (removed.includes(hash)) delete index[url]
-      await atomicWrite(path.join(this.dir, "index.json"), `${JSON.stringify(index, null, 2)}\n`)
+      await this.writeIndex(index)
     }
     return removed
   }

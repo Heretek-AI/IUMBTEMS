@@ -23,7 +23,7 @@ export type Json = string | number | boolean | null | Json[] | { [key: string]: 
 export type TokenTree = Record<string, unknown>
 
 export const isToken = (node: unknown): node is Record<string, Json | undefined> =>
-  typeof node === "object" && node !== null && !Array.isArray(node) && "$value" in node
+  typeof node === "object" && node !== null && !Array.isArray(node) && Object.hasOwn(node, "$value")
 
 export const isAliasValue = (value: unknown): value is string =>
   typeof value === "string" && ALIAS_FULL.test(value.trim())
@@ -83,12 +83,9 @@ function resolveType(node: unknown, inherited?: string): string | undefined {
 function walkPath(root: unknown, ref: string): unknown {
   let node: unknown = root
   for (const segment of ref.split(".")) {
-    if (
-      typeof node !== "object" ||
-      node === null ||
-      Array.isArray(node) ||
-      !(segment in (node as Record<string, unknown>))
-    )
+    // Own-property only: `in` walks the prototype chain, so {__proto__},
+    // {constructor} and friends would resolve against Object.prototype (#266).
+    if (typeof node !== "object" || node === null || Array.isArray(node) || !Object.hasOwn(node, segment))
       throw new UnknownAliasError(`alias {${ref}} does not resolve: missing "${segment}"`)
     node = (node as Record<string, unknown>)[segment]
   }

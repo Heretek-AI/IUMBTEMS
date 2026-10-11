@@ -36,9 +36,13 @@ async function rig() {
   return { state, webRoot, server, token }
 }
 
-const raw = (port: number, head: string): Promise<{ status: number; headers: Record<string, string>; body: string }> =>
+const raw = (
+  port: number,
+  head: string,
+  body = "",
+): Promise<{ status: number; headers: Record<string, string>; body: string }> =>
   new Promise((resolve, reject) => {
-    const socket = createConnection(port, "127.0.0.1", () => socket.write(head))
+    const socket = createConnection(port, "127.0.0.1", () => socket.write(head + body))
     let buffer = Buffer.alloc(0)
     socket.on("data", (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk])
@@ -67,6 +71,24 @@ const get = (port: number, target: string, headers: Record<string, string> = {})
       .join("")}\r\n`,
   )
 
+const postRpc = (port: number, payload: unknown, extra: Record<string, string> = {}) => {
+  const body = JSON.stringify(payload)
+  return raw(
+    port,
+    `POST /fleet/rpc HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n${Object.entries(
+      extra,
+    )
+      .map(([k, v]) => `${k}: ${v}\r\n`)
+      .join("")}\r\n`,
+    body,
+  )
+}
+
+const expectSecurityHeaders = (headers: Record<string, string>, where: string): void => {
+  for (const [name, value] of Object.entries(WEB_SECURITY_HEADERS))
+    expect(headers[name], `${where}: ${name}`).toBe(value)
+}
+
 describe("web tickets", () => {
   test("a ticket redeems once, then is dead", async () => {
     const state = await mkdtemp(path.join(tmpdir(), "es-fleet-web-"))
@@ -91,13 +113,42 @@ describe("web tickets", () => {
     }
   })
 
-  test("malformed and expired tickets are refused", async () => {
+  test("malformed and missing tickets are refused", async () => {
     const state = await mkdtemp(path.join(tmpdir(), "es-fleet-web-"))
     try {
       expect(await redeemWebTicket(state, "not-hex")).toBe(false)
       expect(await redeemWebTicket(state, "../token")).toBe(false)
       expect(await redeemWebTicket(state, "ab".repeat(32))).toBe(false)
     } finally {
+      await rm(state, { recursive: true, force: true })
+    }
+  })
+
+  test("a minted-then-expired ticket is refused and consumed (#283.2)", async () => {
+    const state = await mkdtemp(path.join(tmpdir(), "es-fleet-web-"))
+    try {
+      const ticket = await mintWebTicket(state)
+      const { fleetDir } = await import("../src/state.ts")
+      // Age the ticket file past its TTL instead of sleeping for it.
+      await writeFile(path.join(fleetDir(state), "web-tickets", ticket), `${Date.now() - 1_000}\n`)
+      expect(await redeemWebTicket(state, ticket)).toBe(false)
+      expect(await redeemWebTicket(state, ticket)).toBe(false)
+    } finally {
+      await rm(state, { recursive: true, force: true })
+    }
+  })
+
+  test("an expired ticket redeems to 403 without a cookie at HTTP level (#283.2)", async () => {
+    const { state, server } = await rig()
+    try {
+      const ticket = await mintWebTicket(state)
+      const { fleetDir } = await import("../src/state.ts")
+      await writeFile(path.join(fleetDir(state), "web-tickets", ticket), `${Date.now() - 1_000}\n`)
+      const res = await get(server.port, `/?t=${ticket}`)
+      expect(res.status).toBe(403)
+      expect(res.headers["set-cookie"]).toBeUndefined()
+    } finally {
+      await server.stop()
       await rm(state, { recursive: true, force: true })
     }
   })
@@ -164,7 +215,7 @@ describe("web serving", () => {
   })
 
   test("every web response carries the strict security headers", async () => {
-    const { state, server } = await rig()
+    const { state, server, token } = await rig()
     try {
       const ticket = await mintWebTicket(state)
       const login = await get(server.port, `/?t=${ticket}`)
@@ -174,6 +225,26 @@ describe("web serving", () => {
       expect(login.headers["x-content-type-options"]).toBe("nosniff")
       expect(login.headers["referrer-policy"]).toBe("no-referrer")
       expect(WEB_SECURITY_HEADERS["content-security-policy"]).toContain("connect-src 'self'")
+      // JSON responders carry them too (#282): success, error envelopes, and
+      // the bare 401/403/404 paths.
+      const authed = { Authorization: `Bearer ${token}` }
+      const ok = await postRpc(server.port, { method: "fleet.status", params: {} }, authed)
+      expect(ok.status).toBe(200)
+      expect(ok.headers["content-type"]).toContain("application/json")
+      expectSecurityHeaders(ok.headers, "fleet.status 200")
+      const unknown = await postRpc(server.port, { method: "nope", params: {} }, authed)
+      expect(unknown.status).toBe(200)
+      expect(unknown.body).toContain("-32601")
+      expectSecurityHeaders(unknown.headers, "unknown method")
+      const anon = await postRpc(server.port, { method: "fleet.status", params: {} })
+      expect(anon.status).toBe(401)
+      expectSecurityHeaders(anon.headers, "anonymous rpc 401")
+      const missing = await raw(
+        server.port,
+        `GET /fleet/rpc HTTP/1.1\r\nHost: 127.0.0.1:${server.port}\r\nConnection: close\r\n\r\n`,
+      )
+      expect(missing.status).toBe(404)
+      expectSecurityHeaders(missing.headers, "wrong path 404")
     } finally {
       await server.stop()
       await rm(state, { recursive: true, force: true })

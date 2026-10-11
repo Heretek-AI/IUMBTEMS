@@ -7,6 +7,8 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import type { BrainstormIdea, BrainstormScore } from "../src/index.ts"
 import {
+  AGENTS,
+  BRAINSTORM_FANOUT_SPAWNS,
   brainstormRunPaths,
   brainstormTools,
   buildPlan,
@@ -452,6 +454,25 @@ describe("callable runs (#108)", () => {
       expect(typeof entry.lens).toBe("string")
       expect(typeof entry.total).toBe("number")
       expect(typeof entry.outlier).toBe("boolean")
+    }
+  })
+})
+
+describe("nested refusal at depth 1 (#269)", () => {
+  test("lens subagents and the critic spawn nothing; only primaries fan out", () => {
+    const byId = new Map(AGENTS.map((agent) => [agent.id, agent]))
+    // The mechanism: empty `spawns` + deny-by-default + the foreground guard.
+    // A lens or the critic asked to launch a subagent has nothing to launch.
+    for (const lens of LENSES) {
+      const agent = byId.get(`es-lens-${lens.id}`)!
+      expect(agent, `es-lens-${lens.id}`).toBeDefined()
+      expect(agent.spawns).toEqual([])
+    }
+    expect(byId.get("es-brainstorm-critic")!.spawns).toEqual([])
+    // The calling primaries fan out themselves, at depth 1, in the foreground.
+    for (const id of ["brainstormer", "grill", "factory"]) {
+      const spawns = byId.get(id)!.spawns
+      for (const fanout of BRAINSTORM_FANOUT_SPAWNS) expect(spawns, id).toContain(fanout)
     }
   })
 })

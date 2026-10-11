@@ -6,8 +6,7 @@
     "PEER_REVIEWED": 0.8,
     "TECHNICAL_DOCUMENTATION": 0.7,
     "PRIMARY_PRESS": 1.0,
-    "PREPRINT": 0.2,
-    "SECONDARY_MEDIA": 0.3
+    "PREPRINT": 0.2
   },
   "negBonus": 0.5,
   "rejectPenalty": 2.5,

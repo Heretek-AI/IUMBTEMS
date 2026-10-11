@@ -112,6 +112,18 @@ describe("brainstorm on the real host", () => {
     expect(critic.tools[0]?.status).toBe("error")
   })
 
+  test("a lens seat and the critic cannot launch nested subagents (depth-1 refusal, #269)", async () => {
+    // Callable brainstorms run lenses at depth 1; nothing runs at depth 2:
+    // lens and critic seats have empty spawns, so the seat policy refuses
+    // the launch before anything starts.
+    for (const agent of ["es-lens-inversion", "es-brainstorm-critic"]) {
+      const { tools } = await h.run(`go ${delegate("es-lens-scamper", "Nested diverge.")}`, { agent })
+      expect([agent, ...tools.map((tool) => `${tool.name}:${tool.status}`)]).toEqual([agent, "subagent:error"])
+      // Empty spawns: the host never offers these seats the tool at all.
+      expect(tools[0]?.text).toContain('No tool named "subagent"')
+    }
+  })
+
   test("#108: the grill runs a 2-lens brainstorm at depth 1 and gets the shortlist JSON", async () => {
     const run = "grill-fanout"
     const planned = await h.run(
@@ -172,7 +184,13 @@ describe("brainstorm on the real host", () => {
     const parsed = JSON.parse(json!) as { run: string; shortlist: Array<{ id: string; outlier: boolean }> }
     expect(parsed.run).toBe(run)
     expect(parsed.shortlist.map((entry) => entry.id).sort()).toEqual(["b001", "b002"])
-    // The human's default run is untouched by the grill's run.
+    // The human's default run is untouched by the grill's run: the grill
+    // wrote run "grill-fanout", while default still holds the brainstormer's
+    // shortlist from the earlier test in this file (one shared harness, so
+    // "untouched" means unchanged, not absent).
     expect(await readResult(h.directory, run)).toBeDefined()
+    const untouched = await readResult(h.directory)
+    expect(untouched?.shortlist).toHaveLength(1)
+    expect(untouched?.ranked[0]).toEqual({ id: "b001", total: 17 })
   })
 })

@@ -1,15 +1,130 @@
-// Live-run visibility dashboard on the real host (#199.2, bug #248): the
-// factoryState/status RPCs paused at each headline state, headline-first
-// ordering (indexOf, not containment), research absence, DONE-without-PR and
-// SPEC/RELEASE wording, and es_status over the host.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+// Live-run visibility dashboard on the real host (#199.2, bug #248) plus
+// registration proofs (#276).
+// Union of the audit (#199) and remediation suites at the #290 merge: the
+// audit side pauses the dashboard RPC at each headline state (headline-first
+// ordering, research absence, DONE/SPEC/RELEASE wording, es_status); the
+// remediation side proves additive registration (built-ins untouched),
+// server-computed footer content and a project-tree-clean setup. The
+// remediation fixture lives in its own describe block beside the audit host
+// harness, so neither side's lets, hooks nor helpers were renamed.
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test"
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import type { FactoryState, SeatRecord, Stage } from "@heretek-ai/es-core"
-import { Factory, factoryLayout, gateRunner, signEngineFile, updateSeats, writeJson } from "@heretek-ai/es-core"
+import {
+  AGENTS,
+  ensureEngineKey,
+  Factory,
+  type FactoryState,
+  factoryLayout,
+  footerLine,
+  gateRunner,
+  loadSkills,
+  readLiveness,
+  type SeatRecord,
+  type Stage,
+  signEngineFile,
+  updateSeats,
+  writeJson,
+} from "@heretek-ai/es-core"
 import { boot, directiveScript, type Harness } from "@heretek-ai/es-testkit"
+import { compileAgents } from "../src/agents.ts"
+import { createRpcHandlers } from "../src/rpc.ts"
 import { EsRpc } from "../src/rpc-def.ts"
+import { createRuntime, parseOptions, type Runtime } from "../src/runtime.ts"
+import { createSessionHooks } from "../src/session.ts"
+
+describe("registration proofs (#276)", () => {
+  let root: string
+  let state: string
+  let runtime: Runtime
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "es-visibility-"))
+    state = await mkdtemp(path.join(tmpdir(), "es-visibility-state-"))
+    runtime = await createRuntime(root, parseOptions({ stateDir: state }))
+  })
+
+  afterEach(async () => {
+    await runtime.lsp.stopAll().catch(() => undefined)
+    await rm(root, { recursive: true, force: true })
+    await rm(state, { recursive: true, force: true })
+  })
+
+  describe("additive registration", () => {
+    test("we only add registry agents (never built-ins or defaults)", async () => {
+      const ids = new Set(AGENTS.map((agent) => agent.id))
+      for (const compiled of await compileAgents(runtime.options, [])) expect(ids.has(compiled.spec.id)).toBe(true)
+    })
+
+    test("context prunes only invisible es_* tools; built-ins and state blocks are additive", async () => {
+      const hooks = createSessionHooks(runtime)
+      const tools = () => ({
+        read: {},
+        write: {},
+        shell: {},
+        question: {},
+        es_status: {},
+        es_gates_run: {},
+        es_complete: {},
+        es_build_start: {},
+      })
+      const user = { agent: "build", system: [] as unknown[], tools: tools() }
+      await hooks.context(user as never)
+      // Built-ins are untouched; only the read-only es tools stay visible.
+      expect(Object.keys(user.tools).sort()).toEqual([
+        "es_gates_run",
+        "es_status",
+        "question",
+        "read",
+        "shell",
+        "write",
+      ])
+      expect(user.system).toEqual([])
+
+      const factory = { agent: "factory", system: [] as unknown[], tools: tools() }
+      await hooks.context(factory as never)
+      expect(Object.keys(factory.tools)).toContain("es_build_start")
+      expect(factory.system).toHaveLength(1)
+      expect((factory.system[0] as { text: string }).text).toContain("<factory-state>")
+    })
+  })
+
+  describe("footer server-content wiring", () => {
+    test("status().footer is footerLine(state, liveness, paused)", async () => {
+      const handlers = createRpcHandlers(runtime, async () => {})
+      const seen = await handlers.status()
+      const state = await runtime.factory.read()
+      const liveness = await readLiveness(root, state)
+      expect(seen.footer ?? null).toBe(footerLine(state, liveness, undefined) ?? null)
+      expect(seen.headline).toContain("No factory run")
+    })
+  })
+
+  describe("setup writes no project-tree files (#276.1)", () => {
+    test("runtime creation, engine key, agents and skills leave the project tree alone", async () => {
+      const fresh = await mkdtemp(path.join(tmpdir(), "es-setup-diff-"))
+      const freshState = await mkdtemp(path.join(tmpdir(), "es-setup-diff-state-"))
+      try {
+        const before = await readdir(fresh)
+        const staged = await createRuntime(fresh, parseOptions({ stateDir: freshState }))
+        try {
+          // The engine key seals cached sources: created at setup in the masked
+          // state dir, never in the project tree.
+          await ensureEngineKey(staged.stateDir)
+          await compileAgents(staged.options, [])
+          await loadSkills()
+        } finally {
+          await staged.lsp.stopAll().catch(() => undefined)
+        }
+        expect(await readdir(fresh)).toEqual(before)
+      } finally {
+        await rm(fresh, { recursive: true, force: true })
+        await rm(freshState, { recursive: true, force: true })
+      }
+    })
+  })
+})
 
 const pluginDir = path.resolve(import.meta.dir, "..")
 const call = (name: string, args: Record<string, unknown> = {}) => `@@CALL ${name} ${JSON.stringify(args)}@@`

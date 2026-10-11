@@ -159,4 +159,41 @@ describe("sandboxArgv", () => {
     expect(argv("user")).not.toContain("--die-with-parent")
     expect(argv("seat")).toContain("--die-with-parent")
   })
+
+  test("a failed overlay probe degrades to no overlay: protections stay, nothing mounts (#231)", () => {
+    // Overlayfs mounts can fail on one filesystem while they succeed on
+    // another (a btrfs home vs tmpfs /tmp): the probe answers per directory,
+    // and a refusal omits the overlay args instead of emitting a mount that
+    // fails every seat shell at runtime.
+    const refused = { exists: () => true, overlay: true, overlayFor: (_dir: string) => false }
+    const args = sandboxArgv(
+      { kind: "readonly", root: "/p", cwd: "/p", stateDir: "/h/.local/state/es", home: "/h", offline: true },
+      ["true"],
+      refused,
+    ).join(" ")
+    expect(args).not.toContain("--overlay-src")
+    expect(args).not.toContain("--tmp-overlay")
+    expect(args).toContain("--tmpfs /h/.local/state/es")
+    expect(args).toContain("--unshare-net")
+    // ...while a working per-dir probe keeps the throwaway layers.
+    const supported = { exists: () => true, overlay: false, overlayFor: (_dir: string) => true }
+    const layered = sandboxArgv(
+      { kind: "readonly", root: "/p", cwd: "/p", stateDir: "/h/.local/state/es", home: "/h", offline: true },
+      ["true"],
+      supported,
+    ).join(" ")
+    expect(layered).toContain("--overlay-src /h")
+    expect(layered).toContain("--tmp-overlay /p")
+  })
+
+  test("the overlay probe is per directory: an unmountable dir reports false (#231)", async () => {
+    const { bwrapOverlay, resetOverlayProbe } = await import("../src/trust/sandbox.ts")
+    const { bwrapAvailable } = await import("../src/index.ts")
+    if (!bwrapAvailable()) return
+    resetOverlayProbe()
+    // No bwrap can overlay-mount a path that does not exist; /tmp mounts here.
+    expect(bwrapOverlay(`/nonexistent-es-probe-${process.pid}`)).toBe(false)
+    expect(bwrapOverlay(`/nonexistent-es-probe-${process.pid}`)).toBe(false)
+    resetOverlayProbe()
+  })
 })
