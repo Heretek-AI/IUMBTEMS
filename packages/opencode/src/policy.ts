@@ -87,7 +87,7 @@ export function createPolicyHooks(runtime: Runtime, seats?: SeatTracker) {
       if (problem) deny(problem.message)
       // Heterogeneous models (#170): a programmer/QA seat that would share
       // weights with the other side never launches.
-      const refusal = seatModelRefusal(input.agent, runtime.config.models)
+      const refusal = seatModelRefusal(input.agent, runtime.config?.models)
       if (refusal) deny(`Seat "${input.agent}" cannot launch: ${refusal}`)
     }
     if (seat && event.tool === "subagent") guardSeatLaunch({ agent: event.agent, input }, seats)
