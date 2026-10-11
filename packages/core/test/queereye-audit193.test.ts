@@ -14,7 +14,6 @@ import {
   designPaths,
   designTools,
   FORMS,
-  findOneOffs,
   readProbes,
   readTokens,
   renderGuide,
@@ -43,8 +42,8 @@ const completeInterview = async () => {
   await call("es_design_complete", {})
 }
 
-describe("audit #193 pin: prototype-chain aliases (#266)", () => {
-  test("an alias through the prototype chain validates clean today", () => {
+describe("audit #193 pin: prototype-chain aliases (#266 fixed)", () => {
+  test("an alias through the prototype chain is refused", () => {
     const tree = {
       color: {
         $type: "color",
@@ -52,15 +51,15 @@ describe("audit #193 pin: prototype-chain aliases (#266)", () => {
         semantic: { evil: { $value: "{__proto__.toString}" } },
       },
     }
-    // FINDING (#266): the `in` operator in walkPath follows the prototype
-    // chain, so this resolves to Object.prototype.toString and validates
-    // with zero errors and zero one-offs.
-    expect(validateTokens(tree)).toEqual([])
-    expect(findOneOffs(tree)).toEqual([])
-    expect(typeof resolveAlias(tree, "__proto__.toString")).toBe("function")
+    // FIXED (#266): walkPath uses Object.hasOwn, so the alias cannot
+    // resolve via the prototype chain and validates with a clear error.
+    expect(validateTokens(tree)).toEqual([
+      'color.semantic.evil: alias {__proto__.toString} does not resolve: missing "__proto__"',
+    ])
+    expect(() => resolveAlias(tree, "__proto__.toString")).toThrow('missing "__proto__"')
   })
 
-  test("inherited Object members validate clean as bare aliases today", () => {
+  test("inherited Object members are refused as bare aliases", () => {
     for (const ref of ["toString", "valueOf"]) {
       const tree = {
         color: {
@@ -69,8 +68,8 @@ describe("audit #193 pin: prototype-chain aliases (#266)", () => {
           semantic: { evil: { $value: `{${ref}}` } },
         },
       }
-      // FINDING (#266): same mechanism, single segment.
-      expect(validateTokens(tree)).toEqual([])
+      // FIXED (#266): same mechanism, single segment.
+      expect(validateTokens(tree)).toEqual([`color.semantic.evil: alias {${ref}} does not resolve: missing "${ref}"`])
     }
   })
 
@@ -86,8 +85,8 @@ describe("audit #193 pin: prototype-chain aliases (#266)", () => {
   })
 })
 
-describe("audit #193 pin: cite-gate with deleted probes.json (#270.1)", () => {
-  test("deleted probes + guide re-rendered with [] verifies today", async () => {
+describe("audit #193 pin: cite-gate with deleted probes.json (#270.1 fixed)", () => {
+  test("deleted probes are reported missing and the cite-gate refuses the vacuous pass", async () => {
     await completeInterview()
     await call("es_design_specs", {})
     await call("es_design_harvest", {})
@@ -98,11 +97,13 @@ describe("audit #193 pin: cite-gate with deleted probes.json (#270.1)", () => {
     const tokens = await readTokens(root)
     await writeFile(designPaths(root).guide, renderGuide(tokens, []))
 
-    // FINDING (#270.1): readProbes defaults a missing file to [] (store.ts),
-    // so the drift gate is green and the cite-gate verifies with zero
-    // contrast pairs — the contrast QA leg is vacuous on missing probes.
-    expect(await checkDrift(root)).toEqual({ drifted: [], missing: [], tokenErrors: [] })
-    expect(await verifyCiteGate(receipt, root)).toEqual([])
+    // FIXED (#270.1): a missing probes file is reported, not defaulted —
+    // the drift gate names it and the cite-gate refuses the vacuous pass
+    // instead of verifying with zero contrast pairs.
+    expect(await checkDrift(root)).toEqual({ drifted: [], missing: ["probes.json"], tokenErrors: [] })
+    const errors = await verifyCiteGate(receipt, root)
+    expect(errors.some((error) => error.includes("probes.json is missing or empty"))).toBe(true)
+    expect(errors.some((error) => error.includes("probes.json differs from the rendered output"))).toBe(true)
   })
 
   test("control: the receipt still binds tokens, so a stale tokens tree is refused", async () => {

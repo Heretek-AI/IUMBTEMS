@@ -50,9 +50,6 @@ const FACTORY_PATHS = CONTROL_PATHS.filter(
   (target) => target !== "opencode.jsonc" && target !== ".claude/settings.json",
 )
 
-/** Paths the shell text rule does not name; seats pass them to the sandbox. */
-const SANDBOX_BACKSTOP = new Set([".factory/harvest/clean-room/widget-search.md", ".factory/improve/proposal.json"])
-
 let root: string
 let state: string
 let worktree: string
@@ -96,20 +93,17 @@ describe("control matrix: every seat is denied every control path (#182)", () =>
     }
   })
 
-  test("shell: seats are refused at the text layer except the documented sandbox-backstop paths", () => {
+  test("shell: seats are refused at the text layer for every control path (#216 G1)", () => {
     for (const spec of AGENTS) {
       for (const target of CONTROL_PATHS) {
         const decision = evaluateShell(ctx(), spec.id, `echo pwned > ${target} && echo WRITE-SUCCEEDED`, {
           sandboxAvailable: true,
         })
-        if (SANDBOX_BACKSTOP.has(target)) {
-          // Not named by CONTROL_MENTION: runs under the sandbox, whose
-          // read-only .factory bind refuses the redirect.
-          expect([spec.id, target, decision]).toMatchObject([spec.id, target, { effect: "allow", mode: "sandbox" }])
-        } else {
-          expect(decision.effect).toBe("deny")
-          expect("reason" in decision ? decision.reason : "").toMatch(/may not reference control files/)
-        }
+        // G1 parity: the text layer denies uniformly, including the two
+        // paths the old sandbox backstop used to admit (they are refused
+        // here; the sandbox bind would refuse them again below).
+        expect(decision.effect).toBe("deny")
+        expect("reason" in decision ? decision.reason : "").toMatch(/may not reference control files/)
       }
     }
   })

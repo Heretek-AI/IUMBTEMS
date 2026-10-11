@@ -16,6 +16,7 @@ import path from "node:path"
 import {
   approveStage,
   Factory,
+  factoryLayout,
   gateRunner,
   type HumanSigner,
   rebaseline,
@@ -23,8 +24,10 @@ import {
   researchSourcesDir,
   SourceCache,
   sealHumanKey,
+  signEngineFile,
   stringifyFrontmatter,
   unlockHumanKey,
+  writeJson,
 } from "@heretek-ai/es-core"
 import { boot, directiveScript, type Harness } from "@heretek-ai/es-testkit"
 
@@ -76,6 +79,29 @@ describe("seeded built-in gates via es_gates_run (programmer seat)", () => {
     await symlink(path.join(TYPESCRIPT, "bin/tsc"), path.join(h.directory, "node_modules/.bin/tsc"))
     const factory = new Factory(h.directory, { gates: gateRunner({ stateDir: state }), stateDir: state })
     await factory.provisionRun("tester", 10)
+    // Gate runs record during BUILD only (#223.2): drive the provisioned
+    // GRILL run to BUILD by test-only state surgery (the visibility
+    // suite's sealState pattern) so the finding-shape assertions below run.
+    const current = (await factory.read())!
+    await writeJson(factoryLayout(h.directory).state, {
+      ...current,
+      stage: "BUILD",
+      activePhase: "alpha",
+      phases: [
+        {
+          id: "alpha",
+          title: "Alpha",
+          status: "building",
+          goalHash: "0".repeat(64),
+          failures: 0,
+          replanned: false,
+          qa: {},
+          history: [],
+        },
+      ],
+      updatedAt: new Date().toISOString(),
+    })
+    await signEngineFile(factoryLayout(h.directory).state, state)
   }, 120_000)
   afterAll(async () => {
     await h?.close()

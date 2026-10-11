@@ -1,10 +1,7 @@
-// JSON responders omit WEB_SECURITY_HEADERS (#282, follow-up of #207).
-// Web-file and deny paths (:508, :564) spread the headers; the JSON
-// responders (`jsonBody` :286, `ok` :732, `fail` :737, plus the bare
-// 401/403/404 paths) do not. This locks the CURRENT behavior so the gap
-// stays visible: every assertion below documents the omission. When #282
-// is fixed (spread WEB_SECURITY_HEADERS in the JSON responders), update
-// these assertions to expect the headers.
+// JSON responders carry WEB_SECURITY_HEADERS (#282 fixed by the S5
+// remediation: the JSON responders spread the same headers as the web-file
+// and deny paths). This locks the fixed behavior: every responder below
+// must carry every header.
 import { describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { createConnection } from "node:net"
@@ -86,12 +83,13 @@ const postApprove = (port: number, target: string, payload: unknown, extra: Reco
   )
 }
 
-const expectNoSecurityHeaders = (headers: Record<string, string>, where: string): void => {
-  for (const name of HEADER_NAMES) expect(headers[name], `${where}: ${name}`).toBeUndefined()
+const expectSecurityHeaders = (headers: Record<string, string>, where: string): void => {
+  for (const name of HEADER_NAMES) expect(headers[name], `${where}: ${name}`).toBeDefined()
+  expect(headers["content-security-policy"] ?? "", `${where}: csp`).toContain("frame-ancestors 'none'")
 }
 
-describe("web JSON responders omit the strict headers (#282)", () => {
-  test("successful JSON-RPC carries no security headers (current behavior)", async () => {
+describe("web JSON responders carry the strict headers (#282 fixed)", () => {
+  test("successful JSON-RPC carries the strict headers", async () => {
     const { state, server, token } = await rig()
     try {
       const res = await postRpc(
@@ -101,14 +99,14 @@ describe("web JSON responders omit the strict headers (#282)", () => {
       )
       expect(res.status).toBe(200)
       expect(res.headers["content-type"]).toContain("application/json")
-      expectNoSecurityHeaders(res.headers, "fleet.status 200")
+      expectSecurityHeaders(res.headers, "fleet.status 200")
     } finally {
       await server.stop()
       await rm(state, { recursive: true, force: true })
     }
   })
 
-  test("JSON-RPC error envelopes carry no security headers (current behavior)", async () => {
+  test("JSON-RPC error envelopes carry the strict headers", async () => {
     const { state, server, token } = await rig()
     try {
       const auth = { Authorization: `Bearer ${token}` }
@@ -116,37 +114,37 @@ describe("web JSON responders omit the strict headers (#282)", () => {
       const unknown = await postRpc(server.port, { method: "nope", params: {} }, auth)
       expect(unknown.status).toBe(200)
       expect(unknown.body).toContain("-32601")
-      expectNoSecurityHeaders(unknown.headers, "unknown method")
+      expectSecurityHeaders(unknown.headers, "unknown method")
       const badParams = await postRpc(server.port, { method: "fleet.status", params: { extra: 1 } }, auth)
       expect(badParams.status).toBe(200)
       expect(badParams.body).toContain("-32602")
-      expectNoSecurityHeaders(badParams.headers, "invalid params")
+      expectSecurityHeaders(badParams.headers, "invalid params")
       // Unknown run answers 200 + -32603 via the fail path in dispatch.
       const unknownRun = await postRpc(server.port, { method: "evidence.claims", params: { runId: "nope" } }, auth)
       expect(unknownRun.status).toBe(200)
       expect(unknownRun.body).toContain("-32603")
-      expectNoSecurityHeaders(unknownRun.headers, "unknown run")
+      expectSecurityHeaders(unknownRun.headers, "unknown run")
     } finally {
       await server.stop()
       await rm(state, { recursive: true, force: true })
     }
   })
 
-  test("bare 401/403/404 and approve JSON failures carry no security headers (current behavior)", async () => {
+  test("bare 401/403/404 and approve JSON failures carry the strict headers", async () => {
     const { state, server } = await rig()
     try {
       // No credentials at all: 401 with no JSON body and no security headers.
       const anon = await postRpc(server.port, { method: "fleet.status", params: {} })
       expect(anon.status).toBe(401)
-      expectNoSecurityHeaders(anon.headers, "rpc 401")
+      expectSecurityHeaders(anon.headers, "rpc 401")
       // Approve preview without credentials: 401, also bare.
       const previewAnon = await postApprove(server.port, "/fleet/approve/preview", { runId: "t1", stage: "frontier" })
       expect(previewAnon.status).toBe(401)
-      expectNoSecurityHeaders(previewAnon.headers, "approve preview 401")
+      expectSecurityHeaders(previewAnon.headers, "approve preview 401")
       // Approve submit without a session: 401, bare.
       const submitAnon = await postApprove(server.port, "/fleet/approve", { ticket: "x", passphrase: "y" })
       expect(submitAnon.status).toBe(401)
-      expectNoSecurityHeaders(submitAnon.headers, "approve submit 401")
+      expectSecurityHeaders(submitAnon.headers, "approve submit 401")
       // Approve submit with a session but no Origin/CSRF: 403, bare.
       const ticket = await mintWebTicket(state)
       const login = await raw(
@@ -161,7 +159,7 @@ describe("web JSON responders omit the strict headers (#282)", () => {
         { Cookie: cookie, "X-CSRF": "wrong" },
       )
       expect(noOrigin.status).toBe(403)
-      expectNoSecurityHeaders(noOrigin.headers, "approve submit 403")
+      expectSecurityHeaders(noOrigin.headers, "approve submit 403")
       // Malformed approve body answers 400 JSON via fail(): no headers.
       const malformed = await postApprove(
         server.port,
@@ -171,11 +169,11 @@ describe("web JSON responders omit the strict headers (#282)", () => {
       )
       expect(malformed.status).toBe(400)
       expect(malformed.body).toContain("want {runId")
-      expectNoSecurityHeaders(malformed.headers, "approve preview 400")
+      expectSecurityHeaders(malformed.headers, "approve preview 400")
       // Unknown POST target: 404, bare.
       const missing = await postApprove(server.port, "/fleet/nope", {})
       expect(missing.status).toBe(404)
-      expectNoSecurityHeaders(missing.headers, "unknown target 404")
+      expectSecurityHeaders(missing.headers, "unknown target 404")
     } finally {
       await server.stop()
       await rm(state, { recursive: true, force: true })

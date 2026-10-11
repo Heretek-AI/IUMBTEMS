@@ -14,7 +14,6 @@ import path from "node:path"
 import {
   approveStage,
   Factory,
-  factoryLayout,
   gateRunner,
   type HumanSigner,
   readJournal,
@@ -170,15 +169,17 @@ describe("factory stage order (issue #179)", () => {
     await refused("es_tiebreak", "es-manager", { verdict: "pass", notes: "x" }, /needs QA|only possible|Not allowed/i)
     await refused("es_replan", "es-manager", { notes: "x" }, /needs BUILD|not awaiting|Not allowed/i)
     await refused("es_release", "factory", {}, /needs RELEASE|Not allowed/i)
-    // Gate-run recording outside BUILD must not touch phase history: there
-    // are no phases yet, and the silent no-op (no throw) leaves state alone.
+    // Gate-run recording outside BUILD refuses (#223.2): the direct call
+    // throws instead of the old silent no-op, and state is untouched.
     const before = await snap()
-    await stub().recordGateRun("es-programmer", {
-      passed: false,
-      findings: [],
-      summary: "red",
-      failedTests: ["test/alpha.test.ts"],
-    })
+    await expect(
+      stub().recordGateRun("es-programmer", {
+        passed: false,
+        findings: [],
+        summary: "red",
+        failedTests: ["test/alpha.test.ts"],
+      }),
+    ).rejects.toThrow(/BUILD only/)
     expect(await snap()).toBe(before)
   }, 120_000)
 
@@ -232,15 +233,17 @@ describe("factory stage order (issue #179)", () => {
     await refused("es_complete", "es-programmer", {}, /needs BUILD|not building|Not allowed/i)
     await refused("es_replan", "es-manager", { notes: "x" }, /needs BUILD|not awaiting|Not allowed/i)
     await refused("es_release", "factory", {}, /needs RELEASE|Not allowed/i)
-    // Gate-run recording outside BUILD is a silent no-op: the tool reports
-    // gates, but the phase history gains no entry (finding: not a refusal).
+    // Gate-run recording outside BUILD refuses (#223.2): the tool errors
+    // instead of the old report-while-recording-nothing, and the phase
+    // history gains no entry either way.
     const history = (id: string) =>
       stub()
         .read()
         .then((s) => s!.phases.find((p) => p.id === id)!.history.length)
     const before = await history("alpha")
     const gates = await h.run(`gates ${call("es_gates_run", { files: [] })}`, { agent: "es-programmer" })
-    expect(gates.tools[0]?.status).toBe("completed")
+    expect(gates.tools[0]?.status).toBe("error")
+    expect(gates.tools[0]?.text).toMatch(/BUILD only/i)
     expect(await history("alpha")).toBe(before)
   }, 180_000)
 

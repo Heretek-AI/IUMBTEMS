@@ -137,12 +137,14 @@ describe("the below-threshold refusal path (#256.2)", () => {
   })
 })
 
-describe("dead tier config, documented as observed (#256.3 — do not fix here)", () => {
-  test("SECONDARY_MEDIA is weighted in all three packs but the classifier never emits it", async () => {
-    // Observed: every shipped pack carries a SECONDARY_MEDIA weight ...
-    expect((await loadDomainPack("biopharma")).tierWeights.SECONDARY_MEDIA).toBe(0.2)
-    expect((await loadDomainPack("quant")).tierWeights.SECONDARY_MEDIA).toBe(0.2)
-    expect((await loadDomainPack("legal")).tierWeights.SECONDARY_MEDIA).toBe(0.3)
+describe("removed dead tier config (#252, was #256.3)", () => {
+  test("SECONDARY_MEDIA carries no weight in any pack and the classifier never emits it", async () => {
+    // Fixed: the tierless SECONDARY_MEDIA weights are gone from every
+    // shipped pack (they were dead config — tier.ts has no rule returning
+    // it, not even for news-like hosts).
+    expect((await loadDomainPack("biopharma")).tierWeights.SECONDARY_MEDIA).toBeUndefined()
+    expect((await loadDomainPack("quant")).tierWeights.SECONDARY_MEDIA).toBeUndefined()
+    expect((await loadDomainPack("legal")).tierWeights.SECONDARY_MEDIA).toBeUndefined()
     // ... yet tier.ts has no rule returning it, not even for news-like hosts.
     for (const url of [
       "https://arxiv.org/abs/1",
