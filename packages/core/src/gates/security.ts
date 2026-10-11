@@ -8,12 +8,16 @@ import type { GateFinding } from "../schema/gates.ts"
 import { parseJsonc } from "../util/jsonc.ts"
 import { run } from "../util/proc.ts"
 
-const which = new Map<string, boolean>()
-
-/** Is `binary` an executable on PATH? Pure lookup (no shell), so no injection. */
+/**
+ * Is `binary` an executable on PATH? Pure lookup (no shell), so no injection.
+ * Probed live on every call: caching the answer pinned Gate skips across
+ * PATH changes in both directions (#243 — a cached miss hid later shims;
+ * a cached hit outlived the shim's finally-restore and sent the gate at a
+ * binary that was already gone). A PATH probe is microseconds; gate runs
+ * call this a handful of times.
+ */
 export function installed(binary: string): boolean {
-  if (!which.has(binary)) which.set(binary, onPath(binary))
-  return which.get(binary)!
+  return onPath(binary)
 }
 
 function onPath(binary: string): boolean {
