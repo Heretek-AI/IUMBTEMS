@@ -1351,7 +1351,20 @@ describe("es audit and es scout (headless jobs)", () => {
       )
       await tool("es_scout_scan").execute({ candidate: "tiny" }, scout)
       await tool("es_scout_record").execute(
-        { candidate: "tiny", maintenance: "slow", proposal: "adopt", rationale: "small enough to keep", claims: [] },
+        {
+          candidate: "tiny",
+          maintenance: "slow",
+          proposal: "adopt",
+          rationale: "small enough to keep",
+          claims: [
+            {
+              tag: "NEGATIVE_KNOWLEDGE",
+              statement: "OSV advisories were not queried for tiny",
+              query: "OSV advisories for tiny",
+              finding: "skipped: a local fixture with no published package",
+            },
+          ],
+        },
         scout,
       )
       await tool("es_scout_complete").execute({}, scout)
