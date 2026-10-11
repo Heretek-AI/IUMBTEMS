@@ -27,7 +27,7 @@ import {
 import { boot, directiveScript, type Harness } from "@heretek-ai/es-testkit"
 import { ghPrOpener } from "../src/pr.ts"
 
-const BASE = "rewrite"
+const BASE = "main"
 const BRANCH = "factory/run-test-1/integration"
 
 interface Remote {
@@ -81,8 +81,8 @@ describe("release against a local bare remote", () => {
       await expect(ghPrOpener.open({ root: fx.root, branch: BASE, base: BASE, title: "t", body: "b" })).rejects.toThrow(
         `refusing to push "${BASE}"`,
       )
-      expect(await remoteBranches(fx.remote)).toEqual(["refs/heads/rewrite"])
-      expect(await remoteSha(fx.remote, "refs/heads/rewrite")).toBe(fx.baseSha)
+      expect(await remoteBranches(fx.remote)).toEqual(["refs/heads/main"])
+      expect(await remoteSha(fx.remote, "refs/heads/main")).toBe(fx.baseSha)
     } finally {
       await fx.cleanup()
     }
@@ -94,8 +94,8 @@ describe("release against a local bare remote", () => {
       await expect(
         ghPrOpener.open({ root: fx.root, branch: "feature/x", base: BASE, title: "t", body: "b" }),
       ).rejects.toThrow(/refusing to push/)
-      expect(await remoteBranches(fx.remote)).toEqual(["refs/heads/rewrite"])
-      expect(await remoteSha(fx.remote, "refs/heads/rewrite")).toBe(fx.baseSha)
+      expect(await remoteBranches(fx.remote)).toEqual(["refs/heads/main"])
+      expect(await remoteSha(fx.remote, "refs/heads/main")).toBe(fx.baseSha)
     } finally {
       await fx.cleanup()
     }
@@ -109,10 +109,10 @@ describe("release against a local bare remote", () => {
       // runs in tests: no `gh` invocation here).
       await git(fx.root, ["push", "--set-upstream", "origin", `${BRANCH}:${BRANCH}`])
       expect(await remoteBranches(fx.remote)).toEqual(
-        ["refs/heads/factory/run-test-1/integration", "refs/heads/rewrite"].sort(),
+        ["refs/heads/factory/run-test-1/integration", "refs/heads/main"].sort(),
       )
       expect(await remoteSha(fx.remote, `refs/heads/${BRANCH}`)).toBe(local)
-      expect(await remoteSha(fx.remote, "refs/heads/rewrite")).toBe(fx.baseSha)
+      expect(await remoteSha(fx.remote, "refs/heads/main")).toBe(fx.baseSha)
       // The release PR itself is a draft against the base.
       const argv = buildPrArgs({ branch: BRANCH, base: BASE, title: "t", body: "b" })
       expect(argv.slice(0, 4)).toEqual(["gh", "pr", "create", "--draft"])

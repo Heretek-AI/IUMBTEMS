@@ -1105,9 +1105,9 @@ describe("es factory init --preset self-dogfood (#137)", () => {
       expect(result.out).toContain(".factory/roadmap.json")
       expect(result.out).toContain("es trust")
       expect(result.out).toContain("$15")
-      expect(result.out).toContain("rewrite")
+      expect(result.out).toContain('keep baseBranch "main"')
       const roadmap = JSON.parse(await readFile(factoryLayout(root).roadmap, "utf8"))
-      expect(roadmap.baseBranch).toBe("rewrite")
+      expect(roadmap.baseBranch).toBe("main")
       expect(await readFile(path.join(root, ".factory/notes/idea-137.md"), "utf8")).toContain("Stub issue")
       const entries = await recentAuditEntries(root, 5)
       const seeded = entries.find((entry) => entry.action === "factory.preset")!

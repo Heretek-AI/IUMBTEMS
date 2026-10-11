@@ -29,10 +29,9 @@ describe("self-dogfood preset integration (#205)", () => {
         { issue: 205, title: "Self-dogfood preset", body: "The factory builds this repo." },
         { actor: "human:tester" },
       )
-      // Current behavior (#281 owns the base-selection question): the seed
-      // pins the release base to `rewrite`.
-      expect(baseBranch).toBe("rewrite")
-      expect(SELF_DOGFOOD_BASE_BRANCH).toBe("rewrite")
+      // Post-cutover (#281): the seed pins the release base to `main`.
+      expect(baseBranch).toBe("main")
+      expect(SELF_DOGFOOD_BASE_BRANCH).toBe("main")
       expect(written).toEqual([
         ".factory/config.json",
         ".factory/gates.json",
@@ -50,7 +49,7 @@ describe("self-dogfood preset integration (#205)", () => {
         "bun run docs:check",
       ])
       const roadmap = RoadmapSchema.parse(JSON.parse(await readFile(layout.roadmap, "utf8")))
-      expect(roadmap.baseBranch).toBe("rewrite")
+      expect(roadmap.baseBranch).toBe("main")
       expect(roadmap.title).toContain("205")
       expect(await readFile(`${fx.root}/.factory/notes/idea-205.md`, "utf8")).toContain("# #205:")
     } finally {

@@ -206,6 +206,54 @@ describe("waivers and trust at gate time (#221 gaps)", () => {
   }, 60_000)
 })
 
+describe("commandSetHash covers the full normalized CommandCheck (#217)", () => {
+  const dirOf = () => mkdtemp(path.join(tmpdir(), "es-command-hash-"))
+  type Variant = Parameters<typeof commandSetHash>[1][number]
+  const base = { id: "probe", kind: "test", command: "touch RAN" } as const
+  const table: [string, Variant][] = [
+    ["kind", { ...base, kind: "lint" }],
+    ["parser", { ...base, parser: "tsc" }],
+    ["touchedArgs", { ...base, touchedArgs: true }],
+    ["extensions", { ...base, touchedArgs: true, extensions: [".ts"] }],
+    ["related", { ...base, related: "vitest" }],
+    ["timeoutMs", { ...base, timeoutMs: 60_000 }],
+  ]
+  test.each(table)("flipping %s revokes trust", async (_field: string, variant: Variant) => {
+    const dir = await dirOf()
+    try {
+      const before = (await commandSetHash(dir, [base])).hash
+      const after = (await commandSetHash(dir, [variant])).hash
+      expect(after).not.toBe(before)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a bare id+command hashes the same as its schema-normalized form", async () => {
+    const dir = await dirOf()
+    try {
+      const bare = (await commandSetHash(dir, [base])).hash
+      const normalized = (
+        await commandSetHash(dir, [
+          {
+            id: "probe",
+            kind: "test",
+            command: "touch RAN",
+            parser: "generic",
+            touchedArgs: false,
+            extensions: [],
+            related: "none",
+            timeoutMs: 300_000,
+          },
+        ])
+      ).hash
+      expect(normalized).toBe(bare)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("agent shells and sealed state through the host (#181 §2)", () => {
   test("an agent shell running human-gated verbs is refused", async () => {
     for (const command of ["es trust", "es waive lint/check --reason x", "es reseal --sign", "es rebaseline"]) {

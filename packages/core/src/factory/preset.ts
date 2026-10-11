@@ -20,8 +20,8 @@ const PRESETS = fileURLToPath(new URL("../../assets/presets/", import.meta.url))
 
 /** The only preset so far: the factory builds this repo. */
 export const SELF_DOGFOOD_PRESET = "self-dogfood" as const
-/** Self-dogfood release PRs target `rewrite`, never `main`. */
-export const SELF_DOGFOOD_BASE_BRANCH = "rewrite" as const
+/** Self-dogfood release PRs target `main` (post-1.6.0 cutover, #281). */
+export const SELF_DOGFOOD_BASE_BRANCH = "main" as const
 /** Default spend ceiling (USD) the runbook sets on the grill frontier. */
 export const SELF_DOGFOOD_SPEND_CEILING_USD = 15 as const
 
@@ -139,8 +139,8 @@ export const readPresetSeed = (root: string): Promise<PresetSeed | undefined> =>
 
 /**
  * The single argv builder every PR opener uses for `gh pr create --draft`.
- * For a preset-seeded run the base is pinned: `--base main` (or anything
- * other than the preset's base) is refused here, before anything is pushed.
+ * For a preset-seeded run the base is pinned: anything other than the
+ * preset's base is refused here, before anything is pushed.
  */
 export function buildPrArgs(options: {
   branch: string
@@ -151,7 +151,7 @@ export function buildPrArgs(options: {
 }): string[] {
   if (options.preset === SELF_DOGFOOD_PRESET && options.base !== SELF_DOGFOOD_BASE_BRANCH)
     throw new Error(
-      `refusing --base "${options.base}" for a preset "${SELF_DOGFOOD_PRESET}" run (release PRs target "${SELF_DOGFOOD_BASE_BRANCH}", never "main")`,
+      `refusing --base "${options.base}" for a preset "${SELF_DOGFOOD_PRESET}" run (release PRs target "${SELF_DOGFOOD_BASE_BRANCH}")`,
     )
   return [
     "gh",

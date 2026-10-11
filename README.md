@@ -23,8 +23,10 @@
 ## What it does
 
 - **Factory stages, enforced by code.** Grill → Research → Spec → Build ⇄ QA →
-  Release runs through a state machine; every `es_*` tool refuses an
-  out-of-order step. Approvals (frontier, spec) are human-only and complete
+  Release runs through a state machine; the phase-transition tools refuse an
+  out-of-order step (status, validation, approval-request, gate-record,
+  audit-open, research, scout, brainstorm, harvest, design and LSP tools are
+  intentionally stage-free: seat-gated, not stage-gated). Approvals (frontier, spec) are human-only and complete
   in the TUI (masked passphrase dialog, in-process signing), in the browser
   (preview, then passphrase over loopback), or at a terminal
   (`es approve`); waivers and trust stay terminal-only (`es waive`,

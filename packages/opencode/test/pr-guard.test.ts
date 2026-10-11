@@ -18,7 +18,7 @@ const open = (root: string, overrides: { branch: string; base?: string; preset?:
   ghPrOpener.open({
     root,
     branch: overrides.branch,
-    base: overrides.base ?? "rewrite",
+    base: overrides.base ?? "main",
     title: "t",
     body: "b",
     ...(overrides.preset !== undefined ? { preset: overrides.preset } : {}),
@@ -44,7 +44,7 @@ describe("ghPrOpener.open() branch guard", () => {
   test("branch === base is refused", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "es-pr-guard-"))
     try {
-      await expect(open(root, { branch: "rewrite", base: "rewrite" })).rejects.toThrow(/refusing to push "rewrite"/)
+      await expect(open(root, { branch: "main", base: "main" })).rejects.toThrow(/refusing to push "main"/)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -67,7 +67,7 @@ describe("ghPrOpener.open() branch guard", () => {
     // (`pr.ts` checks the branch before `git push --set-upstream`).
     const root = await mkdtemp(path.join(tmpdir(), "es-pr-guard-"))
     try {
-      await open(root, { branch: "main", base: "rewrite" })
+      await open(root, { branch: "main", base: "main" })
       expect.unreachable("a non-factory/ branch must be refused")
     } catch (error) {
       expect((error as Error).message).toMatch(/refusing to push "main"/)
@@ -118,9 +118,9 @@ describe("ghPrOpener.open() branch guard", () => {
 
 describe("release PR argv", () => {
   test("a factory branch opens a draft PR against the base", () => {
-    const argv = buildPrArgs({ branch: "factory/run-1/integration", base: "rewrite", title: "t", body: "b" })
+    const argv = buildPrArgs({ branch: "factory/run-1/integration", base: "main", title: "t", body: "b" })
     expect(argv.slice(0, 4)).toEqual(["gh", "pr", "create", "--draft"])
     expect(argv.slice(argv.indexOf("--head") + 1, argv.indexOf("--head") + 2)).toEqual(["factory/run-1/integration"])
-    expect(argv.slice(argv.indexOf("--base") + 1, argv.indexOf("--base") + 2)).toEqual(["rewrite"])
+    expect(argv.slice(argv.indexOf("--base") + 1, argv.indexOf("--base") + 2)).toEqual(["main"])
   })
 })
