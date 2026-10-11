@@ -691,7 +691,8 @@ export class Factory {
   /** Record a gate run made during BUILD (red test runs are the failing-test-first evidence). */
   async recordGateRun(agentId: string | undefined, result: GateRunLike): Promise<void> {
     await this.mutate(`agent:${agentId}`, (state) => {
-      if (state.stage !== "BUILD") return
+      if (state.stage !== "BUILD")
+        throw new FactoryError(`Gate runs record during BUILD only (current stage: ${state.stage}).`)
       const phase = this.active(state)
       const failed = result.failedTests ?? []
       const red = failed.length > 0 || result.testsFailed === true
@@ -1240,7 +1241,7 @@ export class Factory {
   private async prBody(state: FactoryState) {
     const spec = await readApproval(this.root, "spec")
     const lines = [
-      `Built by the Epistemic Swarm factory (run \`${state.runId}\`). A human reviews and merges; the factory never merges.`,
+      `Built by the Epistemic Swarm factory (run \`${state.runId}\`). A human reviews and merges; the factory never merges into the release/base branch.`,
       "",
       "## Phases",
       ...state.phases.map(
