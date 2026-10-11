@@ -23,8 +23,7 @@ export interface GateVerdict {
 
 export function decideGateVerdict(input: GateVerdictInput): GateVerdict {
   const { failed, stable, sampled } = input
-  if (!failed.length)
-    return { exit: 0, message: "no current failures; nothing to gate." }
+  if (!failed.length) return { exit: 0, message: "no current failures; nothing to gate." }
   const known = new Set(input.known ?? stable)
   const stableSet = new Set(stable)
   if (sampled === 0)
@@ -38,8 +37,7 @@ export function decideGateVerdict(input: GateVerdictInput): GateVerdict {
   if (!regressions.length)
     return {
       exit: 0,
-      message:
-        `${failed.length} current failure(s) (${failed.join(", ")}) are not regressions of stable cases; passing.`,
+      message: `${failed.length} current failure(s) (${failed.join(", ")}) are not regressions of stable cases; passing.`,
     }
   const unknown = regressions.filter((id) => !known.has(id))
   const unknownNote = unknown.length ? ` (no history for: ${unknown.join(", ")})` : ""
