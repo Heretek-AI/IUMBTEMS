@@ -1,7 +1,14 @@
 // REPORT.md for a finished scout: the competitive matrix, the risks the
 // red-team found, clean-room blueprints, and the cited claims. Deterministic.
 import type { HarvestProfile } from "../schema/harvest.ts"
-import type { ScoutAssessment, ScoutPlan, ScoutResult } from "../schema/scout.ts"
+import type { ScoutAdvisoryQuery, ScoutAssessment, ScoutPlan, ScoutResult } from "../schema/scout.ts"
+
+/** What the report says about one candidate's advisories step (#257). */
+export interface AdvisoryCheck {
+  readonly query?: ScoutAdvisoryQuery | undefined
+  readonly skipped: boolean
+  readonly count: number
+}
 
 const cell = (value: unknown) => String(value ?? "—").replaceAll("|", "\\|")
 
@@ -10,6 +17,7 @@ export function renderScoutReport(
   result: ScoutResult,
   profiles: ReadonlyMap<string, HarvestProfile>,
   assessments: ReadonlyMap<string, ScoutAssessment>,
+  checks: ReadonlyMap<string, AdvisoryCheck>,
 ): string {
   const lines = [
     `# Scout: ${plan.objective}`,
@@ -38,6 +46,21 @@ export function renderScoutReport(
     lines.push(
       `- **${verdict.name}**: ${notes.length ? notes.join("; ") : "none found"}${verdict.attribution ? ` · attribution ${verdict.attribution}` : ""}`,
     )
+  }
+  // What the advisories step actually checked (#257): the queried
+  // coordinates, or the explicit skip. A clean adopt with no line here is
+  // impossible — complete refuses the silent skip.
+  lines.push("", "## Advisory checks", "")
+  for (const verdict of result.verdicts) {
+    const check = checks.get(verdict.candidate)
+    if (!check || check.skipped)
+      lines.push(`- **${verdict.name}**: advisories not queried; the assessment records explicit NEGATIVE_KNOWLEDGE.`)
+    else {
+      const at = check.query?.version ? `@${check.query.version}` : ""
+      lines.push(
+        `- **${verdict.name}**: OSV ${check.query?.ecosystem}:${check.query?.package}${at} checked, ${check.count} ${check.count === 1 ? "advisory" : "advisories"} cited.`,
+      )
+    }
   }
   const blueprints = result.verdicts.filter(
     (verdict) => verdict.verdict === "clean-room" && assessments.get(verdict.candidate)?.blueprint,

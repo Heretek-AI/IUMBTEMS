@@ -4,7 +4,11 @@
 //   bundled SPDX template (templates.ts): extra or changed terms — a rider like
 //   the Commons Clause, the JSON licence's "Good, not Evil" — mean "unknown".
 // - Copyleft and source-available licences are recognised by their title and
-//   date lines (GPL-3.0 is not mistaken for AGPL because §13 mentions it).
+//   date lines (the earliest GPL-family title in the bytes decides among the
+//   GPL family: the GPL-3.0 tail names the Lesser GPL, which must not outrank
+//   an earlier GPL title).
+// - NOTICE/PATENTS files are not evaluated as licences: a top-level NOTICE
+//   without a licence file warns about the blind spot instead of verifying.
 // - Every licence file in the root counts (LICENSE*, COPYING*, UNLICENSE…);
 //   the most restrictive wins, and several permissive ones combine with AND.
 // - `SPDX-License-Identifier` headers are declarations by single files: they
@@ -28,7 +32,8 @@ const FAMILIES: Readonly<Record<string, Family>> = {
   "Apache-2.0": "permissive",
   "BSD-2-Clause": "permissive",
   "BSD-3-Clause": "permissive",
-  "BSD-4-Clause": "permissive",
+  // No BSD-4-Clause: the advertising clause is an obligation the whitelist
+  // does not cover, so it must read as unknown, never as safe (#264).
   ISC: "permissive",
   "0BSD": "permissive",
   Unlicense: "public-domain",
@@ -145,6 +150,24 @@ interface Rule {
 // Lesser GPL and GPL-3.0 §13 the Affero GPL. Date lines catch texts that sit
 // under a project notice.
 const has = (text: string, ...phrases: string[]) => phrases.every((phrase) => text.includes(phrase))
+
+/**
+ * The Lesser title plus a date line, but only when the Lesser title is the
+ * earliest GPL-family title in the bytes (#264): the GPL-3.0 tail ("use the
+ * GNU Lesser General Public License instead of this License") names it, and
+ * a later mention must not outrank an earlier GPL title.
+ */
+const lesserFirst = (body: string, date: string): boolean => {
+  if (!has(body, "gnu lesser general public license", date)) return false
+  const lesser = body.indexOf("gnu lesser general public license")
+  for (const title of [
+    "gnu affero general public license",
+    "gnu library general public license",
+    "gnu general public license",
+  ])
+    if (body.includes(title) && body.indexOf(title) < lesser) return false
+  return true
+}
 const title = (phrase: string, spdx: string | ((head: string) => string), note?: string): Rule => ({
   test: (head) => (head.includes(phrase) ? (typeof spdx === "string" ? spdx : spdx(head)) : undefined),
   ...(note ? { note } : {}),
@@ -171,8 +194,8 @@ const RESTRICTIVE: readonly Rule[] = [
   title("elastic license", "Elastic-2.0", SOURCE_AVAILABLE),
   // 2. Texts under a project notice: their distinctive date lines.
   { test: (_, body) => (has(body, "gnu affero general public license", "19 november 2007") ? "AGPL-3.0" : undefined) },
-  { test: (_, body) => (has(body, "gnu lesser general public license", "february 1999") ? "LGPL-2.1" : undefined) },
-  { test: (_, body) => (has(body, "gnu lesser general public license", "29 june 2007") ? "LGPL-3.0" : undefined) },
+  { test: (_, body) => (lesserFirst(body, "february 1999") ? "LGPL-2.1" : undefined) },
+  { test: (_, body) => (lesserFirst(body, "29 june 2007") ? "LGPL-3.0" : undefined) },
   { test: (_, body) => (has(body, "gnu general public license", "29 june 2007") ? "GPL-3.0" : undefined) },
   { test: (_, body) => (has(body, "gnu general public license", "june 1991") ? "GPL-2.0" : undefined) },
   { test: (_, body) => (has(body, "mozilla public license", "version 2.0") ? "MPL-2.0" : undefined) },
@@ -271,6 +294,17 @@ export async function detectLicense(
 
   // 1. Every licence file in the root.
   const entries = await readdirImpl(dir).catch(() => [] as LicenseScanEntry[])
+  // NOTICE/PATENTS files are not evaluated as licences (#264): when no
+  // licence file matched, their presence is reported on the finding so the
+  // blind spot is visible instead of silent.
+  const noticeFiles = entries
+    .filter((item) => !item.directory && /^(notice|patents)([-._][\w.-]+)?$/i.test(item.name))
+    .map((item) => item.name)
+    .sort(byText)
+  const noticed = (note: string): string =>
+    noticeFiles.length
+      ? `${note}; ${noticeFiles.join(", ")} present but not evaluated as a license (NOTICE obligations are a blind spot)`
+      : note
   const files: FileVerdict[] = []
   for (const entry of entries
     .filter((item) => !item.directory && LICENSE_FILE.test(item.name))
@@ -302,7 +336,7 @@ export async function detectLicense(
       sha256: sha256(headers[0]!.text),
       confidence: "medium",
       verified: false,
-      note: `declared only by SPDX headers (${headers.length} file(s)); no licence text found`,
+      note: noticed(`declared only by SPDX headers (${headers.length} file(s)); no licence text found`),
     }
   }
 
@@ -316,7 +350,7 @@ export async function detectLicense(
       file: manifest.file,
       confidence: "medium",
       verified: false,
-      note: "self-reported in a manifest; no license text found",
+      note: noticed("self-reported in a manifest; no license text found"),
     }
 
   return {
@@ -325,7 +359,7 @@ export async function detectLicense(
     source: "manifest",
     confidence: "low",
     verified: false,
-    note: "no license file, header or manifest field found",
+    note: noticed("no license file, header or manifest field found"),
   }
 }
 
