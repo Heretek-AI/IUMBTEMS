@@ -174,6 +174,28 @@ describe("--help (#59)", () => {
     expect(approve.out).toContain("approve <frontier|spec>")
     expect(await exists(factoryLayout(root).dir)).toBe(false)
   })
+
+  test("`es worktree --help` prints the worktree usage", async () => {
+    const worktree = await run(["worktree", "--help"])
+    expect(worktree.code).toBe(0)
+    expect(worktree.out).toContain("worktree prune")
+  })
+})
+
+describe("worktree prune (#160)", () => {
+  test("`es worktree prune` on an empty root exits 0 and reports counts", async () => {
+    const result = await run(["worktree", "prune"])
+    expect(result.code).toBe(0)
+    expect(result.out).toContain("dropped 0 stale lease(s)")
+    expect(result.out).toContain("removed 0 orphaned checkout(s)")
+    expect(result.out).toContain("kept 0 live lease(s)")
+  })
+
+  test("`es worktree` without a sub-verb prints usage and exits 2", async () => {
+    const result = await run(["worktree"])
+    expect(result.code).toBe(2)
+    expect(result.out).toContain("Usage: es worktree prune")
+  })
 })
 
 describe("human-only confirmation", () => {
