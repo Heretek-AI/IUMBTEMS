@@ -155,6 +155,12 @@ describe("scout-fires", () => {
       await write(h.directory, `${dir}/package.json`, JSON.stringify({ name: candidate.name, version: "1.0.0" }))
       if (candidate.license) await write(h.directory, `${dir}/LICENSE`, read(`licenses/${candidate.license}.txt`))
     }
+    const skip = (name: string) => ({
+      tag: "NEGATIVE_KNOWLEDGE",
+      statement: `OSV advisories were not queried for ${name}`,
+      query: `OSV advisories for ${name}`,
+      finding: "skipped: a local fixture with no published package",
+    })
     const calls = [
       call("es_scout_plan", {
         objective: "a function library",
@@ -167,7 +173,7 @@ describe("scout-fires", () => {
           maintenance: "stable",
           proposal: "adopt",
           rationale: "it does what we need",
-          claims: [],
+          claims: [skip(candidate.name)],
         }),
       ),
       call("es_scout_complete"),
