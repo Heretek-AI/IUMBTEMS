@@ -1,4 +1,5 @@
 export * from "./attempts.ts"
 export * from "./keystore.ts"
+export * from "./machine.ts"
 export * from "./record.ts"
 export * from "./service.ts"
