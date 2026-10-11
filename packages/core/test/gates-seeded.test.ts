@@ -306,6 +306,27 @@ describe("gitleaks shape and waiver glob edges", () => {
     })
   })
 
+  test("installed() does not pin a negative: a binary appearing later on PATH is seen (#243)", async () => {
+    // The gitleaks PATH shims above read as absent once any earlier gate run
+    // cached the miss on a machine without the binary (CI): the gate then
+    // skips and the shape assertions fail on empty findings.
+    const { installed } = await import("../src/gates/security.ts")
+    const { mkdtemp, rm } = await import("node:fs/promises")
+    const { tmpdir } = await import("node:os")
+    const missing = `es-no-such-binary-${Date.now().toString(36)}`
+    const previous = process.env.PATH ?? ""
+    const shimdir = await mkdtemp(path.join(tmpdir(), "es-which-"))
+    try {
+      process.env.PATH = `${shimdir}${path.delimiter}/nonexistent-es-dir`
+      expect(installed(missing)).toBe(false)
+      await writeFile(path.join(shimdir, missing), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+      expect(installed(missing)).toBe(true)
+    } finally {
+      process.env.PATH = previous
+      await rm(shimdir, { recursive: true, force: true })
+    }
+  })
+
   test("a rule+files glob waiver hides only what both globs match", async () => {
     const token = (name: string) => `export const ${name} = "ghp_Ab3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6"\n`
     await write("src/a.ts", token("a"))
