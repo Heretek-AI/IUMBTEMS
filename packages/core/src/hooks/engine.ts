@@ -410,7 +410,17 @@ export class HookEngine {
   ): Promise<{ additionalContext: string[]; notices: string[] }> {
     const items = this.select("SessionStart", [source])
     const result = { additionalContext: [] as string[], notices: [] as string[] }
-    if (!items.length) return result
+    if (!items.length) {
+      // An unmatched source is an explicit notice, never a silent no-op
+      // (#289): the bridge fires only startup + compact, so a hook filtered
+      // to resume/clear/fork would otherwise sit inert with no sign. Silent
+      // only when no SessionStart hook is registered at all.
+      if (this.loaded.handlers.some((item) => item.event === "SessionStart"))
+        result.notices.push(
+          `SessionStart: hook(s) registered but none match source "${source}" (the bridge fires startup + compact)`,
+        )
+      return result
+    }
     const ran = await this.execute("SessionStart", items, { ...this.common("SessionStart", base), source })
     for (const { item, outcome } of ran) {
       this.failure(item, outcome, result.notices)

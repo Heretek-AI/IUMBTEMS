@@ -382,6 +382,26 @@ describe("other events", () => {
     }
   })
 
+  test("SessionStart routes every source; an unmatched source is an explicit notice, never silent (#289)", async () => {
+    const hooks = await engine({
+      SessionStart: [
+        { matcher: "startup", hooks: [{ type: "command", command: "echo 'project uses bun'" }] },
+        { matcher: "resume", hooks: [{ type: "command", command: "echo 'welcome back'" }] },
+      ],
+    })
+    expect(await hooks.sessionStart(base, "startup")).toMatchObject({ additionalContext: ["project uses bun"] })
+    expect(await hooks.sessionStart(base, "resume")).toMatchObject({ additionalContext: ["welcome back"] })
+    // compact/clear/fork have no matching hook here: explicit notice, not silence.
+    for (const source of ["compact", "clear", "fork"] as const) {
+      const result = await hooks.sessionStart(base, source)
+      expect(result.additionalContext).toEqual([])
+      expect(result.notices.join("\n")).toContain(`none match source "${source}"`)
+    }
+    // No SessionStart hook at all: silent (nothing to be confused about).
+    const bare = await engine({ PostToolUse: [{ hooks: [{ type: "command", command: "true" }] }] })
+    expect((await bare.sessionStart(base, "resume")).notices).toEqual([])
+  })
+
   test("the engine sandbox knob reaches hook subprocesses: gates fail closed, observers fail open (#265)", async () => {
     resetBwrapProbe(false)
     try {
