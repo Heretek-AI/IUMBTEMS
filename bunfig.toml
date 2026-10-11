@@ -3,3 +3,5 @@ timeout = 30000
 # Discovery starts at packages/: a bare `bun test` or path filter never walks
 # review/ or evals/ (#159). Paths outside it still run when given as ./path.
 root = "packages"
+# Ambient web-provider settings are removed before any suite loads (#312).
+preload = ["./scripts/test-preload.ts"]
