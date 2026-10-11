@@ -38,8 +38,10 @@ const trustFile = (dir?: string) => path.join(dir ?? stateDir(), "trust.json")
  * defaults): `kind`, `related`, `touchedArgs`/`extensions`, `timeoutMs` and
  * `parser` change what runs, so flipping any of them revokes trust (#217).
  * Bare `{id, command}` inputs normalize to the same hash as their
- * schema-defaulted form, so existing approvals of equivalent sets still match
- * field-for-field — only genuinely different execution hashes differently.
+ * schema-defaulted form (explicit defaults hash identically to omitted
+ * ones). The hash shape itself changed in 1.6.1, so approvals recorded
+ * under the old `[id, command]`-only hash do not carry over: re-approval
+ * is required, and the gates refuse to run until it happens.
  */
 export async function commandSetHash(
   dir: string,
