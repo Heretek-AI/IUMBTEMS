@@ -228,6 +228,8 @@ export function createPolicyHooks(runtime: Runtime, seats?: SeatTracker) {
   }) => {
     const seat = seatOf(event.agent)
     const context = await runtime.policy()
+    // The host's patch tool asks for `edit` too, once, with every target of
+    // the patch as a resource: there is no `patch` action to branch on (#220).
     if (event.action === "edit" || event.action === "read") {
       const decisions = event.resources.map((resource) =>
         event.action === "edit"
