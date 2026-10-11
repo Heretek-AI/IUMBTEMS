@@ -79,7 +79,6 @@ describe("seatModelRefusal", () => {
 })
 
 const pluginDir = path.resolve(import.meta.dir, "..")
-const call = (name: string, args: Record<string, unknown> = {}) => `@@CALL ${name} ${JSON.stringify(args)}@@`
 
 describe("colliding seat launches are refused on the real host", () => {
   let h: Harness
@@ -109,7 +108,7 @@ describe("colliding seat launches are refused on the real host", () => {
 
   test("launching a QA seat on the programmer provider is refused with remediation", async () => {
     const { tools } = await h.run(
-      `go ${call("subagent", { agent: "es-qa-functional", description: "x", prompt: "check it" })}`,
+      'go @@CALL subagent {"agent":"es-qa-functional","description":"x","prompt":"check it"}@@',
       { agent: "factory" },
     )
     expect(tools.map((tool) => `${tool.name}:${tool.status}`)).toEqual(["subagent:error"])
