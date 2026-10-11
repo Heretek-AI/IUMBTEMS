@@ -169,7 +169,9 @@ describe("trust", () => {
     const foreignSigner = await unlockHumanKey(PASSPHRASE, foreign)
     const retargeted = {
       hash: forgedHash,
-      lines: ["probe: touch FORGED"],
+      // The real display lines for the forged set (#217: the full normalized
+      // check, not just `id: command`), so the forgery shapes match production.
+      lines: (await commandSetHash(fx.root, wanted.commands)).lines,
       approvedBy: "x",
       approvedAt: entry.approvedAt,
     }

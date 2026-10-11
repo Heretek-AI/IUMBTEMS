@@ -9,6 +9,7 @@ import path from "node:path"
 import { type HumanSigner, type RecordSignature, verifyRecordSignature } from "../approval/keystore.ts"
 import { stateDir } from "../layout.ts"
 import type { CommandCheck } from "../schema/gates.ts"
+import { CommandCheckSchema } from "../schema/gates.ts"
 import { readJson, withLock, writeJson } from "../util/fs.ts"
 import { hashJson } from "../util/hash.ts"
 import { canonicalPath } from "./paths.ts"
@@ -31,12 +32,24 @@ interface TrustFile {
 
 const trustFile = (dir?: string) => path.join(dir ?? stateDir(), "trust.json")
 
-/** Hash of the gate command set and the package.json scripts it can reach. */
+/** Hash of the gate command set and the package.json scripts it can reach.
+ *
+ * The hash covers the full normalized `CommandCheck` (post-`CommandCheckSchema`
+ * defaults): `kind`, `related`, `touchedArgs`/`extensions`, `timeoutMs` and
+ * `parser` change what runs, so flipping any of them revokes trust (#217).
+ * Bare `{id, command}` inputs normalize to the same hash as their
+ * schema-defaulted form, so existing approvals of equivalent sets still match
+ * field-for-field — only genuinely different execution hashes differently.
+ */
 export async function commandSetHash(
   dir: string,
-  commands: readonly CommandCheck[],
+  commands: readonly (CommandCheck | Parameters<typeof CommandCheckSchema.parse>[0])[],
 ): Promise<{ hash: string; lines: string[] }> {
-  const lines = commands.map((item) => `${item.id}: ${item.command}`)
+  const normalized = commands.map((item) => CommandCheckSchema.parse(item))
+  const lines = normalized.map(
+    (item) =>
+      `${item.id}: ${item.command} [kind=${item.kind} parser=${item.parser} related=${item.related} timeoutMs=${item.timeoutMs}${item.touchedArgs ? ` touchedArgs extensions=${item.extensions.join(",") || "*"}` : ""}]`,
+  )
   let scripts: Record<string, string> = {}
   try {
     scripts = JSON.parse(await readFile(path.join(dir, "package.json"), "utf8")).scripts ?? {}
@@ -50,10 +63,10 @@ export async function commandSetHash(
     return name === "test" && /^(npm|pnpm|yarn)\s+test\b/.test(command)
   }
   const reachable = Object.fromEntries(
-    Object.entries(scripts).filter(([name]) => commands.some((item) => invokes(item.command, name))),
+    Object.entries(scripts).filter(([name]) => normalized.some((item) => invokes(item.command, name))),
   )
   for (const [name, body] of Object.entries(reachable)) lines.push(`  script ${name}: ${body}`)
-  return { hash: hashJson({ commands: commands.map((item) => [item.id, item.command]), scripts: reachable }), lines }
+  return { hash: hashJson({ commands: normalized, scripts: reachable }), lines }
 }
 
 async function read(dir?: string): Promise<TrustFile> {
