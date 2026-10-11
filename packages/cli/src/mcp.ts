@@ -9,7 +9,7 @@
 // seat-checked tool refuses. Only a registry agent id (`factory`,
 // `es-manager`, `es-programmer`, …) holds a seat: any other pinned string is
 // still the caller, but a seat-less one, refused the same way as "mcp".
-import { stateDir as defaultStateDir, esTools, Factory, gateRunner } from "@heretek-ai/es-core"
+import { checkStopFile, stateDir as defaultStateDir, esTools, Factory, gateRunner } from "@heretek-ai/es-core"
 import { VERSION } from "./version.ts"
 
 export const PROTOCOL_VERSION = "2025-06-18"
@@ -77,6 +77,19 @@ export function createMcpServer(options: McpOptions) {
         if (!tool) return fail(-32602, `Unknown tool: ${params?.name}`)
         const { agent: _ignored, ...input } = (params?.arguments ?? {}) as Json
         try {
+          // STOP and HALTED hold on the MCP surface too (#227): the
+          // kill-switch refuses every call; a halted run refuses everything
+          // but status, mirroring the OpenCode host policy.
+          const stop = await checkStopFile(options.root)
+          if (stop.stopped)
+            throw new Error(
+              `The factory is stopped (.factory/STOP: ${stop.reason}). A human must remove it and resume.`,
+            )
+          if (tool.name !== "es_status") {
+            const state = await factory.read().catch(() => undefined)
+            if (state?.stage === "HALTED")
+              throw new Error(`The factory is halted: ${state.halt?.reason}. Stop and report; a human must resume.`)
+          }
           const text = await tool.execute(input, { agent: caller })
           return reply({ content: [{ type: "text", text }] })
         } catch (error) {

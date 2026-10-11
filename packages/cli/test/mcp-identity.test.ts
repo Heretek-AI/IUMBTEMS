@@ -189,3 +189,29 @@ describe("mcp identity over real stdio", () => {
     expect(await readFile(path.join(root, "README.md"), "utf8")).toContain("# x")
   })
 })
+
+describe("mcp STOP/HALTED enforcement (#227)", () => {
+  test("a STOP file refuses tool calls on the MCP surface", async () => {
+    await Bun.write(path.join(root, ".factory/STOP"), "halt\n")
+    try {
+      const server = createMcpServer({ root, stateDir: state, env: { ES_AGENT: "factory" } })
+      const refused = await call(server, "status", {})
+      expect(refused?.result.isError).toBe(true)
+      expect(refused?.result.content[0].text).toContain("stopped")
+    } finally {
+      await rm(path.join(root, ".factory/STOP"), { force: true })
+    }
+  })
+
+  test("a HALTED run refuses non-status tool calls on the MCP surface", async () => {
+    const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+    await factory.begin("human:tester")
+    await factory.halt("human:tester", "spend ceiling")
+    const server = createMcpServer({ root, stateDir: state, env: { ES_AGENT: "factory" } })
+    const refused = await call(server, "complete", {})
+    expect(refused?.result.isError).toBe(true)
+    expect(refused?.result.content[0].text).toContain("halted")
+    const status = await call(server, "status", {})
+    expect(status?.result.isError).not.toBe(true)
+  })
+})
