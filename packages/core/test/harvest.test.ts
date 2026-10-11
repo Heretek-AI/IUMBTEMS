@@ -397,6 +397,27 @@ describe("the fail-closed licence policy", () => {
     expect(gpl).toMatchObject({ verdict: "clean-room", downgraded: expect.stringContaining("copyleft") })
     expect(built.downgrades).toHaveLength(1)
   })
+
+  test("model-supplied evidence is scrubbed of code spans before it reaches the spec (#267)", () => {
+    // matrix.ts used to spread cell.evidence verbatim into the clean-room
+    // spec, so a harvester pasting upstream code contaminated it
+    // mechanically. The scrub is the enforcement behind the "do not copy"
+    // instruction.
+    const profiles = new Map([["mit", profileFor(license({}), "mit")]])
+    const pasted = `rebuild the parser\n\`\`\`ts\nexport const stolen = 1\n\`\`\`\nsee \`internal()\` for details ${"x".repeat(600)}`
+    const built = buildMatrix(
+      ["mit"],
+      profiles,
+      [{ feature: "parse", cells: [{ candidate: "mit", verdict: "clean-room", evidence: pasted }] }],
+      DEFAULT_LICENSE_WHITELIST,
+    )
+    const evidence = built.matrix.rows[0]!.cells[0]!.evidence!
+    expect(evidence).toContain("rebuild the parser")
+    expect(evidence).not.toContain("```")
+    expect(evidence).not.toContain("`")
+    expect(evidence).not.toContain("stolen")
+    expect(evidence.length).toBeLessThanOrEqual(500)
+  })
 })
 
 describe("the tool loop", () => {

@@ -58,6 +58,27 @@ export interface MatrixBuild {
   }>
 }
 
+/**
+ * Scrub model-supplied evidence before it reaches a clean-room spec (#267).
+ * The "do not read or copy" line in the spec template is procedure, not
+ * enforcement: without this, a harvester that pastes upstream code into
+ * `evidence` contaminates the spec mechanically. Fenced code blocks go
+ * entirely, inline spans keep their text but lose their ticks, stray ticks
+ * go, whitespace collapses, and the note is capped.
+ */
+export const EVIDENCE_MAX = 500
+export function sanitizeEvidence(evidence: string): string | undefined {
+  const text = evidence
+    .replace(/```[\s\S]*?(```|$)/g, " ")
+    .replace(/`([^`\n]*)`/g, "$1")
+    .replace(/`/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, EVIDENCE_MAX)
+    .trimEnd()
+  return text || undefined
+}
+
 /** Apply the policy to every proposed cell and freeze the matrix. */
 export function buildMatrix(
   candidates: readonly string[],
@@ -74,6 +95,7 @@ export function buildMatrix(
       if (!profile)
         return { ...cell, verdict: "skip", downgraded: `candidate "${cell.candidate}" was not scanned; skipped` }
       const checked = checkVerdict(cell.verdict, profile.license, whitelist)
+      const clean = cell.evidence !== undefined ? sanitizeEvidence(cell.evidence) : undefined
       if (checked.downgraded)
         downgrades.push({
           candidate: cell.candidate,
@@ -85,7 +107,7 @@ export function buildMatrix(
       return {
         candidate: cell.candidate,
         verdict: checked.verdict,
-        ...(cell.evidence ? { evidence: cell.evidence } : {}),
+        ...(clean !== undefined ? { evidence: clean } : {}),
         ...(checked.attribution ? { attribution: checked.attribution } : {}),
         ...(checked.downgraded ? { downgraded: checked.downgraded } : {}),
       }
