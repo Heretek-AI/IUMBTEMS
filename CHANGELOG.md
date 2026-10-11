@@ -10,6 +10,7 @@ software engineering instances. The published trio (core/CLI/plugin)
 releases in lockstep as 2.2.0.
 
 **Behaviour changes.**
+
 - **#169: AST mutation testing gate.**
   `generateMutants` (`packages/core/src/gates/mutation.ts`) injects subtle
   mutants into touched sources (negated conditions, swapped arithmetic,
@@ -42,6 +43,7 @@ releases in lockstep as 2.2.0.
   steps and the regression delta; model runs are never CI-blocking.
 
 **Security.**
+
 - Mutation sources are always restored (try/finally, witnessed by test);
   cache fingerprints are content hashes compared in constant time.
 - Model diversity is enforced on every build path (plugin, MCP, seat
