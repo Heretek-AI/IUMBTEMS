@@ -161,7 +161,7 @@ describe("write policy", () => {
     expect(effect(evaluateWrite(ctx(), "es-research-alpha", ".factory/research/notes.md"))).toBe("deny")
   })
 
-  test("REPORT.md has one writer per run mode: the factory in build runs, the synthesizer in research runs (#111)", () => {
+  test("REPORT.md has one writer scope per run mode: factory-docs seats in build runs, the synthesizer in research runs (#111, #220)", () => {
     const report = ".factory/research/REPORT.md"
     // Build runs: factory-docs seats write it, research-report seats do not.
     for (const agent of ["factory", "es-manager"])
@@ -488,6 +488,95 @@ describe("shell policy", () => {
     expect(shell("es-programmer", "cat .factory/gates.json").effect).toBe("deny")
   })
 
+  test("seat shells cannot name any factory control path: pattern-vs-gloss parity (#216)", () => {
+    // One representative per FACTORY_CONTROL glob (trust/control.ts): the seat
+    // text layer must deny each, however spelled. Engine state is not only
+    // *.json, and improve/** is control too (#216).
+    const controls = [
+      ".factory/gates.json",
+      ".factory/config.json",
+      ".factory/frontier.json",
+      ".factory/waivers/w1.json",
+      ".factory/approvals/frontier.json",
+      ".factory/runtime/seats.json",
+      ".factory/STOP",
+      ".factory/git-hooks/pre-commit",
+      ".factory/brainstorm/scores.json",
+      ".factory/brainstorm/ideas.md",
+      ".factory/brainstorm/runs/grill-1/plan.json",
+      ".factory/brainstorm/runs/grill-1/BRAINSTORM.md",
+      ".factory/harvest/matrix.json",
+      ".factory/harvest/VENDOR-PLAN.md",
+      ".factory/harvest/widget/profile.json",
+      ".factory/harvest/clean-room/teardown-search.md",
+      ".factory/harvest/runs/grill-1/HARVEST.md",
+      ".factory/design/tokens.json",
+      ".factory/design/tokens.css",
+      ".factory/design/STYLE_GUIDE.md",
+      ".factory/design/components/table/tokens.json",
+      ".factory/design/skill/table/SKILL.md",
+      ".factory/design/skill-claude/table/SKILL.md",
+      `.factory/research/sources/${"c".repeat(64)}.md`,
+      ".factory/research/coverage.json",
+      ".factory/research/dossier.json",
+      ".factory/research/brief.pcrb.json",
+      ".factory/claims/retractions.json",
+      ".factory/improve/proposals/widget/proposal.json",
+      ".factory/improve/telemetry.json",
+      ".factory/audits/phase-01/findings.json",
+      ".factory/scout/plan.json",
+      ".factory/scout/overview.md",
+      ".factory/scout/widget/profile.json",
+      ".git/config",
+      ".git/hooks/pre-commit",
+    ]
+    for (const file of controls) {
+      for (const agent of ["factory", "es-programmer", "es-research-alpha", "es-manager", "harvester"]) {
+        expect([file, agent, effect(evaluateWrite(ctx(), agent, file))]).toEqual([file, agent, "deny"])
+        expect([file, agent, shell(agent, `cat ${file}`).effect]).toEqual([file, agent, "deny"])
+      }
+      // Non-seat agents may read controls but never mutate them from the shell.
+      expect(shell(undefined, `echo x > ${file}`).effect).toBe("deny")
+    }
+    // Every CONFIG_CONTROL glob: seats denied in the editor and the shell,
+    // non-seat agents asked in the editor (#236 MEDIUM: all 8 representatives).
+    const configs = [
+      "opencode.json",
+      "opencode.jsonc",
+      ".opencode/opencode.json",
+      ".opencode/opencode.jsonc",
+      ".opencode/plugins/table/plugin.json",
+      ".opencode/hooks.json",
+      ".claude/settings.json",
+      ".claude/settings.local.json",
+    ]
+    for (const file of configs) {
+      expect(effect(evaluateWrite(ctx(), "es-manager", file))).toBe("deny")
+      expect(effect(evaluateWrite(ctx(), "build", file))).toBe("ask")
+      expect(shell("es-programmer", `cat ${file}`).effect).toBe("deny")
+    }
+    // The user's own agents may still read controls (never mutate them): the
+    // .md/.css backstop stays a read backstop (#236 MEDIUM).
+    for (const file of [".factory/design/tokens.css", ".factory/scout/overview.md", ".factory/harvest/VENDOR-PLAN.md"])
+      expect(shell("build", `cat ${file}`).effect).toBe("allow")
+    // Case variants name the same control file on case-insensitive volumes.
+    expect(shell("es-programmer", "cat .FACTORY/GATES.JSON").effect).toBe("deny")
+    expect(effect(evaluateWrite(ctx(), "es-programmer", ".factory/GATES.JSON"))).toBe("deny")
+    // Seats keep their own notes out of the text deny (notes are seat-writable).
+    expect(shell("es-programmer", "cat .factory/brainstorm/notes/x.md").effect).not.toBe("deny")
+  })
+
+  test("a symlink into .factory passes the seat text layer; the write is still denied (#220, G1 theme)", async () => {
+    // String patterns cannot resolve symlinks: the seat shell text layer lets
+    // `cat src/shell-link/spec.json` through by construction. Enforcement is
+    // the sandbox ro-bind of .factory/ (trust/sandbox.ts), which the link
+    // resolves into; the editor resolves the link and denies.
+    await writeFile(path.join(root, ".factory/approvals/spec.json"), "{}")
+    await symlink(path.join(root, ".factory/approvals"), path.join(root, "src/shell-link")).catch(() => {})
+    expect(effect(evaluateWrite(ctx(), "build", "src/shell-link/spec.json"))).toBe("deny")
+    expect(shell("es-programmer", "cat src/shell-link/spec.json").effect).not.toBe("deny")
+  })
+
   test("a .factory mention is read-only-gated for the user's agents: the audit's bypasses are refused", () => {
     // A3 (1.1.0): interpreter one-liners.
     expect(shell("build", `python3 -c 'open(".factory/gates.json","w").write("pwned")'`).effect).toBe("deny")
@@ -588,6 +677,26 @@ describe("control baseline", () => {
     await rebaseline(root, "test")
     await writeFile(path.join(root, ".factory/config.json"), '{"afterEdit":"fast"}')
     expect((await verifyControl(root)).violations.join("\n")).toContain(".factory/config.json changed")
+  })
+
+  test("drift in a waiver file is reported (#221)", async () => {
+    // Waiver records are pinned alongside the gates/config/frontier files, so
+    // a hand edit to a granted waiver halts the run like any other drift.
+    const dir = path.join(root, ".factory/waivers")
+    await mkdir(dir, { recursive: true })
+    const record = path.join(dir, "lint-check.json")
+    try {
+      await rm(record, { force: true })
+      await writeFile(record, '{"rule":"lint"}')
+      await rebaseline(root, "test")
+      expect((await verifyControl(root)).clean).toBe(true)
+      await writeFile(record, '{"rule":"lint","edited":true}')
+      const check = await verifyControl(root)
+      expect(check.clean).toBe(false)
+      expect(check.violations.join("\n")).toContain(".factory/waivers/lint-check.json changed")
+    } finally {
+      await rm(record, { force: true })
+    }
   })
 })
 
