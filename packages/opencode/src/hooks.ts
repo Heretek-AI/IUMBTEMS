@@ -5,7 +5,10 @@
 //                          "ask" defers to the host permission prompt)
 //   PostToolUse(Failure)← tool.execute.after (feedback/context appended, output replaced)
 //   UserPromptSubmit    ← session prompt admission (block rejects, context appended)
-//   SessionStart        ← first prompt of a session (startup) and after compaction
+//   SessionStart        ← first prompt of a session (startup), a forked session
+//                          (fork), and after compaction (compact). Resume/clear
+//                          have no host bus events, so they stay intentionally
+//                          unsupported (the engine notices unmatched sources).
 //   PermissionRequest   ← permission.evaluate when the host would ask
 //   x-es.ShellPreExec   ← shell.create.before
 //   Stop (emulated)     ← session.execution.succeeded: a block re-prompts the
@@ -250,6 +253,15 @@ export async function createHookBridge(
           sessionID,
           (await engine.sessionStart(base(sessionID, agent), "compact")).additionalContext,
         )
+        return
+      }
+      if (event.type === "session.forked" && engine.has("SessionStart")) {
+        // A forked session is a new session inheriting its parent's history
+        // (#289): run the SessionStart hooks filtered to "fork" now, and mark
+        // the fork started so its first prompt does not refire "startup".
+        const agent = await agentOf(sessionID)
+        stash(sessionContext, sessionID, (await engine.sessionStart(base(sessionID, agent), "fork")).additionalContext)
+        startedSessions.add(sessionID)
         return
       }
       if (event.type !== "session.execution.succeeded" || !engine.has("Stop")) return

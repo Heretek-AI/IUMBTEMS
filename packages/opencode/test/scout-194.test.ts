@@ -4,8 +4,10 @@
 //    to clean-room by core, including under a narrowed license whitelist;
 //  - a candidate with OSV advisories shows the citation (cached sha256,
 //    witnessed claims, verdict warnings) at the host level;
-//  - probe (NOT a fix) of bug #257: the advisory step is evadable
-//    (skip / wrong-package / fixed-version all yield a clean adopt today);
+//  - probe (NOT a fix) of bug #257 path (a): completing with neither
+//    advisories nor a recorded skip was a silent clean adopt; paths (b) and
+//    (c) are enforced below at the host level for registry candidates, whose
+//    scanned origin pins the advisory coordinates;
 //  - scout-named sandbox probes: host webfetch/websearch denied and an
 //    offline shell for the `scout` seat specifically (alpha probes exist in
 //    scoping.test.ts; these name the scout).
@@ -294,35 +296,13 @@ describe("issue #194: OSV advisories are cited by hash on the real host", () => 
   }, 120_000)
 })
 
-describe("bug #257 probe: the advisory step is evadable (current behavior, not a fix)", () => {
+describe("bug #257: the advisory step is pinned to the scanned origin (enforced)", () => {
   let h: Harness
   beforeAll(async () => {
     h = await bootHost()
     await plantVendor(h.directory, "mit", "MIT")
   }, 60_000)
   afterAll(() => h?.close())
-
-  const planScanRecord = async (extraAdvisoryCalls: string[] = []) => {
-    const planned = await h.run(
-      call("es_scout_plan", {
-        objective: "a function library",
-        candidates: [{ name: "mit", source: "local:./vendor/mit" }],
-      }),
-      { agent: "scout" },
-    )
-    expect(planned.tools[0]?.status).toBe("completed")
-    const scanned = await h.run(call("es_scout_scan", { candidate: "mit" }), { agent: "scout" })
-    expect(scanned.tools[0]?.status).toBe("completed")
-    for (const extra of extraAdvisoryCalls) {
-      const done = await h.run(extra, { agent: "scout" })
-      expect(done.tools[0]?.status).toBe("completed")
-    }
-    const recorded = await h.run(recordAdopt("mit"), { agent: "scout" })
-    expect(recorded.tools[0]?.status).toBe("completed")
-    const completed = await h.run(call("es_scout_complete"), { agent: "scout" })
-    expect(completed.tools[0]?.status).toBe("completed")
-    return (await readScoutResult(h.directory))!.verdicts.find((item) => item.candidate === "mit")!
-  }
 
   test("(a) completing with neither advisories nor a recorded skip is refused (#257 enforced)", async () => {
     const planned = await h.run(
@@ -355,45 +335,100 @@ describe("bug #257 probe: the advisory step is evadable (current behavior, not a
     expect(dossier.claims.map((claim: any) => claim.tag)).toEqual(["NEGATIVE_KNOWLEDGE"])
   }, 120_000)
 
-  test("(b) a hand-supplied wrong package is never validated against the candidate", async () => {
+  test("(b) a hand-supplied wrong ecosystem/package for a registry candidate is refused (#257 enforced)", async () => {
     stubOsv()
     try {
-      const mit = await planScanRecord([
-        call("es_scout_advisories", { candidate: "mit", ecosystem: "npm", package: "unrelated-pkg", version: "1.0.0" }),
-      ])
-      // #257 fail-open, asserted as today's behavior: the tool accepts any
-      // ecosystem/package the agent names; nothing pins it to the scanned origin.
-      expect(osvBodies.at(-1)).toEqual({
-        package: { name: "unrelated-pkg", ecosystem: "npm" },
-        version: "1.0.0",
-      })
-      expect([mit.proposal, mit.verdict]).toEqual(["adopt", "adopt"])
-      const dossier = JSON.parse(await readFile(factoryLayout(h.directory).scoutDossier, "utf8"))
-      const advisoryClaims = dossier.claims.filter((claim: any) => claim.statement.includes("affects mit"))
-      expect(advisoryClaims.length).toBe(3)
-      const hash = advisoryClaims[0].source.sha256 as string
-      const cached = await new SourceCache(researchSourcesDir(h.directory), state).get(hash)
-      expect(cached?.text).toContain("unrelated-pkg")
+      const planned = await h.run(
+        call("es_scout_plan", {
+          objective: "a tiny function library",
+          candidates: [{ name: "leftpad", source: "npm:left-pad" }],
+        }),
+        { agent: "scout" },
+      )
+      expect(planned.tools[0]?.status).toBe("completed")
+      // No network is touched: the mismatch is refused before any OSV query,
+      // naming the scanned origin and what was supplied.
+      for (const args of [
+        { candidate: "leftpad", ecosystem: "PyPI", package: "left-pad" },
+        { candidate: "leftpad", ecosystem: "npm", package: "other-pkg" },
+      ]) {
+        const refused = await h.run(call("es_scout_advisories", args), { agent: "scout" })
+        expect(refused.tools[0]?.status).toBe("error")
+        expect(refused.tools[0]?.text).toContain("must be queried for the scanned source (npm:left-pad)")
+        expect(refused.tools[0]?.text).toContain(`got ${args.ecosystem}:${args.package}`)
+      }
+      expect(osvBodies).toEqual([])
+      // The candidate's own coordinates proceed to the (canned) OSV query.
+      // (Non-registry sources have no scanned origin to pin: their advisory
+      // coordinates stay agent-supplied by design, as the OSV-cited test above
+      // exercises with its vendored fixture.)
+      const done = await h.run(
+        call("es_scout_advisories", { candidate: "leftpad", ecosystem: "npm", package: "left-pad" }),
+        { agent: "scout" },
+      )
+      expect(done.tools[0]?.status).toBe("completed")
+      expect(osvBodies).toEqual([{ package: { name: "left-pad", ecosystem: "npm" } }])
     } finally {
       unstubOsv()
     }
   }, 120_000)
 
-  test("(c) an agent-controlled version pointed at the fixed release clears every warning", async () => {
+  test("(c) an agent-controlled version dodging the scanned release is refused (#257 enforced)", async () => {
     stubOsv()
     try {
-      const mit = await planScanRecord([
-        call("es_scout_advisories", { candidate: "mit", ecosystem: "npm", package: "mit-lib", version: "9.9.9" }),
-      ])
-      // #257 fail-open, asserted as today's behavior: the version defaults to
-      // the agent's word (ops.ts:259), so naming the fixed release yields zero
-      // advisories, zero warnings, and a clean adopt.
-      expect(osvBodies.at(-1)).toEqual({
-        package: { name: "mit-lib", ecosystem: "npm" },
-        version: "9.9.9",
-      })
-      expect([mit.proposal, mit.verdict]).toEqual(["adopt", "adopt"])
-      expect(mit.warnings).toEqual([])
+      const planned = await h.run(
+        call("es_scout_plan", {
+          objective: "a tiny function library",
+          candidates: [{ name: "leftpad", source: "npm:left-pad" }],
+        }),
+        { agent: "scout" },
+      )
+      expect(planned.tools[0]?.status).toBe("completed")
+      // A scanned registry profile pins release 1.0.0 (written directly: no network).
+      const profileFile = factoryLayout(h.directory).scoutProfile("leftpad")
+      await mkdir(path.dirname(profileFile), { recursive: true })
+      await writeFile(
+        profileFile,
+        JSON.stringify({
+          version: 1,
+          id: "leftpad",
+          name: "left-pad",
+          origin: "npm:left-pad",
+          release: "1.0.0",
+          license: { spdx: "MIT", family: "permissive", source: "registry", confidence: "medium", verified: false },
+          languages: {},
+          dependencies: { runtime: [], dev: [] },
+          size: { files: 0, bytes: 0, tokens: 0 },
+          graph: { internalEdges: 0, external: 0, parsers: { treeSitter: 0, regex: 0 } },
+          provenance: {},
+          warnings: [],
+          scannedAt: new Date().toISOString(),
+        }),
+      )
+      const refused = await h.run(
+        call("es_scout_advisories", {
+          candidate: "leftpad",
+          ecosystem: "npm",
+          package: "left-pad",
+          version: "9.9.9",
+        }),
+        { agent: "scout" },
+      )
+      expect(refused.tools[0]?.status).toBe("error")
+      expect(refused.tools[0]?.text).toContain("does not match the scanned release 1.0.0")
+      expect(osvBodies).toEqual([])
+      const done = await h.run(
+        call("es_scout_advisories", {
+          candidate: "leftpad",
+          ecosystem: "npm",
+          package: "left-pad",
+          version: "1.0.0",
+        }),
+        { agent: "scout" },
+      )
+      expect(done.tools[0]?.status).toBe("completed")
+      expect(osvBodies).toEqual([{ package: { name: "left-pad", ecosystem: "npm" }, version: "1.0.0" }])
+      expect(done.tools[0]?.text).toContain("GHSA-aaaa-bbbb-cccc")
     } finally {
       unstubOsv()
     }
