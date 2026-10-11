@@ -296,6 +296,18 @@ describe("S3.1 scrubSecrets redacts secret values, not just keys", () => {
     expect(scrubbed.project).toBe("leaked [redacted] in prose")
   })
 
+  test("PEM scrubbing stays linear on hostile input (CodeQL #85)", () => {
+    // 10k partial PRIVATE KEY matches and a 250KB keyless tail. The old
+    // patterns backtracked super-linearly here: unbounded [^-]* runs on both
+    // sides of PRIVATE KEY (~6s), and worse, the pair rule rescanned a long
+    // word from every start position (~120s). Both fixes must keep this far
+    // under the 1s bound (fixed code: ~0ms).
+    const hostile = `-----BEGIN ${"A".repeat(10)}PRIVATE KEY `.repeat(10000) + `----------END ${"A".repeat(250000)}`
+    const started = performance.now()
+    expect(scrubSecrets(hostile)).toBe(hostile)
+    expect(performance.now() - started).toBeLessThan(1000)
+  }, 60_000)
+
   test("a halt reason carrying NAME=value harvests scrubbed and schema-valid", async () => {
     const sealed = await sealedCopy("run-replan", (state) => {
       ;(state.halt as Record<string, unknown>).reason = "phase p1 failed: GITHUB_TOKEN=ghp_harvestSecret001"
