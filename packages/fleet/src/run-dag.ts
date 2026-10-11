@@ -27,6 +27,24 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  * ceilingUSD, deps, trigger, policy). Unknown deps, self-deps and cycles are
  * refused by DAG validation. `now` stamps createdAt/updatedAt (tests).
  */
+const checkDagId = (value: unknown): string => {
+  const dagId = typeof value === "string" && value.length > 0 ? value : "fleet"
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(dagId) || dagId.length > 64)
+    throw new FleetError(`Invalid dag id ${JSON.stringify(dagId)}: lowercase alphanumerics and dashes only.`)
+  return dagId
+}
+
+const addRoadmapTask = (file: string, dag: DagState, entry: unknown, now: string): DagState => {
+  if (!isRecord(entry)) throw new FleetError(`Roadmap ${file} has a non-object task.`)
+  try {
+    return addTask(dag, entry, now)
+  } catch (error) {
+    throw new FleetError(
+      `Roadmap ${file} has an invalid task: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+}
+
 export async function loadRoadmapFile(file: string, now = new Date().toISOString()): Promise<RoadmapFile> {
   let raw: unknown
   try {
@@ -36,20 +54,9 @@ export async function loadRoadmapFile(file: string, now = new Date().toISOString
   }
   if (!isRecord(raw) || !Array.isArray(raw.tasks))
     throw new FleetError(`Roadmap ${file} must be an object with a tasks array.`)
-  const dagId = typeof raw.dagId === "string" && raw.dagId.length > 0 ? raw.dagId : "fleet"
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(dagId) || dagId.length > 64)
-    throw new FleetError(`Invalid dag id ${JSON.stringify(dagId)}: lowercase alphanumerics and dashes only.`)
+  const dagId = checkDagId(raw.dagId)
   let dag = emptyDag()
-  for (const entry of raw.tasks) {
-    if (!isRecord(entry)) throw new FleetError(`Roadmap ${file} has a non-object task.`)
-    try {
-      dag = addTask(dag, entry, now)
-    } catch (error) {
-      throw new FleetError(
-        `Roadmap ${file} has an invalid task: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    }
-  }
+  for (const entry of raw.tasks) dag = addRoadmapTask(file, dag, entry, now)
   if (Object.keys(dag.tasks).length === 0) throw new FleetError(`Roadmap ${file} has no tasks.`)
   return { dagId, dag }
 }

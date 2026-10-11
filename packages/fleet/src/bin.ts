@@ -378,13 +378,13 @@ export async function main(argv: readonly string[]): Promise<number> {
         const repo = valueFlag(rest, ["--repo"]) ?? process.cwd()
         const esBin = valueFlag(rest, ["--es-bin"]) ?? "es"
         const maxUsd = Number(valueFlag(rest, ["--max-usd"]))
-        if (!(maxUsd > 0) || !Number.isFinite(maxUsd))
+        if (maxUsd <= 0 || !Number.isFinite(maxUsd))
           throw new FleetError("`es-fleet run-dag` needs a positive --max-usd ceiling.")
         const concurrency = Number(valueFlag(rest, ["--concurrency"]) ?? "4")
         if (!Number.isInteger(concurrency) || concurrency < 1)
           throw new FleetError(`Refusing to run with concurrency ${concurrency}: it must be an integer >= 1.`)
         const stuckTimeoutMs = Number(valueFlag(rest, ["--stuck-timeout-ms"]) ?? `${30 * 60_000}`)
-        if (!(stuckTimeoutMs > 0) || !Number.isFinite(stuckTimeoutMs))
+        if (stuckTimeoutMs <= 0 || !Number.isFinite(stuckTimeoutMs))
           throw new FleetError(`Refusing to run with --stuck-timeout-ms ${valueFlag(rest, ["--stuck-timeout-ms"])}.`)
         const final = await runDag({
           repoRoot: repo,
@@ -401,7 +401,8 @@ export async function main(argv: readonly string[]): Promise<number> {
         const ids = Object.keys(final.tasks).sort((a, b) => a.localeCompare(b))
         for (const id of ids) {
           const task = final.tasks[id]!
-          process.stdout.write(`${id}\t${task.status}${task.reason ? `\t${task.reason}` : ""}\n`)
+          const reason = task.reason ? `\t${task.reason}` : ""
+          process.stdout.write(`${id}\t${task.status}${reason}\n`)
         }
         const waiting = ids.filter((id) => final.tasks[id]!.status === "waiting-human")
         if (waiting.length > 0) {

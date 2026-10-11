@@ -11,7 +11,7 @@ import { FleetDaemon, type WorkerPort } from "../src/daemon.ts"
 import { loadFleetHeartbeat } from "../src/heartbeat.ts"
 import { loadRoadmapFile, runDag } from "../src/run-dag.ts"
 import type { TaskReport } from "../src/scheduler.ts"
-import { loadDag } from "../src/tasks.ts"
+import { addTask, emptyDag, loadDag, saveDag } from "../src/tasks.ts"
 import type { WorkerOutcome, WorkerSpec } from "../src/worker.ts"
 
 const STAMP = "2026-10-11T00:00:00.000Z"
@@ -211,45 +211,58 @@ describe("daemon-driven DAG without human intervention (#161)", () => {
 })
 
 describe("stuck-turn restart (#161)", () => {
+  /** Silent driver: launches but never reports, like a wedged headless run. */
+  const silentDriver =
+    (taskId: string) =>
+    (_spec: WorkerSpec, _onReport: (taskId: string, report: TaskReport) => void): WorkerPort => ({
+      run: () => new Promise<WorkerOutcome>(() => {}),
+      stop: () => Promise.resolve(),
+      snapshot: () => ({ taskId, pid: -1, spendUsd: 0, tokensIn: 0, tokensOut: 0 }),
+    })
+
+  const stuckDaemonFor = (
+    root: string,
+    state: string,
+    spawner: (spec: WorkerSpec, onReport: (taskId: string, report: TaskReport) => void) => WorkerPort,
+    now: () => number,
+  ): FleetDaemon =>
+    new FleetDaemon({
+      repoRoot: root,
+      stateRoot: state,
+      esBin: "/stub/es.js",
+      fleetCeilingUsd: 100,
+      checkGates: gatesOk,
+      spawnWorker: spawner,
+      stuckTimeoutMs: 60_000,
+      now,
+    })
+
+  const saveStuckTask = async (state: string, id: string, extra: Record<string, unknown> = {}) => {
+    await saveDag(
+      state,
+      addTask(
+        emptyDag(),
+        {
+          id,
+          title: id,
+          kind: "factory-run",
+          input: { objective: `do ${id}` },
+          ceilingUSD: 5,
+          createdAt: STAMP,
+          updatedAt: STAMP,
+          ...extra,
+        },
+        STAMP,
+      ),
+    )
+  }
+
   test("a turn with no worker progress past the stuck timeout is failed for restart", async () => {
     const { root, state, cleanup } = await fixture()
     try {
       let nowMs = Date.parse(STAMP)
-      const clock = () => nowMs
-      // Silent driver: launches but never reports, like a wedged headless run.
-      const silent = (_spec: WorkerSpec, _onReport: (taskId: string, report: TaskReport) => void): WorkerPort => ({
-        run: () => new Promise<WorkerOutcome>(() => {}),
-        stop: () => Promise.resolve(),
-        snapshot: () => ({ taskId: "stuck-a", pid: -1, spendUsd: 0, tokensIn: 0, tokensOut: 0 }),
-      })
-      const daemon = new FleetDaemon({
-        repoRoot: root,
-        stateRoot: state,
-        esBin: "/stub/es.js",
-        fleetCeilingUsd: 100,
-        checkGates: gatesOk,
-        spawnWorker: silent,
-        stuckTimeoutMs: 60_000,
-        now: clock,
-      })
-      const { saveDag } = await import("../src/tasks.ts")
-      const { addTask, emptyDag } = await import("../src/tasks.ts")
-      await saveDag(
-        state,
-        addTask(
-          emptyDag(),
-          {
-            id: "stuck-a",
-            title: "stuck a",
-            kind: "factory-run",
-            input: { objective: "do stuck-a" },
-            ceilingUSD: 5,
-            createdAt: STAMP,
-            updatedAt: STAMP,
-          },
-          STAMP,
-        ),
-      )
+      const daemon = stuckDaemonFor(root, state, silentDriver("stuck-a"), () => nowMs)
+      await saveStuckTask(state, "stuck-a")
       await daemon.tick()
       expect((await loadDag(state))?.tasks["stuck-a"]?.status).toBe("running")
       // No progress for over the timeout: the next tick restarts the turn.
@@ -268,39 +281,8 @@ describe("stuck-turn restart (#161)", () => {
     const { root, state, cleanup } = await fixture()
     try {
       let nowMs = Date.parse(STAMP)
-      const silent = (_spec: WorkerSpec, _onReport: (taskId: string, report: TaskReport) => void): WorkerPort => ({
-        run: () => new Promise<WorkerOutcome>(() => {}),
-        stop: () => Promise.resolve(),
-        snapshot: () => ({ taskId: "stuck-r", pid: -1, spendUsd: 0, tokensIn: 0, tokensOut: 0 }),
-      })
-      const daemon = new FleetDaemon({
-        repoRoot: root,
-        stateRoot: state,
-        esBin: "/stub/es.js",
-        fleetCeilingUsd: 100,
-        checkGates: gatesOk,
-        spawnWorker: silent,
-        stuckTimeoutMs: 60_000,
-        now: () => nowMs,
-      })
-      const { addTask, emptyDag, saveDag } = await import("../src/tasks.ts")
-      await saveDag(
-        state,
-        addTask(
-          emptyDag(),
-          {
-            id: "stuck-r",
-            title: "stuck r",
-            kind: "factory-run",
-            input: { objective: "do stuck-r" },
-            ceilingUSD: 5,
-            policy: { strategy: "retry", maxAttempts: 2 },
-            createdAt: STAMP,
-            updatedAt: STAMP,
-          },
-          STAMP,
-        ),
-      )
+      const daemon = stuckDaemonFor(root, state, silentDriver("stuck-r"), () => nowMs)
+      await saveStuckTask(state, "stuck-r", { policy: { strategy: "retry", maxAttempts: 2 } })
       await daemon.tick()
       nowMs += 61_000
       await daemon.tick()
@@ -341,34 +323,8 @@ describe("stuck-turn restart (#161)", () => {
           snapshot: () => ({ taskId: spec.taskId, pid: -1, spendUsd: 0, tokensIn: 0, tokensOut: 0 }),
         }
       }
-      const daemon = new FleetDaemon({
-        repoRoot: root,
-        stateRoot: state,
-        esBin: "/stub/es.js",
-        fleetCeilingUsd: 100,
-        checkGates: gatesOk,
-        spawnWorker: spawner,
-        stuckTimeoutMs: 60_000,
-        now: () => nowMs,
-      })
-      const { addTask, emptyDag, saveDag } = await import("../src/tasks.ts")
-      await saveDag(
-        state,
-        addTask(
-          emptyDag(),
-          {
-            id: "stuck-l",
-            title: "stuck l",
-            kind: "factory-run",
-            input: { objective: "do stuck-l" },
-            ceilingUSD: 5,
-            policy: { strategy: "retry", maxAttempts: 2 },
-            createdAt: STAMP,
-            updatedAt: STAMP,
-          },
-          STAMP,
-        ),
-      )
+      const daemon = stuckDaemonFor(root, state, spawner, () => nowMs)
+      await saveStuckTask(state, "stuck-l", { policy: { strategy: "retry", maxAttempts: 2 } })
       await daemon.tick()
       nowMs += 61_000
       await daemon.tick()
