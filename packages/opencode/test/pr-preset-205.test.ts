@@ -1,7 +1,8 @@
 // Issue #205 opener half: `ghPrOpener.open` with `preset: self-dogfood` and
-// `--base main` refuses before anything is pushed. Local bare remote only, no
-// network and no `gh` invocation: the shared argv builder throws first, so the
-// test asserts the bare remote holds no new ref afterwards.
+// a non-`main` base refuses before anything is pushed (#281 retargeted the
+// preset base to `main`). Local bare remote only, no network and no `gh`
+// invocation: the shared argv builder throws first, so the test asserts the
+// bare remote holds no new ref afterwards.
 import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -17,8 +18,8 @@ const sh = async (args: string[], cwd: string) => {
 const showRefs = async (bare: string, cwd: string) =>
   (await run(["git", "--git-dir", bare, "show-ref"], { cwd })).stdout.trim()
 
-describe("self-dogfood opener refuses --base main without pushing (#205)", () => {
-  test("preset run against main is refused and the remote is unchanged", async () => {
+describe("self-dogfood opener refuses a non-main base without pushing (#205, #281)", () => {
+  test("preset run against the old base is refused and the remote is unchanged", async () => {
     const bare = await mkdtemp(path.join(tmpdir(), "es-205-bare-"))
     const repo = await mkdtemp(path.join(tmpdir(), "es-205-repo-"))
     try {
@@ -44,12 +45,12 @@ describe("self-dogfood opener refuses --base main without pushing (#205)", () =>
         ghPrOpener.open({
           root: repo,
           branch: "factory/run-205/integration",
-          base: "main",
+          base: "rewrite",
           title: "dogfood",
           body: "body",
           preset: "self-dogfood",
         }),
-      ).rejects.toThrow(/refusing.*main|rewrite/)
+      ).rejects.toThrow(/refusing.*rewrite/)
 
       // Refusal happened before the push: the bare remote is byte-identical.
       const after = await showRefs(bare, repo)

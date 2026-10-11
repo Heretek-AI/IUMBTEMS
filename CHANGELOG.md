@@ -8,7 +8,9 @@ the complete normalized `CommandCheck` — `kind`, `parser`, `related`,
 change to what a gate runs revokes trust. **Humans: re-run `es trust` after
 upgrading**; previously approved command sets hash differently and the gates
 refuse to run until the new set is approved. The e2e regression gate now fails
-closed when no history is sampled (#210).
+closed when no history is sampled (#210). The self-dogfood preset releases
+onto `main` post-cutover: the `rewrite` pin, workflow triggers and runbook
+now target `main` (#281); the `rewrite` branch itself is untouched.
 
 ## 1.6.0 — 2026-10-09
 

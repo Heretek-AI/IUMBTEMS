@@ -4,13 +4,13 @@ name: Nightly (OpenCode v2 HEAD)
 # runs the real-host suite against the `v2` branch HEAD every night and turns
 # red when the host drifts. It is the mitigation, not a pin.
 #
-# Scheduled workflows only run from the default branch, so pre-cutover the job
-# is exercised through workflow_dispatch (and the push trigger on `rewrite`).
+# Scheduled workflows only run from the default branch, so the job
+# is exercised through workflow_dispatch (and the push trigger on `main`).
 on:
   schedule:
     - cron: "0 6 * * *"
   push:
-    branches: [rewrite]
+    branches: [main]
   workflow_dispatch:
 
 permissions:

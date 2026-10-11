@@ -13,7 +13,7 @@ suite, and open a draft PR a human reviews. This runbook is that loop.
   PR through it.
 - A sealed human key (`es key seal` once); approvals, trust and resume all
   need the passphrase.
-- Work on `rewrite`, with a clean tree.
+- Work on `main`, with a clean tree.
 
 ## The flow
 
@@ -22,25 +22,25 @@ suite, and open a draft PR a human reviews. This runbook is that loop.
    This writes `.factory/config.json` (`audit.phase: required`), the
    self-dogfood `.factory/gates.json` (`bun install --frozen-lockfile`,
    `bun run check`, `bun run docs:check`), a `.factory/roadmap.json` seed
-   pinning `baseBranch: rewrite`, and the issue body as
+   pinning `baseBranch: main`, and the issue body as
    `.factory/notes/idea-<n>.md`.
 2. **Trust the gates**: `es trust` (human-only). The gate commands run
    project code; review the hashes before trusting.
 3. **Grill**: `/grill` (or `es factory begin` plus the grill flow) with a
    **$15 spend ceiling** (the preset default; raise deliberately). Keep
-   `baseBranch: rewrite` when the grill rewrites the roadmap — the factory
-   never pushes `main` or `rewrite` itself.
+   `baseBranch: main` when the grill rewrites the roadmap — the factory
+   never pushes `main` itself.
 4. **Approve the frontier and the spec** (`es approve frontier`, then
    `es approve spec`) — on any Phase 2/4 surface: terminal, TUI or browser.
 5. **Build ⇄ QA** runs in the phase worktree under bwrap; the runtime cap
    is mandatory and `.factory/STOP` halts the run at its next step.
 6. **Release**: the merge gate runs in full; on green the factory pushes
-   only its run branch and opens a **draft PR against `rewrite`**.
+   only its run branch and opens a **draft PR against `main`**.
    A human reviews and merges. Auto-merge never happens.
 
 ## Reviewing the PR
 
-- Check the base is `rewrite` and the head is a `factory/…` branch.
+- Check the base is `main` and the head is a `factory/…` branch.
 - Read the gate logs under `.factory/runs/<run>/gates/` and the spend
   against the $15 ceiling.
 - Merge only when every check — including CodeRabbit and SonarCloud —

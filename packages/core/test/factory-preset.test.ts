@@ -1,6 +1,6 @@
 // Self-dogfood preset (#137): the factory builds this repo. Preset files
 // validate against their schemas, init seeds the run with the release base
-// pinned to `rewrite`, and the PR argv never names `main`.
+// pinned to `main`, and the PR argv always names that base.
 import { describe, expect, test } from "bun:test"
 import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -48,7 +48,7 @@ describe("self-dogfood preset files", () => {
 })
 
 describe("initFromPreset", () => {
-  test("seeds control files, a rewrite-based roadmap and the issue idea", async () => {
+  test("seeds control files, a main-based roadmap and the issue idea", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "es-preset-"))
     try {
       const { written, baseBranch } = await initFromPreset(root, "self-dogfood", {
@@ -56,7 +56,7 @@ describe("initFromPreset", () => {
         title: "Self-dogfood preset",
         body: "The factory builds this repo.",
       })
-      expect(baseBranch).toBe("rewrite")
+      expect(baseBranch).toBe("main")
       expect(written).toEqual([
         ".factory/config.json",
         ".factory/gates.json",
@@ -64,7 +64,7 @@ describe("initFromPreset", () => {
         ".factory/notes/idea-137.md",
       ])
       const layout = factoryLayout(root)
-      expect(RoadmapSchema.parse(JSON.parse(await readFile(layout.roadmap, "utf8"))).baseBranch).toBe("rewrite")
+      expect(RoadmapSchema.parse(JSON.parse(await readFile(layout.roadmap, "utf8"))).baseBranch).toBe("main")
       expect(GatesConfigSchema.parse(JSON.parse(await readFile(layout.gates, "utf8"))).commands).toHaveLength(3)
       expect(await readFile(path.join(root, ".factory/notes/idea-137.md"), "utf8")).toContain(
         "# #137: Self-dogfood preset",
@@ -76,12 +76,12 @@ describe("initFromPreset", () => {
 })
 
 describe("self-dogfood PR base", () => {
-  test("the draft PR targets rewrite, never main", () => {
-    expect(SELF_DOGFOOD_BASE_BRANCH).toBe("rewrite")
-    const argv = buildPrArgs({ branch: "factory/x/integration", base: "rewrite", title: "t", body: "b" })
+  test("the draft PR targets main", () => {
+    expect(SELF_DOGFOOD_BASE_BRANCH).toBe("main")
+    const argv = buildPrArgs({ branch: "factory/x/integration", base: "main", title: "t", body: "b" })
     expect(argv).toContain("--draft")
-    expect(argv.slice(argv.indexOf("--base") + 1, argv.indexOf("--base") + 2)).toEqual(["rewrite"])
-    expect(argv).not.toContain("main")
+    expect(argv.slice(argv.indexOf("--base") + 1, argv.indexOf("--base") + 2)).toEqual(["main"])
+    expect(argv).not.toContain("rewrite")
   })
 })
 
@@ -164,22 +164,25 @@ describe("preset-seeded runs pin the release base (S2.2)", () => {
     }
     expect(typeof core.buildPrArgs).toBe("function")
     expect(core.selfDogfoodPrArgs).toBeUndefined()
-    const argv = core.buildPrArgs!({ branch: "factory/x/integration", base: "rewrite", title: "t", body: "b" })
+    const argv = core.buildPrArgs!({ branch: "factory/x/integration", base: "main", title: "t", body: "b" })
     expect(argv.slice(0, 4)).toEqual(["gh", "pr", "create", "--draft"])
-    expect(argv.slice(argv.indexOf("--base") + 1, argv.indexOf("--base") + 2)).toEqual(["rewrite"])
-    expect(argv).not.toContain("main")
+    expect(argv.slice(argv.indexOf("--base") + 1, argv.indexOf("--base") + 2)).toEqual(["main"])
+    expect(argv).not.toContain("rewrite")
   })
 
-  test("the shared argv refuses --base main for a preset run", async () => {
+  test("the shared argv refuses a non-main base for a preset run", async () => {
     const { buildPrArgs } = (await import("../src/index.ts")) as unknown as {
       buildPrArgs: (options: { branch: string; base: string; title: string; body: string; preset?: string }) => string[]
     }
     expect(() =>
-      buildPrArgs({ branch: "factory/x/integration", base: "main", title: "t", body: "b", preset: "self-dogfood" }),
-    ).toThrow(/refusing.*main/)
+      buildPrArgs({ branch: "factory/x/integration", base: "rewrite", title: "t", body: "b", preset: "self-dogfood" }),
+    ).toThrow(/refusing.*rewrite/)
     expect(() =>
       buildPrArgs({ branch: "factory/x/integration", base: "other", title: "t", body: "b", preset: "self-dogfood" }),
-    ).toThrow(/rewrite/)
+    ).toThrow(/release PRs target "main"/)
+    expect(
+      buildPrArgs({ branch: "factory/x/integration", base: "main", title: "t", body: "b", preset: "self-dogfood" }),
+    ).toContain("--draft")
   })
 
   test("the seed marker is part of the run-state schema, not a field the parse strips", () => {
@@ -205,7 +208,7 @@ describe("a preset-seeded run end to end (S2.2)", () => {
     const { gitRepo, frontier, writeReport, writeSpecs } = await import("./helpers.ts")
     const { Factory, recordApproval, sealHumanKey, unlockHumanKey } = await import("../src/index.ts")
     const fx = await gitRepo("es-preset-e2e-")
-    await Bun.spawn(["git", "branch", "rewrite"], { cwd: fx.root }).exited
+    await Bun.spawn(["git", "branch", "main"], { cwd: fx.root }).exited
     await sealHumanKey(PASSPHRASE, fx.state)
     const signer = await unlockHumanKey(PASSPHRASE, fx.state)
     await initFromPreset(
@@ -239,13 +242,13 @@ describe("a preset-seeded run end to end (S2.2)", () => {
       // The grill kept baseBranch when it rewrote the roadmap (before approval).
       const roadmapFile = factoryLayout(fx.root).roadmap
       const roadmap = JSON.parse(await readFile(roadmapFile, "utf8"))
-      await Bun.write(roadmapFile, `${JSON.stringify({ ...roadmap, baseBranch: "rewrite" }, null, 2)}\n`)
+      await Bun.write(roadmapFile, `${JSON.stringify({ ...roadmap, baseBranch: "main" }, null, 2)}\n`)
     }
     await recordApproval(fx.root, { stage: "spec", channel: "cli", approvedBy: "tester", signer })
     return { fx, factory, opened, begun, writeFrontier }
   }
 
-  test("a preset-seeded run releases its draft PR on rewrite", async () => {
+  test("a preset-seeded run releases its draft PR on main", async () => {
     const { fx, factory, opened } = await seedAndReachSpec({ keepBaseBranch: true })
     try {
       const { buildPrArgs } = (await import("../src/index.ts")) as unknown as {
@@ -258,7 +261,7 @@ describe("a preset-seeded run end to end (S2.2)", () => {
         }) => string[]
       }
       const built = await factory.startBuild("factory")
-      expect(built.baseBranch).toBe("rewrite")
+      expect(built.baseBranch).toBe("main")
       const dir = (await factory.activeWorktree())!
       await mkdir(path.join(dir, "test"), { recursive: true })
       await mkdir(path.join(dir, "src"), { recursive: true })
@@ -276,12 +279,12 @@ describe("a preset-seeded run end to end (S2.2)", () => {
       const done = await factory.release("factory")
       expect(done.stage).toBe("DONE")
       expect(opened).toHaveLength(1)
-      expect(opened[0]?.base).toBe("rewrite")
+      expect(opened[0]?.base).toBe("main")
       expect(opened[0]?.preset).toBe("self-dogfood")
       const argv = buildPrArgs({ ...opened[0]! })
       expect(argv).toContain("--draft")
-      expect(argv.slice(argv.indexOf("--base") + 1, argv.indexOf("--base") + 2)).toEqual(["rewrite"])
-      expect(argv).not.toContain("main")
+      expect(argv.slice(argv.indexOf("--base") + 1, argv.indexOf("--base") + 2)).toEqual(["main"])
+      expect(argv).not.toContain("rewrite")
     } finally {
       await fx.cleanup()
     }
@@ -295,7 +298,7 @@ describe("a preset-seeded run end to end (S2.2)", () => {
       expect(roadmap.baseBranch).toBeUndefined()
       await expect(factory.startBuild("factory")).rejects.toThrow(/baseBranch/)
       const state = await factory.read()
-      expect(state?.baseBranch ?? "rewrite").toBe("rewrite")
+      expect(state?.baseBranch ?? "main").toBe("main")
     } finally {
       await fx.cleanup()
     }

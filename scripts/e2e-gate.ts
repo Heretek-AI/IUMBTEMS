@@ -75,7 +75,7 @@ const ghOk = (args: string[]) => {
   }
 }
 
-const branch = process.env.GITHUB_REF_NAME ?? "rewrite"
+const branch = process.env.GITHUB_REF_NAME ?? "main"
 const repo = process.env.GITHUB_REPOSITORY
 const repoArgs = repo ? ["--repo", repo] : []
 const listed = ghOut([

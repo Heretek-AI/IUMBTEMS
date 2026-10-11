@@ -75,7 +75,7 @@ spike as proof).
   registry or capability rows. Prompt changes require the assets snapshot
   (`bun test -u packages/core/test/assets.test.ts`) and a version bump.
 - Stage explicit paths; never `git add -A`. Commit per milestone.
-- Push only `rewrite` during development; never push or merge to `main`
-  without asking. The 1.0 cutover (tag legacy, reviewed merge, npm publish via
-  OIDC) is a separate, human-approved step.
+- Push only your ticket branch during development; never push or merge to `main`
+  without asking — release lands on `main` through a human-merged PR.
+  Publishing to npm via OIDC is a separate, human-approved step.
 - After any push, check every workflow (`gh run list`) — not just the obvious one.
