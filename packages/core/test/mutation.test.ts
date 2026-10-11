@@ -7,6 +7,7 @@
 // has a low kill rate and the phase is rejected (kill rate < 80%).
 import { describe, expect, test } from "bun:test"
 import {
+  cacheHashesEqual,
   evaluateMutations,
   generateMutants,
   MUTATION_KILL_THRESHOLD,
@@ -147,6 +148,13 @@ describe("runMutationGate", () => {
   test("mutantCacheKey changes when the file content changes", () => {
     expect(mutantCacheKey("src/a.ts", "a + b")).not.toBe(mutantCacheKey("src/a.ts", "a - b"))
     expect(mutantCacheKey("src/a.ts", "same")).toBe(mutantCacheKey("src/a.ts", "same"))
+  })
+
+  test("cacheHashesEqual compares hashes in constant time", () => {
+    const hash = mutantCacheKey("src/a.ts", "same")
+    expect(cacheHashesEqual(hash, mutantCacheKey("src/a.ts", "same"))).toBe(true)
+    expect(cacheHashesEqual(hash, mutantCacheKey("src/a.ts", "different"))).toBe(false)
+    expect(cacheHashesEqual(hash, `${hash}00`)).toBe(false)
   })
 
   test("changing a test file invalidates the cache: the suite reruns", async () => {

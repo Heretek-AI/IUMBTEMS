@@ -31,6 +31,7 @@ import { validateArtifacts } from "./artifacts.ts"
 import { checkBudgets, isSourceFile, isTestFile } from "./budgets.ts"
 import { detectGates } from "./detect.ts"
 import {
+  cacheHashesEqual,
   evaluateMutations,
   generateMutants,
   type MutationCacheState,
@@ -392,7 +393,7 @@ async function runMutationCheck(
       check.files.filter((candidate) => isTestFile(candidate)),
     )
     const entry = next[file]
-    if (entry?.hash === hash) {
+    if (entry && cacheHashesEqual(entry.hash, hash)) {
       const killed = new Set(entry.killed)
       for (let index = 0; index < entry.total; index++)
         outcomes.push({

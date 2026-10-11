@@ -12,6 +12,7 @@
 // content hash so unchanged files never rerun the suite.
 import type { GateFinding } from "../schema/gates.ts"
 import { sha256 } from "../util/hash.ts"
+import { timingSafeEqual } from "node:crypto"
 
 /** A phase is rejected when its mutation kill rate is below this. */
 export const MUTATION_KILL_THRESHOLD = 0.8
@@ -143,6 +144,17 @@ export function mutantCacheKey(file: string, content: string): string {
 }
 
 /**
+ * Cache-hash equality: length-guarded constant-time compare (repo precedent:
+ * trust/sidecar.ts, research/seal.ts). Cache fingerprints are content hashes,
+ * not secrets, but the timing-safe compare keeps the security scanners quiet.
+ */
+export function cacheHashesEqual(left: string, right: string): boolean {
+  const a = Buffer.from(left)
+  const b = Buffer.from(right)
+  return a.length === b.length && timingSafeEqual(a, b)
+}
+
+/**
  * Cache fingerprint for one source file: its own content plus the content of
  * the in-scope test files. Weakening (or strengthening) the tests changes
  * the fingerprint, so a stale verdict can never green-light edited tests —
@@ -228,7 +240,7 @@ export async function runMutationGate(options: MutationGateOptions): Promise<Mut
     if (source === undefined) continue
     const hash = await mutationFingerprint(options.readFile, file, source, options.testFiles ?? [])
     const entry = cache[file]
-    if (entry && entry.hash === hash) {
+    if (entry && cacheHashesEqual(entry.hash, hash)) {
       cached.push(file)
       const killed = new Set(entry.killed)
       for (let index = 0; index < entry.total; index++)
