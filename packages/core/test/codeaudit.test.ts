@@ -143,6 +143,19 @@ describe("the line-pointer law at es_audit_verdict", () => {
     expect(await Bun.file(factoryLayout(fx.root).auditRecords(audit.id)).exists()).toBe(false)
   })
 
+  test("an excerpt under 12 characters is refused as too short to be evidence (#241)", async () => {
+    const audit = await openPathAudit()
+    const verdict = tools()("es_audit_verdict")
+    // "db.query" (8 chars) is verbatim on line 3, so only the witness's
+    // 12-char floor (verifySpan) can refuse it — pins the short branch at
+    // verdict level, not just in the sibling span tests.
+    const short = { ...injection, lines: [3, 3], excerpt: "db.query" }
+    await expect(
+      verdict.execute({ audit: audit.id, verdict: "fail", findings: [short], notes: "n" }, { agent: "es-auditor-antithesis" }),
+    ).rejects.toThrow(/too short to be evidence/)
+    expect((await factory.read())!.audits[0]!.antithesis).toBeUndefined()
+  })
+
   test("malformed findings and verdicts that contradict their findings are refused", async () => {
     const audit = await openPathAudit()
     const verdict = tools()("es_audit_verdict")
