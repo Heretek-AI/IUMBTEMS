@@ -550,6 +550,10 @@ export default Plugin.define({
         // stream closed on unload
       }
     })()
+    // Language-server lifecycle (#275.1): servers stop here on plugin unload;
+    // between sessions only the manager's idle sweeper (600 s default) reaps
+    // them, so a long-lived server outlives its session by design. The running
+    // set stays visible through `/lsp` and the LSP panel.
     return async () => {
       abort.abort()
       if (queued) clearTimeout(queued)
