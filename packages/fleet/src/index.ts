@@ -19,6 +19,17 @@ export {
   VERSION,
 } from "./bin.ts"
 export {
+  type CanaryApproval,
+  type CanaryBuild,
+  CanaryError,
+  type CanaryOptions,
+  type CanaryPipeline,
+  type CanaryResult,
+  CanaryRunner,
+  type CanaryWorker,
+  type ShadowResult,
+} from "./canary.ts"
+export {
   type ConfigDrift,
   type ConfigPlan,
   type ConfigPlanInput,
