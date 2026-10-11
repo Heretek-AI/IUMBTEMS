@@ -331,6 +331,12 @@ describe("shell policy", () => {
     expect(shell("build", "es factory stop").effect).toBe("allow")
   })
 
+  test("es runs and es watch are explicitly allowed: read-only views, not absence-of-rule (#248)", () => {
+    for (const command of ["es runs", "es runs --all", "es watch", "es watch --interval 5"])
+      for (const agent of ["build", "factory", undefined])
+        expect([agent, command, shell(agent, command).effect]).toEqual([agent, command, "allow"])
+  })
+
   test("a flag or `--` before the verb still reads as that verb, as the CLI parser does (#88)", () => {
     for (const command of [
       "es --cwd . approve spec",

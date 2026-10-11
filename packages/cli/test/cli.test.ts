@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
   exists,
   Factory,
+  type FactoryState,
   factoryLayout,
   gateRunner,
   HUMAN_VERBS,
   loadPrompt,
   parseArgs,
+  type RunIndexEntry,
   readApproval,
   recentAuditEntries,
   researchSourcesDir,
@@ -22,6 +24,7 @@ import { type HarnessDriver, type HeadlessEvent, presentEvent, runHeadless } fro
 import { openProposalsPr } from "../src/improve.ts"
 import { commandHelp, main } from "../src/main.ts"
 import { createMcpServer } from "../src/mcp.ts"
+import { otherRunHint, runsCommand, statusCommand } from "../src/status.ts"
 import { type ConfirmIO, confirmHuman, NotInteractive } from "../src/tty.ts"
 import { VERSION } from "../src/version.ts"
 
@@ -384,6 +387,90 @@ describe("per-verb pipe refusal (#221.2)", () => {
     const result = await run(["audit", "src", "--max-usd", "5", "--open-only"])
     expect(result.code).toBe(3)
     expect(await exists(factoryLayout(root).dir)).toBe(false)
+  })
+})
+
+describe("status and runs are read-only; other-run hints (#248)", () => {
+  // File list + sizes + content hashes under .factory and the state dir.
+  // Directory mtimes are excluded on purpose: the state lock legitimately
+  // mkdirs+removes its lock dir on reads, churning the parent mtime.
+  const snapshot = async () => {
+    const entries: string[] = []
+    for (const [label, dir] of [
+      ["root", path.join(root, ".factory")],
+      ["state", state],
+    ] as const) {
+      const walk = async (rel: string): Promise<void> => {
+        const names = await readdir(path.join(dir, rel)).catch(() => [] as string[])
+        for (const name of names) {
+          const child = rel ? `${rel}/${name}` : name
+          const info = await stat(path.join(dir, child))
+          if (info.isDirectory()) await walk(child)
+          else if (info.isFile())
+            entries.push(`${label}/${child}:${info.size}:${Bun.hash(await readFile(path.join(dir, child)))}`)
+        }
+      }
+      await walk("")
+    }
+    return entries.sort()
+  }
+
+  test("status and runs (text, --json, --all) write nothing", async () => {
+    const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+    const begun = await factory.begin("human:tester")
+    const printed: string[] = []
+    const context = { root, stateDir: state, print: (text: string) => printed.push(text) }
+    const before = await snapshot()
+    expect(await statusCommand(context, { positionals: ["status"], flags: {} })).toBe(0)
+    expect(await statusCommand(context, { positionals: ["status"], flags: { json: true } })).toBe(0)
+    expect(await runsCommand(context, { positionals: ["runs"], flags: {} })).toBe(0)
+    expect(await runsCommand(context, { positionals: ["runs"], flags: { all: true, json: true } })).toBe(0)
+    // The commands really ran (not an early return): the GRILL headline and
+    // the begun run are in the output.
+    expect(printed.join("\n")).toContain("grill")
+    expect(printed.join("\n")).toContain(begun.runId)
+    expect(await snapshot()).toEqual(before)
+  })
+
+  test("otherRunHint: window boundary, DONE and equal-timestamp edges", async () => {
+    const NOW = new Date("2026-10-08T02:10:00.000Z")
+    const iso = (ms: number) => new Date(NOW.getTime() + ms).toISOString()
+    const entry = (overrides: Partial<RunIndexEntry> = {}): RunIndexEntry => ({
+      runId: "run-other",
+      root: "/elsewhere",
+      stage: "BUILD",
+      createdAt: iso(-3_600_000),
+      updatedAt: iso(-60_000),
+      ...overrides,
+    })
+    const here = (updatedAt: string): FactoryState => ({
+      version: 2,
+      runId: "run-here",
+      stage: "BUILD",
+      createdAt: iso(-3_600_000),
+      updatedAt,
+      spend: { usd: 1, estimated: true, events: 1 },
+      phases: [],
+      audits: [],
+    })
+    const hint = (runs: RunIndexEntry[], updatedAt: string | undefined) =>
+      otherRunHint(runs, { root, state: updatedAt === undefined ? undefined : here(updatedAt) }, NOW)
+
+    // A more recently active run elsewhere is named; without a local run the
+    // copy points at it directly.
+    expect(hint([entry()], iso(-120_000))).toContain("run-other")
+    expect(hint([entry()], undefined)).toContain("A run is active elsewhere")
+    // The window is ten minutes: just inside counts, exactly at it and
+    // outside do not (OTHER_RUN_WINDOW_MS is pinned behaviorally here).
+    expect(hint([entry({ updatedAt: iso(-599_000) })], iso(-3_600_000))).toContain("run-other")
+    expect(hint([entry({ updatedAt: iso(-600_000) })], iso(-3_600_000))).toBeUndefined()
+    expect(hint([entry({ updatedAt: iso(-601_000) })], iso(-3_600_000))).toBeUndefined()
+    // DONE runs never hint, however fresh; an equally-fresh run is not
+    // "more recently active"; our own root is skipped; a stale local run is.
+    expect(hint([entry({ stage: "DONE" })], iso(-120_000))).toBeUndefined()
+    expect(hint([entry({ updatedAt: iso(-120_000) })], iso(-120_000))).toBeUndefined()
+    expect(hint([entry({ root })], iso(-120_000))).toBeUndefined()
+    expect(hint([entry()], iso(-30_000))).toBeUndefined()
   })
 })
 
