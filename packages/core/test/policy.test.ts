@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { globalConfigFile } from "../src/config.ts"
 import {
   controlClass,
   evaluateRead,
@@ -10,6 +11,7 @@ import {
   HUMAN_VERBS,
   invokesHumanOnly,
   rebaseline,
+  snapshotControl,
   verifyControl,
 } from "../src/trust/index.ts"
 import { BOOLEAN_FLAGS, parseArgs } from "../src/util/args.ts"
@@ -684,6 +686,32 @@ describe("control baseline", () => {
     await rebaseline(root, "test")
     await writeFile(path.join(root, ".factory/config.json"), '{"afterEdit":"fast"}')
     expect((await verifyControl(root)).violations.join("\n")).toContain(".factory/config.json changed")
+  })
+
+  test("the user-global config sits outside the project baseline by design (#240.3)", async () => {
+    // The baseline pins project-root files only. The user-global layer
+    // (globalConfigFile, under XDG_CONFIG_HOME) is machine-scoped and
+    // shared across projects: pinning it here would drift whenever the
+    // human edits global settings for another project. Global writes stay
+    // guarded by the human-only `es config set --global` gate instead.
+    await rebaseline(root, "test")
+    const before = await snapshotControl(root)
+    expect(Object.keys(before).length).toBeGreaterThan(0)
+    expect(Object.keys(before).every((key) => key.startsWith(".factory/"))).toBe(true)
+    // A write to the global layer (hermetic: XDG pointed at the test state
+    // dir) changes nothing in the project baseline and verifies clean.
+    const realXdg = process.env.XDG_CONFIG_HOME
+    process.env.XDG_CONFIG_HOME = path.join(state, "xdg-config")
+    try {
+      const file = globalConfigFile()
+      await mkdir(path.dirname(file), { recursive: true })
+      await writeFile(file, '{"research":{"depth":3}}\n')
+      expect(await snapshotControl(root)).toEqual(before)
+      expect((await verifyControl(root)).clean).toBe(true)
+    } finally {
+      if (realXdg === undefined) delete process.env.XDG_CONFIG_HOME
+      else process.env.XDG_CONFIG_HOME = realXdg
+    }
   })
 
   test("drift in a waiver file is reported (#221)", async () => {
