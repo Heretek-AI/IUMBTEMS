@@ -262,7 +262,7 @@ describe("providers", () => {
     const text = await fetchTool.execute({ url: "https://zod.test" }, { agent: "es-research-alpha" })
     const hash = /sha256:([0-9a-f]{64})/.exec(text)?.[1]
     expect(hash).toBeDefined()
-    const stored = await new SourceCache(path.join(dir, ".factory/research/sources")).get(hash!)
+    const stored = await new SourceCache(path.join(dir, ".factory/research/sources"), state).get(hash!)
     expect(stored?.text).toContain("TypeScript-first schema validation")
     const search = tools.find((tool) => tool.name === "es_research_search")!
     await expect(search.execute({ query: "x" }, { agent: "es-research-alpha" })).rejects.toThrow("No search provider")
@@ -334,7 +334,7 @@ describe("the webcache gate (d66328c:skills/epistemic_search/scripts/webcache.py
     ).toContain("Version 3")
     expect(calls).toBe(3)
     // A search result cached under the page's URL is a snippet, never served as the page.
-    await new SourceCache(path.join(dir, ".factory/research/sources")).put({
+    await new SourceCache(path.join(dir, ".factory/research/sources"), state).put({
       url: "https://limits.test/api?a=1&b=2",
       text: "Snippet: limits are documented.",
       provider: "searxng",

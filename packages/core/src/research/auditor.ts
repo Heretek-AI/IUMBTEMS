@@ -2,13 +2,16 @@
 //
 // Every claim line (a bullet, numbered item or prose paragraph line) must carry
 // at least one tag:
-//   [VERIFIED: sha256:<hash> "verbatim quote"]   — quote must be in the cached source
+//   [VERIFIED: sha256:<hash> "quote, verbatim after documented normalisation"]   — quote must be in the cached source
 //   [INFERRED: reasoning]                          — reasoning from verified facts
 //   [HYPOTHESIS: how to test it]
 //   [NEGATIVE_KNOWLEDGE: what was searched]
 // The auditor verifies quotes against the content-addressed cache, flags
 // untagged and ungrounded claims, can prune them into a "Pruned claims"
-// section, and reports coverage counts (no composite score).
+// section, and reports coverage counts (no composite score). It marks,
+// prunes and refuses failing claims and dossiers; it never re-tags a claim's
+// kind (no VERIFIED→INFERRED demotion: that verb belongs to the
+// scout/harvest licence policy).
 import type { SourceCache } from "./cache.ts"
 import { verifyQuote } from "./quote.ts"
 

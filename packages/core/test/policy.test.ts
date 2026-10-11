@@ -282,6 +282,7 @@ describe("shell policy", () => {
     expect(shell(undefined, "cd x && epistemic-swarm waive lint/check").effect).toBe("deny")
     expect(shell("build", "es config set models.deep x/y").effect).toBe("deny")
     expect(shell("factory", `es research retract ${"c".repeat(64)} --event retracted`).effect).toBe("deny")
+    expect(shell("build", "es research export").effect).toBe("deny")
     expect(shell("build", "es config show").effect).toBe("allow")
     // Audit and scout runs drive a harness CLI: never from an agent's shell.
     expect(shell("build", "es audit src --max-usd 5").effect).toBe("deny")

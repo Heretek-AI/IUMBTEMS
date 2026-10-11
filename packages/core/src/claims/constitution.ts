@@ -141,7 +141,7 @@ export interface ClaimVerdictOptions {
 /**
  * The per-claim ACCEPTED/REJECTED gate used by domain packs. A claim is
  * REJECTED when the legacy structural rules fire (VERIFIED needs its source
- * hash + verbatim quote or a code location; INFERRED needs its reasoning;
+ * hash + quote (verbatim after documented normalisation) or a code location; INFERRED needs its reasoning;
  * HYPOTHESIS needs its falsification; NEGATIVE_KNOWLEDGE needs query and
  * finding), when any pack rule fires (parent unresolved, missing mandatory
  * tag, banned domain), or when the retraction policy is zero_tolerance and
