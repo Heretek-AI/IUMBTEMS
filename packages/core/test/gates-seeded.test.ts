@@ -325,6 +325,10 @@ describe("gitleaks shape and waiver glob edges", () => {
       process.env.PATH = previous
       await rm(shimdir, { recursive: true, force: true })
     }
+    // And no stale positive survives the shim's removal: the next gate run
+    // must skip the scanner instead of spawning a binary that is gone (the
+    // cli.test.ts gates failure this exact staleness caused in CI).
+    expect(installed(missing)).toBe(false)
   })
 
   test("a rule+files glob waiver hides only what both globs match", async () => {

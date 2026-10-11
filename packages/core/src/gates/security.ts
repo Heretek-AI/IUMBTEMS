@@ -8,21 +8,16 @@ import type { GateFinding } from "../schema/gates.ts"
 import { parseJsonc } from "../util/jsonc.ts"
 import { run } from "../util/proc.ts"
 
-const which = new Map<string, boolean>()
-
 /**
  * Is `binary` an executable on PATH? Pure lookup (no shell), so no injection.
- * Only positive answers are cached: a miss is re-probed every time, so a
- * binary installed (or shimmed onto PATH) later in the process is seen.
- * Caching a miss pinned Gate skips across PATH changes (#243: the gitleaks
- * PATH shims in these tests read as absent once any earlier gate run cached
- * the miss on a machine without the binary).
+ * Probed live on every call: caching the answer pinned Gate skips across
+ * PATH changes in both directions (#243 — a cached miss hid later shims;
+ * a cached hit outlived the shim's finally-restore and sent the gate at a
+ * binary that was already gone). A PATH probe is microseconds; gate runs
+ * call this a handful of times.
  */
 export function installed(binary: string): boolean {
-  if (which.get(binary) === true) return true
-  const found = onPath(binary)
-  if (found) which.set(binary, true)
-  return found
+  return onPath(binary)
 }
 
 function onPath(binary: string): boolean {
