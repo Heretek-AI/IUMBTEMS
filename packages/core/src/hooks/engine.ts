@@ -7,6 +7,7 @@
 // handler is written to the audit log.
 import { appendAuditEntry } from "../audit/chain.ts"
 import { isTrusted } from "../trust/store.ts"
+import type { SandboxSpec } from "../trust/sandbox.ts"
 import { type HookSource, hookSources, type LoadedHooks, loadHooks } from "./load.ts"
 import { ifMatches, matcherMatches } from "./match.ts"
 import { type HandlerOutcome, runHandler } from "./run.ts"
@@ -19,6 +20,16 @@ export interface HookEngineOptions {
   readonly sources?: HookSource[]
   readonly generate?: (prompt: string, model?: string) => Promise<string>
   readonly audit?: boolean
+  /**
+   * Sandbox for hook command subprocesses (#265). Absent runs unsandboxed
+   * with the parent environment (Claude Code parity; project hooks are
+   * trusted code). "readonly" makes everything read-only; a spec runs with
+   * one writable directory. Without bwrap the run errors and gates fail
+   * closed while observers fail open.
+   */
+  readonly sandbox?: "none" | "readonly" | Omit<SandboxSpec, "cwd">
+  /** No network inside the sandbox (only meaningful with `sandbox`). */
+  readonly offline?: boolean
 }
 
 export interface BaseInput {
@@ -188,6 +199,15 @@ export class HookEngine {
   }
 
   private async execute(event: string, items: SourcedHandler[], input: Record<string, unknown>): Promise<Ran[]> {
+    // The sandbox knob rides every handler run (#265); per-handler timeout
+    // and x-es-offline are honored in run.ts.
+    const sandboxContext =
+      this.options.sandbox !== undefined || this.options.offline !== undefined
+        ? {
+            ...(this.options.sandbox !== undefined ? { sandbox: this.options.sandbox } : {}),
+            ...(this.options.offline !== undefined ? { offline: this.options.offline } : {}),
+          }
+        : {}
     const ran = await Promise.all(
       items.map(async (item): Promise<Ran> => {
         const project = !item.source.startsWith("user:")
@@ -205,6 +225,7 @@ export class HookEngine {
             root: this.options.root,
             event,
             input,
+            ...sandboxContext,
             ...(this.options.generate ? { generate: this.options.generate } : {}),
           })
           return { item, outcome: { status: "ok", durationMs: 0 } }
@@ -213,6 +234,7 @@ export class HookEngine {
           root: this.options.root,
           event,
           input,
+          ...sandboxContext,
           ...(this.options.generate ? { generate: this.options.generate } : {}),
         })
         return { item, outcome }
