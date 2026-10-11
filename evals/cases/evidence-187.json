@@ -1,0 +1,8 @@
+{
+  "description": "Research fetches a served fixture page and quotes its key sentence verbatim (no false VERIFIED).",
+  "agent": "es-research-alpha",
+  "prompt": "Fetch {{SERVE_URL}}/evidence-187.txt with es_research_fetch and report the key sentence about mechanical gates, quoted verbatim.",
+  "maxSteps": 6,
+  "checks": { "toolsUsed": ["es_research_fetch"], "contains": ["Mechanical gates catch regressions before review"] },
+  "id": "evidence-187"
+}
