@@ -249,8 +249,8 @@ had no quote behind it and is corrected above.
 
 ## Decision recorded, not yet in force: config edits from the browser
 
-#132 required asking the user whether this ADR should be extended to
-authorize config edits from the browser. No answer was on record, so the
+Ticket #132 required asking the user whether this ADR should be extended
+to authorize config edits from the browser. No answer was on record, so the
 editor shipped preview-only. On 2026-10-11 the user answered a
 multiple-choice question in a Claude Code session (recorded on #156):
 
@@ -266,6 +266,6 @@ Offered and not selected: "Preview only (Recommended)" and "Undecided".
 
 This records the decision only. I7 is unchanged and still enforced: the bus
 refuses `fleet.config.apply`, the UI has no apply button, and `config set`
-stays terminal-only. #145 carries the work, which includes amending I7 and
-the inventory above and reusing the #131 ticket, passphrase and CSRF/Origin
-path.
+stays terminal-only. Ticket #145 carries the work, which includes amending
+I7 and the inventory above and reusing the ticket, passphrase and
+CSRF/Origin path from #131.
