@@ -304,10 +304,16 @@ export async function writeOptimizerProposals(
     const dir = path.join(out, id)
     await withLock(dir, async () => {
       await mkdir(dir, { recursive: true })
-      await atomicWrite(
-        path.join(dir, "proposal.json"),
-        `${JSON.stringify({ id, basePromptId: result.basePromptId, candidate: winner.candidate, before: winner.before, after: winner.receipt }, null, 2)}\n`,
-      )
+      // Hoisted payloads + concatenation: no object braces inside template
+      // literals (keeps the missing-indicator lint quiet and stays readable).
+      const proposalBody = {
+        id,
+        basePromptId: result.basePromptId,
+        candidate: winner.candidate,
+        before: winner.before,
+        after: winner.receipt,
+      }
+      await atomicWrite(path.join(dir, "proposal.json"), `${JSON.stringify(proposalBody, null, 2)}\n`)
       await atomicWrite(
         path.join(dir, "prompt.patch.md"),
         [
@@ -336,31 +342,21 @@ export async function writeOptimizerProposals(
           "",
         ].join("\n"),
       )
-      await atomicWrite(
-        path.join(dir, "receipt.json"),
-        `${JSON.stringify({ before: winner.before, after: winner.receipt }, null, 2)}\n`,
-      )
+      const receiptBody = { before: winner.before, after: winner.receipt }
+      await atomicWrite(path.join(dir, "receipt.json"), `${JSON.stringify(receiptBody, null, 2)}\n`)
     })
     written.push({ dir, id, candidateId: winner.candidate.id })
   }
   written.sort((a, b) => compareStrings(a.id, b.id))
   const droppedFile = path.join(out, "dropped.json")
-  await withLock(droppedFile, () =>
-    atomicWrite(
-      droppedFile,
-      `${JSON.stringify(
-        result.dominated.map((receipt) => ({
-          candidateId: receipt.candidateId,
-          reasons:
-            receipt.regressions.length > 0
-              ? [`regressions: ${receipt.regressions.join(", ")}`]
-              : ["dominated: no axis strictly improves"],
-        })),
-        null,
-        2,
-      )}\n`,
-    ),
-  )
+  const droppedBody = result.dominated.map((receipt) => ({
+    candidateId: receipt.candidateId,
+    reasons:
+      receipt.regressions.length > 0
+        ? [`regressions: ${receipt.regressions.join(", ")}`]
+        : ["dominated: no axis strictly improves"],
+  }))
+  await withLock(droppedFile, () => atomicWrite(droppedFile, `${JSON.stringify(droppedBody, null, 2)}\n`))
   return { written, droppedFile }
 }
 
