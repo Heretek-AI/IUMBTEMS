@@ -1,5 +1,54 @@
 # Changelog
 
+## 2.2.0 — 2026-10-11
+
+Phase 8 anti-Goodhart verification & mutation oracle. Tautological tests,
+shared-weight blind spots and string-assertion evals stop passing silently:
+mutants must be killed, builder and checker seats must run on different
+model providers, and factory fitness is measured on 54 oracle-graded
+software engineering instances. The published trio (core/CLI/plugin)
+releases in lockstep as 2.2.0.
+
+**Behaviour changes.**
+- **#169: AST mutation testing gate.**
+  `generateMutants` (`packages/core/src/gates/mutation.ts`) injects subtle
+  mutants into touched sources (negated conditions, swapped arithmetic,
+  stripped calls, voided returns, capped per file) and the gate engine reruns
+  the touched suite per mutant (`mutation` check in `packages/core/src/gates/engine.ts`,
+  enabled via `mutation` in `.factory/gates.json`). Kill rates below 80%
+  reject the phase with a `mutation/kill-rate` error — including the
+  zero-mutant case, which fails closed instead of passing vacuously. Results
+  are cached by a test-aware fingerprint (source plus in-scope test contents
+  under a constant-time compare), so unchanged files skip the suite but
+  edited tests always rerun it, and sources are restored after every mutant.
+- **#170: Heterogeneous multi-model policy.**
+  `packages/core/src/agents/models.ts` resolves the programmer, QA and
+  auditor seats (per-agent override > role key > tier) and refuses
+  shared-provider programmer/QA pairs at build initiation
+  (`Factory.startBuild`, wired with the effective config by the plugin and
+  best-effort by `es mcp`) and at seat launch (plugin launch guard).
+  `models.programmer`, `models.qa` and `models.auditor` join the config with
+  per-seat model assignment, so enforcement and reality cannot diverge; unset
+  seats are unverified (refused only under `models.requireDiversity`).
+- **#171: Rigorous SWE benchmark suite.**
+  54 isolated instances across algorithms, refactoring, API integration and
+  debugging (`packages/core/src/evals/benchmark-cases.ts`, per-category
+  files), graded by a deterministic oracle — real bundle compilation,
+  property tests and performance budgets
+  (`packages/core/src/evals/benchmarks.ts`). The unit self-check grades every
+  reference green and every seed red. `scripts/benchmarks.ts` runs the oracle
+  smoke (rewriting `evals/benchmarks/baseline.json`) and, only with
+  `--model`, dispatches spend-bearing model turns that record pass@1, spend,
+  steps and the regression delta; model runs are never CI-blocking.
+
+**Security.**
+- Mutation sources are always restored (try/finally, witnessed by test);
+  cache fingerprints are content hashes compared in constant time.
+- Model diversity is enforced on every build path (plugin, MCP, seat
+  launch); config stays a human-only control file, so agents cannot relax it.
+- Benchmark oracles stay hidden from the agent; catalog seeds are reviewed
+  repo files that must terminate (proven by the completing self-check).
+
 ## 2.1.0 — 2026-10-11
 
 Phase 7 key delegation & consensus governance. Autonomous background builds

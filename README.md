@@ -5,13 +5,12 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 2.1.0.** Phase 7 key delegation & consensus governance:
-> the machine key signs stage transitions on topic branches only under a
-> cryptographic gate proof (`GateProofBundle`), stack branches cascade
-> upstream fixes via `es rebase cascade` with TS/JSON conflict resolution,
-> and integration branches land on `staging/autonomous` until a
-> human-signed release cut (#164–#166). Install from npm
-> (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`,
+> **Status: 2.2.0.** Phase 8 anti-Goodhart verification & mutation oracle:
+> tautological suites fail the mutation gate below an 80% kill rate,
+> programmer and QA seats refuse shared-weight providers (`models.programmer`
+> vs `models.qa`), and factory fitness is tracked on 54 oracle-graded SWE
+> benchmark instances with pass@1, spend and regression deltas (#169–#171).
+> Install from npm (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`,
 > `@heretek-ai/es-cli`); run `es key seal` once.
 
 ## Naming
