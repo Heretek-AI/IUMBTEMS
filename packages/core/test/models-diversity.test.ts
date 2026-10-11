@@ -9,7 +9,7 @@ import {
   checkModelDiversity,
   ModelDiversityError,
   resolveSeatModels,
-} from "../src/agents/registry.ts"
+} from "../src/agents/models.ts"
 import { recordApproval } from "../src/approval/index.ts"
 import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import { Factory, FactoryError } from "../src/factory/index.ts"

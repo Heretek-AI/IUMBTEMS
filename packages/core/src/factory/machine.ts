@@ -14,7 +14,8 @@
 import { randomBytes } from "node:crypto"
 import { readFile, symlink } from "node:fs/promises"
 import path from "node:path"
-import { assertModelDiversity, ModelDiversityError, type SeatModelMap, seatOf } from "../agents/registry.ts"
+import { assertModelDiversity, ModelDiversityError, type SeatModelMap } from "../agents/models.ts"
+import { seatOf } from "../agents/registry.ts"
 import { readApproval, verifyApproval } from "../approval/record.ts"
 import { appendAuditEntry } from "../audit/chain.ts"
 import {
