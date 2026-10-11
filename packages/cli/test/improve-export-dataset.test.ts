@@ -49,7 +49,8 @@ async function makeVerifiedWorktree(): Promise<string> {
   await writeFile(path.join(dir, "trajectory.jsonl"), `${transcript.map((line) => JSON.stringify(line)).join("\n")}\n`)
   const gates = path.join(dir, ".factory", "runs", "r1", "gates", "2026-10-11-full")
   await mkdir(gates, { recursive: true })
-  await writeFile(path.join(gates, "summary.json"), `${JSON.stringify({ passed: true, findings: [] })}\n`)
+  const greenSummary = { passed: true, findings: [] as unknown[] }
+  await writeFile(path.join(gates, "summary.json"), `${JSON.stringify(greenSummary)}\n`)
   await appendAuditEntry(dir, { actor: "system", action: "stage.build" })
   return dir
 }

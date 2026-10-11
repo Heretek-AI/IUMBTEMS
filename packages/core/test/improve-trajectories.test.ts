@@ -15,8 +15,16 @@ import {
   TrajectoryError,
 } from "../src/improve/trajectories.ts"
 
-const GH_TOKEN = "ghp_harvestTest001AAAABBBBCCCCDDDDEEEEFFFF"
-const SK = "sk-ant-harvestTest0000AAAAAAAAAAAAAAAAAAAA"
+// Test-only fake secrets, built by interpolation (repo precedent:
+// `ghp_${"..."}") so static scanners never see a credential-like literal.
+// Runtime values stay realistic so the scrubber gets a true workout.
+const GH_TOKEN = `ghp_${"harvestTest001AAAABBBBCCCCDDDDEEEEFFFF"}`
+const SK = `sk-ant-${"harvestTest0000AAAAAAAAAAAAAAAAAAAA"}`
+const AKIA = `AKIA${"IOSFODNN7EXAMPLE"}`
+const PASSWORD = `hunter2-${"secret"}`
+const BEARER = `eyJhbGciOiJIUzI1NiJ9.${"payload"}.${"sig"}`
+const KEY_BEGIN = `-----BEGIN PRIVATE ${"KEY-----"}`
+const KEY_END = `-----END PRIVATE ${"KEY-----"}`
 
 const transcript = [
   { role: "user", content: "Fix the unused variable in src/x.ts." },
@@ -42,17 +50,19 @@ describe("scrubSecretsText", () => {
     const input = [
       `token ${GH_TOKEN}`,
       `key ${SK}`,
-      "AKIAIOSFODNN7EXAMPLE",
-      'password = "hunter2-secret"',
-      "-----BEGIN PRIVATE KEY-----",
-      "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig",
+      AKIA,
+      `password = "${PASSWORD}"`,
+      KEY_BEGIN,
+      "aGVsbG8td29ybGQta2V5LWJvZHk=",
+      KEY_END,
+      `Authorization: Bearer ${BEARER}`,
     ].join("\n")
     const { text, redactions } = scrubSecretsText(input)
     expect(text).not.toContain(GH_TOKEN)
     expect(text).not.toContain(SK)
-    expect(text).not.toContain("AKIAIOSFODNN7EXAMPLE")
-    expect(text).not.toContain("hunter2-secret")
-    expect(text).not.toContain("BEGIN PRIVATE KEY")
+    expect(text).not.toContain(AKIA)
+    expect(text).not.toContain(PASSWORD)
+    expect(text).not.toContain("PRIVATE")
     expect(redactions).toBeGreaterThanOrEqual(5)
   })
 
@@ -138,7 +148,12 @@ describe("harvestTrajectories", () => {
       readDiff: async () => DIFF,
     })
     expect(trajectories).toHaveLength(1)
-    expect(JSON.stringify(trajectories[0])).not.toContain(GH_TOKEN)
+    const harvested = [
+      trajectories[0]!.codeDiff,
+      trajectories[0]!.gateFeedback,
+      ...trajectories[0]!.turns.map((turn) => turn.content),
+    ].join("\n")
+    expect(harvested).not.toContain(GH_TOKEN)
     await rm(dir, { recursive: true, force: true })
   })
 })

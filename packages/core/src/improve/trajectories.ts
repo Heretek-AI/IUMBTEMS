@@ -273,7 +273,7 @@ export function toSft(trajectory: Trajectory): SftRecord {
   const messages: Array<{ role: string; content: string }> = []
   for (const turn of trajectory.turns) {
     if (turn.role === "tool") {
-      const prior = messages[messages.length - 1]
+      const prior = messages.at(-1)
       const folded = `[tool feedback] ${turn.content}`
       if (prior && prior.role === "user") prior.content += `\n${folded}`
       else messages.push({ role: "user", content: folded })
