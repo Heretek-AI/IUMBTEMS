@@ -756,8 +756,9 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
       case "worktree": {
         if (sub === "prune") {
           const report = await pruneWorktrees(root)
+          const dropped = report.dropped.length ? ` (${report.dropped.join(", ")})` : ""
           io.print(
-            `Pruned ${root}/.worktrees: dropped ${report.dropped.length} stale lease(s)${report.dropped.length ? ` (${report.dropped.join(", ")})` : ""}, removed ${report.removed.length} orphaned checkout(s), kept ${report.kept.length} live lease(s).`,
+            `Pruned ${root}/.worktrees: dropped ${report.dropped.length} stale lease(s)${dropped}, removed ${report.removed.length} orphaned checkout(s), kept ${report.kept.length} live lease(s).`,
           )
           return 0
         }

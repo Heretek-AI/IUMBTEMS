@@ -251,7 +251,7 @@ export class WorktreeLeaseManager {
       throw error
     })
     const records: LeaseRecord[] = []
-    for (const name of names.sort()) {
+    for (const name of names.sort((a, b) => a.localeCompare(b))) {
       if (!name.endsWith(".json")) continue
       const record = await this.read(name.slice(0, -".json".length))
       if (record) records.push(record)
@@ -355,8 +355,8 @@ export async function pruneWorktrees(repoRoot: string, options: LeaseManagerOpti
       }
     }
   })
-  dropped.sort()
-  removed.sort()
-  kept.sort()
+  dropped.sort((a, b) => a.localeCompare(b))
+  removed.sort((a, b) => a.localeCompare(b))
+  kept.sort((a, b) => a.localeCompare(b))
   return { dropped, removed, kept }
 }
