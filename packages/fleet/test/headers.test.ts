@@ -1,6 +1,9 @@
 // S5.4 (CodeQL #84) remote property injection (repair-151): request headers
 // parse into a Map (never a plain `{}` keyed by remote names), non-token
-// names are rejected, and `field()` is actually case-insensitive.
+// names are rejected, and `field()` is actually case-insensitive. This file
+// probes request-header parser hygiene only — web security headers (CSP) are
+// proven in `web.test.ts` ("every web response carries the strict security
+// headers", #283.1).
 import { describe, expect, test } from "bun:test"
 import { field, parseHeaders } from "../src/telemetry.ts"
 

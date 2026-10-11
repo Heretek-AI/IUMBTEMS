@@ -14,6 +14,7 @@ import {
   INPUT_ANATOMY,
   REQUIRED_SPEC_KEYS,
   REQUIRED_STATES,
+  renderedSlotsOfSpecMd,
   renderSpecMd,
   specFilename,
   validateAll,
@@ -234,6 +235,43 @@ describe("renderSpecMd (byte-stable deterministic render)", () => {
     expect(specFilename("a b/c")).toBe("components/a-b-c.md")
     expect(specFilename("Table")).toBe("components/Table.md")
   })
+
+  test("renderedSlotsOfSpecMd reads the actual render output (#270)", () => {
+    expect(renderedSlotsOfSpecMd(renderSpecMd(EXEMPLARS.button)).sort()).toEqual(["icon", "label", "spinner"])
+    expect(renderedSlotsOfSpecMd(renderSpecMd(EXEMPLARS.dialog)).sort()).toEqual([
+      "close",
+      "content",
+      "description",
+      "overlay",
+      "title",
+      "trigger",
+    ])
+    // A hand-removed slot line is visible in the extraction.
+    const edited = renderSpecMd(EXEMPLARS.button).replace("- `spinner`:", "- `removed`:")
+    expect(renderedSlotsOfSpecMd(edited).sort()).toEqual(["icon", "label", "removed"])
+    expect(renderedSlotsOfSpecMd("no slots here")).toEqual([])
+  })
+
+  test("renderedSlotsOfSpecMd bounds the section at the next heading or the trailing whitespace", () => {
+    // The section stops at the next `## ` heading: a later list is not a slot.
+    expect(renderedSlotsOfSpecMd("## Slots\n- `a`: one\n\n## Props\n- `b`: two\n")).toEqual(["a"])
+    // No next heading: the section runs to the end, trailing whitespace aside.
+    expect(renderedSlotsOfSpecMd("# X\n\n## Slots\n- `a`: one\n- `b`: two\n\n \t\n")).toEqual(["a", "b"])
+    // The header's own newline is not the next heading's: the section runs on.
+    expect(renderedSlotsOfSpecMd("## Slots\n## Props\n- `b`: two\n")).toEqual(["b"])
+    expect(renderedSlotsOfSpecMd("## Slots\n")).toEqual([])
+  })
+
+  test("renderedSlotsOfSpecMd stays linear on a hostile whitespace run (CodeQL js/polynomial-redos)", () => {
+    // The file is read back from disk, so its bytes are not the renderer's.
+    // The old lazy `[\s\S]*?(?:\n## |\s*$)` scan retried `\s*$` from every
+    // offset of a whitespace run that does not reach the end: quadratic
+    // (~1.2s at 40k tabs, ~8s here). The fixed code is ~0ms.
+    const hostile = `## Slots\n- \`a\`: one\n${"\t".repeat(100_000)}x`
+    const started = performance.now()
+    expect(renderedSlotsOfSpecMd(hostile)).toEqual(["a"])
+    expect(performance.now() - started).toBeLessThan(1000)
+  }, 60_000)
 
   test("validateAll takes a subset map", () => {
     const results = validateAll({ button: EXEMPLARS.button })

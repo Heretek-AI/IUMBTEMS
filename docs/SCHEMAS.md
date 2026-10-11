@@ -76,6 +76,8 @@ Do not edit by hand: run `bun run docs:gen` after changing a schema (CI runs `bu
 | run-phase-telemetry | `schemas/run-phase-telemetry.schema.json` |
 | run-state-seal | `schemas/run-state-seal.schema.json` |
 | run-telemetry | `schemas/run-telemetry.schema.json` |
+| scout-advisories-file | `schemas/scout-advisories-file.schema.json` |
+| scout-advisory-query | `schemas/scout-advisory-query.schema.json` |
 | scout-advisory | `schemas/scout-advisory.schema.json` |
 | scout-assessment | `schemas/scout-assessment.schema.json` |
 | scout-plan | `schemas/scout-plan.schema.json` |

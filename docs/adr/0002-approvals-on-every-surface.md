@@ -119,7 +119,8 @@ prompt-injected agent acting through a seat or user-agent shell.
   (TTL ≤ 120 s) binds the preview to `hashJson(subject)`, and signing
   re-derives the subject and refuses a mismatch.
 - **I4** Attempts are limited: at most N wrong passphrases per M minutes per
-  surface (recommended 5 per 10 min), then a lockout and an audit entry.
+  state dir (recommended 5 per 10 min; the CLI and the TUI share one bucket),
+  then a lockout and an audit entry.
 - **I5** The channel is recorded (`cli`, `tui` or `web`) and audited.
 - **I6** Mutating approval endpoints are unreachable from agent contexts: no
   agent tool and no MCP tool; the TUI path requires the TUI process's dialog;
@@ -201,8 +202,8 @@ ticket before merge. All probes apply to both surfaces unless marked.
 - The TUI plugin links core's approval service directly and signs in-process;
   no new RPC, no passphrase on the wire anywhere except loopback for the
   browser path.
-- Attempt-limit state lives per surface (a small file in the state dir for
-  the TUI/CLI; server memory plus audit for the web path).
+- Attempt-limit state lives per state dir (one shared attempt file for
+  the CLI and the TUI; server memory plus audit for the web path, which keeps its own dir).
 - Docs and messages stop saying approvals are terminal-only, while trust,
   waive, resume, key seal, config set and export keep saying it.
 

@@ -63,6 +63,12 @@ jobs:
           # NOTE: the ./ prefix is load-bearing. A bare packs/foo.tgz is
           # parsed as a GitHub user/repo shorthand (git ls-remote failure);
           # ./packs/foo.tgz is resolved as the local tarball.
+          # Fail closed: an empty tarball list (e.g. --release format drift
+          # through the awk above) must never exit 0 having published nothing.
+          if [ -z "${{ steps.packages.outputs.tarballs }}" ]; then
+            echo "publish: no tarballs listed by scripts/packages.ts --release" >&2
+            exit 1
+          fi
           for tgz in ${{ steps.packages.outputs.tarballs }}; do
             echo "::group::npm publish $tgz"
             if [ "$DRY_RUN" = "true" ]; then

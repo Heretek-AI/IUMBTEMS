@@ -32,7 +32,7 @@ import {
 } from "./ledger.ts"
 import { compileToCssVars, renderGuide } from "./render.ts"
 import { AXES, type Axis, ContradictionError, FORMS, SlotLoop, SmuggledValueError, VagueAnswerError } from "./slots.ts"
-import { EXEMPLARS, renderSpecMd, specFilename, validateAll } from "./specs.ts"
+import { EXEMPLARS, renderedSlotsOfSpecMd, renderSpecMd, specFilename, validateAll } from "./specs.ts"
 import {
   checkDrift,
   designPaths,
@@ -259,8 +259,13 @@ export function designTools(context: DesignOpsContext): EsToolDef[] {
           }
           for (const [name, spec] of Object.entries(EXEMPLARS)) {
             for (const error of validateTuiCoverage(spec)) drift.push(`${name}: ${error}`)
-            for (const error of specVsRenderCheck(spec, Object.keys(spec.slots ?? {}).sort(), isWebrefFresh()))
-              drift.push(error)
+            // The slot-fill leg reads the actual render output from disk: a
+            // spec fed its own slots could never fail (#270). A missing file
+            // is already drift above; null keeps the gate honest, never green.
+            const renderedFile = bundlePath(root, specFilename(name))
+            const onDisk = await readFile(renderedFile, "utf8").catch(() => undefined)
+            const renderedSlots = onDisk === undefined ? null : renderedSlotsOfSpecMd(onDisk)
+            for (const error of specVsRenderCheck(spec, renderedSlots, isWebrefFresh())) drift.push(error)
           }
           if (drift.length) throw new ToolRefusal(`Phase-02 drift:\n- ${drift.join("\n- ")}`)
           return "Phase-02 check: specs, webref, csf and tui-notes byte-match the renderers; coverage, spec-vs-render, freshness and the play suite pass."

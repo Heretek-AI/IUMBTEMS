@@ -6,6 +6,15 @@
 // - http: POST the input; 2xx JSON body decides, anything else is non-blocking.
 // - prompt: evaluated through an injected model call; {ok, reason, impossible}.
 // - mcp_tool and agent: not available in the bridge (reported as skipped).
+//
+// Sandboxing (#265): command subprocesses run with the parent environment,
+// unsandboxed, by design (Claude Code parity) — hook commands are trusted
+// code (project hooks need a human `es trust` before they run at all), so the
+// parent env, secrets included, is visible to them. Callers that need
+// isolation pass `sandbox`/`offline` in the RunContext (honored per handler:
+// `x-es-offline` overrides the context default); without bwrap the sandboxed
+// run fails and the engine's gate/observer policy decides (fail closed/open).
+import type { SandboxSpec } from "../trust/sandbox.ts"
 import { type RunResult, run } from "../util/proc.ts"
 import type { HookHandler } from "./spec.ts"
 
@@ -30,6 +39,15 @@ export interface RunContext {
   readonly signal?: AbortSignal
   /** Model call for prompt hooks; absent means prompt hooks are skipped. */
   readonly generate?: (prompt: string, model?: string) => Promise<string>
+  /**
+   * Sandbox for command subprocesses (#265). Absent (the default) runs
+   * unsandboxed with the parent environment, as Claude Code does. "readonly"
+   * makes everything read-only; a spec runs with one writable directory.
+   * Throws inside the outcome (error status) when bwrap is unavailable.
+   */
+  readonly sandbox?: "none" | "readonly" | Omit<SandboxSpec, "cwd">
+  /** No network inside the sandbox (only meaningful with `sandbox`). */
+  readonly offline?: boolean
 }
 
 const DEFAULT_TIMEOUT_S: Record<string, number> = { UserPromptSubmit: 30 }
@@ -69,6 +87,7 @@ async function runCommand(
     ? [substitute(handler.command, context.root), ...handler.args.map((arg) => substitute(arg, context.root))]
     : ["sh", "-c", handler.command]
   let result: RunResult
+  const offline = handler["x-es-offline"] ?? context.offline
   try {
     result = await run(argv, {
       cwd: context.root,
@@ -77,6 +96,10 @@ async function runCommand(
       inheritEnv: true,
       env: { CLAUDE_PROJECT_DIR: context.root, ES_HOOK_EVENT: context.event },
       maxOutputBytes: 1_000_000,
+      // The sandbox knob, honored per handler (#265): absent runs unsandboxed
+      // with the parent environment, as Claude Code does.
+      ...(context.sandbox !== undefined && context.sandbox !== "none" ? { sandbox: context.sandbox } : {}),
+      ...(offline !== undefined ? { offline } : {}),
       ...(context.signal ? { signal: context.signal } : {}),
     })
   } catch (error) {

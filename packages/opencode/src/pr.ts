@@ -1,6 +1,10 @@
-// Release PR opener backed by the GitHub CLI. It pushes only the run's
-// integration branch (never the base branch) and opens a draft PR for a human
-// to review and merge.
+// Factory release PR opener backed by the GitHub CLI. Every factory push
+// path goes through here: it pushes only the run's `factory/` integration
+// branch — `branch === base` or a non-`factory/` branch is refused before
+// any push — and opens a draft PR for a human to review and merge. (Other
+// push paths exist outside the factory: `es improve --open-pr` pushes
+// `improve/*` branches on its own human-run path; phase fast-forwards and
+// fleet landings never touch the base branch; only a human merges.)
 import type { PrOpener } from "@heretek-ai/es-core"
 import { buildPrArgs, git, run } from "@heretek-ai/es-core"
 
