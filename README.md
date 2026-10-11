@@ -5,13 +5,13 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 2.0.0.** Phase 6 autonomous orchestration & fleet hardening:
-> atomic worktree leases with heartbeat TTL and orphan GC
-> (`es worktree prune`, wired into factory startup) replace shell `flock`
-> coordination, and the fleet daemon drives multi-phase task DAGs natively
-> (`run-dag <roadmap.json>`, heartbeats in `.factory/runtime/fleet.json`,
-> stuck-turn restart) with no giant orchestrator prompts (#160–#161).
-> Install from npm (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`,
+> **Status: 2.1.0.** Phase 7 key delegation & consensus governance:
+> the machine key signs stage transitions on topic branches only under a
+> cryptographic gate proof (`GateProofBundle`), stack branches cascade
+> upstream fixes via `es rebase cascade` with TS/JSON conflict resolution,
+> and integration branches land on `staging/autonomous` until a
+> human-signed release cut (#164–#166). Install from npm
+> (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`,
 > `@heretek-ai/es-cli`); run `es key seal` once.
 
 ## Naming
