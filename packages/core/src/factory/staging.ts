@@ -10,8 +10,9 @@
 //
 // The proof shape mirrors `GateProofBundle` (#164) field-for-field, so once
 // both land a machine proof passes here structurally with zero adaptation.
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+
 import { randomInt } from "node:crypto"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import * as Git from "../worktree/git.ts"
@@ -117,34 +118,8 @@ export async function landOnStaging(root: string, options: LandOptions): Promise
       stagingExists ? STAGING_BRANCH : options.branch,
     ])
     if (stagingExists) {
-      const merged = await Git.git(
-        worktree,
-        [...IDENTITY, "-c", "core.editor=true", "merge", "--no-ff", "--no-edit", options.branch],
-        { allowFail: true },
-      )
-      if (merged.code !== 0) {
-        const uu = await unmerged(worktree)
-        if (!uu.length || !options.resolveConflict)
-          return fail(
-            uu.length
-              ? `conflicting landing in ${uu.join(", ")} with no resolver: rebase by hand`
-              : `merge of ${options.branch} failed: ${(merged.stderr || merged.stdout).trim()}`,
-          )
-        for (const file of uu) {
-          const ours = await Git.git(worktree, ["show", `:2:${file}`], { allowFail: true })
-          const theirs = await Git.git(worktree, ["show", `:3:${file}`], { allowFail: true })
-          if (ours.code !== 0 || theirs.code !== 0) return fail(`conflicting landing in ${file}: stages unreadable`)
-          const resolved = options.resolveConflict(file, ours.stdout, theirs.stdout)
-          if (resolved === undefined) return fail(`conflicting landing in ${file}: resolver declined`)
-          await writeFile(path.join(worktree, file), resolved)
-          await Git.git(worktree, ["add", "--", file])
-        }
-        const committed = await Git.git(worktree, [...IDENTITY, "-c", "core.editor=true", "commit", "--no-edit"], {
-          allowFail: true,
-        })
-        if (committed.code !== 0 || (await unmerged(worktree)).length)
-          return fail(`conflict resolution did not settle: ${(committed.stderr || committed.stdout).trim()}`)
-      }
+      const merged = await mergeBranchIntoStaging(worktree, options.branch, options.resolveConflict)
+      if ("reason" in merged) return fail(merged.reason)
     }
     const newTip = await Git.headCommit(worktree)
     // Default verification: the merge settled (no unmerged paths) and is
@@ -163,6 +138,75 @@ export async function landOnStaging(root: string, options: LandOptions): Promise
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error))
   }
+}
+
+/** Read both merge stages for every conflicted file in parallel. */
+async function readMergeStages(
+  worktree: string,
+  files: readonly string[],
+): Promise<Array<{ readonly file: string; readonly ours: string; readonly theirs: string } | undefined>> {
+  return Promise.all(
+    files.map(async (file) => {
+      const [ours, theirs] = await Promise.all([
+        Git.git(worktree, ["show", `:2:${file}`], { allowFail: true }),
+        Git.git(worktree, ["show", `:3:${file}`], { allowFail: true }),
+      ])
+      if (ours.code !== 0 || theirs.code !== 0) return undefined
+      return { file, ours: ours.stdout, theirs: theirs.stdout }
+    }),
+  )
+}
+
+/** Resolve every conflicted file with the injected resolver and commit. */
+async function resolveMergeConflicts(
+  worktree: string,
+  files: readonly string[],
+  resolveConflict: (file: string, oursText: string, theirsText: string) => string | undefined,
+): Promise<{ done: true } | { reason: string }> {
+  const stages = await readMergeStages(worktree, files)
+  const merged = new Map<string, string>()
+  for (let i = 0; i < files.length; i++) {
+    const stage = stages[i]
+    if (!stage) return { reason: `conflicting landing in ${files[i]}: stages unreadable` }
+    const resolved = resolveConflict(stage.file, stage.ours, stage.theirs)
+    if (resolved === undefined) return { reason: `conflicting landing in ${stage.file}: resolver declined` }
+    merged.set(stage.file, resolved)
+  }
+  for (const [file, text] of merged) {
+    await writeFile(path.join(worktree, file), text)
+    await Git.git(worktree, ["add", "--", file])
+  }
+  const committed = await Git.git(worktree, [...IDENTITY, "-c", "core.editor=true", "commit", "--no-edit"], {
+    allowFail: true,
+  })
+  if (committed.code !== 0 || (await unmerged(worktree)).length)
+    return { reason: `conflict resolution did not settle: ${(committed.stderr || committed.stdout).trim()}` }
+  return { done: true }
+}
+
+/**
+ * Merge `branch` into the staging checkout. Returns `{ merged: true }` on a
+ * clean merge, or a human-readable reason when it conflicts or fails.
+ */
+async function mergeBranchIntoStaging(
+  worktree: string,
+  branch: string,
+  resolveConflict?: (file: string, oursText: string, theirsText: string) => string | undefined,
+): Promise<{ merged: true } | { reason: string }> {
+  const merged = await Git.git(
+    worktree,
+    [...IDENTITY, "-c", "core.editor=true", "merge", "--no-ff", "--no-edit", branch],
+    {
+      allowFail: true,
+    },
+  )
+  if (merged.code === 0) return { merged: true }
+  const uu = await unmerged(worktree)
+  if (!uu.length) return { reason: `merge of ${branch} failed: ${(merged.stderr || merged.stdout).trim()}` }
+  if (!resolveConflict) return { reason: `conflicting landing in ${uu.join(", ")} with no resolver: rebase by hand` }
+  const settled = await resolveMergeConflicts(worktree, uu, resolveConflict)
+  if ("reason" in settled) return settled
+  return { merged: true }
 }
 
 export interface StagingFireSuite {
