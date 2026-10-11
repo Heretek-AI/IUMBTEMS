@@ -82,12 +82,23 @@ export const hashPrompt = (prompt: string): string => sha256(prompt)
 const candidateId = (operator: PromptOperator, prompt: string): string =>
   `prompt-${operator}-${shortHash(hashPrompt(`${operator}:${prompt}`))}`
 
-const slug = (text: string): string =>
-  text
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/g, "-")
-    .replaceAll(/^-+|-+$/g, "")
-    .slice(0, 48) || "signal"
+/** URL-safe slug without regular expressions (linear scan; no ReDoS surface). */
+const slug = (text: string): string => {
+  let out = ""
+  let prevDash = true // Leading runs collapse to nothing (trimmed).
+  for (const ch of text.toLowerCase()) {
+    const ok = (ch >= "a" && ch <= "z") || (ch >= "0" && ch <= "9")
+    if (ok) {
+      out += ch
+      prevDash = false
+    } else if (!prevDash) {
+      out += "-"
+      prevDash = true
+    }
+  }
+  if (out.endsWith("-")) out = out.slice(0, -1)
+  return out.slice(0, 48) || "signal"
+}
 
 /**
  * Derive candidate prompt variations from telemetry failure clusters. Each

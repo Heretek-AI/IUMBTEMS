@@ -15,6 +15,7 @@ import {
   OptimizerError,
   paretoDominates,
   receiptFor,
+  writeOptimizerProposals,
 } from "../src/improve/optimizer.ts"
 import type { RunTelemetry, Telemetry } from "../src/schema/improve.ts"
 
@@ -161,6 +162,63 @@ describe("evolvePrompts", () => {
         grade: async () => ({ attempts: [], costUSD: 0, steps: 0 }),
       }),
     ).rejects.toThrow(OptimizerError)
+  })
+})
+
+describe("writeOptimizerProposals", () => {
+  test("writes one proposal dir per winner with before/after receipts, and nothing else", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "es-opt-proposals-"))
+    const baselineMap = { a: { pass: true, durationMs: 4 }, b: { pass: false, durationMs: 4 } }
+    const grade = async (prompt: string) =>
+      prompt.includes("lint/no-unused-vars")
+        ? { attempts: [attempt("a", true), attempt("b", true)], costUSD: 0.02, steps: 6 }
+        : { attempts: [attempt("a", true), attempt("b", false)], costUSD: 0.02, steps: 6 }
+    const result = await evolvePrompts({
+      basePrompt: BASE,
+      basePromptId: "programmer",
+      telemetry: failingTelemetry(),
+      baseline: baselineMap,
+      grade,
+    })
+    expect(result.winners.length).toBeGreaterThan(0)
+    const { written, droppedFile } = await writeOptimizerProposals(dir, result, BASE)
+    expect(written).toHaveLength(result.winners.length)
+    for (const entry of written) {
+      const proposal = JSON.parse(await readFile(path.join(entry.dir, "proposal.json"), "utf8"))
+      expect(proposal.candidate.prompt).toContain("lint/no-unused-vars")
+      expect(proposal.after.regressions).toEqual([])
+      expect(proposal.after.passAt1).toBeGreaterThan(proposal.before.passAt1)
+      const patch = await readFile(path.join(entry.dir, "prompt.patch.md"), "utf8")
+      expect(patch).toContain("## Before")
+      expect(patch).toContain("## After")
+      const receipt = JSON.parse(await readFile(path.join(entry.dir, "receipt.json"), "utf8"))
+      expect(receipt.before.candidateId).toBe(proposal.after.candidateId)
+    }
+    expect(JSON.parse(await readFile(droppedFile, "utf8"))).toEqual([])
+    // The shipped prompt is untouched: proposals are review-only.
+    expect(await readFile(path.join(dir, "dropped.json"), "utf8")).toBeDefined()
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("dominated candidates land in dropped.json with reasons", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "es-opt-dropped-"))
+    const baselineMap = { a: { pass: true, durationMs: 4 }, b: { pass: false, durationMs: 4 } }
+    // Every candidate regresses case `a`: nothing may win.
+    const grade = async () => ({ attempts: [attempt("a", false), attempt("b", true)], costUSD: 0.01, steps: 2 })
+    const result = await evolvePrompts({
+      basePrompt: BASE,
+      basePromptId: "programmer",
+      telemetry: failingTelemetry(),
+      baseline: baselineMap,
+      grade,
+    })
+    expect(result.winners).toEqual([])
+    const { written, droppedFile } = await writeOptimizerProposals(dir, result, BASE)
+    expect(written).toEqual([])
+    const dropped = JSON.parse(await readFile(droppedFile, "utf8"))
+    expect(dropped).toHaveLength(result.dominated.length)
+    expect(dropped[0].reasons.join(" ")).toContain("regressions")
+    await rm(dir, { recursive: true, force: true })
   })
 })
 
