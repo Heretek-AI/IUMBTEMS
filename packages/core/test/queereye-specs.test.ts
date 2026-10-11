@@ -14,6 +14,7 @@ import {
   INPUT_ANATOMY,
   REQUIRED_SPEC_KEYS,
   REQUIRED_STATES,
+  renderedSlotsOfSpecMd,
   renderSpecMd,
   specFilename,
   validateAll,
@@ -233,6 +234,22 @@ describe("renderSpecMd (byte-stable deterministic render)", () => {
     expect(specFilename("form-input")).toBe("components/form-input.md")
     expect(specFilename("a b/c")).toBe("components/a-b-c.md")
     expect(specFilename("Table")).toBe("components/Table.md")
+  })
+
+  test("renderedSlotsOfSpecMd reads the actual render output (#270)", () => {
+    expect(renderedSlotsOfSpecMd(renderSpecMd(EXEMPLARS.button)).sort()).toEqual(["icon", "label", "spinner"])
+    expect(renderedSlotsOfSpecMd(renderSpecMd(EXEMPLARS.dialog)).sort()).toEqual([
+      "close",
+      "content",
+      "description",
+      "overlay",
+      "title",
+      "trigger",
+    ])
+    // A hand-removed slot line is visible in the extraction.
+    const edited = renderSpecMd(EXEMPLARS.button).replace("- `spinner`:", "- `removed`:")
+    expect(renderedSlotsOfSpecMd(edited).sort()).toEqual(["icon", "label", "removed"])
+    expect(renderedSlotsOfSpecMd("no slots here")).toEqual([])
   })
 
   test("validateAll takes a subset map", () => {
