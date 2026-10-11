@@ -145,10 +145,19 @@ describe("the scout tools", () => {
   test("adopt survives only for a verified permissive license; core recomputes every verdict and ranks", async () => {
     const tool = tools()
     await planAll(tool)
+    // Local fixtures have no published package, so each assessment records
+    // explicit NEGATIVE_KNOWLEDGE that the advisories step was skipped (#257:
+    // complete refuses a silent skip).
+    const skip = (name: string) => ({
+      tag: "NEGATIVE_KNOWLEDGE",
+      statement: `OSV advisories were not queried for ${name}`,
+      query: `OSV advisories for ${name}`,
+      finding: "skipped: a local fixture with no published package",
+    })
     for (const name of NAMES) {
       const scanned = await tool("es_scout_scan").execute({ candidate: name }, scout)
       expect(scanned).toContain(`Scanned ${name}`)
-      await record(tool, name)
+      await record(tool, name, "adopt", [skip(name)])
     }
     const done = await tool("es_scout_complete").execute({}, scout)
     expect(done).toContain("Adoption is the human's decision")
@@ -192,7 +201,17 @@ describe("the scout tools", () => {
     expect((await new SourceCache(researchSourcesDir(root)).get(hash))?.meta.provider).toBe("osv")
     for (const name of NAMES) {
       await tool("es_scout_scan").execute({ candidate: name }, scout)
-      await record(tool, name)
+      // mit carries real advisories; the rest record an explicit skip (#257).
+      if (name !== "mit")
+        await record(tool, name, "adopt", [
+          {
+            tag: "NEGATIVE_KNOWLEDGE",
+            statement: `OSV advisories were not queried for ${name}`,
+            query: `OSV advisories for ${name}`,
+            finding: "skipped: a local fixture with no published package",
+          },
+        ])
+      else await record(tool, name)
     }
     await tool("es_scout_complete").execute({}, scout)
     const mit = (await readScoutResult(root))!.verdicts.find((item) => item.candidate === "mit")!
@@ -204,6 +223,97 @@ describe("the scout tools", () => {
     const cited = dossier.claims.filter((claim: any) => claim.source?.sha256 === hash)
     expect(cited.length).toBe(3)
     expect(cited.every((claim: any) => claim.witness.ok)).toBe(true)
+  })
+
+  test("complete refuses a silent advisories skip; explicit NEGATIVE_KNOWLEDGE satisfies it (#257)", async () => {
+    const tool = tools()
+    await planAll(tool)
+    for (const name of NAMES) {
+      await tool("es_scout_scan").execute({ candidate: name }, scout)
+      await record(tool, name)
+    }
+    await expect(tool("es_scout_complete").execute({}, scout)).rejects.toThrow("es_scout_advisories")
+    const skip = (name: string) => ({
+      tag: "NEGATIVE_KNOWLEDGE",
+      statement: `OSV advisories were not queried for ${name}`,
+      query: `OSV advisories for ${name}`,
+      finding: "skipped: a local fixture with no published package",
+    })
+    for (const name of NAMES) await record(tool, name, "adopt", [skip(name)])
+    await expect(tool("es_scout_complete").execute({}, scout)).resolves.toContain("Scout complete")
+    const report = await readFile(factoryLayout(root).scoutReport, "utf8")
+    expect(report).toContain("## Advisory checks")
+    expect(report).toContain("advisories not queried; the assessment records explicit NEGATIVE_KNOWLEDGE")
+  })
+
+  test("a hand-supplied wrong ecosystem/package for a registry source is refused (#257)", async () => {
+    const tool = tools()
+    await tool("es_scout_plan").execute(
+      {
+        objective: "a tiny function library",
+        candidates: [{ name: "leftpad", source: "npm:left-pad" }],
+      },
+      scout,
+    )
+    // No network is touched: the mismatch is refused before any OSV query.
+    await expect(
+      tool("es_scout_advisories").execute({ candidate: "leftpad", ecosystem: "PyPI", package: "left-pad" }, scout),
+    ).rejects.toThrow("must be queried for the scanned source")
+    await expect(
+      tool("es_scout_advisories").execute({ candidate: "leftpad", ecosystem: "npm", package: "other-pkg" }, scout),
+    ).rejects.toThrow("must be queried for the scanned source")
+    // The candidate's own coordinates proceed to the (canned) OSV query.
+    const done = await tool("es_scout_advisories").execute(
+      { candidate: "leftpad", ecosystem: "npm", package: "left-pad" },
+      scout,
+    )
+    expect(done).toContain("OSV advisor")
+    expect(osvCalls).toEqual([{ package: { name: "left-pad", ecosystem: "npm" } }])
+  })
+
+  test("an agent-controlled version that dodges the scanned release is refused (#257)", async () => {
+    const { writeScoutProfile } = await import("../src/scout/store.ts")
+    const tool = tools()
+    await tool("es_scout_plan").execute(
+      {
+        objective: "a tiny function library",
+        candidates: [{ name: "leftpad", source: "npm:left-pad" }],
+      },
+      scout,
+    )
+    // A scanned registry profile pins release 1.0.0 (written directly: no network).
+    await writeScoutProfile(root, {
+      version: 1,
+      id: "leftpad",
+      name: "left-pad",
+      release: "1.0.0",
+      license: {
+        spdx: "MIT",
+        family: "permissive",
+        source: "registry",
+        confidence: "medium",
+        verified: false,
+      },
+      languages: {},
+      dependencies: { runtime: [], dev: [] },
+      size: { files: 0, bytes: 0, tokens: 0 },
+      graph: { internalEdges: 0, external: 0, parsers: { treeSitter: 0, regex: 0 } },
+      provenance: {},
+      warnings: [],
+      scannedAt: new Date().toISOString(),
+    })
+    await expect(
+      tool("es_scout_advisories").execute(
+        { candidate: "leftpad", ecosystem: "npm", package: "left-pad", version: "9.9.9" },
+        scout,
+      ),
+    ).rejects.toThrow("does not match the scanned release")
+    const done = await tool("es_scout_advisories").execute(
+      { candidate: "leftpad", ecosystem: "npm", package: "left-pad", version: "1.0.0" },
+      scout,
+    )
+    expect(osvCalls).toEqual([{ package: { name: "left-pad", ecosystem: "npm" }, version: "1.0.0" }])
+    expect(done).toContain("GHSA-aaaa-bbbb-cccc")
   })
 
   test("a recorded claim must survive its witness; a fabricated quote refuses the record", async () => {

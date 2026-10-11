@@ -6,8 +6,8 @@ import path from "node:path"
 import { factoryLayout } from "../layout.ts"
 import { type HarvestProfile, HarvestProfileSchema } from "../schema/harvest.ts"
 import {
-  type ScoutAdvisory,
-  ScoutAdvisorySchema,
+  type ScoutAdvisoriesFile,
+  ScoutAdvisoriesFileSchema,
   type ScoutAssessment,
   ScoutAssessmentSchema,
   type ScoutPlan,
@@ -56,13 +56,20 @@ export async function startScoutRun(root: string, plan: ScoutPlan): Promise<void
 export const writeScoutProfile = (root: string, profile: HarvestProfile) =>
   writeJson(scoutPaths(root).profile(profile.id), HarvestProfileSchema.parse(profile))
 
-export async function readScoutAdvisories(root: string, id: string): Promise<ScoutAdvisory[] | undefined> {
-  const raw = await readJson<unknown[]>(scoutPaths(root).advisories(id))
-  return raw === undefined ? undefined : raw.map((item) => ScoutAdvisorySchema.parse(item))
+export async function readScoutAdvisories(root: string, id: string): Promise<ScoutAdvisoriesFile | undefined> {
+  const raw = await readJson<unknown>(scoutPaths(root).advisories(id))
+  if (raw === undefined) return undefined
+  try {
+    return ScoutAdvisoriesFileSchema.parse(raw)
+  } catch (error) {
+    throw new Error(
+      `invalid ${scoutPaths(root).advisories(id)}: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
 }
 
-export const writeScoutAdvisories = (root: string, id: string, advisories: readonly ScoutAdvisory[]) =>
-  writeJson(scoutPaths(root).advisories(id), advisories)
+export const writeScoutAdvisories = (root: string, id: string, file: ScoutAdvisoriesFile) =>
+  writeJson(scoutPaths(root).advisories(id), ScoutAdvisoriesFileSchema.parse(file))
 
 export async function readAssessments(root: string): Promise<ScoutAssessment[]> {
   const raw = await readJson<unknown[]>(scoutPaths(root).assessments)
