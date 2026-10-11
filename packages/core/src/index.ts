@@ -1,5 +1,6 @@
 export * from "./agents/assets.ts"
 export * from "./agents/drift.ts"
+export * from "./agents/models.ts"
 export * from "./agents/registry.ts"
 export * from "./approval/index.ts"
 export * from "./audit/index.ts"

@@ -3,7 +3,14 @@
 // tool and last activity in .factory/runtime/seats.json. es_status, `es
 // status`, the dashboard and the headless driver read it; the foreground guard
 // and the continuation ask it what is running right now.
-import { agentSpec, type SeatRecord, updateSeats } from "@heretek-ai/es-core"
+import {
+  agentSpec,
+  assertModelDiversity,
+  ModelDiversityError,
+  type SeatModelMap,
+  type SeatRecord,
+  updateSeats,
+} from "@heretek-ai/es-core"
 import type { Runtime } from "./runtime.ts"
 
 /** Activity-only updates (tool calls, steps) are persisted at most this often per seat. */
@@ -27,6 +34,26 @@ export interface SeatTracker {
   running(agent?: string): SeatRecord[]
   /** Whether `parentID` has a seat child still running. */
   hasRunningChildren(parentID: string): boolean
+}
+
+/** Seats covered by the heterogeneous-model policy (#170): the programmer and both QA seats. */
+const DIVERSE_SEATS: ReadonlySet<string> = new Set(["es-programmer", "es-qa-functional", "es-qa-adversarial"])
+
+/**
+ * Refusal text when launching `target` would run the programmer and QA on the
+ * same model provider (shared weights share blind spots); undefined when the
+ * target is not a build seat or diversity holds. Unverified configs (unset
+ * seats) launch unless models.requireDiversity is set.
+ */
+export function seatModelRefusal(target: string, models: SeatModelMap | undefined): string | undefined {
+  if (!DIVERSE_SEATS.has(target)) return undefined
+  try {
+    assertModelDiversity(models)
+    return undefined
+  } catch (error) {
+    if (error instanceof ModelDiversityError) return error.message
+    throw error
+  }
 }
 
 /** Factory seats are the registry's subagents; primary agents (factory, grill) are drivers, not seats. */

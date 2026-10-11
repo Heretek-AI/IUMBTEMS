@@ -48,9 +48,30 @@ export function permissionRules(spec: AgentSpec, mcpServers: readonly string[]):
 }
 
 export function modelFor(spec: AgentSpec, options: PluginOptions) {
-  const ref = options.models?.agents?.[spec.id] ?? options.models?.[spec.tier]
+  const ref = options.models?.agents?.[spec.id] ?? roleModel(spec.id, options) ?? options.models?.[spec.tier]
   if (!ref) return undefined
   return parseModelRef(ref)
+}
+
+/** Heterogeneous-model role keys (#170): the seat's models.<role> key, so enforcement and reality agree. */
+function roleModel(agentId: string, options: PluginOptions): string | undefined {
+  const role = ROLE_MODEL_KEY[agentId]
+  return role ? options.models?.[role] : undefined
+}
+
+const ROLE_MODEL_KEY: Record<string, "programmer" | "qa" | "auditor"> = {
+  "es-programmer": "programmer",
+  "es-qa-functional": "qa",
+  "es-qa-adversarial": "qa",
+  "es-auditor-thesis": "auditor",
+  "es-auditor-antithesis": "auditor",
+}
+
+/** The config key a seat's model resolved from (for remediation text). */
+function modelKey(spec: AgentSpec, options: PluginOptions): string {
+  if (options.models?.agents?.[spec.id] !== undefined) return `models.agents.${spec.id}`
+  if (roleModel(spec.id, options) !== undefined) return `models.${ROLE_MODEL_KEY[spec.id]!}`
+  return `models.${spec.tier}`
 }
 
 /** A configured model ref the host does not have: the seat is refused at launch (#96). */
@@ -80,9 +101,9 @@ export function modelProblems(
 ): ModelProblem[] {
   const problems: ModelProblem[] = []
   for (const spec of specs) {
-    const ref = options.models?.agents?.[spec.id] ?? options.models?.[spec.tier]
+    const ref = options.models?.agents?.[spec.id] ?? roleModel(spec.id, options) ?? options.models?.[spec.tier]
     if (ref === undefined) continue
-    const key = options.models?.agents?.[spec.id] !== undefined ? `models.agents.${spec.id}` : `models.${spec.tier}`
+    const key = modelKey(spec, options)
     const parsed = parseModelRef(ref)
     if (parsed === undefined || !exists(parsed.providerID, parsed.id))
       problems.push({

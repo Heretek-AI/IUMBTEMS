@@ -20,6 +20,25 @@
           "pattern": "^[^\\s/]+\\/\\S+$",
           "description": "Model for deep-tier seats (factory, grill, managers, critics)."
         },
+        "programmer": {
+          "type": "string",
+          "pattern": "^[^\\s/]+\\/\\S+$",
+          "description": "Model for the programmer seat, \"provider/model\". Must differ in provider from the QA model (#170)."
+        },
+        "qa": {
+          "type": "string",
+          "pattern": "^[^\\s/]+\\/\\S+$",
+          "description": "Model for both QA seats, \"provider/model\". Must differ in provider from the programmer model (#170)."
+        },
+        "auditor": {
+          "type": "string",
+          "pattern": "^[^\\s/]+\\/\\S+$",
+          "description": "Model for the auditor seats, \"provider/model\"."
+        },
+        "requireDiversity": {
+          "type": "boolean",
+          "description": "Refuse build initiation unless programmer/QA provider diversity is proven (no unset seats)."
+        },
         "agents": {
           "type": "object",
           "propertyNames": {

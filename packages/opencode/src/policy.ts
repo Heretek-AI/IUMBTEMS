@@ -22,7 +22,7 @@ import {
 import { Error as ToolError } from "@opencode/plugin/promise/tool"
 import { HOST_WEB_TOOLS } from "./agents.ts"
 import type { Runtime } from "./runtime.ts"
-import type { SeatTracker } from "./seats.ts"
+import { type SeatTracker, seatModelRefusal } from "./seats.ts"
 
 const WRITE_TOOLS = new Set(["write", "edit"])
 
@@ -85,6 +85,10 @@ export function createPolicyHooks(runtime: Runtime, seats?: SeatTracker) {
     if (event.tool === "subagent" && typeof input.agent === "string") {
       const problem = runtime.modelProblems?.get(input.agent)
       if (problem) deny(problem.message)
+      // Heterogeneous models (#170): a programmer/QA seat that would share
+      // weights with the other side never launches.
+      const refusal = seatModelRefusal(input.agent, runtime.config?.models)
+      if (refusal) deny(`Seat "${input.agent}" cannot launch: ${refusal}`)
     }
     if (seat && event.tool === "subagent") guardSeatLaunch({ agent: event.agent, input }, seats)
     if (seat && event.sessionID) await seats?.onTool(event.sessionID, event.agent, event.tool)

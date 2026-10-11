@@ -485,3 +485,19 @@ export const ALL_ES_TOOLS: readonly string[] = [...new Set(AGENTS.flatMap((agent
 export function seatMayUse(agentId: string | undefined, tool: string): boolean {
   return agentSpec(agentId)?.tools.includes(tool) ?? false
 }
+// ------------------------------------------- heterogeneous roles (#170)
+//
+// Which seats form the programmer, QA and auditor roles for the
+// heterogeneous-model policy. The resolution and enforcement live in
+// ./models.ts (kept out of the registry so this seat table stays small);
+// the seat-launch guard (plugin seats.ts) and build initiation (factory
+// machine.ts) enforce it.
+
+/** Seat roles with a dedicated models.* key. QA spans both QA seats. */
+export type ModelRole = "programmer" | "qa" | "auditor"
+
+export const ROLE_SEATS: Record<ModelRole, { readonly agents: readonly string[]; readonly tier: ModelTier }> = {
+  programmer: { agents: ["es-programmer"], tier: "balanced" },
+  qa: { agents: ["es-qa-functional", "es-qa-adversarial"], tier: "balanced" },
+  auditor: { agents: ["es-auditor-thesis", "es-auditor-antithesis"], tier: "deep" },
+}

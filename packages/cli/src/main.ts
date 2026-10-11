@@ -749,14 +749,22 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         if (sub === "run") return await gatesRun(context, subArgs(2))
         if (sub === "install-git") return await installGitHooks(context, subArgs(2))
         break
-      case "mcp":
+      case "mcp": {
+        // Heterogeneous models (#170): the MCP build path enforces the same
+        // policy as the plugin. Best-effort: an unreadable config cannot
+        // prove diversity, so the check is skipped (the plugin refuses).
+        const models = await loadEsConfig(root)
+          .then((loaded) => loaded.config.models)
+          .catch(() => undefined)
         await serveStdio({
           root,
           version: VERSION,
           ...(io.stateDir ? { stateDir: io.stateDir } : {}),
           ...(process.env.ES_AGENT ? { defaultAgent: process.env.ES_AGENT } : {}),
+          ...(models ? { models } : {}),
         })
         return 0
+      }
       case "rebase": {
         if (sub === "cascade") {
           const from = flag(subArgs(2), "from")

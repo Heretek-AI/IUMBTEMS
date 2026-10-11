@@ -27,6 +27,10 @@ configured model missing on the host refuses that seat at launch):
 | `models.fast` | Model for fast-tier seats (lenses), "provider/model". |
 | `models.balanced` | Model for balanced-tier seats (programmer, QA, research). |
 | `models.deep` | Model for deep-tier seats (factory, grill, managers, critics). |
+| `models.programmer` | Model for the programmer seat, "provider/model". Must differ in provider from the QA model (#170). |
+| `models.qa` | Model for both QA seats, "provider/model". Must differ in provider from the programmer model (#170). |
+| `models.auditor` | Model for the auditor seats, "provider/model". |
+| `models.requireDiversity` | Refuse build initiation unless programmer/QA provider diversity is proven (no unset seats). |
 | `models.agents` | Per-agent model overrides by agent id. |
 
 `es config show` and `/config` print the effective config and which files contributed.

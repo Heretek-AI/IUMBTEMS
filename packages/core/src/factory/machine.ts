@@ -14,6 +14,7 @@
 import { randomBytes } from "node:crypto"
 import { readFile, symlink } from "node:fs/promises"
 import path from "node:path"
+import { assertModelDiversity, ModelDiversityError, type SeatModelMap } from "../agents/models.ts"
 import { seatOf } from "../agents/registry.ts"
 import { readApproval, verifyApproval } from "../approval/record.ts"
 import { appendAuditEntry } from "../audit/chain.ts"
@@ -136,6 +137,13 @@ export interface FactoryDeps {
    * `es config set audit.phase required`.
    */
   readonly auditPhase?: "optional" | "required"
+  /**
+   * Config models: programmer/QA provider diversity (#170). Shared weights
+   * share blind spots, so build initiation refuses when both sides resolve to
+   * the same provider; unset seats are unverified (refused only under
+   * models.requireDiversity). The plugin passes its effective config here.
+   */
+  readonly models?: SeatModelMap
 }
 
 export interface CompleteResult {
@@ -598,6 +606,14 @@ export class Factory {
 
   async startBuild(agentId: string | undefined): Promise<FactoryState> {
     this.requireSeat(agentId, "factory")
+    // Heterogeneous models (#170): programmer and QA on shared weights share
+    // blind spots, so build initiation refuses before touching any branch.
+    try {
+      assertModelDiversity(this.deps.models)
+    } catch (error) {
+      if (error instanceof ModelDiversityError) throw new FactoryError(error.message)
+      throw error
+    }
     return this.mutate(`agent:${agentId}`, async (state) => {
       this.requireStage(state, "SPEC")
       this.requireAuditsClear(state)

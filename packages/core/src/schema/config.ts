@@ -25,6 +25,17 @@ export const EsConfigSchema = z
         fast: ModelRefSchema.describe('Model for fast-tier seats (lenses), "provider/model".').optional(),
         balanced: ModelRefSchema.describe("Model for balanced-tier seats (programmer, QA, research).").optional(),
         deep: ModelRefSchema.describe("Model for deep-tier seats (factory, grill, managers, critics).").optional(),
+        programmer: ModelRefSchema.describe(
+          'Model for the programmer seat, "provider/model". Must differ in provider from the QA model (#170).',
+        ).optional(),
+        qa: ModelRefSchema.describe(
+          'Model for both QA seats, "provider/model". Must differ in provider from the programmer model (#170).',
+        ).optional(),
+        auditor: ModelRefSchema.describe('Model for the auditor seats, "provider/model".').optional(),
+        requireDiversity: z
+          .boolean()
+          .describe("Refuse build initiation unless programmer/QA provider diversity is proven (no unset seats).")
+          .optional(),
         agents: z
           .record(z.string(), ModelRefSchema)
           .describe("Per-agent model overrides by agent id.")
