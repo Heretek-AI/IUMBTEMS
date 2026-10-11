@@ -63,7 +63,23 @@ async function adoptAll(tool: ReturnType<typeof tools>, names: string[]) {
   for (const name of names) {
     await tool("es_scout_scan").execute({ candidate: name }, scout)
     await tool("es_scout_record").execute(
-      { candidate: name, maintenance: "stable", proposal: "adopt", rationale: "small, focused and tested", claims: [] },
+      {
+        candidate: name,
+        maintenance: "stable",
+        proposal: "adopt",
+        rationale: "small, focused and tested",
+        // es_scout_complete requires advisories or an explicit skip per
+        // candidate (#257 enforcement): local fixtures have no published
+        // package to query, so the skip is recorded, not silently omitted.
+        claims: [
+          {
+            tag: "NEGATIVE_KNOWLEDGE",
+            statement: `OSV advisories were not queried for ${name}`,
+            query: `OSV advisories for ${name}`,
+            finding: "skipped: a local fixture with no published package",
+          },
+        ],
+      },
       scout,
     )
   }

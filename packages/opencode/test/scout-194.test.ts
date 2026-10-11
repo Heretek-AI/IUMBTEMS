@@ -39,13 +39,23 @@ const plantVendor = async (root: string, name: string, licenseFile: string | nul
   await write(root, `${dir}/package.json`, JSON.stringify({ name, version: "1.0.0" }))
   if (licenseFile) await write(root, `${dir}/LICENSE`, read(`licenses/${licenseFile}.txt`))
 }
-const recordAdopt = (name: string) =>
+// es_scout_complete requires advisories or an explicit skip per candidate
+// (#257 enforcement): local fixtures have no published package to query,
+// so the skip is recorded, not silently omitted (a50ced8 precedent).
+const advisorySkip = (name: string) => ({
+  tag: "NEGATIVE_KNOWLEDGE",
+  statement: `OSV advisories were not queried for ${name}`,
+  query: `OSV advisories for ${name}`,
+  finding: "skipped: a local fixture with no published package",
+})
+
+const recordAdopt = (name: string, claims: ReadonlyArray<Record<string, unknown>> = [advisorySkip(name)]) =>
   call("es_scout_record", {
     candidate: name,
     maintenance: "stable",
     proposal: "adopt",
     rationale: "it does what we need",
-    claims: [],
+    claims: [...claims],
   })
 
 // Canned OSV /v1/query body (same shape as packages/core/test/scout.test.ts):
@@ -132,7 +142,7 @@ describe("issue #194: core downgrades scout-proposed adopt on the real host", ()
         candidates: names.map((name) => ({ name, source: `local:./vendor/${name}` })),
       }),
       ...names.map((name) => call("es_scout_scan", { candidate: name })),
-      ...names.map(recordAdopt),
+      ...names.map((name) => recordAdopt(name)),
       call("es_scout_complete"),
     ]
     const { tools } = await h.run(`scout ${calls.join(" ")}`, { agent: "scout" })
@@ -218,7 +228,7 @@ describe("issue #194: a narrowed license whitelist demotes verified permissive l
         candidates: names.map((name) => ({ name, source: `local:./vendor/${name}` })),
       }),
       ...names.map((name) => call("es_scout_scan", { candidate: name })),
-      ...names.map(recordAdopt),
+      ...names.map((name) => recordAdopt(name)),
       call("es_scout_complete"),
     ]
     const { tools } = await h.run(`scout ${calls.join(" ")}`, { agent: "scout" })
@@ -260,7 +270,7 @@ describe("issue #194: OSV advisories are cited by hash on the real host", () => 
       expect(osvBodies).toEqual([{ package: { name: "mit-lib", ecosystem: "npm" }, version: "1.0.0" }])
       const hash = /sha256:([0-9a-f]{64})/.exec(advisories.tools[0]?.text ?? "")?.[1]
       expect(hash).toBeDefined()
-      const cached = await new SourceCache(researchSourcesDir(h.directory)).get(hash!)
+      const cached = await new SourceCache(researchSourcesDir(h.directory), state).get(hash!)
       expect(cached?.meta.provider).toBe("osv")
 
       const recorded = await h.run(recordAdopt("mit"), { agent: "scout" })
@@ -314,15 +324,35 @@ describe("bug #257 probe: the advisory step is evadable (current behavior, not a
     return (await readScoutResult(h.directory))!.verdicts.find((item) => item.candidate === "mit")!
   }
 
-  test("(a) skipping es_scout_advisories still completes a clean adopt with zero citations", async () => {
-    const mit = await planScanRecord()
-    // #257 fail-open, asserted as today's behavior: no advisory gate, no
-    // citation, no warning. Desired: require advisories or an explicit
-    // NEGATIVE_KNOWLEDGE record before es_scout_complete.
+  test("(a) completing with neither advisories nor a recorded skip is refused (#257 enforced)", async () => {
+    const planned = await h.run(
+      call("es_scout_plan", {
+        objective: "a function library",
+        candidates: [{ name: "mit", source: "local:./vendor/mit" }],
+      }),
+      { agent: "scout" },
+    )
+    expect(planned.tools[0]?.status).toBe("completed")
+    const scanned = await h.run(call("es_scout_scan", { candidate: "mit" }), { agent: "scout" })
+    expect(scanned.tools[0]?.status).toBe("completed")
+    const recorded = await h.run(recordAdopt("mit", []), { agent: "scout" })
+    expect(recorded.tools[0]?.status).toBe("completed")
+    // No advisories and no explicit skip: the completion refuses instead
+    // of the old silent clean adopt.
+    const refused = await h.run(call("es_scout_complete"), { agent: "scout" })
+    expect(refused.tools[0]?.status).toBe("error")
+    expect(refused.tools[0]?.text).toContain("query its advisories")
+    // Recording the skip unblocks it: clean adopt, zero warnings, and the
+    // skip itself cited in the dossier (not a silent omission).
+    const rerecorded = await h.run(recordAdopt("mit"), { agent: "scout" })
+    expect(rerecorded.tools[0]?.status).toBe("completed")
+    const completed = await h.run(call("es_scout_complete"), { agent: "scout" })
+    expect(completed.tools[0]?.status).toBe("completed")
+    const mit = (await readScoutResult(h.directory))!.verdicts.find((item) => item.candidate === "mit")!
     expect([mit.proposal, mit.verdict]).toEqual(["adopt", "adopt"])
     expect(mit.warnings).toEqual([])
     const dossier = JSON.parse(await readFile(factoryLayout(h.directory).scoutDossier, "utf8"))
-    expect(dossier.claims).toEqual([])
+    expect(dossier.claims.map((claim: any) => claim.tag)).toEqual(["NEGATIVE_KNOWLEDGE"])
   }, 120_000)
 
   test("(b) a hand-supplied wrong package is never validated against the candidate", async () => {
@@ -342,7 +372,7 @@ describe("bug #257 probe: the advisory step is evadable (current behavior, not a
       const advisoryClaims = dossier.claims.filter((claim: any) => claim.statement.includes("affects mit"))
       expect(advisoryClaims.length).toBe(3)
       const hash = advisoryClaims[0].source.sha256 as string
-      const cached = await new SourceCache(researchSourcesDir(h.directory)).get(hash)
+      const cached = await new SourceCache(researchSourcesDir(h.directory), state).get(hash)
       expect(cached?.text).toContain("unrelated-pkg")
     } finally {
       unstubOsv()

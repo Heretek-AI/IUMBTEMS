@@ -134,7 +134,7 @@ describe("auditor downgrade rules (#187: verbatim grounds, paraphrase and plants
     expect(paraphrased.claims[0]?.reason).toContain("not found verbatim")
   })
 
-  test("a planted unsealed entry is refused by the sealed cache; the legacy constructor still reads it (#251)", async () => {
+  test("a planted unsealed entry is refused by the sealed cache (#251)", async () => {
     const text = "Planted findings about gate latency on reference hardware."
     const hash = sha256(normalizeSourceText(text))
     await mkdir(path.join(dir, "sources"), { recursive: true })
@@ -151,8 +151,6 @@ describe("auditor downgrade rules (#187: verbatim grounds, paraphrase and plants
     expect(audit.coverage).toMatchObject({ claims: 1, grounded: 0, ungrounded: 1 })
     expect(audit.claims[0]?.reason).toContain("not in the cache")
     expect(audit.passed).toBe(false)
-    // Current legacy behaviour (bug #251): without a state dir nothing is verified.
-    expect((await new SourceCache(path.join(dir, "sources")).get(hash))?.text).toContain("gate latency")
   })
 
   test("short and missing quotes stay ungrounded; substantive other tags ground, stubs are malformed", async () => {

@@ -87,8 +87,21 @@ describe("biopharma pack on the real host (#190.2)", () => {
       })
       await factory.beginResearchRun({ objective: "Does the therapy hold?", ceilingUSD: 5 })
 
-      const shaClean = await fetchSha(h, `http://127.0.0.1:${PORT}/clean`)
       const shaRetract = await fetchSha(h, `http://127.0.0.1:${PORT}/retract`)
+      // Peer-reviewed fixtures, sealed straight into the cache like the
+      // banned one: the fixed scorer clamps tierless loopback sources to
+      // the lowest tier (#252), so the passing report needs tiered weight
+      // to clear the 0.7 threshold honestly — (1+1+0.3)/3 = 0.767.
+      const peer1 = await researchCache(h.directory, state).put({
+        url: "https://doi.org/10.1000/therapy-trial",
+        text: "The randomized trial demonstrated efficacy on the primary endpoint with durable response.",
+        provider: "fetch",
+      })
+      const peer2 = await researchCache(h.directory, state).put({
+        url: "https://www.nejm.org/doi/therapy-review",
+        text: "Independent review confirmed the safety profile across subgroups and follow-up.",
+        provider: "fetch",
+      })
       // No network fixture can serve a banned host, so the banned-domain
       // source is sealed straight into the project cache (same engine seal
       // the fetch path mints, same state dir the plugin verifies with).
@@ -99,19 +112,20 @@ describe("biopharma pack on the real host (#190.2)", () => {
       })
 
       const bannedLine = `- The surrogate is fully validated [VERIFIED: sha256:${banned.meta.sha256} "surrogate endpoint is fully validated"]`
-      const cleanLine = `- The trial met its primary endpoint [VERIFIED: sha256:${shaClean} "met its primary endpoint"]`
+      const peerLine1 = `- The therapy works [VERIFIED: sha256:${peer1.meta.sha256} "demonstrated efficacy on the primary endpoint"]`
+      const peerLine2 = `- It is safe [VERIFIED: sha256:${peer2.meta.sha256} "confirmed the safety profile across subgroups"]`
       const retractLine = `- Surrogates predicted survival [VERIFIED: sha256:${shaRetract} "predicted long-term survival"]`
 
       // A banned-domain claim is grounded (verbatim quote, sealed source) so
       // the epistemic audit passes and the pack gate is what refuses it.
-      await writeReport(h, `# Report\n\n${bannedLine}\n${cleanLine}\n`)
+      await writeReport(h, `# Report\n\n${bannedLine}\n${peerLine1}\n`)
       const refused = await h.run(call("es_research_complete"), { agent: "deep-researcher" })
       expect(refused.tools[0]?.status).toBe("error")
       expect(refused.tools[0]?.text).toContain("BANNED_DOMAIN")
       expect(refused.tools[0]?.text).toContain("biopharma")
 
       // Without the banned claim the pack-active report completes to DONE.
-      await writeReport(h, `# Report\n\n${cleanLine}\n${retractLine}\n`)
+      await writeReport(h, `# Report\n\n${peerLine1}\n${peerLine2}\n${retractLine}\n`)
       const completed = await h.run(call("es_research_complete"), { agent: "deep-researcher" })
       expect(completed.tools[0]?.status).toBe("completed")
       expect((await factory.read())?.stage).toBe("DONE")

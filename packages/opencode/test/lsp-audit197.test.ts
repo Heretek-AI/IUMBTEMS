@@ -117,12 +117,11 @@ describe("LSP diagnostics end to end (#197)", () => {
   }, 60_000)
 })
 
-describe("after-edit diagnostics for an lsp:none seat (#277)", () => {
-  test("the injector appends diagnostics even though the seat has no LSP tools (current behavior)", async () => {
-    // Premise pin: the designer seat is lsp:"none" (registry), so its agent
-    // permissions deny the lsp/lsp_rename actions — yet the execute.after hook
-    // appends server diagnostics to any completed write (policy.ts:177-189).
-    // This test records that leak; scoping it is bug #277, not this file.
+describe("after-edit diagnostics for an lsp:none seat (#277 fixed)", () => {
+  test("the injector stays silent for a seat with no LSP tools", async () => {
+    // FIXED (#277.2): the injector is scoped to seats whose registry entry
+    // allows LSP — the designer seat is lsp:"none", so its completed writes
+    // pass through untouched. (The old leak this pinned is gone.)
     expect(agentSpec("designer")?.lsp).toBe("none")
     const { createPolicyHooks } = await import("../src/policy.ts")
     const root = await mkdtemp(path.join(tmpdir(), "es-lsp-197-none-"))
@@ -150,9 +149,8 @@ describe("after-edit diagnostics for an lsp:none seat (#277)", () => {
       }
       await hooks.after(event as any)
       const content = String((event.result as any)?.content ?? "")
-      expect(content).toContain("<diagnostics>")
-      expect(content).toContain("src/main.ts:1:1")
-      expect(content).toContain("not assignable to type 'string'")
+      expect(content).toBe("ok")
+      expect(content).not.toContain("<diagnostics>")
     } finally {
       await rm(root, { recursive: true, force: true })
     }

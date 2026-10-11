@@ -123,7 +123,7 @@ describe("slash commands that answer verbatim (no seat switch)", () => {
   }, 60_000)
 })
 
-describe("/research duplicate registration: the last body wins", () => {
+describe("/research duplicate registration resolved (#274 fixed)", () => {
   test("/research with no args reads the report/coverage/sources", async () => {
     const { before, after, context } = await invoke("research", "")
     expect(after).toBe(before)
@@ -132,14 +132,13 @@ describe("/research duplicate registration: the last body wins", () => {
     expect(text).toContain("Cached sources:")
   }, 60_000)
 
-  test("/research deep args still reach the reader, not the deep flow (FINDING)", async () => {
+  test("/research deep args reach the deep flow, not the reader", async () => {
     const { before, after, context } = await invoke("research", "deep what is foo --max-usd 5")
-    // The deep-research body would switch to deep-researcher and begin a run;
-    // the reader body wins instead: no switch, reader text.
-    expect(after).toBe(before)
-    expect(after).not.toBe("deep-researcher")
+    // FIXED (#274): one registration — deep args switch to deep-researcher
+    // instead of falling through to the reader body.
+    expect(after).toBe("deep-researcher")
+    expect(after).not.toBe(before)
     const text = syntheticTexts(context).join("\n")
-    expect(text).toContain("No research report yet (.factory/research/REPORT.md).")
-    expect(text).toContain("Cached sources:")
+    expect(text).not.toContain("Cached sources:")
   }, 60_000)
 })
