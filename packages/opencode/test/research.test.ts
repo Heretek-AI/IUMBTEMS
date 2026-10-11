@@ -18,8 +18,14 @@ let h: Harness
 let server: ReturnType<typeof Bun.serve>
 let previous: string | undefined
 let previousLoopback: string | undefined
+// Ambient provider keys must not reach the wire (#312): only the fixture serves.
+const ambient = new Map<string, string | undefined>()
 
 beforeAll(async () => {
+  for (const key of ["BRAVE_API_KEY", "FIRECRAWL_API_KEY"]) {
+    ambient.set(key, process.env[key])
+    delete process.env[key]
+  }
   state = await mkdtemp(path.join(tmpdir(), "es-research-host-"))
   server = Bun.serve({
     port: 0,
@@ -61,6 +67,10 @@ afterAll(async () => {
   else process.env.SEARXNG_URL = previous
   if (previousLoopback === undefined) delete process.env.ES_RESEARCH_ALLOW_LOOPBACK
   else process.env.ES_RESEARCH_ALLOW_LOOPBACK = previousLoopback
+  for (const [key, value] of ambient) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
   await rm(state, { recursive: true, force: true })
 })
 
