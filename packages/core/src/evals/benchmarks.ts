@@ -47,75 +47,103 @@ export interface BenchmarkGrade {
 
 const deepEqual = (a: unknown, b: unknown): boolean => Bun.deepEquals(a, b, true)
 
+/** Write the candidate into the grade dir; an escaping path fails closed. */
+async function writeSolutionFiles(
+  dir: string,
+  solution: Readonly<Record<string, string>>,
+): Promise<string | undefined> {
+  for (const [file, content] of Object.entries(solution)) {
+    const target = path.join(dir, file)
+    if (path.relative(dir, target).startsWith("..")) return `solution escapes the workspace: ${file}`
+    await mkdir(path.dirname(target), { recursive: true })
+    await writeFile(target, content)
+  }
+  return undefined
+}
+
+/** Bundle-build the entry and import it; failures name the compile break. */
+async function loadCompiledEntry(
+  dir: string,
+  entry: string,
+): Promise<{ module: Record<string, unknown> } | { failure: string }> {
+  const entryAbs = path.join(dir, entry)
+  const build = await Bun.build({ entrypoints: [entryAbs], outdir: path.join(dir, "dist"), target: "bun" }).catch(
+    (error: Error) => ({ success: false as const, logs: error.message }),
+  )
+  if (build.success !== true) {
+    const logs =
+      "logs" in build
+        ? String(build.logs)
+        : Array.isArray((build as { logs?: unknown }).logs)
+          ? (build as { logs: Array<{ message?: string }> }).logs.map((log) => log.message ?? String(log)).join("\n")
+          : "build failed"
+    return { failure: `does not compile: ${logs.slice(0, 500)}` }
+  }
+  const module = await import(`${entryAbs}?bench=${Date.now()}`).catch(() => undefined)
+  if (module === undefined) return { failure: "does not compile: the entry cannot be imported" }
+  return { module: module as Record<string, unknown> }
+}
+
+/** Call every oracle property against the module exports, deep-comparing results. */
+async function runOracleProperties(
+  module: Record<string, unknown>,
+  oracle: BenchmarkOracle,
+): Promise<{ failures: string[]; durationMs: number }> {
+  const failures: string[] = []
+  const started = Date.now()
+  for (const property of oracle.properties) {
+    const fn = module[property.fn]
+    if (typeof fn !== "function") {
+      failures.push(`missing export: ${property.fn}`)
+      continue
+    }
+    let actual: unknown
+    try {
+      actual = await (fn as (...args: unknown[]) => unknown)(...property.args)
+    } catch (error) {
+      failures.push(
+        `${property.fn}(${JSON.stringify(property.args)}) threw: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      continue
+    }
+    if (!deepEqual(actual, property.expected))
+      failures.push(
+        `${property.fn}(${JSON.stringify(property.args)}) = ${JSON.stringify(actual)}, expected ${JSON.stringify(property.expected)}`,
+      )
+  }
+  const durationMs = Date.now() - started
+  const budget = oracle.perfBudgetMs ?? 5_000
+  if (durationMs > budget)
+    failures.push(
+      `performance budget exceeded: ${durationMs}ms > ${budget}ms for ${oracle.properties.length} properties`,
+    )
+  return { failures, durationMs }
+}
+
+/** Source-shape constraints (refactoring/API-use bars) over the entry text. */
+function checkSourceConstraints(entry: string, oracle: BenchmarkOracle): string[] {
+  const failures: string[] = []
+  for (const needle of oracle.mustContain ?? [])
+    if (!entry.includes(needle)) failures.push(`solution must contain: ${needle}`)
+  for (const needle of oracle.mustNotContain ?? [])
+    if (entry.includes(needle)) failures.push(`solution must not contain: ${needle}`)
+  return failures
+}
+
 /** A candidate solution fails closed when the entry does not compile or an export is missing. */
 export async function gradeBenchmarkSolution(
   testCase: BenchmarkCase,
   solution: Readonly<Record<string, string>>,
 ): Promise<BenchmarkGrade> {
   const started = Date.now()
-  const failures: string[] = []
   const dir = await mkdtemp(path.join(tmpdir(), "es-benchmark-"))
   try {
-    for (const [file, content] of Object.entries(solution)) {
-      const target = path.join(dir, file)
-      if (path.relative(dir, target).startsWith("..")) {
-        failures.push(`solution escapes the workspace: ${file}`)
-        return { pass: false, failures, durationMs: Date.now() - started }
-      }
-      await mkdir(path.dirname(target), { recursive: true })
-      await writeFile(target, content)
-    }
-    const entryAbs = path.join(dir, testCase.entry)
-    const build = await Bun.build({ entrypoints: [entryAbs], outdir: path.join(dir, "dist"), target: "bun" }).catch(
-      (error: Error) => ({ success: false as const, logs: error.message }),
-    )
-    if (build.success !== true) {
-      const logs =
-        "logs" in build
-          ? String(build.logs)
-          : Array.isArray((build as { logs?: unknown }).logs)
-            ? (build as { logs: Array<{ message?: string }> }).logs.map((log) => log.message ?? String(log)).join("\n")
-            : "build failed"
-      failures.push(`does not compile: ${logs.slice(0, 500)}`)
-      return { pass: false, failures, durationMs: Date.now() - started }
-    }
-    const module = await import(`${entryAbs}?bench=${Date.now()}`).catch(() => undefined)
-    if (module === undefined) {
-      failures.push("does not compile: the entry cannot be imported")
-      return { pass: false, failures, durationMs: Date.now() - started }
-    }
-    const propertiesStarted = Date.now()
-    for (const property of testCase.oracle.properties) {
-      const fn = (module as Record<string, unknown>)[property.fn]
-      if (typeof fn !== "function") {
-        failures.push(`missing export: ${property.fn}`)
-        continue
-      }
-      let actual: unknown
-      try {
-        actual = await (fn as (...args: unknown[]) => unknown)(...property.args)
-      } catch (error) {
-        failures.push(
-          `${property.fn}(${JSON.stringify(property.args)}) threw: ${error instanceof Error ? error.message : String(error)}`,
-        )
-        continue
-      }
-      if (!deepEqual(actual, property.expected))
-        failures.push(
-          `${property.fn}(${JSON.stringify(property.args)}) = ${JSON.stringify(actual)}, expected ${JSON.stringify(property.expected)}`,
-        )
-    }
-    const propertiesMs = Date.now() - propertiesStarted
-    const budget = testCase.oracle.perfBudgetMs ?? 5_000
-    if (propertiesMs > budget)
-      failures.push(
-        `performance budget exceeded: ${propertiesMs}ms > ${budget}ms for ${testCase.oracle.properties.length} properties`,
-      )
-    const entry = solution[testCase.entry] ?? ""
-    for (const needle of testCase.oracle.mustContain ?? [])
-      if (!entry.includes(needle)) failures.push(`solution must contain: ${needle}`)
-    for (const needle of testCase.oracle.mustNotContain ?? [])
-      if (entry.includes(needle)) failures.push(`solution must not contain: ${needle}`)
+    const escapeFailure = await writeSolutionFiles(dir, solution)
+    if (escapeFailure !== undefined) return { pass: false, failures: [escapeFailure], durationMs: Date.now() - started }
+    const loaded = await loadCompiledEntry(dir, testCase.entry)
+    if ("failure" in loaded) return { pass: false, failures: [loaded.failure], durationMs: Date.now() - started }
+    const ran = await runOracleProperties(loaded.module, testCase.oracle)
+    const failures = [...ran.failures, ...checkSourceConstraints(solution[testCase.entry] ?? "", testCase.oracle)]
     return { pass: failures.length === 0, failures, durationMs: Date.now() - started }
   } finally {
     await rm(dir, { recursive: true, force: true })
