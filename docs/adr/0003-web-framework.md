@@ -1,6 +1,6 @@
 # ADR 0003: Web control plane framework (SolidJS)
 
-- **Status:** Accepted (SolidJS, per the Phase 4 plan direction; the human re-confirms at the #134 release review).
+- **Status:** Accepted (SolidJS; confirmed by the user on 2026-10-11, quoted under "Decision").
 - **Date:** 2026-10-09
 - **Epic:** #94 · **Milestone:** Phase 4 · Web control plane · 1.5.0
 - **Ticket:** #129 (scaffold; features follow in #130–#133)
@@ -46,6 +46,17 @@ Adopt **SolidJS with Vite** for `packages/web`:
 4. No runtime CDN, ever: `vite build` emits `packages/web/dist/`, served
    from the workspace path in dev and from an embedded asset map once
    fleet publishes.
+
+**Confirmation (2026-10-11).** The user answered a multiple-choice question
+in a Claude Code session (recorded on #156):
+
+> Is SolidJS your choice of framework for the web dashboard?
+
+Selected:
+
+> **Yes, SolidJS (Recommended).** It is already built and shipped this way.
+
+Offered and not selected: "No" and "Undecided".
 
 ## Consequences
 
