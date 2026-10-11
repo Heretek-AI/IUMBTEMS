@@ -51,9 +51,7 @@ describe("STOP/HALTED covers user-agent seat launches (#227)", () => {
   })
 
   test("a user-agent launch is allowed when neither STOP nor HALTED applies", async () => {
-    const factory = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
-    void factory
     const { before } = createPolicyHooks(runtime("clean"))
-    await before(launch("build") as never)
+    await expect(before(launch("build") as never)).resolves.toBeUndefined()
   })
 })

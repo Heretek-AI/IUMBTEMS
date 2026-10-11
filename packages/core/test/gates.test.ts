@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import path from "node:path"
 import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import {
@@ -12,6 +13,7 @@ import {
   GatesConfigSchema,
   gitleaks,
   installed,
+  isTrusted,
   loadGatesConfig,
   parseOutput,
   recordWaiver,
@@ -19,6 +21,7 @@ import {
   trustProject,
   validateArtifacts,
 } from "../src/index.ts"
+import { canonicalPath } from "../src/trust/paths.ts"
 import { bwrapAvailable, resetBwrapProbe, run } from "../src/util/proc.ts"
 import { type Fixture, gitRepo } from "./helpers.ts"
 
@@ -145,6 +148,77 @@ describe("trust", () => {
     expect((await gates({ scope: "full", config: changed })).findings[0]?.rule).toBe("trust/untrusted")
   })
 
+  test("a forged trust entry is not trust: isTrusted verifies the human signature (#221.3)", async () => {
+    const cfg = config([{ id: "probe", kind: "test", command: "touch RAN" }])
+    const wanted = config([{ id: "probe", kind: "test", command: "touch FORGED" }])
+    const { hash } = await commandSetHash(fx.root, cfg.commands)
+    const forgedHash = (await commandSetHash(fx.root, wanted.commands)).hash
+    await trust(cfg)
+    expect(await isTrusted(fx.root, hash, fx.state)).toBe(true)
+
+    const file = path.join(fx.state, "trust.json")
+    const genuine = await readFile(file, "utf8")
+    const store = JSON.parse(genuine) as { projects: Record<string, { gates: Record<string, any> }> }
+    const project = Object.keys(store.projects)[0]!
+    const entry = store.projects[project]!.gates
+    const plant = (projects: Record<string, unknown>) => writeFile(file, JSON.stringify({ version: 3, projects }))
+
+    // A second human key: a real Ed25519 signature, but not this machine's.
+    const foreign = await mkdtemp(path.join(tmpdir(), "es-gates-foreign-"))
+    await sealHumanKey(PASSPHRASE, foreign)
+    const foreignSigner = await unlockHumanKey(PASSPHRASE, foreign)
+    const retargeted = {
+      hash: forgedHash,
+      lines: ["probe: touch FORGED"],
+      approvedBy: "x",
+      approvedAt: entry.approvedAt,
+    }
+    const forgeries: Record<string, Record<string, unknown>> = {
+      // The genuine signature replayed over another command set.
+      "replayed signature": { [project]: { gates: { ...entry, hash: forgedHash, lines: retargeted.lines } } },
+      "made-up signature": {
+        [project]: {
+          gates: { ...retargeted, signature: { alg: "ed25519", keyId: entry.signature.keyId, sig: "AAAA" } },
+        },
+      },
+      "no signature": { [project]: { gates: retargeted } },
+      "foreign key": {
+        [project]: {
+          gates: {
+            ...retargeted,
+            signature: foreignSigner.sign({ trust: 1, project, kind: "gates", ...retargeted }),
+          },
+        },
+      },
+    }
+    try {
+      for (const [name, projects] of Object.entries(forgeries)) {
+        await plant(projects)
+        expect([name, await isTrusted(fx.root, forgedHash, fx.state)]).toEqual([name, false])
+        const report = await gates({ scope: "full", config: wanted })
+        expect([name, report.findings[0]?.rule]).toEqual([name, "trust/untrusted"])
+        expect(await Bun.file(path.join(fx.root, "FORGED")).exists()).toBe(false)
+      }
+
+      // The signature binds the project and the kind: the genuine entry moved
+      // to another project, or presented as hook trust, verifies for neither.
+      const other = await gitRepo("es-gates-other-")
+      try {
+        const otherProject = canonicalPath(other.root)
+        expect(project).toBe(canonicalPath(fx.root))
+        await plant({ [project]: { gates: entry, hooks: entry }, [otherProject]: { gates: entry } })
+        expect(await isTrusted(other.root, hash, fx.state)).toBe(false)
+        expect(await isTrusted(fx.root, hash, fx.state, "hooks")).toBe(false)
+        // Control: in the same planted file, the untouched entry still verifies.
+        expect(await isTrusted(fx.root, hash, fx.state)).toBe(true)
+      } finally {
+        await other.cleanup()
+      }
+    } finally {
+      await rm(foreign, { recursive: true, force: true })
+    }
+  })
+
   test("a package script reachable from a command is part of the trusted hash", async () => {
     await write("package.json", JSON.stringify({ scripts: { typecheck: "tsc" } }))
     const cfg = config([{ id: "typecheck", kind: "typecheck", command: "npm run --silent typecheck" }])
@@ -193,6 +267,41 @@ describe("built-in checks", () => {
     const waived = await gates({ touched: ["src/config.ts"], config: config([]) })
     expect(waived.findings.some((finding) => finding.rule === "security/secret-github-token")).toBe(false)
     expect(waived.waived).toBeGreaterThan(0)
+  })
+
+  test("an expired signed waiver planted at gate time waives nothing (#221.1)", async () => {
+    await write("src/config.ts", `export const token = "${FAKE_TOKEN}"\n`)
+    // recordWaiver refuses a past expiry, so the record is hand-aged: the
+    // same fields it signs, under the real human key, one day apart.
+    const plant = async (expiresAt: Date) => {
+      const unsigned = {
+        version: 2 as const,
+        id: "aged-token",
+        rule: "security/secret-github-token",
+        files: "src/config.ts",
+        reason: "fixture value, not a real token",
+        approvedBy: "tester",
+        approvedAt: new Date(expiresAt.getTime() - 30 * 86_400_000).toISOString(),
+        expiresAt: expiresAt.toISOString(),
+        channel: "cli" as const,
+        auditHead: null,
+      }
+      await write(".factory/waivers/aged-token.json", JSON.stringify({ ...unsigned, signature: signer.sign(unsigned) }))
+      return gates({ touched: ["src/config.ts"], config: config([]) })
+    }
+
+    const expired = await plant(new Date(Date.now() - 86_400_000))
+    // The signature verifies, so this is not the forged path: no waiver/invalid.
+    expect(expired.findings.some((finding) => finding.rule === "waiver/invalid")).toBe(false)
+    expect(expired.findings.some((finding) => finding.rule === "security/secret-github-token")).toBe(true)
+    expect(expired.waived).toBe(0)
+    expect(expired.passed).toBe(false)
+
+    // Control: the identical record with a live expiry does waive, so the
+    // refusal above is the expiry and nothing else about the planted file.
+    const live = await plant(new Date(Date.now() + 86_400_000))
+    expect(live.findings.some((finding) => finding.rule === "security/secret-github-token")).toBe(false)
+    expect(live.waived).toBe(1)
   })
 
   test("budgets: behaviour change without a test change, file length, complexity", async () => {
