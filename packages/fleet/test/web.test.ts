@@ -239,7 +239,10 @@ describe("web serving", () => {
       const anon = await postRpc(server.port, { method: "fleet.status", params: {} })
       expect(anon.status).toBe(401)
       expectSecurityHeaders(anon.headers, "anonymous rpc 401")
-      const missing = await raw(server.port, `GET /fleet/rpc HTTP/1.1\r\nHost: 127.0.0.1:${server.port}\r\nConnection: close\r\n\r\n`)
+      const missing = await raw(
+        server.port,
+        `GET /fleet/rpc HTTP/1.1\r\nHost: 127.0.0.1:${server.port}\r\nConnection: close\r\n\r\n`,
+      )
       expect(missing.status).toBe(404)
       expectSecurityHeaders(missing.headers, "wrong path 404")
     } finally {
