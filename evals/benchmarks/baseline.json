@@ -1,0 +1,218 @@
+{
+  "algo-01-binary-search": {
+    "pass": true,
+    "durationMs": 9
+  },
+  "algo-02-quicksort": {
+    "pass": true,
+    "durationMs": 5
+  },
+  "algo-03-merge-intervals": {
+    "pass": true,
+    "durationMs": 6
+  },
+  "algo-04-bfs-path": {
+    "pass": true,
+    "durationMs": 5
+  },
+  "algo-05-lru-cache": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "algo-06-edit-distance": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "algo-07-toposort": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "algo-08-token-bucket": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "algo-09-k-largest": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "algo-10-longest-unique-substring": {
+    "pass": true,
+    "durationMs": 3
+  },
+  "algo-11-fib-memo": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "algo-12-two-sum-sorted": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "algo-13-group-anagrams": {
+    "pass": true,
+    "durationMs": 5
+  },
+  "algo-14-knapsack": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "algo-15-max-sliding-window": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "algo-16-dijkstra": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "ref-01-sum-reduce": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "ref-02-filter-map": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "ref-03-extract-discount": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "ref-04-early-return": {
+    "pass": true,
+    "durationMs": 3
+  },
+  "ref-05-const-bindings": {
+    "pass": true,
+    "durationMs": 3
+  },
+  "ref-06-template-literal": {
+    "pass": true,
+    "durationMs": 3
+  },
+  "ref-07-destructure": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "ref-08-pure-take-last": {
+    "pass": true,
+    "durationMs": 3
+  },
+  "ref-09-async-await": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "ref-10-named-constant": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "ref-11-remove-dead-code": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "ref-12-flatten-conditionals": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "api-01-paginated-fetch": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "api-02-retry-backoff": {
+    "pass": true,
+    "durationMs": 3
+  },
+  "api-03-debounce": {
+    "pass": true,
+    "durationMs": 3
+  },
+  "api-04-cache-aside": {
+    "pass": true,
+    "durationMs": 3
+  },
+  "api-05-csv-parse": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "api-06-url-router": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "api-07-event-emitter": {
+    "pass": true,
+    "durationMs": 3
+  },
+  "api-08-deep-merge": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "api-09-webhook-hmac": {
+    "pass": true,
+    "durationMs": 9
+  },
+  "api-10-slugify": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "api-11-config-flatten": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "api-12-chunk": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "dbg-01-last-element": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "dbg-02-inclusive-range": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "dbg-03-null-guard": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "dbg-04-float-money": {
+    "pass": true,
+    "durationMs": 3
+  },
+  "dbg-05-rotate-modulo": {
+    "pass": true,
+    "durationMs": 3
+  },
+  "dbg-06-leap-year": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "dbg-07-weekend-sunday": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "dbg-08-highlight-literal": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "dbg-09-average-empty": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "dbg-10-unique-words": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "dbg-11-numeric-sort": {
+    "pass": true,
+    "durationMs": 3
+  },
+  "dbg-12-forgotten-await": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "dbg-13-page-one-based": {
+    "pass": true,
+    "durationMs": 4
+  },
+  "dbg-14-config-match": {
+    "pass": true,
+    "durationMs": 4
+  }
+}
