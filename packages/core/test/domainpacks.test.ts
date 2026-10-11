@@ -205,7 +205,7 @@ describe("the pack gates completeResearch", () => {
   test("a clean report passes under biopharma and records the pack and score", async () => {
     const factory = await toResearch("biopharma")
     await report(
-      "https://journal.example/clean",
+      "https://doi.org/10.1/clean",
       "The cohort met the primary efficacy bar in the per-protocol analysis.",
       "primary efficacy bar",
     )
@@ -274,7 +274,10 @@ describe("source tiers reach claims and the score (#113)", () => {
       classifySourceTier("https://www.nature.com/articles/x"),
       classifySourceTier("https://docs.python.org/3/"),
       classifySourceTier("https://developer.mozilla.org/en/"),
+      // A docs./developer. prefix on an unlisted host earns no tier (#252):
+      // the prefix rule would let docs.<attacker> claim curated weight.
       classifySourceTier("https://docs.example.com/x"),
+      classifySourceTier("https://developer.example.com/y"),
       classifySourceTier("https://www.fda.gov/news/x"),
       classifySourceTier("https://journal.example/clean"),
       classifySourceTier("not a url"),
@@ -288,7 +291,8 @@ describe("source tiers reach claims and the score (#113)", () => {
       "PEER_REVIEWED",
       "TECHNICAL_DOCUMENTATION",
       "TECHNICAL_DOCUMENTATION",
-      "TECHNICAL_DOCUMENTATION",
+      undefined,
+      undefined,
       "PRIMARY_PRESS",
       undefined,
       undefined,
@@ -373,8 +377,13 @@ describe("source tiers reach claims and the score (#113)", () => {
     )
     expect(peer.score).toBe(1)
     expect(pre.score).toBe(0.3)
-    // Unknown tiers fall back to __default__.
-    expect(computeEpistemicScoreFromClaims([{ id: "c".repeat(64), tag: "VERIFIED" }], constitution).score).toBe(1)
+    // Unknown tiers fall back to __default__, which a pack clamps to its
+    // lowest verified tier weight (#252): tierless must never outscore
+    // verified evidence.
+    expect(weightFor(constitution, undefined)).toBeLessThanOrEqual(0.3)
+    expect(computeEpistemicScoreFromClaims([{ id: "c".repeat(64), tag: "VERIFIED" }], constitution).score).toBe(
+      weightFor(constitution, undefined),
+    )
   })
 
   test("tiers do not change claim identity: PCRB export and verify still pass", async () => {
@@ -393,5 +402,63 @@ describe("source tiers reach claims and the score (#113)", () => {
     expect(withTier.id).toBe(without.id)
     expect(withTier.tier).toBe("PEER_REVIEWED")
     expect(claimId({ ...without, tier: "PREPRINT" } as never)).toBe(without.id)
+  })
+})
+
+describe("scoring integrity (#252)", () => {
+  test("tierless claims weigh at the lowest verified tier, never full weight", async () => {
+    // Unclassifiable hosts used to fall back to __default__ 1.0 and outscore
+    // verified preprints (0.3) under biopharma: a perverse incentive to cite
+    // worse sources. A pack now clamps __default__ to its lowest tier weight.
+    const pack = await loadDomainPack("biopharma")
+    const constitution = constitutionFromPack(pack)
+    const floor = Math.min(
+      ...Object.entries(pack.tierWeights)
+        .filter(([tier]) => tier !== "__default__")
+        .map(([, weight]) => weight),
+    )
+    expect(weightFor(constitution, undefined)).toBe(floor)
+    const tierless = computeEpistemicScoreFromClaims([{ id: "c".repeat(64), tag: "VERIFIED" }], constitution)
+    const preprint = computeEpistemicScoreFromClaims(
+      [{ id: "d".repeat(64), tag: "VERIFIED", tier: "PREPRINT" }],
+      constitution,
+    )
+    expect(tierless.score).toBe(floor)
+    expect(tierless.score).toBeLessThanOrEqual(preprint.score)
+    // The no-pack constitution is untouched (legacy numbers preserved).
+    expect(weightFor(LEGACY_CONSTITUTION, undefined)).toBe(1)
+  })
+
+  test("negative knowledge cannot inflate the score past the threshold", async () => {
+    // totalAssertions excluded negKnowledge while the numerator added
+    // negBonus per row: 10xPREPRINT went 0.3 -> 1.0 with 14 NK lines. NK rows
+    // now count as assertions too.
+    const pack = await loadDomainPack("biopharma")
+    const constitution = constitutionFromPack(pack)
+    const verified = Array.from({ length: 10 }, (_, index) => ({
+      id: `v${index}`.padEnd(64, "0"),
+      tag: "VERIFIED" as const,
+      tier: "PREPRINT" as const,
+    }))
+    const nk = Array.from({ length: 14 }, (_, index) => ({
+      id: `n${index}`.padEnd(64, "0"),
+      tag: "NEGATIVE_KNOWLEDGE" as const,
+      query: `query ${index}`,
+      finding: `finding ${index}`,
+    }))
+    const scored = computeEpistemicScoreFromClaims([...verified, ...nk], constitution)
+    expect(scored.breakdown.negativeKnowledgeCount).toBe(14)
+    expect(scored.score).toBeLessThan(constitution.acceptThreshold)
+  })
+
+  test("mandatory tags enforce membership, not just presence", async () => {
+    const pack = await biopharma()
+    const garbage = claimVerdict({ id: "g", tag: "GARBAGE" }, { constitution: pack })
+    expect(garbage.verdict).toBe("REJECTED")
+    expect(garbage.reasons.some((reason) => reason.startsWith("MISSING_TAG"))).toBe(true)
+    expect(
+      claimVerdict({ id: "v", tag: "VERIFIED", source: { sha256: "a".repeat(64), quote: "q" } }, { constitution: pack })
+        .verdict,
+    ).toBe("ACCEPTED")
   })
 })

@@ -49,12 +49,9 @@ export function classifySourceTier(
       if (domains.some((domain) => matches(host, domain.toLowerCase()))) return tier
   if (PREPRINT.some((domain) => matches(host, domain))) return "PREPRINT"
   if (PEER_REVIEWED.some((domain) => matches(host, domain))) return "PEER_REVIEWED"
-  if (
-    (DOC_DOMAINS as readonly string[]).some((domain) => matches(host, domain)) ||
-    host.startsWith("docs.") ||
-    host.startsWith("developer.")
-  )
-    return "TECHNICAL_DOCUMENTATION"
+  // Only curated documentation hosts count (#252): a bare docs./developer.
+  // prefix rule would let docs.<attacker> claim curated weight.
+  if ((DOC_DOMAINS as readonly string[]).some((domain) => matches(host, domain))) return "TECHNICAL_DOCUMENTATION"
   if (host.endsWith(".gov")) return "PRIMARY_PRESS"
   return undefined
 }
