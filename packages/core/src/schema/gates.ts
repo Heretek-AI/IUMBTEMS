@@ -71,11 +71,22 @@ export const GateSecuritySchema = z.object({
 })
 export type GateSecurity = z.infer<typeof GateSecuritySchema>
 
+export const GateMutationSchema = z.object({
+  /** The AST mutation gate (#169): mutants of touched sources must be killed by the suite. */
+  enabled: z.boolean().default(false),
+  /** Kill rate below this rejects the phase (tautological suites fail closed). */
+  threshold: z.number().min(0).max(1).default(0.8),
+  /** Cap on mutants per file, so one giant file cannot stall the gate. */
+  maxMutants: z.number().int().positive().default(50),
+})
+export type GateMutation = z.infer<typeof GateMutationSchema>
+
 export const GatesConfigSchema = z.object({
   version: z.literal(1).default(1),
   commands: z.array(CommandCheckSchema).default([]),
   budgets: GateBudgetsSchema.default(GateBudgetsSchema.parse({})),
   security: GateSecuritySchema.default(GateSecuritySchema.parse({})),
+  mutation: GateMutationSchema.default({ enabled: false, threshold: 0.8, maxMutants: 50 }),
   /** Max findings returned to the agent (the full list is in the run log). */
   topN: z.number().int().positive().default(20),
   /** Glob patterns excluded from built-in scans (secrets, budgets). */
