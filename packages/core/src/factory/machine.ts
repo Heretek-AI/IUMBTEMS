@@ -433,6 +433,10 @@ export class Factory {
       this.requireAuditsClear(state)
       const check = await verifyApproval(this.root, "frontier", { stateDir: this.deps.stateDir })
       if (!check.ok) throw new FactoryError(check.reason)
+      if (check.record.spendCeilingUSD === undefined)
+        throw new FactoryError(
+          "The frontier approval carries no spend ceiling; a human must approve it again (`es approve frontier`).",
+        )
       state.spendCeilingUSD = check.record.spendCeilingUSD
       state.stage = "RESEARCH"
       await this.audit(actor, "stage.research", { spendCeilingUSD: state.spendCeilingUSD })
