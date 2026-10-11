@@ -1,6 +1,7 @@
 // Approval attempt limiting (ADR 0002 I4): at most 5 wrong passphrases per
 // 10 minutes per state dir, then a lockout. Lockouts are audited into the
-// project's audit log. One surface's lockout does not affect the others.
+// project's audit log. The CLI and the TUI share one attempt file per state
+// dir (a single bucket for both); the web path keeps its own dir and bucket.
 import path from "node:path"
 import { appendAuditEntry } from "../audit/chain.ts"
 import { readJson, withLock, writeJson } from "../util/fs.ts"
