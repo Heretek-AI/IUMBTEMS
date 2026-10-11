@@ -120,8 +120,11 @@ afterAll(async () => {
 
 const factoryFor = (root: string) => new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
 
+/** Boot a host with hermetic web env (ambient keys must not reach the wire, #312). */
 async function bootHost(env: Record<string, string> = {}) {
-  const saved = new Map(Object.keys(env).map((key) => [key, process.env[key]] as const))
+  const ambient = ["BRAVE_API_KEY", "FIRECRAWL_API_KEY"]
+  const saved = new Map([...ambient, ...Object.keys(env)].map((key) => [key, process.env[key]] as const))
+  for (const key of ambient) delete process.env[key]
   for (const [key, value] of Object.entries(env)) process.env[key] = value
   const h = await boot({
     git: true,
@@ -277,13 +280,14 @@ describe("research-fires", () => {
 
   describe("degradation and export", () => {
     let h: Harness
+    let close: (() => Promise<void>) | undefined
     let sha: string
     beforeAll(async () => {
-      ;({ h } = await bootHost())
+      ;({ h, close } = await bootHost())
       sha = await completeGroundedRun(h, `http://127.0.0.1:${PAGES_PORT}/a`, "keep agents honest under load")
     }, 120_000)
     afterAll(async () => {
-      await h?.close()
+      await close?.()
     })
 
     test("4. degradation: a retracted source reads STALE in the render", async () => {
