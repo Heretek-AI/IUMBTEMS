@@ -330,6 +330,63 @@ describe("human-only confirmation", () => {
   })
 })
 
+describe("per-verb pipe refusal (#221.2)", () => {
+  // approve, rebaseline and reseal already have dedicated non-TTY pipe
+  // tests above. Every other verb in the confirmHuman funnel refuses the
+  // same way: exit 3 comes only from the NotInteractive catch in main, so
+  // asserting it proves the test reached the terminal gate — and each test
+  // also proves nothing was written. Each argv below is shaped to pass
+  // every check before the confirmation (usage → 2 and early-returns → 0/1
+  // would fail the assertion instead of passing vacuously).
+  test("es trust refuses without a terminal and trusts nothing", async () => {
+    await mkdir(path.dirname(factoryLayout(root).gates), { recursive: true })
+    await writeFile(
+      factoryLayout(root).gates,
+      JSON.stringify({ version: 1, commands: [{ id: "probe", kind: "test", command: "touch PROBE" }] }),
+    )
+    expect((await run(["trust"])).code).toBe(3)
+    expect(await exists(path.join(state, "trust.json"))).toBe(false)
+  })
+
+  test("es waive refuses without a terminal and records nothing", async () => {
+    const result = await run(["waive", "lint/*", "--reason", "legacy code under migration"])
+    expect(result.code).toBe(3)
+    expect(await exists(factoryLayout(root).waivers)).toBe(false)
+  })
+
+  test("es factory resume refuses without a terminal and stays halted", async () => {
+    const halted = new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state })
+    await halted.begin("human:tester")
+    await halted.halt("system", "test halt")
+    expect((await run(["factory", "resume"])).code).toBe(3)
+    expect((await halted.read())?.stage).toBe("HALTED")
+  })
+
+  test("es factory pr refuses without a terminal and records nothing", async () => {
+    const result = await run(["factory", "pr", "https://github.com/example/repo/pull/1"])
+    expect(result.code).toBe(3)
+    expect(await exists(factoryLayout(root).config)).toBe(false)
+  })
+
+  test("es gates install-git refuses without a terminal and installs nothing", async () => {
+    const result = await run(["gates", "install-git"])
+    expect(result.code).toBe(3)
+    expect(await exists(path.join(root, ".factory", "git-hooks"))).toBe(false)
+  })
+
+  test("es lsp install refuses without a terminal before consent or install", async () => {
+    const result = await run(["lsp", "install", "typescript"])
+    expect(result.code).toBe(3)
+    expect(await exists(path.join(state, "lsp-consent.json"))).toBe(false)
+  })
+
+  test("es audit open refuses without a terminal and provisions nothing", async () => {
+    const result = await run(["audit", "src", "--max-usd", "5", "--open-only"])
+    expect(result.code).toBe(3)
+    expect(await exists(factoryLayout(root).dir)).toBe(false)
+  })
+})
+
 describe("es key", () => {
   test("seal asks twice, refuses short or mismatched passphrases, and status shows the fingerprint", async () => {
     const { humanKeyId } = await import("@heretek-ai/es-core")
@@ -354,6 +411,9 @@ describe("es key", () => {
       }
       expect((await runIn(["key", "seal"], seq(["short", "short"]))).code).toBe(1)
       expect((await runIn(["key", "seal"], seq(["long-enough-pass", "different-pass"]))).code).toBe(1)
+      expect(await humanKeyId(fresh)).toBeUndefined()
+      // A pipe cannot seal either: keySeal throws NotInteractive (exit 3) before reading.
+      expect((await runIn(["key", "seal"], pipe)).code).toBe(3)
       expect(await humanKeyId(fresh)).toBeUndefined()
       expect((await runIn(["key", "seal"], seq(["a-long-test-passphrase", "a-long-test-passphrase"]))).code).toBe(0)
       expect(await humanKeyId(fresh)).toBeDefined()
