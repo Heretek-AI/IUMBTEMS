@@ -161,7 +161,7 @@ export function mergeJson(oursText: string, theirsText: string): string | undefi
   return `${JSON.stringify(merge(ours, theirs), null, 2)}\n`
 }
 
-const DEPENDENCY_SECTIONS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]
+const DEPENDENCY_SECTIONS = new Set(["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"])
 
 /**
  * Merge two package.json texts: dependency ranges union, with the higher
@@ -184,7 +184,7 @@ export function mergePackageJson(oursText: string, theirsText: string): string |
     if (merged && Object.keys(merged).length) out[section] = merged
   }
   for (const [key, value] of Object.entries(theirs))
-    if (!DEPENDENCY_SECTIONS.includes(key) && !(key in out)) out[key] = value
+    if (!DEPENDENCY_SECTIONS.has(key) && !(key in out)) out[key] = value
   return `${JSON.stringify(out, null, 2)}\n`
 }
 
@@ -331,10 +331,13 @@ async function resolveRound(
       return { reason: `unresolvable conflict in ${files.join(", ")}: a human must rebase by hand` }
     merged.set(stage.file, text)
   }
-  for (const [file, text] of merged) {
-    await writeFile(path.join(worktree, file), text)
-    await Git.git(worktree, ["add", "--", file])
-  }
+  // Independent files resolve concurrently; each write+stage pair is ordered within its file.
+  await Promise.all(
+    [...merged].map(async ([file, text]) => {
+      await writeFile(path.join(worktree, file), text)
+      await Git.git(worktree, ["add", "--", file])
+    }),
+  )
   const continued = await Git.git(worktree, [...IDENTITY, "-c", "core.editor=true", "rebase", "--continue"], {
     allowFail: true,
   })

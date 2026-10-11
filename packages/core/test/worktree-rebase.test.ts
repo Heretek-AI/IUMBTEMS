@@ -87,13 +87,18 @@ describe("cascadeRebase", () => {
     await Git.git(fx.root, ["checkout", "-q", "main"])
   }
 
-  test("clean cascade replays downstream commits onto the upstream tip", async () => {
-    await commitFile(fx.root, "fix.txt", "upstream fix\n", "upstream fix")
+  /** Linear stack: from-br is one commit ahead of main, to-br one more on other files. */
+  const linearPair = async (upstreamFile: string, downstreamFile: string) => {
+    await commitFile(fx.root, upstreamFile, "upstream\n", "upstream")
     await Git.git(fx.root, ["branch", "from-br", "HEAD"])
-    await Git.git(fx.root, ["reset", "--hard", "HEAD~1"])
-    await commitFile(fx.root, "feat.txt", "downstream work\n", "downstream work")
+    await Git.git(fx.root, ["reset", "-q", "--hard", "HEAD~1"])
+    await commitFile(fx.root, downstreamFile, "downstream\n", "downstream")
     await Git.git(fx.root, ["branch", "to-br", "HEAD"])
     await Git.git(fx.root, ["checkout", "-q", "main"])
+  }
+
+  test("clean cascade replays downstream commits onto the upstream tip", async () => {
+    await linearPair("fix.txt", "feat.txt")
 
     const before = await Git.revParse(fx.root, "to-br")
     const result = await cascadeRebase(fx.root, {
@@ -106,9 +111,9 @@ describe("cascadeRebase", () => {
     expect(result.previousSha).toBe(before)
     // Both commits are reachable from the rebased tip, linearly.
     const log = (await Git.git(fx.root, ["log", "--format=%s", "to-br"])).stdout
-    expect(log).toContain("upstream fix")
-    expect(log).toContain("downstream work")
-    expect((await Git.git(fx.root, ["log", "--format=%s", "from-br"])).stdout).not.toContain("downstream work")
+    expect(log).toContain("upstream")
+    expect(log).toContain("downstream")
+    expect((await Git.git(fx.root, ["log", "--format=%s", "from-br"])).stdout).not.toContain("downstream")
   })
 
   test("conflicting imports auto-merge and the cascade succeeds", async () => {
@@ -129,12 +134,7 @@ describe("cascadeRebase", () => {
   })
 
   test("a failing post-rebase test run restores the previous SHA", async () => {
-    await commitFile(fx.root, "a.txt", "upstream\n", "upstream")
-    await Git.git(fx.root, ["branch", "from-br", "HEAD"])
-    await Git.git(fx.root, ["reset", "--hard", "HEAD~1"])
-    await commitFile(fx.root, "b.txt", "downstream\n", "downstream")
-    await Git.git(fx.root, ["branch", "to-br", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "main"])
+    await linearPair("a.txt", "b.txt")
     const before = await Git.revParse(fx.root, "to-br")
 
     const result = await cascadeRebase(fx.root, {
