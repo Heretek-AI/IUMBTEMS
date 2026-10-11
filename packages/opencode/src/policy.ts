@@ -174,7 +174,10 @@ export function createPolicyHooks(runtime: Runtime, seats?: SeatTracker) {
           ? patchTargets(input.patchText)
           : []
     if (!files.length) return
-    if (runtime.options.lspAfterEdit !== false) {
+    // The post-edit diagnostics are a language-server channel (#277.2): seats
+    // scoped to `lsp: "none"` never get them (their tool rules already hide
+    // `lsp_*`). Navigating seats and the user's own agents keep the channel.
+    if (runtime.options.lspAfterEdit !== false && agentSpec(event.agent)?.lsp !== "none") {
       const lines: string[] = []
       for (const file of files) {
         const absolute = path.resolve(runtime.root, file)
