@@ -4,7 +4,7 @@
 // inputs and write the one `--out` location — so they stay out of HUMAN_VERBS
 // in core. Only `--open-pr` publishes, and it is human-run: without a
 // terminal it refuses instead of opening anything.
-import { readFile, writeFile } from "node:fs/promises"
+import { readdir, readFile, stat, writeFile } from "node:fs/promises"
 import path from "node:path"
 import {
   type Args,
@@ -12,16 +12,20 @@ import {
   type DistillThresholds,
   disposedWithReasons,
   distillProposals,
+  exportDataset,
   factoryLayout,
   flag,
   git,
   harvestTelemetry,
+  harvestTrajectories,
   type Proposal,
   renderProposalFiles,
   run,
   type Telemetry,
   TelemetrySchema,
   undisposed,
+  verifyAuditChain,
+  type WorktreeInput,
   type WrittenProposal,
   writeDropped,
   writeProposals,
@@ -251,4 +255,85 @@ export async function improveDistill(args: Args, io: ImproveIO, root: string): P
   }
   io.print(lines.join("\n"))
   return 0
+}
+
+/** Every gate summary.json under a .factory tree, deepest first in stable order. */
+async function exportGateSummaries(factoryDir: string): Promise<string[]> {
+  let entries: string[]
+  try {
+    entries = await readdir(factoryDir)
+  } catch {
+    return []
+  }
+  const found: string[] = []
+  for (const name of entries) {
+    const full = path.join(factoryDir, name)
+    const info = await stat(full).catch(() => undefined)
+    if (info?.isDirectory() === true) found.push(...(await exportGateSummaries(full)))
+    else if (name === "summary.json") found.push(full)
+  }
+  found.sort(compareStrings)
+  return found
+}
+
+/**
+ * Derive the harvester's verification attestation from on-disk evidence:
+ * gates are green only when at least one gate summary exists and every one
+ * passed, and the audit is valid only when the hash chain verifies over a
+ * non-empty log (an empty log verifies vacuously, so it does not count).
+ */
+async function verifyWorktreeForExport(dir: string): Promise<WorktreeInput> {
+  const summaries = await exportGateSummaries(path.join(dir, ".factory"))
+  let gatesGreen = summaries.length > 0
+  for (const file of summaries) {
+    try {
+      const parsed: unknown = JSON.parse(await readFile(file, "utf8"))
+      if (typeof parsed !== "object" || parsed === null || (parsed as { passed?: unknown }).passed !== true) {
+        gatesGreen = false
+        break
+      }
+    } catch {
+      gatesGreen = false
+      break
+    }
+  }
+  const chain = await verifyAuditChain(dir)
+  return { dir, verification: { gatesGreen, auditValid: chain.valid && chain.entries.length > 0 } }
+}
+
+export async function improveExportDataset(
+  args: Args,
+  io: { print: (text: string) => void; cwd: string },
+): Promise<number> {
+  const usage =
+    "Usage: es improve export-dataset --format jsonl --kind <sft|dpo> --worktrees <dir>[,<dir>] --output <path>"
+  const format = flag(args, "format") ?? "jsonl"
+  const kind = flag(args, "kind") ?? "sft"
+  const dirs = splitList(flag(args, "worktrees")).map((dir) => path.resolve(io.cwd, dir))
+  const output = flag(args, "output")
+  if (dirs.length === 0 || !output) {
+    io.print(usage)
+    return 2
+  }
+  if (kind !== "sft" && kind !== "dpo") {
+    io.print(`Bad --kind ${kind}: takes sft or dpo.\n${usage}`)
+    return 2
+  }
+  const worktrees = await Promise.all(dirs.map((dir) => verifyWorktreeForExport(dir)))
+  const { trajectories, skipped: harvestSkipped } = await harvestTrajectories({ worktrees })
+  const file = path.resolve(io.cwd, output)
+  try {
+    const result = await exportDataset(trajectories, { format, kind, output: file })
+    const rel = path.relative(io.cwd, file) || file
+    io.print(
+      [
+        `Exported ${result.records} ${kind} record(s) from ${trajectories.length} trajector(y/ies) to ${rel} (+ manifest).`,
+        ...[...harvestSkipped, ...result.skipped].map((entry) => `Skipped ${entry.worktree}: ${entry.reason}`),
+      ].join("\n"),
+    )
+    return 0
+  } catch (error) {
+    io.print(error instanceof Error ? error.message : String(error))
+    return 2
+  }
 }
