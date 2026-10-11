@@ -5,11 +5,12 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 2.2.0.** Phase 8 anti-Goodhart verification & mutation oracle:
-> tautological suites fail the mutation gate below an 80% kill rate,
-> programmer and QA seats refuse shared-weight providers (`models.programmer`
-> vs `models.qa`), and factory fitness is tracked on 54 oracle-graded SWE
-> benchmark instances with pass@1, spend and regression deltas (#169–#171).
+> **Status: 2.3.0.** Phase 9 recursive self-improvement & model distillation:
+> prompt candidates evolve against telemetry failure clusters and ship only
+> behind a strict Pareto gate with benchmark receipts (`improve/optimizer`),
+> passed phase worktrees export scrubbed SFT/DPO datasets
+> (`es improve export-dataset`), and candidate builds promote through an
+> explicitly human-enabled canary with instant rollback (#174–#176).
 > Install from npm (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`,
 > `@heretek-ai/es-cli`); run `es key seal` once.
 
