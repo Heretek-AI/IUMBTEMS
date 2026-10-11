@@ -357,6 +357,78 @@ const mutationCacheFile = (stateDir: string) => path.join(stateDir, "mutation-ca
  * `mutation/kill-rate` error. Files whose content hash matches the cache
  * reuse their stored outcome without rerunning the suite.
  */
+/** Cached verdicts replayed as outcomes without touching the suite. */
+function cachedMutationOutcomes(
+  file: string,
+  source: string,
+  entry: { killed: readonly string[]; total: number },
+): MutationOutcome[] {
+  const killed = new Set(entry.killed)
+  const outcomes: MutationOutcome[] = []
+  for (let index = 0; index < entry.total; index++)
+    outcomes.push({
+      mutant: {
+        id: `${file}#${index + 1}`,
+        file,
+        line: 1,
+        kind: "condition",
+        description: "cached",
+        mutated: source,
+      },
+      killed: killed.has(`${file}#${index + 1}`),
+    })
+  return outcomes
+}
+
+interface MutantRun {
+  readonly killed: boolean
+  readonly error?: string
+}
+
+/**
+ * Apply one mutant, run every test suite until one fails, then restore the
+ * source. A failing suite kills the mutant; a runner error is reported, not
+ * mistaken for a kill.
+ */
+async function applyMutantAndRun(
+  context: {
+    dir: string
+    root: string
+    scope: "touched" | "full"
+    logDir: string
+    sandbox: "required" | "preferred"
+    stateDir: string
+    signal?: AbortSignal
+  },
+  file: string,
+  absolute: string,
+  source: string,
+  mutant: { id: string; mutated: string },
+  suites: readonly CommandCheck[],
+): Promise<MutantRun> {
+  await writeFile(absolute, mutant.mutated)
+  try {
+    for (const suite of suites) {
+      const outcome = await runCommandCheck(suite, {
+        dir: context.dir,
+        root: context.root,
+        scope: context.scope,
+        files: [file],
+        logDir: context.logDir,
+        sandbox: context.sandbox,
+        stateDir: context.stateDir,
+        ...(context.signal ? { signal: context.signal } : {}),
+      })
+      if (outcome.report.status === "fail") return { killed: true }
+      if (outcome.report.status === "error")
+        return { killed: false, error: `${mutant.id}: ${outcome.report.note ?? "runner error"}` }
+    }
+    return { killed: false }
+  } finally {
+    await writeFile(absolute, source)
+  }
+}
+
 async function runMutationCheck(
   check: {
     dir: string
@@ -394,19 +466,7 @@ async function runMutationCheck(
     )
     const entry = next[file]
     if (entry && cacheHashesEqual(entry.hash, hash)) {
-      const killed = new Set(entry.killed)
-      for (let index = 0; index < entry.total; index++)
-        outcomes.push({
-          mutant: {
-            id: `${file}#${index + 1}`,
-            file,
-            line: 1,
-            kind: "condition",
-            description: "cached",
-            mutated: source,
-          },
-          killed: killed.has(`${file}#${index + 1}`),
-        })
+      outcomes.push(...cachedMutationOutcomes(file, source, entry))
       continue
     }
     const killedIds: string[] = []
@@ -414,34 +474,25 @@ async function runMutationCheck(
     for (const [position, mutant] of mutants.entries()) {
       const mutantLogDir = path.join(check.logDir, "mutation", `${position + 1}`)
       await mkdir(mutantLogDir, { recursive: true })
-      await writeFile(absolute, mutant.mutated)
-      try {
-        let killed = false
-        for (const suite of suites) {
-          const outcome = await runCommandCheck(suite, {
-            dir: check.dir,
-            root: check.root,
-            scope: check.scope,
-            files: [file],
-            logDir: mutantLogDir,
-            sandbox: check.sandbox,
-            stateDir: check.stateDir,
-            ...(check.signal ? { signal: check.signal } : {}),
-          })
-          if (outcome.report.status === "fail") {
-            killed = true
-            break
-          }
-          if (outcome.report.status === "error") {
-            runnerErrors.push(`${mutant.id}: ${outcome.report.note ?? "runner error"}`)
-            break
-          }
-        }
-        outcomes.push({ mutant, killed })
-        if (killed) killedIds.push(mutant.id)
-      } finally {
-        await writeFile(absolute, source)
-      }
+      const result = await applyMutantAndRun(
+        {
+          dir: check.dir,
+          root: check.root,
+          scope: check.scope,
+          logDir: mutantLogDir,
+          sandbox: check.sandbox,
+          stateDir: check.stateDir,
+          ...(check.signal ? { signal: check.signal } : {}),
+        },
+        file,
+        absolute,
+        source,
+        mutant,
+        suites,
+      )
+      outcomes.push({ mutant, killed: result.killed })
+      if (result.killed) killedIds.push(mutant.id)
+      if (result.error) runnerErrors.push(result.error)
     }
     next[file] = { hash, killed: killedIds, total: mutants.length }
   }

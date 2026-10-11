@@ -232,7 +232,7 @@ export interface MutationGateOptions {
 export async function runMutationGate(options: MutationGateOptions): Promise<MutationReport> {
   const threshold = options.threshold ?? MUTATION_KILL_THRESHOLD
   const maxPerFile = options.maxPerFile ?? MAX_MUTANTS_PER_FILE
-  const cache: Record<string, MutationCacheEntry> = { ...(options.cache ?? {}) }
+  const cache: Record<string, MutationCacheEntry> = { ...options.cache }
   const cached: string[] = []
   const outcomes: MutationOutcome[] = []
   for (const file of options.files) {
