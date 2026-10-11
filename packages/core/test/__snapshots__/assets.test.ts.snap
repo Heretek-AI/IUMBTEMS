@@ -5,7 +5,7 @@ exports[`agent assets prompt snapshot: a changed prompt must bump its version 1`
   "auditor-antithesis": "v2:15f4d7f75e5bb958",
   "auditor-thesis": "v2:b903e1353177f342",
   "brainstorm-critic": "v1:28fd3abc95c4a28a",
-  "brainstormer": "v3:eee9b20fb26482a4",
+  "brainstormer": "v4:278864b7a2cf7008",
   "deep-researcher": "v1:2c436cd49fd6aaf8",
   "designer": "v2:745908a2a4abff0b",
   "factory": "v9:4b48ec73da814ab3",

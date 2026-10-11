@@ -10,6 +10,7 @@ import {
   AXES,
   aliasReuseRatio,
   aliasToVarRef,
+  bundlePath,
   ContradictionError,
   checkDrift,
   compileToCssVars,
@@ -30,6 +31,7 @@ import {
   SlotLoop,
   SmuggledValueError,
   saveInterview,
+  specFilename,
   VagueAnswerError,
   validatePair,
   validateTokens,
@@ -63,6 +65,25 @@ describe("DTCG token validation", () => {
     expect(resolveAlias(tree, "color.semantic.primary")).toBe("#1d4ed8")
     expect([...iterTokens(tree)]).toHaveLength(4)
     expect(aliasReuseRatio(tree)).toEqual({ aliased: 2, total: 4, ratio: 0.5 })
+  })
+
+  test("prototype-chain properties are not resolvable alias refs (#266)", () => {
+    // walkPath must use own-property checks per segment: {__proto__},
+    // {constructor}, {hasOwnProperty}, {valueOf}, {toString} and
+    // {__proto__.toString} must NOT validate clean via the prototype chain.
+    for (const ref of ["__proto__", "constructor", "hasOwnProperty", "valueOf", "toString", "__proto__.toString"]) {
+      const smuggled = {
+        color: {
+          $type: "color",
+          primitive: { x: { $value: "#123456" } },
+          semantic: { evil: { $value: `{${ref}}` } },
+        },
+      }
+      expect(
+        validateTokens(smuggled).some((error) => error.includes("does not resolve")),
+        ref,
+      ).toBe(true)
+    }
   })
 
   test("circular and dangling aliases are errors, never warnings", () => {
@@ -236,6 +257,20 @@ describe("render and drift", () => {
     expect(() => aliasToVarRef("#fff {a.b}")).toThrow(/mixed raw \+ alias/)
   })
 
+  test("a missing probes.json is reported in checkDrift.missing, never silently green (#270)", async () => {
+    const loop = new SlotLoop()
+    for (const axis of AXES) for (const slot of FORMS[axis].requiredSlots) loop.skip(axis, slot)
+    const tokens = loop.toTokens()
+    const probes = probeReport(loop.probePairs())
+    await writeArtifacts(root, { tokens, probes, guide: renderGuide(tokens, probes), css: compileToCssVars(tokens) })
+    expect((await checkDrift(root)).missing).toEqual([])
+    // The #270 repro: delete probes.json and re-render the guide with [].
+    await rm(designPaths(root).probes)
+    await writeFile(designPaths(root).guide, renderGuide(tokens, []))
+    const report = await checkDrift(root)
+    expect(report.missing).toContain("probes.json")
+  })
+
   test("the guide is a pure render; drift fails checkDrift", async () => {
     const loop = new SlotLoop()
     for (const axis of AXES) for (const slot of FORMS[axis].requiredSlots) loop.skip(axis, slot)
@@ -320,5 +355,21 @@ describe("the design tools", () => {
     const check = await call("es_design_check", {}, "designer")
     expect(check).toContain("byte-match")
     expect(check).toContain("One-off mints: 0")
+  })
+
+  test("es_design_specs check:true reads rendered slots from disk, not the spec's own slots (#270)", async () => {
+    for (const axis of AXES)
+      for (const slot of FORMS[axis].requiredSlots) await call("es_design_skip", { axis, slot }, "designer")
+    await call("es_design_complete", {}, "designer")
+    await call("es_design_specs", {}, "designer")
+    expect(await call("es_design_specs", { check: true }, "designer")).toContain("byte-match")
+    // Remove one slot line from the rendered button spec. The slot-fill leg
+    // must fail on the actual render output (the old code fed each spec its
+    // own slots, so this leg could never fail).
+    const file = bundlePath(root, specFilename("button"))
+    const rendered = await readFile(file, "utf8")
+    expect(rendered).toContain("- `spinner`:")
+    await writeFile(file, rendered.replace("- `spinner`:", "- `removed`:"))
+    await expect(call("es_design_specs", { check: true }, "designer")).rejects.toThrow(/not filled in render/)
   })
 })

@@ -1325,6 +1325,17 @@ export function specFilename(name: string): string {
   return `components/${safe}.md`
 }
 
+/**
+ * Slot names carried by a rendered spec markdown's `## Slots` section (the
+ * actual render output: `- \`name\`: description` lines). The phase-02 check
+ * reads these from the file on disk instead of feeding each spec its own
+ * slots (which could never fail); a hand-removed slot line diverges here.
+ */
+export function renderedSlotsOfSpecMd(markdown: string): string[] {
+  const section = /## Slots\n([\s\S]*?)(?:\n## |\s*$)/.exec(markdown)?.[1] ?? ""
+  return [...section.matchAll(/^-\s+`([^`]+)`: /gm)].map((match) => match[1]!)
+}
+
 // ---------------------------------------------------------------------------
 // render_spec_md (d66328c:runner/queereye/specs.py)
 // ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ import {
   trustProject,
   verifyAuditChain,
 } from "../src/index.ts"
+import { resetBwrapProbe } from "../src/util/proc.ts"
 
 let root: string
 let state: string
@@ -44,14 +45,24 @@ async function script(name: string, body: string) {
 }
 async function engine(
   hooks: Record<string, unknown>,
-  options: { trust?: boolean; generate?: (p: string) => Promise<string> } = {},
+  options: {
+    trust?: boolean
+    generate?: (p: string) => Promise<string>
+    sandbox?: "none" | "readonly"
+    offline?: boolean
+  } = {},
 ) {
   await writeFile(path.join(root, ".opencode/hooks.json"), JSON.stringify({ hooks }))
+  const extra = {
+    ...(options.generate ? { generate: options.generate } : {}),
+    ...(options.sandbox !== undefined ? { sandbox: options.sandbox } : {}),
+    ...(options.offline !== undefined ? { offline: options.offline } : {}),
+  }
   let created = await HookEngine.create({
     root,
     stateDir: state,
     sources: sources(),
-    ...(options.generate ? { generate: options.generate } : {}),
+    ...extra,
   })
   if (options.trust !== false) {
     const status = created.status()
@@ -60,7 +71,7 @@ async function engine(
       root,
       stateDir: state,
       sources: sources(),
-      ...(options.generate ? { generate: options.generate } : {}),
+      ...extra,
     })
   }
   return created
@@ -98,6 +109,30 @@ describe("matching", () => {
       fromOpenCode("patch", { patchText: "*** Begin Patch\n*** Update File: x.ts\n*** End Patch" }, root).input
         .file_path,
     ).toBe(path.join(root, "x.ts"))
+  })
+
+  test("matcher corpus: exact lists vs unanchored regex (the Claude Code rule, #268)", () => {
+    // The rule (match.ts): "*", "" or omitted matches everything; a value of
+    // only [A-Za-z0-9_-, |] is an exact-match list; anything else is an
+    // unanchored JavaScript regex (so "Edit" never matches "NotebookEdit",
+    // while "Edit.*" does).
+    const cases: Array<[string | undefined, string, boolean]> = [
+      [undefined, "Bash", true],
+      ["", "Bash", true],
+      ["*", "Anything", true],
+      ["Bash", "Bash", true],
+      ["Bash", "bash", false],
+      ["Edit|Write", "Write", true],
+      ["Edit, Write", "Edit", true],
+      ["Edit", "NotebookEdit", false],
+      ["Edit.*", "NotebookEdit", true],
+      ["^Edit", "NotebookEdit", false],
+      ["mcp__memory__.*", "mcp__memory__create", true],
+      ["mcp__memory", "mcp__memory__create", false],
+      ["[invalid", "Bash", false],
+    ]
+    for (const [matcher, value, expected] of cases)
+      expect(matcherMatches(matcher, [value]), `${String(matcher)} vs ${value}`).toBe(expected)
   })
 
   test("`if` rules use permission syntax over subcommands and paths", () => {
@@ -287,6 +322,107 @@ describe("other events", () => {
       command: "bun run test",
     })
     expect((await hooks.shellPreExec(base, { command: "ls", cwd: root })).command).toBeUndefined()
+  })
+
+  test("x-es.ShellPreExec deny wins and drops the rewritten command (#268)", async () => {
+    const hooks = await engine({
+      "x-es.ShellPreExec": [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: `echo '{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"no shells here","updatedInput":{"command":"evil"}}}'`,
+            },
+          ],
+        },
+      ],
+    })
+    // deny + command: the `command && !deny` precedence keeps the deny only.
+    const denied = await hooks.shellPreExec(base, { command: "ls", cwd: root })
+    expect(denied.deny).toBe("no shells here")
+    expect(denied.command).toBeUndefined()
+
+    const blockers = await engine({
+      "x-es.ShellPreExec": [{ hooks: [{ type: "command", command: `echo "blocked reason" >&2; exit 2` }] }],
+    })
+    expect((await blockers.shellPreExec(base, { command: "ls", cwd: root })).deny).toBe("blocked reason")
+  })
+
+  test("PostToolUseFailure routes failing tools; PostToolUse does not fire on failure (#268)", async () => {
+    const hooks = await engine({
+      PostToolUse: [
+        {
+          matcher: "Write",
+          hooks: [{ type: "command", command: `echo '{"decision":"block","reason":"post ok"}'` }],
+        },
+      ],
+      PostToolUseFailure: [
+        {
+          matcher: "Write",
+          hooks: [{ type: "command", command: `echo '{"decision":"block","reason":"post-failure lint"}'` }],
+        },
+      ],
+    })
+    const write = fromOpenCode("write", { path: "a.ts", content: "" }, root)
+    const failed = await hooks.postToolUse(base, write, "t", "boom", true)
+    expect(failed.feedback).toEqual(["post-failure lint"])
+    const ok = await hooks.postToolUse(base, write, "t", { ok: true }, false)
+    expect(ok.feedback).toEqual(["post ok"])
+  })
+
+  test("hook commands run with the parent environment by design (Claude Code parity, #265)", async () => {
+    process.env.ES_HOOK_PARENT_ENV_PIN = "pinned-123"
+    try {
+      const hooks = await engine({
+        UserPromptSubmit: [{ hooks: [{ type: "command", command: "echo \"pin=$ES_HOOK_PARENT_ENV_PIN\"" }] }],
+      })
+      expect(await hooks.userPromptSubmit(base, "hi")).toMatchObject({ additionalContext: ["pin=pinned-123"] })
+    } finally {
+      delete process.env.ES_HOOK_PARENT_ENV_PIN
+    }
+  })
+
+  test("SessionStart routes every source; an unmatched source is an explicit notice, never silent (#289)", async () => {
+    const hooks = await engine({
+      SessionStart: [
+        { matcher: "startup", hooks: [{ type: "command", command: "echo 'project uses bun'" }] },
+        { matcher: "resume", hooks: [{ type: "command", command: "echo 'welcome back'" }] },
+      ],
+    })
+    expect(await hooks.sessionStart(base, "startup")).toMatchObject({ additionalContext: ["project uses bun"] })
+    expect(await hooks.sessionStart(base, "resume")).toMatchObject({ additionalContext: ["welcome back"] })
+    // compact/clear/fork have no matching hook here: explicit notice, not silence.
+    for (const source of ["compact", "clear", "fork"] as const) {
+      const result = await hooks.sessionStart(base, source)
+      expect(result.additionalContext).toEqual([])
+      expect(result.notices.join("\n")).toContain(`none match source "${source}"`)
+    }
+    // No SessionStart hook at all: silent (nothing to be confused about).
+    const bare = await engine({ PostToolUse: [{ hooks: [{ type: "command", command: "true" }] }] })
+    expect((await bare.sessionStart(base, "resume")).notices).toEqual([])
+  })
+
+  test("the engine sandbox knob reaches hook subprocesses: gates fail closed, observers fail open (#265)", async () => {
+    resetBwrapProbe(false)
+    try {
+      const hooks = await engine(
+        {
+          PreToolUse: [
+            { matcher: "Bash", hooks: [{ type: "command", command: "true", "x-es-policy": "gate" }] },
+            { matcher: "Read", hooks: [{ type: "command", command: "true" }] },
+          ],
+        },
+        { sandbox: "readonly" },
+      )
+      const gated = await hooks.preToolUse(base, bash("ls"), "t1")
+      expect(gated.decision).toBe("deny")
+      expect(gated.reason).toContain("bwrap")
+      const observed = await hooks.preToolUse(base, fromOpenCode("read", { path: "a" }, root), "t2")
+      expect(observed.decision).toBeUndefined()
+      expect(observed.notices.join("\n")).toContain("bwrap")
+    } finally {
+      resetBwrapProbe()
+    }
   })
 })
 
