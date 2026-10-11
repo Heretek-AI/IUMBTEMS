@@ -89,7 +89,7 @@ import {
   trust,
   waive,
 } from "./human.ts"
-import { improveDistill, improveHarvest } from "./improve.ts"
+import { improveDistill, improveExportDataset, improveHarvest } from "./improve.ts"
 import { auditCommand, auditDismiss, auditShow, researchDeepCommand, scoutCommand, scoutShow } from "./jobs.ts"
 import { keySeal, keyStatus } from "./key.ts"
 import { serveStdio } from "./mcp.ts"
@@ -150,6 +150,7 @@ Other
   improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file>   Harvest read-only telemetry from runs and evals
   improve distill --telemetry <file> --out <dir> [--open-pr]   Cluster telemetry into reviewable proposals
         [--open-pr opens a draft PR from a topic branch; human-run, refused without a terminal]
+  improve export-dataset --format jsonl --kind <sft|dpo> --worktrees <dir>[,<dir>] --output <path>   Export verified trajectories as distillation datasets
   design [status]               Design interview progress (resumes from .factory/design)
   design render                 Re-render tokens.css + STYLE_GUIDE.md from tokens.json
   design check                  Fail on render drift, invalid tokens or one-off mints
@@ -703,8 +704,9 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         if (sub === "harvest") return await improveHarvest(subArgs(2), { print: io.print, cwd: io.cwd })
         if (sub === "distill")
           return await improveDistill(subArgs(2), { print: io.print, cwd: io.cwd, confirm: io.confirm }, root)
+        if (sub === "export-dataset") return await improveExportDataset(subArgs(2), { print: io.print, cwd: io.cwd })
         io.print(
-          "Usage: es improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file> | distill --telemetry <file> --out <dir> [--open-pr]",
+          "Usage: es improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file> | distill --telemetry <file> --out <dir> [--open-pr] | export-dataset --format jsonl --kind <sft|dpo> --worktrees <dir>[,<dir>] --output <path>",
         )
         return 2
       }
