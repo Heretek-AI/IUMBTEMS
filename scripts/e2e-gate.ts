@@ -13,6 +13,7 @@
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { decideGateVerdict } from "../packages/core/src/evals/gate.ts"
 
 const root = path.resolve(import.meta.dir, "..")
 const resultsDir = path.join(root, "evals", "results")
@@ -139,13 +140,11 @@ try {
     .filter(([, cell]) => cell.samples >= 5 && cell.passes / cell.samples >= 0.9)
     .map(([id]) => id)
   console.log(`e2e-gate: sampled ${sampled} prior run(s); stable cases: ${stable.length ? stable.join(", ") : "(none yet)"}`)
-  const regressions = failed.filter((id) => stable.includes(id))
-  if (!regressions.length) {
-    console.log(`e2e-gate: ${failed.length} current failure(s) (${failed.join(", ")}) are not regressions of stable cases; passing.`)
-    process.exit(0)
-  }
-  console.log(`e2e-gate: REGRESSION in historically stable case(s): ${regressions.join(", ")}`)
-  process.exit(1)
+  // Fail-closed (#210): zero sampled history with failures exits 2 (not
+  // green), and failed IDs never seen in history count as regressions.
+  const verdict = decideGateVerdict({ failed, stable, sampled, known: [...tally.keys()] })
+  console.log(`e2e-gate: ${verdict.message}`)
+  process.exit(verdict.exit)
 } finally {
   await rm(scratch, { recursive: true, force: true })
 }
