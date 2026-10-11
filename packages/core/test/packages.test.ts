@@ -64,8 +64,15 @@ describe("workspace packages", () => {
   test("the real repo releases core, cli and the plugin in dependency order", async () => {
     const root = path.resolve(import.meta.dir, "../../..")
     expect((await releasePackages(root)).map((pkg) => pkg.dir)).toEqual(["core", "cli", "opencode"])
-    expect((await workspacePackages(root)).map((pkg) => pkg.dir).sort()).toEqual(
-      expect.arrayContaining(["cli", "core", "opencode", "testkit"]),
-    )
+    const all = await workspacePackages(root)
+    expect(all.map((pkg) => pkg.dir).sort()).toEqual(expect.arrayContaining(["cli", "core", "opencode", "testkit"]))
+    // Manifest name re-scope or version skew must not ship green (#212):
+    // pin the release manifests' names and lockstep version beside the dir.
+    const byDir = new Map(all.map((pkg) => [pkg.dir, pkg]))
+    expect(byDir.get("core")).toMatchObject({ name: "@heretek-ai/es-core" })
+    expect(byDir.get("cli")).toMatchObject({ name: "@heretek-ai/es-cli" })
+    expect(byDir.get("opencode")).toMatchObject({ name: "@heretek-ai/epistemic-swarm" })
+    const versions = new Set((await releasePackages(root)).map((pkg) => pkg.version))
+    expect(versions.size).toBe(1)
   })
 })
