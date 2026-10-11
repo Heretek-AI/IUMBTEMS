@@ -10,8 +10,16 @@ import path from "node:path"
 import { SourceCache } from "../src/research/cache.ts"
 
 const put2 = async (cache: SourceCache) => {
-  const a = await cache.put({ url: "https://a.test/page", text: "Alpha source text with enough length.", provider: "fetch" })
-  const b = await cache.put({ url: "https://b.test/page", text: "Beta source text with enough length here.", provider: "fetch" })
+  const a = await cache.put({
+    url: "https://a.test/page",
+    text: "Alpha source text with enough length.",
+    provider: "fetch",
+  })
+  const b = await cache.put({
+    url: "https://b.test/page",
+    text: "Beta source text with enough length here.",
+    provider: "fetch",
+  })
   return { a, b }
 }
 

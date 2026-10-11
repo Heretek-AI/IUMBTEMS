@@ -9,8 +9,8 @@ import { mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
-  backoffFor,
   BackendError,
+  backoffFor,
   runFetchChain,
   runSearchChain,
   type SourceBackend,
@@ -143,7 +143,11 @@ describe("token absence exhaustiveness (#253.3)", () => {
       ["http-500", (seen) => client(() => jsonRpc({ detail: "boom" }, 500), seen).search("q", 1), "upstream"],
       [
         "contract",
-        (seen) => client(() => jsonRpc({ jsonrpc: "2.0", id: 1, result: {} }, 200, { "x-swarm-contract": "9" }), seen).search("q", 1),
+        (seen) =>
+          client(() => jsonRpc({ jsonrpc: "2.0", id: 1, result: {} }, 200, { "x-swarm-contract": "9" }), seen).search(
+            "q",
+            1,
+          ),
         "upstream",
       ],
       [
@@ -191,10 +195,10 @@ describe("token absence exhaustiveness (#253.3)", () => {
       [
         "tool-upstream",
         (seen) =>
-          client(
-            () => jsonRpc({ jsonrpc: "2.0", id: 1, error: { code: -32602, message: "bad params" } }),
-            seen,
-          ).search("q", 1),
+          client(() => jsonRpc({ jsonrpc: "2.0", id: 1, error: { code: -32602, message: "bad params" } }), seen).search(
+            "q",
+            1,
+          ),
         "upstream",
       ],
       [

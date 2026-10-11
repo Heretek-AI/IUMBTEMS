@@ -6,8 +6,8 @@
 // missing trust; observers fail open, as Claude Code does. Every executed
 // handler is written to the audit log.
 import { appendAuditEntry } from "../audit/chain.ts"
-import { isTrusted } from "../trust/store.ts"
 import type { SandboxSpec } from "../trust/sandbox.ts"
+import { isTrusted } from "../trust/store.ts"
 import { type HookSource, hookSources, type LoadedHooks, loadHooks } from "./load.ts"
 import { ifMatches, matcherMatches } from "./match.ts"
 import { type HandlerOutcome, runHandler } from "./run.ts"

@@ -374,7 +374,7 @@ describe("other events", () => {
     process.env.ES_HOOK_PARENT_ENV_PIN = "pinned-123"
     try {
       const hooks = await engine({
-        UserPromptSubmit: [{ hooks: [{ type: "command", command: "echo \"pin=$ES_HOOK_PARENT_ENV_PIN\"" }] }],
+        UserPromptSubmit: [{ hooks: [{ type: "command", command: 'echo "pin=$ES_HOOK_PARENT_ENV_PIN"' }] }],
       })
       expect(await hooks.userPromptSubmit(base, "hi")).toMatchObject({ additionalContext: ["pin=pinned-123"] })
     } finally {

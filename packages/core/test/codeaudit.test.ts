@@ -151,7 +151,10 @@ describe("the line-pointer law at es_audit_verdict", () => {
     // verdict level, not just in the sibling span tests.
     const short = { ...injection, lines: [3, 3], excerpt: "db.query" }
     await expect(
-      verdict.execute({ audit: audit.id, verdict: "fail", findings: [short], notes: "n" }, { agent: "es-auditor-antithesis" }),
+      verdict.execute(
+        { audit: audit.id, verdict: "fail", findings: [short], notes: "n" },
+        { agent: "es-auditor-antithesis" },
+      ),
     ).rejects.toThrow(/too short to be evidence/)
     expect((await factory.read())!.audits[0]!.antithesis).toBeUndefined()
   })
