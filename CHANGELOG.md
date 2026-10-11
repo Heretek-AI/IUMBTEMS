@@ -2,13 +2,31 @@
 
 ## 2.3.0 — 2026-10-11
 
-Phase 9 recursive self-improvement & model distillation. The factory can now
-propose better prompts, distill its own verified work into local-model
-training data, and hot-swap its own binaries — every loop fail-closed and
-human-gated by construction: nothing rewrites prompts, weights or shipped
-code without a recorded human approval, and the canary stays OFF until a
-human explicitly enables it. The published trio (core/CLI/plugin) releases
-in lockstep as 2.3.0.
+Phase 9 recursive self-improvement & model distillation. This release adds
+a prompt optimizer, a trajectory exporter for local-model training data and
+a canary hot-swap harness — every loop fail-closed and human-gated by
+construction: nothing rewrites prompts, weights or shipped code without a
+recorded human approval, and the canary stays OFF until a human explicitly
+enables it. The published trio (core/CLI/plugin) releases in lockstep as
+2.3.0.
+
+2.3.0 is the first published release since 1.6.0. Versions 1.6.1, 2.0.0,
+2.1.0 and 2.2.0 were merged but never tagged or published; everything in
+their entries below ships as part of 2.3.0.
+
+**What is reachable in this release.** Several Phase 6–9 pieces are library
+APIs with tests that no factory, CLI or daemon path calls yet. They are
+inert until wired:
+
+- Reachable: `es improve export-dataset` (#175), `es rebase cascade` (#165),
+  `es worktree prune` and startup orphan GC (#160), the opt-in mutation gate
+  (#169), the model-diversity check (#170) and the benchmark suite (#171).
+- Library only, not called: the prompt optimizer (#174), the machine key and
+  proof-carrying transitions (#164), the staging pipeline (#166) and lease
+  acquisition through `WorktreeLeaseManager` (#160). Stage exits still need
+  the human passphrase.
+- Not in the npm packages: `es-fleet run-dag` (#161) and the canary harness
+  (#176) live in the private `packages/fleet`.
 
 **Behaviour changes.**
 
@@ -52,12 +70,15 @@ in lockstep as 2.3.0.
 
 ## 2.2.0 — 2026-10-11
 
-Phase 8 anti-Goodhart verification & mutation oracle. Tautological tests,
-shared-weight blind spots and string-assertion evals stop passing silently:
-mutants must be killed, builder and checker seats must run on different
-model providers, and factory fitness is measured on 54 oracle-graded
-software engineering instances. The published trio (core/CLI/plugin)
-releases in lockstep as 2.2.0.
+Phase 8 anti-Goodhart verification & mutation oracle. Tools against
+tautological tests, shared-weight blind spots and string-assertion evals: a
+mutation gate that requires mutants to be killed, a policy that refuses
+builder and checker seats on the same model provider, and 54 oracle-graded
+software engineering instances for measuring factory fitness. Both checks
+are opt-in: the mutation gate runs only when a human enables `mutation` in
+`.factory/gates.json`, and seats with no model set are unverified, not
+refused, unless `models.requireDiversity` is on. Never published on its
+own; ships in 2.3.0.
 
 **Behaviour changes.**
 
@@ -103,13 +124,16 @@ releases in lockstep as 2.2.0.
 
 ## 2.1.0 — 2026-10-11
 
-Phase 7 key delegation & consensus governance. Autonomous background builds
-stop needing a human passphrase at every stage exit: the machine key signs
-GRILL/SPEC transitions on topic branches only under a cryptographic gate
-proof, stack branches cascade upstream fixes without hand rebases, and
-integration branches land on `staging/autonomous` until a human-signed
-release cut. The published trio (core/CLI/plugin) releases in lockstep as
-2.1.0.
+Phase 7 key delegation & consensus governance. Building blocks for
+autonomous background builds that do not need a human passphrase at every
+stage exit: a machine key that signs stage transitions on topic branches
+only under a cryptographic gate proof, a rebase cascade for stacked
+branches, and a staging pipeline that lands integration branches on
+`staging/autonomous` until a human-signed release cut. Only the cascade is
+reachable today (`es rebase cascade`). The machine key and the staging
+pipeline are library APIs that the factory state machine, the headless
+runner and the CLI do not call yet, so stage exits still need the human
+passphrase. Never published on its own; ships in 2.3.0.
 
 **Behaviour changes.**
 - **#164: MachineKeyStore with proof-carrying transitions.**
@@ -154,11 +178,14 @@ release cut. The published trio (core/CLI/plugin) releases in lockstep as
 
 ## 2.0.0 — 2026-10-11
 
-Phase 6 autonomous orchestration & fleet hardening. Concurrent runs stop
-coordinating through shell `flock` and 50KB orchestrator prompts: worktree
-leases are atomic files with heartbeat TTLs, and the fleet daemon drives
-multi-phase task DAGs natively. The published trio (core/CLI/plugin)
-releases in lockstep as 2.0.0.
+Phase 6 autonomous orchestration & fleet hardening. Groundwork for
+concurrent runs that do not coordinate through shell `flock` and 50KB
+orchestrator prompts: atomic worktree leases with heartbeat TTLs, and a
+fleet daemon that drives multi-phase task DAGs natively. Stale-lease and
+orphan-checkout GC runs at factory startup and through `es worktree prune`;
+nothing acquires leases through `WorktreeLeaseManager` yet. `run-dag` lives
+in the private fleet daemon (`es-fleet`), which is not in the npm packages.
+Never published on its own; ships in 2.3.0.
 
 **Behaviour changes.**
 - **#160: atomic worktree lease manager.** `WorktreeLeaseManager`
@@ -188,6 +215,8 @@ releases in lockstep as 2.0.0.
   intentionally agent-safe (orphan GC must run at factory startup).
 
 ## 1.6.1 — 2026-10-11
+
+Never published on its own; ships in 2.3.0.
 
 **Trust hash covers the full gate command (#217).** `commandSetHash` now hashes
 the complete normalized `CommandCheck` — `kind`, `parser`, `related`,

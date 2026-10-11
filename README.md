@@ -6,11 +6,12 @@
 > human-only approval channel keep autonomous runs honest.
 
 > **Status: 2.3.0.** Phase 9 recursive self-improvement & model distillation:
-> prompt candidates evolve against telemetry failure clusters and ship only
-> behind a strict Pareto gate with benchmark receipts (`improve/optimizer`),
 > passed phase worktrees export scrubbed SFT/DPO datasets
-> (`es improve export-dataset`), and candidate builds promote through an
-> explicitly human-enabled canary with instant rollback (#174–#176).
+> (`es improve export-dataset`). Also included as tested library APIs that
+> no run calls yet: a prompt optimizer behind a strict Pareto gate
+> (`improve/optimizer`), a human-enabled canary hot-swap harness, and the
+> Phase 7 machine key and staging pipeline (#164, #166, #174, #176). See
+> the CHANGELOG for what is reachable.
 > Install from npm (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`,
 > `@heretek-ai/es-cli`); run `es key seal` once.
 
