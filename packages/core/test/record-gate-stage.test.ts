@@ -1,6 +1,6 @@
 // Gate runs outside BUILD must refuse, never silently record nothing (#223.2).
 import { describe, expect, test } from "bun:test"
-import { Factory, FactoryError } from "../src/factory/index.ts"
+import { Factory } from "../src/factory/index.ts"
 import { type Fixture, frontier, gitRepo } from "./helpers.ts"
 
 describe("recordGateRun stage gate (#223)", () => {

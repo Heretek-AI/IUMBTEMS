@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import { writeFile } from "node:fs/promises"
 import path from "node:path"
-import { hasHumanKey, HumanKeyError, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
+import { HumanKeyError, hasHumanKey, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import { gitRepo } from "./helpers.ts"
 
 const PASSPHRASE = "test-passphrase-1234"
