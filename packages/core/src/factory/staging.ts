@@ -42,7 +42,7 @@ export function stagingProofProblems(proof: StagingGateProof): string[] {
   const problems: string[] = []
   for (const tier of ["tier1", "tier2", "tier3"] as const) {
     const result = proof.tiers[tier]
-    if (!result || !(result.total > 0) || result.passed !== result.total)
+    if (!result || result.total <= 0 || result.passed !== result.total)
       problems.push(`${tier} is not 100% passing (passed ${result?.passed ?? "?"} of ${result?.total ?? "?"})`)
   }
   if (proof.unwaivedSecrets > 0) problems.push(`${proof.unwaivedSecrets} un-waived secret(s)`)
@@ -172,10 +172,13 @@ async function resolveMergeConflicts(
     if (resolved === undefined) return { reason: `conflicting landing in ${stage.file}: resolver declined` }
     merged.set(stage.file, resolved)
   }
-  for (const [file, text] of merged) {
-    await writeFile(path.join(worktree, file), text)
-    await Git.git(worktree, ["add", "--", file])
-  }
+  // Independent files resolve concurrently; each write+stage pair is ordered within its file.
+  await Promise.all(
+    [...merged].map(async ([file, text]) => {
+      await writeFile(path.join(worktree, file), text)
+      await Git.git(worktree, ["add", "--", file])
+    }),
+  )
   const committed = await Git.git(worktree, [...IDENTITY, "-c", "core.editor=true", "commit", "--no-edit"], {
     allowFail: true,
   })
@@ -210,7 +213,8 @@ async function mergeBranchIntoStaging(
 }
 
 export interface StagingFireSuite {
-  readonly name: "regression" | "compatibility" | string
+  /** Suite name ("regression" and "compatibility" are the standard pair). */
+  readonly name: string
   readonly run: (dir: string) => Promise<{ readonly passed: boolean; readonly details?: string }>
 }
 
