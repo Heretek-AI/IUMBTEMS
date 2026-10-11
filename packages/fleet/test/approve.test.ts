@@ -336,9 +336,7 @@ describe("approve submit", () => {
   test("approve tickets expire by TTL at unit level (#283.2)", async () => {
     const { ApproveTickets } = await import("../src/approve.ts")
     const expired = new ApproveTickets(0)
-    expect(
-      expired.redeem(expired.issue({ repoDir: "r", stage: "frontier", subjectHash: "h" })),
-    ).toBeUndefined()
+    expect(expired.redeem(expired.issue({ repoDir: "r", stage: "frontier", subjectHash: "h" }))).toBeUndefined()
     const live = new ApproveTickets()
     const ticket = live.issue({ repoDir: "r", stage: "frontier", subjectHash: "h" })
     expect(live.redeem(ticket)).toEqual({ repoDir: "r", stage: "frontier", subjectHash: "h" })
