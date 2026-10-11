@@ -1,5 +1,55 @@
 # Changelog
 
+## 2.3.0 — 2026-10-11
+
+Phase 9 recursive self-improvement & model distillation. The factory can now
+propose better prompts, distill its own verified work into local-model
+training data, and hot-swap its own binaries — every loop fail-closed and
+human-gated by construction: nothing rewrites prompts, weights or shipped
+code without a recorded human approval, and the canary stays OFF until a
+human explicitly enables it. The published trio (core/CLI/plugin) releases
+in lockstep as 2.3.0.
+
+**Behaviour changes.**
+
+- **#174: Evolutionary prompt & cognitive strategy optimizer.**
+  `generatePromptCandidates` (`packages/core/src/improve/optimizer.ts`)
+  turns telemetry failure clusters into targeted prompt variations
+  (append-guidance, trim-bloat, multi-generation combine); `evolvePrompts`
+  grades each against the benchmark suite and keeps only strict Pareto
+  winners (zero regressions plus a strictly better pass rate or lower
+  spend/steps). Winners become review-only proposal dirs with before/after
+  benchmark receipts; `applyPromptPatch` is the sole applier and refuses
+  without a matching recorded human approval. Signal-free telemetry yields
+  no candidates and vacuous baselines are refused.
+- **#175: Synthetic trajectory harvester for distillation.**
+  `harvestTrajectories` captures multi-turn trajectories of passed, verified
+  phase worktrees only (green gate summaries plus a non-vacuous audit chain,
+  derived by `es improve export-dataset` from on-disk evidence); every
+  string is secret-scrubbed, diffs are path- and existence-verified, and
+  unverified/missing/escaping inputs are skipped with reasons. Exports
+  Unsloth/Axolotl/HF-compatible chat JSONL (`sft`) and prompt/chosen/rejected
+  pairs (`dpo`, never inventing negatives) with a provenance manifest.
+- **#176: Canary self-compilation and hot-swap harness.**
+  `CanaryRunner` (`packages/fleet/src/canary.ts`) builds candidates in an
+  isolated staging sandbox, shadow-tests them beside the live worker, and
+  atomically re-points the active symlink only when green — rolling back
+  instantly when red. OFF by default: construction without `enabled: true`
+  and a recorded human approval throws. The rollback target is frozen at
+  construction, guarded writes deny the rollback tree and the active link,
+  and candidates built inside the rollback tree are refused.
+
+**Security.**
+
+- No autonomous path rewrites prompts, weights or shipped code: the
+  optimizer and canary apply only under recorded human approvals, and the
+  canary pipeline seam has no silent defaults.
+- Distillation datasets are secret-scrubbed (token families, credentials,
+  private-key blocks) with redaction counts; DPO export refuses to invent
+  rejected responses.
+- Test fixtures build fake secrets by interpolation (repo precedent) so
+  static scanners never see credential-like literals.
+
 ## 2.2.0 — 2026-10-11
 
 Phase 8 anti-Goodhart verification & mutation oracle. Tautological tests,
