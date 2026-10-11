@@ -145,8 +145,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     scout: {
       support: "enforced",
       detail:
-        "OSS scout: cached-only web under an offline (--unshare-net) sandbox, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited.",
-      test: "packages/opencode/test/fires.test.ts",
+        "OSS scout: cached-only web under an offline (--unshare-net) sandbox, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited (canned-OSV content in core's scout suite).",
+      test: "packages/opencode/test/scout-host.test.ts",
     },
     "research-fires": {
       support: "enforced",
