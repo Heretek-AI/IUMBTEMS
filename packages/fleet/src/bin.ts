@@ -10,6 +10,7 @@ import { createInterface } from "node:readline"
 import { stateDir } from "@heretek-ai/es-core"
 import { FleetDaemon } from "./daemon.ts"
 import { assertHumanStart, FleetError, fleetStatus, startFleet, stopFleet } from "./lifecycle.ts"
+import { runDag } from "./run-dag.ts"
 import { reportTask } from "./scheduler.ts"
 import { fleetPaths } from "./state.ts"
 import { addTask, emptyDag, loadDag, saveDag, TERMINAL } from "./tasks.ts"
@@ -172,6 +173,8 @@ Usage:
   es-fleet task add --file <task.json>                              add a task from a JSON file (human-only)
   es-fleet task list [--json]                                       list tasks
   es-fleet task cancel <id> [--reason <text>]                       cancel a task (human-only)
+  es-fleet run-dag <roadmap.json> --max-usd <n>                     run a roadmap DAG to completion (human-only)
+        [--repo <dir>] [--es-bin <path>] [--concurrency <k>] [--stuck-timeout-ms <ms>]
   es-fleet gc [--repo <dir>]                                        remove orphaned worktrees (human-only)
   es-fleet watch                                                    live dashboard over the telemetry bus
   es-fleet web                                                      print a one-time browser URL for the web UI (human-only)
@@ -366,6 +369,55 @@ export async function main(argv: readonly string[]): Promise<number> {
           return 0
         }
         throw new FleetError(`Unknown task subcommand ${JSON.stringify(sub ?? "")}: want add, list or cancel.`)
+      }
+      case "run-dag": {
+        // Headless DAG runs spend real money through real workers: human-only.
+        assertHumanStart(process.env, "run a fleet DAG")
+        const roadmapFile = rest[0]
+        if (!roadmapFile) throw new FleetError("`es-fleet run-dag` needs a roadmap file.")
+        const repo = valueFlag(rest, ["--repo"]) ?? process.cwd()
+        const esBin = valueFlag(rest, ["--es-bin"]) ?? "es"
+        const maxUsd = Number(valueFlag(rest, ["--max-usd"]))
+        if (maxUsd <= 0 || !Number.isFinite(maxUsd))
+          throw new FleetError("`es-fleet run-dag` needs a positive --max-usd ceiling.")
+        const concurrency = Number(valueFlag(rest, ["--concurrency"]) ?? "4")
+        if (!Number.isInteger(concurrency) || concurrency < 1)
+          throw new FleetError(`Refusing to run with concurrency ${concurrency}: it must be an integer >= 1.`)
+        const stuckTimeoutMs = Number(valueFlag(rest, ["--stuck-timeout-ms"]) ?? `${30 * 60_000}`)
+        if (stuckTimeoutMs <= 0 || !Number.isFinite(stuckTimeoutMs))
+          throw new FleetError(`Refusing to run with --stuck-timeout-ms ${valueFlag(rest, ["--stuck-timeout-ms"])}.`)
+        const final = await runDag({
+          repoRoot: repo,
+          stateRoot: root,
+          esBin,
+          roadmapFile,
+          concurrency,
+          fleetCeilingUsd: maxUsd,
+          checkGates: defaultGateCheck(esBin),
+          stuckTimeoutMs,
+          // Calm polling for real (minutes-long) headless turns; tests use the 10ms default.
+          settleMs: 5_000,
+        })
+        const ids = Object.keys(final.tasks).sort((a, b) => a.localeCompare(b))
+        for (const id of ids) {
+          const task = final.tasks[id]!
+          const reason = task.reason ? `\t${task.reason}` : ""
+          process.stdout.write(`${id}\t${task.status}${reason}\n`)
+        }
+        const waiting = ids.filter((id) => final.tasks[id]!.status === "waiting-human")
+        if (waiting.length > 0) {
+          process.stdout.write(
+            `run-dag stopped: ${waiting.join(", ")} wait(s) for a human (repair, then re-run the roadmap).\n`,
+          )
+          return 1
+        }
+        const bad = ids.filter((id) => final.tasks[id]!.status === "failed" || final.tasks[id]!.status === "cancelled")
+        if (bad.length > 0) {
+          process.stdout.write(`run-dag finished with ${bad.length} failed/cancelled task(s).\n`)
+          return 1
+        }
+        process.stdout.write(`run-dag finished: all ${ids.length} task(s) done.\n`)
+        return 0
       }
       case "gc": {
         assertHumanStart(process.env, "collect fleet worktrees")

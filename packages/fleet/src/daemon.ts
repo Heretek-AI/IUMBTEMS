@@ -3,6 +3,7 @@
 // gated landings. All DAG mutations serialize through a promise mutex; every
 // collaborator the loop cannot own in tests (spawning, gates) is injected.
 
+import { HEARTBEAT_VERSION, recordFleetHeartbeat } from "./heartbeat.ts"
 import { applyDecision, markGateFailed, reportTask, schedule, type TaskReport } from "./scheduler.ts"
 import { emptyDag, loadDag, saveDag } from "./tasks.ts"
 import {
@@ -39,6 +40,18 @@ export interface DaemonOptions {
   readonly checkGates: GateCheck
   readonly spawnWorker?: (spec: WorkerSpec, onReport: (taskId: string, report: TaskReport) => void) => WorkerPort
   readonly onTransition?: (event: TransitionEvent) => void
+  /** Integration-branch namespace for landings (default "fleet"). */
+  readonly dagId?: string
+  /** Clock override (tests, determinism). */
+  readonly now?: () => number
+  /**
+   * A tracked turn with no folded report for longer than this is stopped and
+   * failed for restart (the task's own failure policy decides: retry
+   * re-queues, otherwise terminal). Undefined disables the check: real
+   * workers only report terminal events, so a short default would kill
+   * legitimate long turns. The `run-dag` verb defaults this to 30 minutes.
+   */
+  readonly stuckTimeoutMs?: number
 }
 
 /**
@@ -74,6 +87,37 @@ export class FleetDaemon {
     this.options.onTransition?.(event)
   }
 
+  private clock(): number {
+    return this.options.now?.() ?? Date.now()
+  }
+
+  private stamp(): string {
+    return new Date(this.clock()).toISOString()
+  }
+
+  private dagId(): string {
+    return this.options.dagId ?? "fleet"
+  }
+
+  /** Best-effort progress heartbeat for humans and factory seats (never throws). */
+  private async heartbeat(): Promise<void> {
+    try {
+      const dag = (await loadDag(this.options.stateRoot)) ?? emptyDag()
+      const tasks: Record<string, { status: string; attempts: number; updatedAt: string }> = {}
+      for (const [id, task] of Object.entries(dag.tasks))
+        tasks[id] = { status: task.status, attempts: task.attempts, updatedAt: task.updatedAt }
+      await recordFleetHeartbeat(this.options.repoRoot, {
+        v: HEARTBEAT_VERSION,
+        at: this.stamp(),
+        pid: process.pid,
+        dagId: this.dagId(),
+        tasks,
+      })
+    } catch {
+      // Heartbeats are advisory: a read-only checkout must not fail the run.
+    }
+  }
+
   private caps() {
     return { concurrency: this.options.concurrency ?? 4, fleetCeilingUsd: this.options.fleetCeilingUsd }
   }
@@ -91,8 +135,8 @@ export class FleetDaemon {
       records = Object.entries(pids).map(([taskId, pid]) => ({ taskId, pid }))
     }
     await this.exclusive(async () => {
-      const { reattached, failed } = this.supervisor.recover(records, Date.now())
-      const now = new Date().toISOString()
+      const { reattached, failed } = this.supervisor.recover(records, this.clock())
+      const now = this.stamp()
       let dag = (await loadDag(this.options.stateRoot)) ?? emptyDag()
       for (const taskId of reattached) this.emit({ type: "recovered", taskId, detail: "reattached to live run" })
       for (const { taskId, reason } of failed) {
@@ -107,7 +151,7 @@ export class FleetDaemon {
   /** One reconcile pass: schedule, allocate, launch, land, release. */
   async tick(): Promise<void> {
     await this.exclusive(async () => {
-      const now = new Date().toISOString()
+      const now = this.stamp()
       let dag = (await loadDag(this.options.stateRoot)) ?? emptyDag()
       const decision = schedule(dag, this.caps())
       dag = applyDecision(dag, { unblock: decision.unblock, start: [], cancel: decision.cancel }, now)
@@ -120,7 +164,7 @@ export class FleetDaemon {
         } catch {
           continue
         }
-        const probe = this.breaker.probe(id, Date.now())
+        const probe = this.breaker.probe(id, this.clock())
         if (probe !== "ok") {
           this.emit({ type: "refused", taskId: id, detail: probe.refused })
           continue
@@ -144,11 +188,16 @@ export class FleetDaemon {
             (taskId, report) => void this.foldReport(taskId, report),
           )
           const snapshot = port.snapshot()
-          this.supervisor.track(id, snapshot.pid ?? -1, {
-            spendUsd: snapshot.spendUsd,
-            tokensIn: snapshot.tokensIn,
-            tokensOut: snapshot.tokensOut,
-          })
+          this.supervisor.track(
+            id,
+            snapshot.pid ?? -1,
+            {
+              spendUsd: snapshot.spendUsd,
+              tokensIn: snapshot.tokensIn,
+              tokensOut: snapshot.tokensOut,
+            },
+            this.clock(),
+          )
           this.ports.set(id, port)
           await saveWorkerPids(
             this.options.stateRoot,
@@ -157,19 +206,25 @@ export class FleetDaemon {
           void port
             .run()
             .then(async (outcome) => {
+              // A restarted turn's late settlement must not untrack the
+              // relaunch: only the currently-owned port may clear tracking.
+              if (this.ports.get(id) !== port) return
               this.supervisor.untrack(id)
               this.ports.delete(id)
               await saveWorkerPids(
                 this.options.stateRoot,
                 Object.fromEntries(this.supervisor.entries().map((entry) => [entry.taskId, entry.pid])),
               ).catch(() => undefined)
-              if (outcome.status === "failed") this.breaker.noteCrash(id, Date.now())
+              if (outcome.status === "failed") this.breaker.noteCrash(id, this.clock())
             })
             .catch((error) => {
+              // Likewise: a restarted turn's late crash must not fold a second
+              // failure over the re-queued task nor untrack its relaunch.
+              if (this.ports.get(id) !== port) return
               const reason = `worker crashed: ${error instanceof Error ? error.message : String(error)}`
               this.supervisor.untrack(id)
               this.ports.delete(id)
-              this.breaker.noteCrash(id, Date.now())
+              this.breaker.noteCrash(id, this.clock())
               this.emit({ type: "refused", taskId: id, detail: reason })
               void this.foldReport(id, { outcome: "failed", reason })
             })
@@ -182,29 +237,66 @@ export class FleetDaemon {
       dag = applyDecision(dag, { unblock: [], start: launched, cancel: [] }, now)
       await saveDag(this.options.stateRoot, dag)
       await this.reconcileTerminals()
+      await this.restartStuck()
+      await this.heartbeat()
     })
   }
 
   /** Fold one worker report into the DAG (called from worker callbacks). */
   async foldReport(taskId: string, report: TaskReport): Promise<void> {
     await this.exclusive(async () => {
-      const now = new Date().toISOString()
+      const now = this.stamp()
       const dag = (await loadDag(this.options.stateRoot)) ?? emptyDag()
       // Late reports after teardown name unknown tasks: not an error, drop them.
       if (!dag.tasks[taskId]) {
         this.emit({ type: "refused", taskId, detail: "stale report for an unknown task" })
         return
       }
+      this.supervisor.noteActivity(taskId, this.clock())
       const next = reportTask(dag, taskId, report, now)
       if (next.changed) {
         await saveDag(this.options.stateRoot, next.dag)
         this.emit({ type: "report", taskId, detail: report.outcome })
       }
+      await this.heartbeat()
     })
   }
 
+  /**
+   * Stop turns with no worker progress past the stuck timeout and fail them
+   * for restart: the task's own failure policy decides (retry re-queues while
+   * attempts remain, otherwise terminal). Skipped when no stuck timeout is
+   * configured. Only `running` tasks are eligible; a turn launched earlier
+   * in this same tick is never stuck (its activity stamp is current).
+   */
+  private async restartStuck(): Promise<void> {
+    const timeoutMs = this.options.stuckTimeoutMs
+    if (timeoutMs === undefined) return
+    const now = this.stamp()
+    let dag = (await loadDag(this.options.stateRoot)) ?? emptyDag()
+    let saved = false
+    for (const id of this.supervisor.stuckTasks(this.clock(), timeoutMs)) {
+      if (dag.tasks[id]?.status !== "running") continue
+      const port = this.ports.get(id)
+      await port?.stop().catch(() => undefined)
+      this.ports.delete(id)
+      this.supervisor.untrack(id)
+      this.breaker.noteCrash(id, this.clock())
+      const next = reportTask(
+        dag,
+        id,
+        { outcome: "failed", reason: `stuck turn: no worker progress for ${timeoutMs}ms; restarting` },
+        now,
+      )
+      dag = next.dag
+      saved = next.changed || saved
+      this.emit({ type: "report", taskId: id, detail: "failed: stuck turn restarted" })
+    }
+    if (saved) await saveDag(this.options.stateRoot, dag)
+  }
+
   private async reconcileTerminals(): Promise<void> {
-    const now = new Date().toISOString()
+    const now = this.stamp()
     let dag = (await loadDag(this.options.stateRoot)) ?? emptyDag()
     for (const id of Object.keys(dag.tasks).sort((a, b) => a.localeCompare(b))) {
       const task = dag.tasks[id]!
@@ -220,7 +312,7 @@ export class FleetDaemon {
           this.options.repoRoot,
           this.options.stateRoot,
           id,
-          "fleet",
+          this.dagId(),
           this.options.checkGates,
         )
         if (landed.landed) {
@@ -264,7 +356,7 @@ export class FleetDaemon {
       this.supervisor.untrack(taskId)
     }
     await this.exclusive(async () => {
-      const now = new Date().toISOString()
+      const now = this.stamp()
       let dag = (await loadDag(this.options.stateRoot)) ?? emptyDag()
       for (const id of Object.keys(dag.tasks).sort((a, b) => a.localeCompare(b))) {
         if (dag.tasks[id]!.status !== "running") continue

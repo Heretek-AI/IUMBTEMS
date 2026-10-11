@@ -266,10 +266,10 @@ export class WorkerError extends Error {
  * while dead ones are reported as failed for the failure policy to decide.
  */
 export class WorkerSupervisor {
-  private readonly live = new Map<string, { pid: number; acc: SpendAcc }>()
+  private readonly live = new Map<string, { pid: number; acc: SpendAcc; lastActivity: number }>()
 
-  track(taskId: string, pid: number, acc: SpendAcc = emptyAcc()): void {
-    this.live.set(taskId, { pid, acc })
+  track(taskId: string, pid: number, acc: SpendAcc = emptyAcc(), now: number = Date.now()): void {
+    this.live.set(taskId, { pid, acc, lastActivity: now })
   }
 
   untrack(taskId: string): void {
@@ -290,15 +290,33 @@ export class WorkerSupervisor {
       throw new WorkerError(`Task ${taskId} is already running under this daemon; refusing a second worker.`)
   }
 
+  /** Record worker progress (a report folded, a turn observed): resets the stuck clock. */
+  noteActivity(taskId: string, now: number = Date.now()): void {
+    const record = this.live.get(taskId)
+    if (record) record.lastActivity = now
+  }
+
+  /**
+   * Tracked tasks with no activity for longer than `timeoutMs` (id-sorted):
+   * wedged headless runs the daemon must restart. Skipped while the
+   * supervisor was just seeded (recover stamps its own clock).
+   */
+  stuckTasks(now: number, timeoutMs: number): string[] {
+    return [...this.live.entries()]
+      .filter(([, record]) => now - record.lastActivity > timeoutMs)
+      .map(([taskId]) => taskId)
+      .sort((a, b) => a.localeCompare(b))
+  }
+
   recover(
     records: ReadonlyArray<{ taskId: string; pid: number }>,
-    _now: number,
+    now: number,
   ): { reattached: string[]; failed: Array<{ taskId: string; reason: string }> } {
     const reattached: string[] = []
     const failed: Array<{ taskId: string; reason: string }> = []
     for (const record of records) {
       if (isPidAlive(record.pid)) {
-        this.live.set(record.taskId, { pid: record.pid, acc: emptyAcc() })
+        this.live.set(record.taskId, { pid: record.pid, acc: emptyAcc(), lastActivity: now })
         reattached.push(record.taskId)
       } else {
         failed.push({ taskId: record.taskId, reason: "daemon restarted while the run was gone; re-queue by policy" })
