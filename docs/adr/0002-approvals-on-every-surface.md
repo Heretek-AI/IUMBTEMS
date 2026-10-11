@@ -1,6 +1,6 @@
 # ADR 0002: Approvals on every surface (TUI, CLI, browser)
 
-- **Status:** Accepted (2026-10-09)
+- **Status:** Accepted (2026-10-11; the user's I8 confirmation is quoted under "To accept")
 - **Date:** 2026-10-09
 - **Epic:** #92 · **Milestone:** Phase 2 · Approvals everywhere · 1.3.0
 - **Ticket:** #116 (threat model and checklist included; no separate file)
@@ -47,7 +47,7 @@ surface copies the record → clear-pending → begin-research sequence.
 
 Browser key handling follows option (b): the sealed key never leaves the
 machine's state dir; the passphrase travels only over loopback to the local
-server (confirmed by user 2026-10-09).
+server (confirmed by the user on 2026-10-11, quoted under "To accept").
 
 ## Options considered
 
@@ -131,7 +131,8 @@ prompt-injected agent acting through a seat or user-agent shell.
   terminal-only.
 - **I8** Browser key handling follows option (b): the sealed key never leaves
   the machine's state dir; the passphrase travels only over loopback to the
-  local server. **Confirmed by user (2026-10-09).**
+  local server. **Confirmed by the user (2026-10-11), quoted under "To
+  accept".**
 
 ## Inventory of terminal-only enforcement points
 
@@ -227,3 +228,44 @@ Until then, #117 and #118 proceed (they need only I1–I7), while #119 and
 ADR Accepted without the required user I8 confirmation; reverted to
 Proposed. The merging human flips to Accepted only after quoting the
 user's verbatim I8 option-(b) confirmation here.
+
+**Confirmation (2026-10-11).** The user answered a multiple-choice question
+in a Claude Code session (recorded on #156):
+
+> When you approve from the browser, how should your key and passphrase be
+> handled?
+
+Selected:
+
+> **Local server unlock (Recommended).** Option (b): your passphrase goes
+> only to the local server on your own machine, which unlocks the key, signs
+> and wipes it. The key file never leaves its folder. This is what the code
+> does today.
+
+Offered and not selected: "Terminal only" (option a), "Unlock in the page"
+(option c) and "Undecided". The answer is a selection, not a typed sentence.
+With it, this ADR is Accepted; the earlier "confirmed 2026-10-09" wording
+had no quote behind it and is corrected above.
+
+## Decision recorded, not yet in force: config edits from the browser
+
+#132 required asking the user whether this ADR should be extended to
+authorize config edits from the browser. No answer was on record, so the
+editor shipped preview-only. On 2026-10-11 the user answered a
+multiple-choice question in a Claude Code session (recorded on #156):
+
+> Should the browser config editor be allowed to apply config changes
+> itself?
+
+Selected:
+
+> **Allow browser apply.** The browser can apply config changes with your
+> authorization. This is new work, tracked in #145.
+
+Offered and not selected: "Preview only (Recommended)" and "Undecided".
+
+This records the decision only. I7 is unchanged and still enforced: the bus
+refuses `fleet.config.apply`, the UI has no apply button, and `config set`
+stays terminal-only. #145 carries the work, which includes amending I7 and
+the inventory above and reusing the #131 ticket, passphrase and CSRF/Origin
+path.
