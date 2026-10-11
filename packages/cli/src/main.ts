@@ -765,7 +765,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
             io.print("Usage: es rebase cascade --from <branch> --to <branch> [--no-verify]")
             return 2
           }
-          const verify = subArgs(2).flags["no-verify"] === true ? async () => true : undefined
+          const verify = subArgs(2).flags["no-verify"] === true ? () => Promise.resolve(true) : undefined
           const result = await cascadeRebase(root, {
             from,
             to,

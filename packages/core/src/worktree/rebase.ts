@@ -15,6 +15,74 @@ import * as Git from "./git.ts"
 
 export class RebaseError extends Error {}
 
+interface ParsedImport {
+  readonly module: string
+  readonly def?: string
+  readonly named: string[]
+  readonly typeOnly: boolean
+  readonly raw: string
+}
+
+/** An import-opening line (leading whitespace tolerated; side-effect imports count). */
+const isImportLine = (line: string): boolean => {
+  const text = line.trimStart()
+  return (
+    text.startsWith("import ") ||
+    text.startsWith("import\t") ||
+    text.startsWith('import"') ||
+    text.startsWith("import'") ||
+    text === "import"
+  )
+}
+
+/**
+ * Single-line import parser with no backtracking (linear scan): split the
+ * trailing quoted module first, then require a standalone `from` keyword.
+ * The naive `import\s+(.+?)\s+from…` regex is polynomial-ReDoS on hostile input.
+ */
+function parseImportLine(line: string): ParsedImport | undefined {
+  let rest = line.trim()
+  if (!rest.startsWith("import")) return undefined
+  rest = rest.slice("import".length)
+  if (!rest.startsWith(" ") && !rest.startsWith("\t")) return undefined
+  rest = rest.trimStart()
+  const tail = /(["'])([^"']+)\1\s*;?$/.exec(rest)
+  if (tail?.[2] === undefined) return undefined
+  let clause = rest.slice(0, rest.length - tail[0].length).trimEnd()
+  if (clause !== "from" && !clause.endsWith(" from") && !clause.endsWith("\tfrom")) return undefined
+  clause = clause.slice(0, clause.length - "from".length).trim()
+  // A surviving inner `from` means the line is not the simple shape we merge.
+  if (!clause || /\bfrom\b/.test(clause)) return undefined
+  const trimmed = clause.trim()
+  const typeOnly = trimmed === "type" || trimmed.startsWith("type ") || trimmed.startsWith("type\t")
+  const bare = (typeOnly ? trimmed.slice("type".length) : trimmed).trim()
+  const braced = bare.startsWith("{") && bare.endsWith("}")
+  const named = braced
+    ? bare
+        .slice(1, -1)
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : []
+  if (bare.startsWith("{") && !named.length) return undefined
+  const def = bare.startsWith("{") ? undefined : bare || undefined
+  if (def === undefined && !named.length) return undefined
+  return { module: tail[2]!, def, named, typeOnly, raw: line }
+}
+
+/** Combine two parsed imports for the same module, or undefined on structural clash. */
+function combineImports(existing: ParsedImport, incoming: ParsedImport): ParsedImport | undefined {
+  if (existing.typeOnly !== incoming.typeOnly) return undefined
+  if (existing.def !== undefined && incoming.def !== undefined && existing.def !== incoming.def) return undefined
+  return {
+    module: existing.module,
+    def: existing.def ?? incoming.def,
+    named: [...new Set([...existing.named, ...incoming.named])].sort((a, b) => a.localeCompare(b)),
+    typeOnly: existing.typeOnly,
+    raw: existing.raw,
+  }
+}
+
 /** Merge two single-line-import TypeScript sources; undefined when unsafe. */
 export function mergeTypeScriptImports(ours: string, theirs: string): string | undefined {
   // Multi-line imports need a real parser: refuse rather than guess. A line
@@ -23,79 +91,31 @@ export function mergeTypeScriptImports(ours: string, theirs: string): string | u
   const multiline = (text: string) =>
     text
       .split("\n")
-      .some((line) => /^\s*import\s+/.test(line) && !/from\s*["']/.test(line) && !/^\s*import\s*["']/.test(line))
+      .some((line) => isImportLine(line) && !line.includes("from") && !line.includes('"') && !line.includes("'"))
   if (multiline(ours) || multiline(theirs)) return undefined
-  interface Parsed {
-    readonly module: string
-    readonly def?: string
-    readonly named: string[]
-    readonly typeOnly: boolean
-    readonly raw: string
-  }
-  /**
-   * Single-line import parser with no backtracking (linear scan): split the
-   * trailing quoted module first, then require a `from` keyword. The naive
-   * `import\s+(.+?)\s+from…` regex is polynomial-ReDoS on hostile input.
-   */
-  const parse = (line: string): Parsed | undefined => {
-    let rest = line.trim()
-    if (!rest.startsWith("import")) return undefined
-    rest = rest.slice("import".length)
-    if (!rest.startsWith(" ") && !rest.startsWith("\t")) return undefined
-    rest = rest.trimStart()
-    const tail = /(["'])([^"']+)\1\s*;?$/.exec(rest)
-    if (!tail || tail[2] === undefined) return undefined
-    let clause = rest.slice(0, rest.length - tail[0].length).trimEnd()
-    if (!/from$/.test(clause)) return undefined
-    clause = clause.slice(0, clause.length - "from".length).trim()
-    // A surviving inner `from` means the line is not the simple shape we merge.
-    if (!clause || /\bfrom\b/.test(clause)) return undefined
-    const typeOnly = /^type\b/.test(clause.trim())
-    const bare = typeOnly
-      ? clause
-          .trim()
-          .replace(/^type\b/, "")
-          .trim()
-      : clause.trim()
-    const named =
-      /^\{([^}]*)\}$/
-        .exec(bare)?.[1]
-        ?.split(",")
-        .map((s) => s.trim())
-        .filter(Boolean) ?? []
-    if (/^\{/.test(bare) && !named.length) return undefined
-    const def = /^\{/.test(bare) ? undefined : bare || undefined
-    if (def === undefined && !named.length) return undefined
-    return { module: tail[2]!, def, named, typeOnly, raw: line }
-  }
   const oursLines = ours.split("\n")
   const theirsLines = theirs.split("\n")
   // Only import lines may differ; anything else means a real code conflict.
-  const strip = (lines: string[]) => lines.filter((line) => line.trim() && !/^\s*import\s+/.test(line)).join("\n")
+  const strip = (lines: string[]) => lines.filter((line) => line.trim() && !isImportLine(line)).join("\n")
   if (strip(oursLines) !== strip(theirsLines)) return undefined
-  const merged = new Map<string, Parsed>()
+  const merged = new Map<string, ParsedImport>()
   for (const line of [...oursLines, ...theirsLines]) {
-    if (!line.trim() || !/^\s*import\s+/.test(line)) continue
-    const parsed = parse(line)
+    if (!line.trim() || !isImportLine(line)) continue
+    const parsed = parseImportLine(line)
     if (!parsed) return undefined
     const existing = merged.get(parsed.module)
     if (!existing) merged.set(parsed.module, parsed)
-    else if (existing.typeOnly !== parsed.typeOnly) return undefined
-    else if (existing.def !== undefined && parsed.def !== undefined && existing.def !== parsed.def) return undefined
-    else
-      merged.set(parsed.module, {
-        module: parsed.module,
-        def: existing.def ?? parsed.def,
-        named: [...new Set([...existing.named, ...parsed.named])].sort(),
-        typeOnly: existing.typeOnly,
-        raw: existing.raw,
-      })
+    else {
+      const combined = combineImports(existing, parsed)
+      if (!combined) return undefined
+      merged.set(parsed.module, combined)
+    }
   }
   const rendered = [...merged.values()].map((entry) => {
     const parts: string[] = []
     if (entry.def) parts.push(entry.def)
     if (entry.named.length) parts.push(`{ ${entry.named.join(", ")} }`)
-    const quote = /"[^"]*" from/.test(entry.raw) || entry.raw.includes('"') ? '"' : "'"
+    const quote = entry.raw.includes('"') ? '"' : "'"
     return `import${entry.typeOnly ? " type" : ""} ${parts.join(", ")} from ${quote}${entry.module}${quote}`
   })
   const body = strip(oursLines)
@@ -141,6 +161,8 @@ export function mergeJson(oursText: string, theirsText: string): string | undefi
   return `${JSON.stringify(merge(ours, theirs), null, 2)}\n`
 }
 
+const DEPENDENCY_SECTIONS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]
+
 /**
  * Merge two package.json texts: dependency ranges union, with the higher
  * semver winning a conflict on the same key. Undefined when either side is
@@ -157,18 +179,27 @@ export function mergePackageJson(oursText: string, theirsText: string): string |
   }
   if (!ours || typeof ours !== "object" || !theirs || typeof theirs !== "object") return undefined
   const out: Record<string, unknown> = { ...ours }
-  for (const section of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
-    const a = (ours[section] ?? {}) as Record<string, string>
-    const b = (theirs[section] ?? {}) as Record<string, string>
-    if (typeof a !== "object" || typeof b !== "object") continue
-    const merged: Record<string, string> = { ...a }
-    for (const [key, value] of Object.entries(b)) merged[key] = key in merged ? newer(merged[key]!, value) : value
-    if (Object.keys(merged).length) out[section] = merged
+  for (const section of DEPENDENCY_SECTIONS) {
+    const merged = mergeDependencySection(ours, theirs, section)
+    if (merged && Object.keys(merged).length) out[section] = merged
   }
   for (const [key, value] of Object.entries(theirs))
-    if (!["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"].includes(key) && !(key in out))
-      out[key] = value
+    if (!DEPENDENCY_SECTIONS.includes(key) && !(key in out)) out[key] = value
   return `${JSON.stringify(out, null, 2)}\n`
+}
+
+/** Union one dependency section, with the higher semver winning a conflict on the same key. */
+function mergeDependencySection(
+  ours: Record<string, unknown>,
+  theirs: Record<string, unknown>,
+  section: string,
+): Record<string, string> | undefined {
+  const a = (ours[section] ?? {}) as Record<string, string>
+  const b = (theirs[section] ?? {}) as Record<string, string>
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return undefined
+  const merged: Record<string, string> = { ...a }
+  for (const [key, value] of Object.entries(b)) merged[key] = key in merged ? newer(merged[key]!, value) : value
+  return merged
 }
 
 /** AST-aware conflict resolution by path. Returns merged text, or undefined when a human must decide. */
@@ -262,19 +293,106 @@ export async function cascadeRebase(root: string, options: CascadeOptions): Prom
     await Git.setBranch(root, options.to, fromTip)
     return { ok: true, previousSha, newSha: fromTip, rolledBack: false, resolutions: [] }
   }
-  const scratch = await mkdtemp(path.join(options.scratchDir ?? tmpdir(), "es-rebase-"))
+  return replayCascade(root, options, previousSha)
+}
+
+/** Read both conflict stages for every unmerged file in parallel. */
+async function readConflictStages(
+  worktree: string,
+  files: readonly string[],
+): Promise<Array<{ readonly file: string; readonly ours: string; readonly theirs: string } | undefined>> {
+  return Promise.all(
+    files.map(async (file) => {
+      const [ours, theirs] = await Promise.all([
+        Git.git(worktree, ["show", `:2:${file}`], { allowFail: true }),
+        Git.git(worktree, ["show", `:3:${file}`], { allowFail: true }),
+      ])
+      if (ours.code !== 0 || theirs.code !== 0) return undefined
+      return { file, ours: ours.stdout, theirs: theirs.stdout }
+    }),
+  )
+}
+
+/**
+ * Resolve one round of unmerged files and continue the sequencer.
+ * Returns the resolved files, or a human-readable reason to abort.
+ */
+async function resolveRound(
+  worktree: string,
+  files: readonly string[],
+): Promise<{ resolved: string[] } | { reason: string }> {
+  const stages = await readConflictStages(worktree, files)
+  const merged = new Map<string, string>()
+  for (let i = 0; i < files.length; i++) {
+    const stage = stages[i]
+    if (!stage) return { reason: `conflict in ${files[i]}: stages unreadable` }
+    const text = resolveConflict(stage.file, stage.ours, stage.theirs)
+    if (text === undefined)
+      return { reason: `unresolvable conflict in ${files.join(", ")}: a human must rebase by hand` }
+    merged.set(stage.file, text)
+  }
+  for (const [file, text] of merged) {
+    await writeFile(path.join(worktree, file), text)
+    await Git.git(worktree, ["add", "--", file])
+  }
+  const continued = await Git.git(worktree, [...IDENTITY, "-c", "core.editor=true", "rebase", "--continue"], {
+    allowFail: true,
+  })
+  if (continued.code !== 0 && (await unmerged(worktree)).length > 0) {
+    await Git.git(worktree, ["rebase", "--abort"], { allowFail: true })
+    return { reason: `conflict re-emerged after resolution: ${(continued.stderr || continued.stdout).trim()}` }
+  }
+  return { resolved: files.slice() }
+}
+
+/**
+ * Drive the rebase sequencer to settlement: resolve rounds, skip empty
+ * picks, abort on anything else. Returns resolutions or an abort reason.
+ */
+async function settleRebase(worktree: string, from: string): Promise<{ resolutions: string[] } | { reason: string }> {
   const resolutions: string[] = []
-  const fail = async (reason: string, worktree?: string): Promise<CascadeResult> => {
-    if (worktree) await Git.removeWorktree(root, worktree).catch(() => undefined)
+  const start = await Git.git(worktree, [...IDENTITY, "rebase", from], { allowFail: true })
+  if (start.code !== 0 && !(await rebaseActive(worktree)) && (await unmerged(worktree)).length === 0)
+    return { reason: `rebase onto ${from} failed to start: ${(start.stderr || start.stdout).trim()}` }
+  for (let step = 0; step < 100; step++) {
+    const uu = await unmerged(worktree)
+    if (uu.length) {
+      const round = await resolveRound(worktree, uu)
+      if ("reason" in round) {
+        await Git.git(worktree, ["rebase", "--abort"], { allowFail: true })
+        return round
+      }
+      resolutions.push(...round.resolved)
+      continue
+    }
+    if (!(await rebaseActive(worktree))) return { resolutions }
+    // No unmerged files but the sequencer is stuck (empty pick): skip it.
+    const skipped = await Git.git(worktree, [...IDENTITY, "-c", "core.editor=true", "rebase", "--skip"], {
+      allowFail: true,
+    })
+    if (skipped.code !== 0) {
+      await Git.git(worktree, ["rebase", "--abort"], { allowFail: true })
+      return { reason: `rebase sequencer stalled: ${(skipped.stderr || skipped.stdout).trim()}` }
+    }
+  }
+  await Git.git(worktree, ["rebase", "--abort"], { allowFail: true })
+  return { reason: "rebase did not settle within 100 sequencer steps" }
+}
+
+/** The replay path of cascadeRebase: scratch worktree, settle, test, move-or-restore. */
+async function replayCascade(root: string, options: CascadeOptions, previousSha: string): Promise<CascadeResult> {
+  const scratch = await mkdtemp(path.join(options.scratchDir ?? tmpdir(), "es-rebase-"))
+  const worktree = path.join(scratch, "tree")
+  const resolutions: string[] = []
+  const fail = async (reason: string): Promise<CascadeResult> => {
+    await Git.removeWorktree(root, worktree).catch(() => undefined)
     await rm(scratch, { recursive: true, force: true }).catch(() => undefined)
     // Explicit restore: `to` never moved (all work happened in scratch),
     // but the monotonic guarantee pins it back to the witnessed SHA anyway.
     await Git.setBranch(root, options.to, previousSha)
     return { ok: false, previousSha, rolledBack: true, resolutions, reason }
   }
-  let worktree = ""
   try {
-    worktree = path.join(scratch, "tree")
     await Git.git(root, [
       "worktree",
       "add",
@@ -283,56 +401,9 @@ export async function cascadeRebase(root: string, options: CascadeOptions): Prom
       worktree,
       options.to,
     ])
-    const start = await Git.git(worktree, [...IDENTITY, "rebase", options.from], { allowFail: true })
-    if (start.code !== 0 && !(await rebaseActive(worktree)) && (await unmerged(worktree)).length === 0)
-      return fail(`rebase onto ${options.from} failed to start: ${(start.stderr || start.stdout).trim()}`)
-    for (let step = 0; step < 100; step++) {
-      const uu = await unmerged(worktree)
-      if (uu.length) {
-        let resolvable = true
-        for (const file of uu) {
-          const ours = await Git.git(worktree, ["show", `:2:${file}`], { allowFail: true })
-          const theirs = await Git.git(worktree, ["show", `:3:${file}`], { allowFail: true })
-          if (ours.code !== 0 || theirs.code !== 0) {
-            resolvable = false
-            break
-          }
-          const merged = resolveConflict(file, ours.stdout, theirs.stdout)
-          if (merged === undefined) {
-            resolvable = false
-            break
-          }
-          await writeFile(path.join(worktree, file), merged)
-          await Git.git(worktree, ["add", "--", file])
-          resolutions.push(file)
-        }
-        if (!resolvable) {
-          await Git.git(worktree, ["rebase", "--abort"], { allowFail: true })
-          return fail(`unresolvable conflict in ${uu.join(", ")}: a human must rebase by hand`)
-        }
-        const continued = await Git.git(worktree, [...IDENTITY, "-c", "core.editor=true", "rebase", "--continue"], {
-          allowFail: true,
-        })
-        if (continued.code !== 0 && (await unmerged(worktree)).length > 0) {
-          await Git.git(worktree, ["rebase", "--abort"], { allowFail: true })
-          return fail(`conflict re-emerged after resolution: ${(continued.stderr || continued.stdout).trim()}`)
-        }
-        continue
-      }
-      if (!(await rebaseActive(worktree))) break
-      // No unmerged files but the sequencer is stuck (empty pick): skip it.
-      const skipped = await Git.git(worktree, [...IDENTITY, "-c", "core.editor=true", "rebase", "--skip"], {
-        allowFail: true,
-      })
-      if (skipped.code !== 0) {
-        await Git.git(worktree, ["rebase", "--abort"], { allowFail: true })
-        return fail(`rebase sequencer stalled: ${(skipped.stderr || skipped.stdout).trim()}`)
-      }
-    }
-    if (await rebaseActive(worktree)) {
-      await Git.git(worktree, ["rebase", "--abort"], { allowFail: true })
-      return fail("rebase did not settle within 100 sequencer steps")
-    }
+    const settled = await settleRebase(worktree, options.from)
+    if ("reason" in settled) return fail(settled.reason)
+    resolutions.push(...settled.resolutions)
     const newTip = await Git.headCommit(worktree)
     const changed = (await Git.git(worktree, ["diff", "--name-only", previousSha, newTip], { allowFail: true })).stdout
       .split("\n")
@@ -344,6 +415,6 @@ export async function cascadeRebase(root: string, options: CascadeOptions): Prom
     await rm(scratch, { recursive: true, force: true }).catch(() => undefined)
     return { ok: true, previousSha, newSha: newTip, rolledBack: false, resolutions }
   } catch (error) {
-    return fail(error instanceof Error ? error.message : String(error), worktree || undefined)
+    return fail(error instanceof Error ? error.message : String(error))
   }
 }
