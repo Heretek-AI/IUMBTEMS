@@ -10,9 +10,9 @@
 // The operators are text spans over the source, one occurrence per mutant,
 // each carrying its file, line and a description. Results are cached by file
 // content hash so unchanged files never rerun the suite.
+import { timingSafeEqual } from "node:crypto"
 import type { GateFinding } from "../schema/gates.ts"
 import { sha256 } from "../util/hash.ts"
-import { timingSafeEqual } from "node:crypto"
 
 /** A phase is rejected when its mutation kill rate is below this. */
 export const MUTATION_KILL_THRESHOLD = 0.8
