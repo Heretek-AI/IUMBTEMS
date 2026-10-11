@@ -47,12 +47,33 @@ const commitFile = async (file: string, text: string, message: string) => {
   return Git.commitAll(fx.root, message)
 }
 
+/** Commit one file and point `branch` at it, back on main. Returns the tip. */
+const stageBranch = async (file: string, text: string, branch: string): Promise<string> => {
+  await commitFile(file, text, branch)
+  await Git.git(fx.root, ["branch", branch, "HEAD"])
+  await Git.git(fx.root, ["checkout", "-q", "main"])
+  return Git.revParse(fx.root, branch)
+}
+
+/** A green proof bound to `branch`'s live tip. */
+const proofFor = async (branch: string): Promise<StagingGateProof> =>
+  green({ branch, commit: await Git.revParse(fx.root, branch) })
+
+/** Two tickets diverged on the same file: ticket-1 and ticket-2 both modify it. */
+const conflictingPair = async (file: string, base: string, one: string, two: string) => {
+  await commitFile(file, base, "base")
+  await Git.git(fx.root, ["branch", "stack-base", "HEAD"])
+  await commitFile(file, one, "ticket one")
+  await Git.git(fx.root, ["branch", "integration/ticket-1", "HEAD"])
+  await Git.git(fx.root, ["checkout", "-q", "stack-base"])
+  await commitFile(file, two, "ticket two")
+  await Git.git(fx.root, ["branch", "integration/ticket-2", "HEAD"])
+  await Git.git(fx.root, ["checkout", "-q", "main"])
+}
+
 describe("landOnStaging", () => {
   test("a green proof lands the branch on staging/autonomous", async () => {
-    await commitFile("feat.txt", "work\n", "ticket work")
-    await Git.git(fx.root, ["branch", "integration/ticket-1", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "main"])
-    const tip = await Git.revParse(fx.root, "integration/ticket-1")
+    const tip = await stageBranch("feat.txt", "work\n", "integration/ticket-1")
     const result = await landOnStaging(fx.root, { branch: "integration/ticket-1", proof: green({ commit: tip }) })
     expect(result.ok).toBe(true)
     expect(await Git.revParse(fx.root, STAGING_BRANCH)).toBe(tip)
@@ -60,9 +81,7 @@ describe("landOnStaging", () => {
   })
 
   test("a red proof never creates staging", async () => {
-    await commitFile("feat.txt", "work\n", "ticket work")
-    await Git.git(fx.root, ["branch", "integration/ticket-1", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "main"])
+    await stageBranch("feat.txt", "work\n", "integration/ticket-1")
     const proof = green({
       tiers: { tier1: { passed: 1, total: 2 }, tier2: { passed: 1, total: 1 }, tier3: { passed: 1, total: 1 } },
     })
@@ -73,9 +92,7 @@ describe("landOnStaging", () => {
   })
 
   test("a proof for another branch is refused", async () => {
-    await commitFile("feat.txt", "work\n", "ticket work")
-    await Git.git(fx.root, ["branch", "integration/ticket-1", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "main"])
+    await stageBranch("feat.txt", "work\n", "integration/ticket-1")
     const result = await landOnStaging(fx.root, {
       branch: "integration/ticket-1",
       proof: green({ branch: "integration/other" }),
@@ -84,20 +101,14 @@ describe("landOnStaging", () => {
   })
 
   test("a second landing merges cleanly and keeps both tickets", async () => {
-    await commitFile("one.txt", "one\n", "ticket one")
-    await Git.git(fx.root, ["branch", "integration/ticket-1", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "main"])
+    const tip1 = await stageBranch("one.txt", "one\n", "integration/ticket-1")
     await Git.git(fx.root, ["reset", "-q", "--hard", "HEAD~1"])
-    await commitFile("two.txt", "two\n", "ticket two")
-    await Git.git(fx.root, ["branch", "integration/ticket-2", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "main"])
-    const tip1 = await Git.revParse(fx.root, "integration/ticket-1")
+    await stageBranch("two.txt", "two\n", "integration/ticket-2")
     const first = await landOnStaging(fx.root, { branch: "integration/ticket-1", proof: green({ commit: tip1 }) })
     expect(first.ok).toBe(true)
-    const tip2 = await Git.revParse(fx.root, "integration/ticket-2")
     const second = await landOnStaging(fx.root, {
       branch: "integration/ticket-2",
-      proof: green({ branch: "integration/ticket-2", commit: tip2 }),
+      proof: await proofFor("integration/ticket-2"),
     })
     expect(second.ok).toBe(true)
     const tree = (await Git.git(fx.root, ["ls-tree", "-r", "--name-only", STAGING_BRANCH])).stdout
@@ -106,23 +117,15 @@ describe("landOnStaging", () => {
   })
 
   test("a conflicting landing without a resolver fails with staging untouched", async () => {
-    await commitFile("code.txt", "base\n", "base")
-    await Git.git(fx.root, ["branch", "stack-base", "HEAD"])
-    await commitFile("code.txt", "one\n", "ticket one")
-    await Git.git(fx.root, ["branch", "integration/ticket-1", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "stack-base"])
-    await commitFile("code.txt", "two\n", "ticket two")
-    await Git.git(fx.root, ["branch", "integration/ticket-2", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "main"])
-    const tip1 = await Git.revParse(fx.root, "integration/ticket-1")
-    expect((await landOnStaging(fx.root, { branch: "integration/ticket-1", proof: green({ commit: tip1 }) })).ok).toBe(
-      true,
-    )
+    await conflictingPair("code.txt", "base\n", "one\n", "two\n")
+    expect(
+      (await landOnStaging(fx.root, { branch: "integration/ticket-1", proof: await proofFor("integration/ticket-1") }))
+        .ok,
+    ).toBe(true)
     const before = await Git.revParse(fx.root, STAGING_BRANCH)
-    const tip2 = await Git.revParse(fx.root, "integration/ticket-2")
     const result = await landOnStaging(fx.root, {
       branch: "integration/ticket-2",
-      proof: green({ branch: "integration/ticket-2", commit: tip2 }),
+      proof: await proofFor("integration/ticket-2"),
     })
     expect(result.ok).toBe(false)
     expect(result.reason).toMatch(/conflict/i)
@@ -130,22 +133,14 @@ describe("landOnStaging", () => {
   })
 
   test("an injected resolver (e.g. #165) unblocks the conflicting landing", async () => {
-    await commitFile("code.txt", "base\n", "base")
-    await Git.git(fx.root, ["branch", "stack-base", "HEAD"])
-    await commitFile("code.txt", "one\n", "ticket one")
-    await Git.git(fx.root, ["branch", "integration/ticket-1", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "stack-base"])
-    await commitFile("code.txt", "two\n", "ticket two")
-    await Git.git(fx.root, ["branch", "integration/ticket-2", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "main"])
-    const tip1 = await Git.revParse(fx.root, "integration/ticket-1")
-    expect((await landOnStaging(fx.root, { branch: "integration/ticket-1", proof: green({ commit: tip1 }) })).ok).toBe(
-      true,
-    )
-    const tip2 = await Git.revParse(fx.root, "integration/ticket-2")
+    await conflictingPair("code.txt", "base\n", "one\n", "two\n")
+    expect(
+      (await landOnStaging(fx.root, { branch: "integration/ticket-1", proof: await proofFor("integration/ticket-1") }))
+        .ok,
+    ).toBe(true)
     const result = await landOnStaging(fx.root, {
       branch: "integration/ticket-2",
-      proof: green({ branch: "integration/ticket-2", commit: tip2 }),
+      proof: await proofFor("integration/ticket-2"),
       resolveConflict: () => "one and two\n",
     })
     expect(result.ok).toBe(true)
@@ -155,11 +150,8 @@ describe("landOnStaging", () => {
 
 describe("runStagingSuites", () => {
   test("green suites report ok with per-suite outcomes", async () => {
-    await commitFile("feat.txt", "work\n", "ticket work")
-    await Git.git(fx.root, ["branch", "integration/ticket-1", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "main"])
-    const tip = await Git.revParse(fx.root, "integration/ticket-1")
-    await landOnStaging(fx.root, { branch: "integration/ticket-1", proof: green({ commit: tip }) })
+    await stageBranch("feat.txt", "work\n", "integration/ticket-1")
+    await landOnStaging(fx.root, { branch: "integration/ticket-1", proof: await proofFor("integration/ticket-1") })
     const report = await runStagingSuites(fx.root, {
       suites: [
         { name: "regression", run: async () => ({ passed: true, details: "142/142" }) },
@@ -172,11 +164,8 @@ describe("runStagingSuites", () => {
   })
 
   test("a failing suite flips the report without moving staging", async () => {
-    await commitFile("feat.txt", "work\n", "ticket work")
-    await Git.git(fx.root, ["branch", "integration/ticket-1", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "main"])
-    const tip = await Git.revParse(fx.root, "integration/ticket-1")
-    await landOnStaging(fx.root, { branch: "integration/ticket-1", proof: green({ commit: tip }) })
+    await stageBranch("feat.txt", "work\n", "integration/ticket-1")
+    await landOnStaging(fx.root, { branch: "integration/ticket-1", proof: await proofFor("integration/ticket-1") })
     const before = await Git.revParse(fx.root, STAGING_BRANCH)
     const report = await runStagingSuites(fx.root, {
       suites: [{ name: "regression", run: async () => ({ passed: false, details: "1 failure" }) }],
