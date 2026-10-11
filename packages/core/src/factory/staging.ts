@@ -225,31 +225,32 @@ export interface StagingReport {
   readonly suites: ReadonlyArray<{ readonly name: string; readonly passed: boolean; readonly details?: string }>
 }
 
-/** Run the fire suites against staging/autonomous in a scratch checkout (read-only: staging never moves). */
+/** Run the fire suites against staging/autonomous (read-only: staging never moves). */
 export async function runStagingSuites(
   root: string,
   options: { readonly suites: readonly StagingFireSuite[]; readonly ref?: string; readonly scratchDir?: string },
 ): Promise<StagingReport> {
   const ref = options.ref ?? STAGING_BRANCH
   const sha = await Git.revParse(root, ref)
-  const scratch = await mkdtemp(path.join(options.scratchDir ?? tmpdir(), "es-suites-"))
-  const worktree = path.join(scratch, "tree")
-  try {
-    await Git.git(root, ["worktree", "add", "--detach", worktree, ref])
-    const suites = []
-    for (const suite of options.suites) {
+  // One detached checkout per suite: suites observe the same SHA in
+  // parallel without sharing a working tree (no cross-suite interference).
+  const runOne = async (
+    suite: StagingFireSuite,
+    index: number,
+  ): Promise<{ readonly name: string; readonly passed: boolean; readonly details?: string }> => {
+    const scratch = await mkdtemp(path.join(options.scratchDir ?? tmpdir(), `es-suite-${index}-`))
+    const worktree = path.join(scratch, "tree")
+    try {
+      await Git.git(root, ["worktree", "add", "--detach", worktree, ref])
       const outcome = await suite.run(worktree)
-      suites.push({
-        name: suite.name,
-        passed: outcome.passed,
-        ...(outcome.details ? { details: outcome.details } : {}),
-      })
+      return { name: suite.name, passed: outcome.passed, ...(outcome.details ? { details: outcome.details } : {}) }
+    } finally {
+      await Git.removeWorktree(root, worktree).catch(() => undefined)
+      await rm(scratch, { recursive: true, force: true }).catch(() => undefined)
     }
-    return { ok: suites.every((s) => s.passed), ref, sha, suites }
-  } finally {
-    await Git.removeWorktree(root, worktree).catch(() => undefined)
-    await rm(scratch, { recursive: true, force: true }).catch(() => undefined)
   }
+  const suites = await Promise.all(options.suites.map((suite, index) => runOne(suite, index)))
+  return { ok: suites.every((s) => s.passed), ref, sha, suites }
 }
 
 export interface ReleaseCut {
