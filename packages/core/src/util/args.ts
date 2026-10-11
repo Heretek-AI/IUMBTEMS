@@ -50,4 +50,5 @@ export const BOOLEAN_FLAGS: readonly string[] = [
   "open-pr",
   "sign",
   "all",
+  "no-verify",
 ]
