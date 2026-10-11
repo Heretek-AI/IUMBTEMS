@@ -1,5 +1,6 @@
-// Built-in language-server registry plus OpenCode v2's `lsp` config key
-// (accepted but not run by v2 itself). User config overrides or disables
+// Built-in language-server registry plus the `lsp` key from v2's
+// `opencode.json` (accepted but not run by v2 itself; not an ES config key —
+// ES config layers strict-reject it). User config overrides or disables
 // built-ins and adds servers; `lsp: false` turns LSP off entirely.
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"

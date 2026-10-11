@@ -97,7 +97,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     lsp: {
       support: "enforced",
-      detail: "The lsp config key is read and served by our own manager (v2 accepts but does not run it).",
+      detail:
+        "The `lsp` key in v2's `opencode.json` — not an ES config key (ES layers strict-reject it) — is read and served by our own manager (v2 accepts but does not run it).",
       test: "packages/opencode/test/lsp.test.ts",
     },
     panels: {
