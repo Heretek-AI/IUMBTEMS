@@ -1,5 +1,56 @@
 # Changelog
 
+## 2.1.0 — 2026-10-11
+
+Phase 7 key delegation & consensus governance. Autonomous background builds
+stop needing a human passphrase at every stage exit: the machine key signs
+GRILL/SPEC transitions on topic branches only under a cryptographic gate
+proof, stack branches cascade upstream fixes without hand rebases, and
+integration branches land on `staging/autonomous` until a human-signed
+release cut. The published trio (core/CLI/plugin) releases in lockstep as
+2.1.0.
+
+**Behaviour changes.**
+- **#164: MachineKeyStore with proof-carrying transitions.**
+  `MachineKeyStore` (`packages/core/src/approval/machine.ts`) holds an
+  in-memory Ed25519 key (privates in a module WeakMap, never on the store
+  object) scoped strictly to `integration/*` and `factory/*`. It signs a
+  stage transition only for a green `GateProofBundle`: 100% passing Tier
+  1-3 tests, zero un-waived secrets or dependency vulnerabilities,
+  verified spec and schema hashes, and a proof commit/branch matching the
+  signed branch. Release merges and `main` targets are refused at sign
+  time and fail closed at verify time — those stay human-only.
+- **#165: SemanticRebaseManager and `es rebase cascade`.**
+  `cascadeRebase` (`packages/core/src/worktree/rebase.ts`) replays a
+  downstream branch's commits onto an upstream tip in a scratch worktree:
+  single-line TypeScript import union per module (defaults, named,
+  `import type`, linear-scan parser with no ReDoS), package.json
+  dependency union with higher-semver-wins, and generic JSON deep-merge.
+  The target moves only on green post-rebase tests (including the
+  fast-forward path); any failure restores the witnessed SHA. Cascades
+  involving `main` are refused. CLI: `es rebase cascade --from <branch>
+  --to <branch> [--no-verify]`.
+- **#166: AutonomousStagingPipeline with human release veto.**
+  `landOnStaging` (`packages/core/src/factory/staging.ts`) merges
+  integration branches onto `staging/autonomous` on green gate proof
+  (structural mirror of #164's bundle), `runStagingSuites` runs the
+  regression and compatibility fires against isolated scratch checkouts,
+  and `cutRelease` mints an UNSIGNED consolidated cut: `openReleasePr`
+  refuses unsigned cuts and `countersignReleaseCut` refuses
+  machine-shaped signers, so no agent path exercises the veto — a human
+  countersigns with the passphrase-unlocked Ed25519 key at a terminal.
+
+**Security.**
+- Machine signing power is unextractable (WeakMap-held privates), branch-
+  and target-scoped, and proof-bound; tampered or cross-key records fail
+  verification closed.
+- The import merger bails to a human on multi-line imports, clashing
+  defaults, mixed type/value imports and non-TS/JSON files instead of
+  guessing; hostile input terminates (ReDoS regression test).
+- Staging and rebase scratch work happens off-branch; targets move only
+  after green verification, and `main` advances through the human release
+  flow only.
+
 ## 2.0.0 — 2026-10-11
 
 Phase 6 autonomous orchestration & fleet hardening. Concurrent runs stop
