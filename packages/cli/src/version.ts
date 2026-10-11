@@ -1,2 +1,2 @@
 /** The `es` CLI version. Single source: kept equal to the package version by test/cli.test.ts. */
-export const VERSION = "2.1.0"
+export const VERSION = "2.2.0"
