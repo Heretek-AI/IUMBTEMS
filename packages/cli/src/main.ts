@@ -13,6 +13,7 @@ import {
   buildPlan,
   candidateId,
   capabilityLoss,
+  cascadeRebase,
   checkDrift,
   compileToCssVars,
   designPaths,
@@ -167,6 +168,9 @@ Other
   scout show [--json]           The scout's ranked verdicts
   mcp                           Serve the factory tools over MCP (stdio)
   worktree prune              Drop stale worktree leases and remove orphaned .worktrees/ checkouts
+  rebase cascade --from <branch> --to <branch> [--no-verify]
+                              Replay <to>'s commits onto <from> with TS/JSON conflict
+                              resolution; <to> moves only when post-rebase checks pass
   version`
 
 /**
@@ -753,6 +757,32 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           ...(process.env.ES_AGENT ? { defaultAgent: process.env.ES_AGENT } : {}),
         })
         return 0
+      case "rebase": {
+        if (sub === "cascade") {
+          const from = flag(subArgs(2), "from")
+          const to = flag(subArgs(2), "to")
+          if (!from || !to) {
+            io.print("Usage: es rebase cascade --from <branch> --to <branch> [--no-verify]")
+            return 2
+          }
+          const verify = subArgs(2).flags["no-verify"] === true ? () => Promise.resolve(true) : undefined
+          const result = await cascadeRebase(root, {
+            from,
+            to,
+            ...(verify ? { runTests: verify } : {}),
+          })
+          if (result.ok) {
+            io.print(
+              `Rebased ${to} onto ${from}: ${result.newSha} (previous ${result.previousSha}, ${result.resolutions.length} auto-resolved: ${result.resolutions.join(", ") || "none"}).`,
+            )
+            return 0
+          }
+          io.print(`Cascade failed: ${result.reason} (${to} stays at ${result.previousSha}).`)
+          return 1
+        }
+        io.print("Usage: es rebase cascade --from <branch> --to <branch> [--no-verify]")
+        return 2
+      }
       case "worktree": {
         if (sub === "prune") {
           const report = await pruneWorktrees(root)
