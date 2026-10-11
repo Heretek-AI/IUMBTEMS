@@ -201,8 +201,8 @@ ticket before merge. All probes apply to both surfaces unless marked.
 - The TUI plugin links core's approval service directly and signs in-process;
   no new RPC, no passphrase on the wire anywhere except loopback for the
   browser path.
-- Attempt-limit state lives per surface (a small file in the state dir for
-  the TUI/CLI; server memory plus audit for the web path).
+- Attempt-limit state lives per state dir (one shared attempt file for
+  the CLI and the TUI; server memory plus audit for the web path, which keeps its own dir).
 - Docs and messages stop saying approvals are terminal-only, while trust,
   waive, resume, key seal, config set and export keep saying it.
 
