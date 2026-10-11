@@ -3,15 +3,21 @@ import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import {
+  checkBudgets,
   commandSetHash,
   complexity,
   detectGates,
+  formatReport,
+  type GateReport,
   GatesConfigSchema,
+  gitleaks,
+  installed,
   loadGatesConfig,
   parseOutput,
   recordWaiver,
   runGates,
   trustProject,
+  validateArtifacts,
 } from "../src/index.ts"
 import { bwrapAvailable, resetBwrapProbe, run } from "../src/util/proc.ts"
 import { type Fixture, gitRepo } from "./helpers.ts"
@@ -446,5 +452,203 @@ describe("parsers", () => {
     expect(scores.find((item) => item.name === "method")?.score).toBe(2)
     expect(scores.find((item) => item.name === "load")?.score).toBe(3)
     expect(scores.find((item) => item.name === "typed")?.score).toBe(2)
+  })
+})
+
+describe("built-in secret scan cache (#239)", () => {
+  test("a rescan re-reads only changed files: hits are counted, edits re-read, no count cap", async () => {
+    const { clearSecretScanCache, scanFileForSecrets, secretScanStats } = await import("../src/index.ts")
+    clearSecretScanCache()
+    await write("src/a.ts", `export const token = "${FAKE_TOKEN}"\n`)
+    await write("src/b.ts", "export const b = 1\n")
+    const first = await scanFileForSecrets(fx.root, "src/a.ts")
+    expect(first.some((finding) => finding.rule === "security/secret-github-token")).toBe(true)
+    expect(await scanFileForSecrets(fx.root, "src/b.ts")).toEqual([])
+    // Unchanged files are cache hits: identical findings, hits counted.
+    const before = secretScanStats()
+    expect(await scanFileForSecrets(fx.root, "src/a.ts")).toEqual(first)
+    expect(await scanFileForSecrets(fx.root, "src/b.ts")).toEqual([])
+    expect(secretScanStats().hits).toBe(before.hits + 2)
+    // An edit re-reads: the finding disappears after the secret is removed.
+    await write("src/a.ts", 'export const token = "rotated"\n')
+    expect(await scanFileForSecrets(fx.root, "src/a.ts")).toEqual([])
+  })
+})
+
+describe("proof gaps (#239)", () => {
+  test("format is a failing arm, not detection-only: unformatted files fail, formatted files pass", async () => {
+    await write("biome.json", "{}")
+    await write("src/a.ts", "export const x=1\n")
+    const cfg = config([
+      {
+        id: "format",
+        kind: "format",
+        command: `${BIOME} format --reporter=json`,
+        parser: "biome",
+        touchedArgs: true,
+        extensions: [".ts"],
+      },
+    ])
+    await trust(cfg)
+    // The engine arm, not the sandbox: pin bwrap away so the command runs
+    // directly (containers without overlayfs cannot sandbox; see #239).
+    resetBwrapProbe(false)
+    try {
+      const red = await gates({ touched: ["src/a.ts"], config: cfg })
+      expect(red.checks.find((check) => check.id === "format")?.status).toBe("fail")
+      expect(red.findings.find((finding) => finding.rule === "format/biome")).toMatchObject({
+        file: "src/a.ts",
+        severity: "error",
+      })
+      await write("src/a.ts", "export const x = 1;\n")
+      const green = await gates({ touched: ["src/a.ts"], config: cfg })
+      expect(green.findings.some((finding) => finding.rule === "format/biome")).toBe(false)
+    } finally {
+      resetBwrapProbe()
+    }
+  })
+
+  test("typecheck runs at gate level: errors fail, clean files pass, present tools are not missing", async () => {
+    const TSC = path.resolve(import.meta.dir, "../../../node_modules/.bin/tsc")
+    await write("tsconfig.json", JSON.stringify({ compilerOptions: { strict: true, noEmit: true }, include: ["src"] }))
+    await write("src/a.ts", 'export const x: number = "nope"\n')
+    const cfg = config([
+      { id: "typecheck", kind: "typecheck", command: `${TSC} --noEmit -p tsconfig.json`, parser: "tsc" },
+    ])
+    await trust(cfg)
+    resetBwrapProbe(false)
+    try {
+      const red = await gates({ touched: ["src/a.ts"], config: cfg })
+      expect(red.checks.find((check) => check.id === "typecheck")?.status).toBe("fail")
+      expect(red.findings.some((finding) => finding.file === "src/a.ts" && finding.check === "typecheck")).toBe(true)
+      await write("src/a.ts", "export const x: number = 1\n")
+      const green = await gates({ touched: ["src/a.ts"], config: cfg })
+      expect(green.checks.find((check) => check.id === "typecheck")?.status).toBe("pass")
+      expect(green.findings.some((finding) => finding.rule === "gates/tool-missing")).toBe(false)
+      expect(green.findings.some((finding) => finding.rule === "gates/sandbox-missing")).toBe(false)
+    } finally {
+      resetBwrapProbe()
+    }
+  })
+
+  test("a failing test command fails the gate (fail arm, not pass-only)", async () => {
+    const cfg = config([{ id: "test", kind: "test", command: "bun -e 'process.exit(1)'", parser: "generic" }])
+    await trust(cfg)
+    resetBwrapProbe(false)
+    try {
+      const report = await gates({ scope: "full", config: cfg })
+      expect(report.checks.find((check) => check.id === "test")?.status).toBe("fail")
+      expect(report.testsFailed).toBe(true)
+      expect(report.findings.some((finding) => finding.rule === "test/command-failed")).toBe(true)
+    } finally {
+      resetBwrapProbe()
+    }
+  })
+
+  test("budget pass arms: small, simple, tested changes are quiet; diff-size has both arms", async () => {
+    await write("src/a.ts", "export const a = 1\n")
+    await write("src/a.test.ts", 'import { a } from "./a"\n')
+    const quiet = await gates({
+      touched: ["src/a.ts", "src/a.test.ts"],
+      config: config([], { budgets: { maxFileLines: 20, maxComplexity: 10 } }),
+    })
+    for (const rule of ["budget/file-length", "budget/complexity", "budget/test-with-behavior"])
+      expect([rule, quiet.findings.some((finding) => finding.rule === rule)]).toEqual([rule, false])
+    const budgets = {
+      maxFileLines: 800,
+      maxComplexity: 15,
+      maxDiffLines: 10,
+      requireDepJustification: false,
+      requireTestWithBehavior: false,
+    }
+    const over = await checkBudgets({ dir: fx.root, files: [], budgets, diff: { added: 6, removed: 5 } })
+    expect(over.find((finding) => finding.rule === "budget/diff-size")?.severity).toBe("error")
+    const under = await checkBudgets({ dir: fx.root, files: [], budgets, diff: { added: 5, removed: 5 } })
+    expect(under.some((finding) => finding.rule === "budget/diff-size")).toBe(false)
+  })
+
+  test("a phase that touches only source passes tool-config (pass arm)", async () => {
+    const base = await commit("base")
+    await write("src/a.ts", "export const a = 1\n")
+    const report = await gates({ scope: "full", base, phaseId: "p1", config: config([]) })
+    expect(report.findings.some((finding) => finding.rule === "integrity/tool-config-changed")).toBe(false)
+  })
+
+  test("a valid gates.json loads with no problem (pass arm)", async () => {
+    await write(".factory/gates.json", JSON.stringify({ commands: [] }))
+    const { config: loaded, problem } = await loadGatesConfig(fx.root)
+    expect(problem).toBeUndefined()
+    expect(loaded.commands).toEqual([])
+  })
+
+  test("artifact validation flags a malformed frontier and passes when artifacts are absent", async () => {
+    expect(await validateArtifacts(fx.root, fx.state)).toEqual([])
+    await write(".factory/frontier.json", "{}")
+    const findings = await validateArtifacts(fx.root, fx.state)
+    expect(findings.find((finding) => finding.rule === "schema/frontier")?.file).toBe(".factory/frontier.json")
+  })
+
+  test("formatReport renders the summary, the findings and the overflow pointer", () => {
+    const report: GateReport = {
+      passed: false,
+      findings: [
+        {
+          file: "src/a.ts",
+          line: 2,
+          rule: "lint/suspicious/noDebugger",
+          severity: "error",
+          message: "No debugger",
+          check: "lint",
+        },
+      ],
+      totalFindings: 3,
+      waived: 0,
+      checks: [{ id: "lint", status: "fail", durationMs: 1, findings: 3 }],
+      summary: "Gates failed: 3 error(s)",
+      failedTests: [],
+      testsFailed: false,
+      logDir: "/tmp/logs",
+    }
+    const text = formatReport(report)
+    expect(text).toContain("Gates failed: 3 error(s)")
+    expect(text).toContain("src/a.ts:2 lint/suspicious/noDebugger")
+    expect(text).toContain("… 2 more in /tmp/logs/summary.json")
+  })
+
+  test("the lsp gate reports error diagnostics and passes on clean files", async () => {
+    await write("src/a.ts", "export const a = 1\n")
+    const red = await gates({
+      touched: ["src/a.ts"],
+      config: config([]),
+      lsp: {
+        diagnostics: async () => [
+          { severity: 1, message: "boom", source: "ts", range: { start: { line: 0, character: 0 } } },
+        ],
+      },
+    })
+    expect(red.findings.find((finding) => finding.rule === "lsp/ts")).toMatchObject({ file: "src/a.ts", line: 1 })
+    const green = await gates({
+      touched: ["src/a.ts"],
+      config: config([]),
+      lsp: { diagnostics: async () => [] },
+    })
+    expect(green.findings.some((finding) => finding.check === "lsp")).toBe(false)
+  })
+
+  test("gitleaks: empty input is a skip; without the binary it never runs", async () => {
+    expect(await gitleaks(fx.root, [])).toBeUndefined()
+    if (!installed("gitleaks")) expect(await gitleaks(fx.root, ["README.md"])).toBeUndefined()
+  })
+
+  test("control drift is an integrity/control-drift gate finding, not just a halt", async () => {
+    const { rebaseline } = await import("../src/trust/index.ts")
+    await rebaseline(fx.root, "human:tester")
+    await write(".factory/gates.json", '{"commands":[]}\n')
+    const report = await gates({ scope: "full", config: config([]) })
+    expect(report.findings.find((finding) => finding.rule === "integrity/control-drift")).toMatchObject({
+      file: ".factory",
+      severity: "error",
+      check: "integrity",
+    })
   })
 })

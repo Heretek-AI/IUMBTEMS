@@ -303,6 +303,81 @@ describe("factory-gate", () => {
   })
 })
 
+describe("gates-seeded (#239)", () => {
+  let h: Harness
+  let state: string
+  let factory: () => Factory
+  let signer: HumanSigner
+  beforeAll(async () => {
+    ;({ h, state, factory, signer } = await bootHost("es-gates-seeded-"))
+  }, 60_000)
+  afterAll(async () => {
+    await h?.close()
+    await rm(state, { recursive: true, force: true })
+  })
+
+  test("es_gates_run surfaces a seeded secret violation to the programmer seat", async () => {
+    // Own host and pipeline to BUILD: never depends on the factory-gate walk.
+    await factory().provisionRun("tester", 10)
+    const layout = factoryLayout(h.directory)
+    await factory().writeFrontier("grill", {
+      version: "1.1",
+      idea: "a session handoff feature",
+      spendCeiling: { currency: "USD", maxAmount: 10 },
+      round: 1,
+      settled: true,
+      nodes: [{ id: "scope", question: "Which harness first?", status: "settled", answer: "opencode", round: 1 }],
+    })
+    await approveStage(h.directory, {
+      stage: "frontier",
+      channel: "cli",
+      approvedBy: "tester",
+      signer,
+      stateDir: state,
+    })
+    const cache = new SourceCache(researchSourcesDir(h.directory), state)
+    const source = await cache.put({
+      url: "https://example.test/handoff",
+      text: "Session handoff writes a file the next agent reads.",
+      provider: "fetch",
+    })
+    await write(
+      h.directory,
+      path.relative(h.directory, layout.researchReport),
+      `- Handoff is file-based [VERIFIED: sha256:${source.meta.sha256} "file the next agent reads"]\n`,
+    )
+    await factory().completeResearch("factory")
+    await write(
+      h.directory,
+      ".factory/roadmap.json",
+      JSON.stringify({ version: 1, title: "Handoff", phases: [{ id: "alpha", title: "Phase alpha" }] }, null, 2),
+    )
+    await write(
+      h.directory,
+      ".factory/specs/alpha/GOAL.md",
+      stringifyFrontmatter(
+        {
+          phase: "alpha",
+          title: "Phase alpha",
+          acceptance: [{ kind: "file", id: "impl", description: "implementation exists", path: "src/alpha.ts" }],
+        },
+        "Implement alpha as a vertical slice.\n",
+      ),
+    )
+    await approveStage(h.directory, { stage: "spec", channel: "cli", approvedBy: "tester", signer, stateDir: state })
+    const started = await h.run(call("es_build_start"), { agent: "factory" })
+    expect(started.tools[0]?.status).toBe("completed")
+    await write(
+      h.directory,
+      ".factory/worktrees/alpha/src/secret.ts",
+      `export const token = "ghp_Ab3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6"\n`,
+    )
+    const run = await h.run(call("es_gates_run", { files: ["src/secret.ts"] }), { agent: "es-programmer" })
+    expect(run.tools[0]?.status).toBe("completed")
+    expect(run.tools[0]?.text).toContain("security/secret-github-token")
+  })
+})
+
 describe("darkharvest-fires", () => {
   let h: Harness
   let state: string
