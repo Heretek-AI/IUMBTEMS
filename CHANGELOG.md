@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.0.0 — 2026-10-11
+
+Phase 6 autonomous orchestration & fleet hardening. Concurrent runs stop
+coordinating through shell `flock` and 50KB orchestrator prompts: worktree
+leases are atomic files with heartbeat TTLs, and the fleet daemon drives
+multi-phase task DAGs natively. The published trio (core/CLI/plugin)
+releases in lockstep as 2.0.0.
+
+**Behaviour changes.**
+- **#160: atomic worktree lease manager.** `WorktreeLeaseManager`
+  (`packages/core/src/worktree/lease.ts`) holds one heartbeat lease per
+  `.worktrees/` checkout (default TTL 120s), acquired with
+  `open(O_CREAT | O_EXCL)` so racing acquirers elect exactly one winner;
+  expired and dead-holder leases are reclaimable, and only the token holder
+  may heartbeat or release. `es worktree prune` (agent-safe) and factory
+  startup garbage-collect stale leases and orphaned checkouts; prune deletes
+  checkouts, never branches.
+- **#161: fleet process orchestrator.** `run-dag <roadmap.json>` loads a
+  ticket-scoped roadmap into a validated task DAG and ticks the
+  `FleetDaemon` to full settlement with no human in the loop and no
+  prompt-level orchestration — tasks carry only their own objective. The
+  daemon records heartbeats in `.factory/runtime/fleet.json`, restarts
+  stuck turns through each task's own failure policy (retry re-queues,
+  otherwise terminal; library default off, verb default 30 minutes), and
+  guards late worker settlement so a restarted turn can never disturb its
+  relaunch. Covered by a fake-model integration test proving a three-phase
+  DAG runs to done in dependency order.
+- `es-fleet run-dag` is human-only, like every spend-bearing verb.
+
+**Security.**
+- Lease dirs refuse slugs outside `[a-z0-9-]` and checkouts outside the
+  managed root; prune never follows stray paths or deletes history.
+- No new human-only surface is agent-reachable: `es worktree prune` is
+  intentionally agent-safe (orphan GC must run at factory startup).
+
 ## 1.6.1 — 2026-10-11
 
 **Trust hash covers the full gate command (#217).** `commandSetHash` now hashes

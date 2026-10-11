@@ -5,13 +5,14 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 1.6.0.** Phase 5 self-improvement: telemetry harvest
-> (`es improve harvest`), distillation into reviewable proposals
-> (`es improve distill`), and the self-dogfood factory preset
-> (`docs/SELF-DOGFOOD.md`) — runs learn from runs, and the factory builds
-> this repo into draft PRs a human reviews (#135–#138). Install from npm
-> (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`, `@heretek-ai/es-cli`);
-> run `es key seal` once.
+> **Status: 2.0.0.** Phase 6 autonomous orchestration & fleet hardening:
+> atomic worktree leases with heartbeat TTL and orphan GC
+> (`es worktree prune`, wired into factory startup) replace shell `flock`
+> coordination, and the fleet daemon drives multi-phase task DAGs natively
+> (`run-dag <roadmap.json>`, heartbeats in `.factory/runtime/fleet.json`,
+> stuck-turn restart) with no giant orchestrator prompts (#160–#161).
+> Install from npm (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`,
+> `@heretek-ai/es-cli`); run `es key seal` once.
 
 ## Naming
 
