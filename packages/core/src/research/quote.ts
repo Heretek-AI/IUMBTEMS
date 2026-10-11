@@ -1,10 +1,12 @@
-// Pure verbatim-quote verification. A quote matches when, after normalising
-// whitespace and typographic punctuation (curly quotes, dashes, NBSP), it
-// appears in the source exactly. An ellipsis ("..." or "…") splits a prose
-// quote into fragments that must appear in order, and each fragment must be
-// evidence on its own (MIN_QUOTE characters). Code excerpts are one contiguous
-// span (verifySpan): "..." there is code, not an ellipsis. No fuzzy matching:
-// a quote is either in the source or it is not.
+// Quote verification that is verbatim after documented normalisation. A quote
+// matches when, after normalising (NFKC, typography folds for curly quotes,
+// dashes and spaces including NBSP, markdown link and emphasis stripping,
+// whitespace collapsing), it appears in the source exactly. An ellipsis
+// ("..." or "…") splits a prose quote into fragments that must appear in
+// order, and each fragment must be evidence on its own (MIN_QUOTE
+// characters). Code excerpts are one contiguous span (verifySpan): "..."
+// there is code, not an ellipsis. No fuzzy matching: a normalised quote is
+// either in the normalised source or it is not.
 
 /** Shortest quote, and shortest ellipsis fragment, that counts as evidence (normalised characters). */
 export const MIN_QUOTE = 12
