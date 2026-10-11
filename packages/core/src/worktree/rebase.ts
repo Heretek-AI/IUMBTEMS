@@ -56,18 +56,53 @@ function parseImportLine(line: string): ParsedImport | undefined {
   const trimmed = clause.trim()
   const typeOnly = trimmed === "type" || trimmed.startsWith("type ") || trimmed.startsWith("type\t")
   const bare = (typeOnly ? trimmed.slice("type".length) : trimmed).trim()
-  const braced = bare.startsWith("{") && bare.endsWith("}")
-  const named = braced
-    ? bare
-        .slice(1, -1)
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : []
-  if (bare.startsWith("{") && !named.length) return undefined
-  const def = bare.startsWith("{") ? undefined : bare || undefined
+  const { def, named = [] } = splitClause(bare)
   if (def === undefined && !named.length) return undefined
   return { module: tail[2]!, def, named, typeOnly, raw: line }
+}
+
+/**
+ * Split an import clause into its default binding and named specifiers
+ * (linear scan: the comma separating `x` from `{ a }` cannot nest). Handles
+ * `x`, `{ a, b }` and `x, { a }`; anything else (empty braces, namespace
+ * re-exports) degrades to a default-or-nothing the combiner treats safely.
+ */
+function splitClause(bare: string): { def?: string; named?: string[] } {
+  const comma = depthZeroComma(bare)
+  const head = (comma === undefined ? bare : bare.slice(0, comma)).trim()
+  const tail = comma === undefined ? undefined : bare.slice(comma + 1).trim()
+  if (tail !== undefined) {
+    if (!tail.startsWith("{") || !tail.endsWith("}")) return {}
+    const named = tail
+      .slice(1, -1)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (!head || !named.length) return {}
+    return { def: head, named }
+  }
+  if (bare.startsWith("{")) {
+    if (!bare.endsWith("}")) return {}
+    const named = bare
+      .slice(1, -1)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+    return named.length ? { named } : {}
+  }
+  return head ? { def: head } : {}
+}
+
+/** Index of the first comma at brace depth zero, or undefined. */
+function depthZeroComma(text: string): number | undefined {
+  let depth = 0
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]
+    if (char === "{") depth++
+    else if (char === "}") depth--
+    else if (char === "," && depth === 0) return i
+  }
+  return undefined
 }
 
 /** Combine two parsed imports for the same module, or undefined on structural clash. */
@@ -289,11 +324,43 @@ export async function cascadeRebase(root: string, options: CascadeOptions): Prom
     // `fromTip` would drop commits, so this is a no-op success.
     return { ok: true, previousSha, newSha: previousSha, rolledBack: false, resolutions: [] }
   if (await Git.isAncestor(root, previousSha, fromTip)) {
-    // `to` is strictly behind: a pure fast-forward, no replay needed.
-    await Git.setBranch(root, options.to, fromTip)
-    return { ok: true, previousSha, newSha: fromTip, rolledBack: false, resolutions: [] }
+    // `to` is strictly behind: verify the fast-forward target, then move.
+    // The monotonic guarantee covers this path too: no green tests, no move.
+    if (await verifyTip(root, options, previousSha, fromTip)) {
+      await Git.setBranch(root, options.to, fromTip)
+      return { ok: true, previousSha, newSha: fromTip, rolledBack: false, resolutions: [] }
+    }
+    return {
+      ok: false,
+      previousSha,
+      rolledBack: true,
+      resolutions: [],
+      reason: "post-rebase tests failed: fast-forward refused",
+    }
   }
   return replayCascade(root, options, previousSha)
+
+  /**
+   * Verify a tip (`fromTip`) in a detached scratch checkout before a branch
+   * moves to it. Returns true only when the configured tests pass there.
+   */
+  async function verifyTip(root: string, options: CascadeOptions, previousSha: string, tip: string): Promise<boolean> {
+    const scratch = await mkdtemp(path.join(options.scratchDir ?? tmpdir(), "es-verify-"))
+    const worktree = path.join(scratch, "tree")
+    try {
+      await Git.git(root, ["worktree", "add", "--detach", worktree, tip])
+      const changed = (await Git.git(worktree, ["diff", "--name-only", previousSha, tip], { allowFail: true })).stdout
+        .split("\n")
+        .filter(Boolean)
+      const runTests = options.runTests ?? ((dir) => sanityTests(dir, changed))
+      return runTests(worktree)
+    } catch {
+      return false
+    } finally {
+      await Git.removeWorktree(root, worktree).catch(() => undefined)
+      await rm(scratch, { recursive: true, force: true }).catch(() => undefined)
+    }
+  }
 }
 
 /** Read both conflict stages for every unmerged file in parallel. */
@@ -320,7 +387,7 @@ async function readConflictStages(
 async function resolveRound(
   worktree: string,
   files: readonly string[],
-): Promise<{ resolved: string[] } | { reason: string }> {
+): Promise<{ resolved: string[]; empty?: true } | { reason: string }> {
   const stages = await readConflictStages(worktree, files)
   const merged = new Map<string, string>()
   for (let i = 0; i < files.length; i++) {
@@ -341,9 +408,24 @@ async function resolveRound(
   const continued = await Git.git(worktree, [...IDENTITY, "-c", "core.editor=true", "rebase", "--continue"], {
     allowFail: true,
   })
-  if (continued.code !== 0 && (await unmerged(worktree)).length > 0) {
+  if (continued.code !== 0) {
+    const stillUnmerged = (await unmerged(worktree)).length > 0
+    const status = (await Git.git(worktree, ["status", "--porcelain=v1", "-uall"])).stdout.trim()
+    if (stillUnmerged) {
+      await Git.git(worktree, ["rebase", "--abort"], { allowFail: true })
+      return { reason: `conflict re-emerged after resolution: ${(continued.stderr || continued.stdout).trim()}` }
+    }
+    // A clean tree means the resolution emptied the pick (already upstream):
+    // --skip drops exactly that pick and keeps earlier replayed commits.
+    // Anything else aborts, preserving the pre-rebase state for a human.
+    if (!status) {
+      const skipped = await Git.git(worktree, [...IDENTITY, "-c", "core.editor=true", "rebase", "--skip"], {
+        allowFail: true,
+      })
+      if (skipped.code === 0) return { resolved: files.slice(), empty: true }
+    }
     await Git.git(worktree, ["rebase", "--abort"], { allowFail: true })
-    return { reason: `conflict re-emerged after resolution: ${(continued.stderr || continued.stdout).trim()}` }
+    return { reason: `rebase --continue failed: ${(continued.stderr || continued.stdout).trim()}` }
   }
   return { resolved: files.slice() }
 }
@@ -366,6 +448,8 @@ async function settleRebase(worktree: string, from: string): Promise<{ resolutio
         return round
       }
       resolutions.push(...round.resolved)
+      // An empty resolution (resolved tree == onto tree) drops the pick on
+      // the next sequencer pass, like an empty commit: already upstream.
       continue
     }
     if (!(await rebaseActive(worktree))) return { resolutions }

@@ -37,6 +37,11 @@ describe("mergeTypeScriptImports", () => {
     expect(merged).toContain(`from "./b"`)
   })
 
+  test("merges default-plus-named imports explicitly", () => {
+    const merged = mergeTypeScriptImports(`import x, { a } from "./m"\n`, `import x, { b } from "./m"\n`)
+    expect(merged).toContain(`import x, { a, b } from "./m"`)
+  })
+
   test("hostile input terminates with a decision instead of hanging (ReDoS)", () => {
     const hostile = `import ${"a\t".repeat(2000)}from"\n`
     expect(mergeTypeScriptImports(hostile, `import { b } from "./m"\n`)).toBeUndefined()
@@ -173,5 +178,23 @@ describe("cascadeRebase", () => {
     expect(result.ok).toBe(true)
     expect(result.newSha).toBe(before)
     expect(result.rolledBack).toBe(false)
+  })
+
+  test("a fast-forward moves only on green tests", async () => {
+    await commitFile(fx.root, "a.txt", "x\n", "one")
+    await Git.git(fx.root, ["branch", "to-br", "HEAD"])
+    await commitFile(fx.root, "b.txt", "y\n", "two")
+    await Git.git(fx.root, ["branch", "from-br", "HEAD"])
+    await Git.git(fx.root, ["checkout", "-q", "main"])
+    const before = await Git.revParse(fx.root, "to-br")
+    const tip = await Git.revParse(fx.root, "from-br")
+    const green = await cascadeRebase(fx.root, { from: "from-br", to: "to-br", runTests: async () => true })
+    expect(green.ok).toBe(true)
+    expect(green.newSha).toBe(tip)
+    await Git.git(fx.root, ["branch", "-f", "to-br", before])
+    const red = await cascadeRebase(fx.root, { from: "from-br", to: "to-br", runTests: async () => false })
+    expect(red.ok).toBe(false)
+    expect(red.rolledBack).toBe(true)
+    expect(await Git.revParse(fx.root, "to-br")).toBe(before)
   })
 })
