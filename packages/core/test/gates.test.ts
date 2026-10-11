@@ -1,18 +1,27 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import path from "node:path"
 import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import {
+  checkBudgets,
   commandSetHash,
   complexity,
   detectGates,
+  formatReport,
+  type GateReport,
   GatesConfigSchema,
+  gitleaks,
+  installed,
+  isTrusted,
   loadGatesConfig,
   parseOutput,
   recordWaiver,
   runGates,
   trustProject,
+  validateArtifacts,
 } from "../src/index.ts"
+import { canonicalPath } from "../src/trust/paths.ts"
 import { bwrapAvailable, resetBwrapProbe, run } from "../src/util/proc.ts"
 import { type Fixture, gitRepo } from "./helpers.ts"
 
@@ -139,6 +148,77 @@ describe("trust", () => {
     expect((await gates({ scope: "full", config: changed })).findings[0]?.rule).toBe("trust/untrusted")
   })
 
+  test("a forged trust entry is not trust: isTrusted verifies the human signature (#221.3)", async () => {
+    const cfg = config([{ id: "probe", kind: "test", command: "touch RAN" }])
+    const wanted = config([{ id: "probe", kind: "test", command: "touch FORGED" }])
+    const { hash } = await commandSetHash(fx.root, cfg.commands)
+    const forgedHash = (await commandSetHash(fx.root, wanted.commands)).hash
+    await trust(cfg)
+    expect(await isTrusted(fx.root, hash, fx.state)).toBe(true)
+
+    const file = path.join(fx.state, "trust.json")
+    const genuine = await readFile(file, "utf8")
+    const store = JSON.parse(genuine) as { projects: Record<string, { gates: Record<string, any> }> }
+    const project = Object.keys(store.projects)[0]!
+    const entry = store.projects[project]!.gates
+    const plant = (projects: Record<string, unknown>) => writeFile(file, JSON.stringify({ version: 3, projects }))
+
+    // A second human key: a real Ed25519 signature, but not this machine's.
+    const foreign = await mkdtemp(path.join(tmpdir(), "es-gates-foreign-"))
+    await sealHumanKey(PASSPHRASE, foreign)
+    const foreignSigner = await unlockHumanKey(PASSPHRASE, foreign)
+    const retargeted = {
+      hash: forgedHash,
+      lines: ["probe: touch FORGED"],
+      approvedBy: "x",
+      approvedAt: entry.approvedAt,
+    }
+    const forgeries: Record<string, Record<string, unknown>> = {
+      // The genuine signature replayed over another command set.
+      "replayed signature": { [project]: { gates: { ...entry, hash: forgedHash, lines: retargeted.lines } } },
+      "made-up signature": {
+        [project]: {
+          gates: { ...retargeted, signature: { alg: "ed25519", keyId: entry.signature.keyId, sig: "AAAA" } },
+        },
+      },
+      "no signature": { [project]: { gates: retargeted } },
+      "foreign key": {
+        [project]: {
+          gates: {
+            ...retargeted,
+            signature: foreignSigner.sign({ trust: 1, project, kind: "gates", ...retargeted }),
+          },
+        },
+      },
+    }
+    try {
+      for (const [name, projects] of Object.entries(forgeries)) {
+        await plant(projects)
+        expect([name, await isTrusted(fx.root, forgedHash, fx.state)]).toEqual([name, false])
+        const report = await gates({ scope: "full", config: wanted })
+        expect([name, report.findings[0]?.rule]).toEqual([name, "trust/untrusted"])
+        expect(await Bun.file(path.join(fx.root, "FORGED")).exists()).toBe(false)
+      }
+
+      // The signature binds the project and the kind: the genuine entry moved
+      // to another project, or presented as hook trust, verifies for neither.
+      const other = await gitRepo("es-gates-other-")
+      try {
+        const otherProject = canonicalPath(other.root)
+        expect(project).toBe(canonicalPath(fx.root))
+        await plant({ [project]: { gates: entry, hooks: entry }, [otherProject]: { gates: entry } })
+        expect(await isTrusted(other.root, hash, fx.state)).toBe(false)
+        expect(await isTrusted(fx.root, hash, fx.state, "hooks")).toBe(false)
+        // Control: in the same planted file, the untouched entry still verifies.
+        expect(await isTrusted(fx.root, hash, fx.state)).toBe(true)
+      } finally {
+        await other.cleanup()
+      }
+    } finally {
+      await rm(foreign, { recursive: true, force: true })
+    }
+  })
+
   test("a package script reachable from a command is part of the trusted hash", async () => {
     await write("package.json", JSON.stringify({ scripts: { typecheck: "tsc" } }))
     const cfg = config([{ id: "typecheck", kind: "typecheck", command: "npm run --silent typecheck" }])
@@ -187,6 +267,41 @@ describe("built-in checks", () => {
     const waived = await gates({ touched: ["src/config.ts"], config: config([]) })
     expect(waived.findings.some((finding) => finding.rule === "security/secret-github-token")).toBe(false)
     expect(waived.waived).toBeGreaterThan(0)
+  })
+
+  test("an expired signed waiver planted at gate time waives nothing (#221.1)", async () => {
+    await write("src/config.ts", `export const token = "${FAKE_TOKEN}"\n`)
+    // recordWaiver refuses a past expiry, so the record is hand-aged: the
+    // same fields it signs, under the real human key, one day apart.
+    const plant = async (expiresAt: Date) => {
+      const unsigned = {
+        version: 2 as const,
+        id: "aged-token",
+        rule: "security/secret-github-token",
+        files: "src/config.ts",
+        reason: "fixture value, not a real token",
+        approvedBy: "tester",
+        approvedAt: new Date(expiresAt.getTime() - 30 * 86_400_000).toISOString(),
+        expiresAt: expiresAt.toISOString(),
+        channel: "cli" as const,
+        auditHead: null,
+      }
+      await write(".factory/waivers/aged-token.json", JSON.stringify({ ...unsigned, signature: signer.sign(unsigned) }))
+      return gates({ touched: ["src/config.ts"], config: config([]) })
+    }
+
+    const expired = await plant(new Date(Date.now() - 86_400_000))
+    // The signature verifies, so this is not the forged path: no waiver/invalid.
+    expect(expired.findings.some((finding) => finding.rule === "waiver/invalid")).toBe(false)
+    expect(expired.findings.some((finding) => finding.rule === "security/secret-github-token")).toBe(true)
+    expect(expired.waived).toBe(0)
+    expect(expired.passed).toBe(false)
+
+    // Control: the identical record with a live expiry does waive, so the
+    // refusal above is the expiry and nothing else about the planted file.
+    const live = await plant(new Date(Date.now() + 86_400_000))
+    expect(live.findings.some((finding) => finding.rule === "security/secret-github-token")).toBe(false)
+    expect(live.waived).toBe(1)
   })
 
   test("budgets: behaviour change without a test change, file length, complexity", async () => {
@@ -446,5 +561,203 @@ describe("parsers", () => {
     expect(scores.find((item) => item.name === "method")?.score).toBe(2)
     expect(scores.find((item) => item.name === "load")?.score).toBe(3)
     expect(scores.find((item) => item.name === "typed")?.score).toBe(2)
+  })
+})
+
+describe("built-in secret scan cache (#239)", () => {
+  test("a rescan re-reads only changed files: hits are counted, edits re-read, no count cap", async () => {
+    const { clearSecretScanCache, scanFileForSecrets, secretScanStats } = await import("../src/index.ts")
+    clearSecretScanCache()
+    await write("src/a.ts", `export const token = "${FAKE_TOKEN}"\n`)
+    await write("src/b.ts", "export const b = 1\n")
+    const first = await scanFileForSecrets(fx.root, "src/a.ts")
+    expect(first.some((finding) => finding.rule === "security/secret-github-token")).toBe(true)
+    expect(await scanFileForSecrets(fx.root, "src/b.ts")).toEqual([])
+    // Unchanged files are cache hits: identical findings, hits counted.
+    const before = secretScanStats()
+    expect(await scanFileForSecrets(fx.root, "src/a.ts")).toEqual(first)
+    expect(await scanFileForSecrets(fx.root, "src/b.ts")).toEqual([])
+    expect(secretScanStats().hits).toBe(before.hits + 2)
+    // An edit re-reads: the finding disappears after the secret is removed.
+    await write("src/a.ts", 'export const token = "rotated"\n')
+    expect(await scanFileForSecrets(fx.root, "src/a.ts")).toEqual([])
+  })
+})
+
+describe("proof gaps (#239)", () => {
+  test("format is a failing arm, not detection-only: unformatted files fail, formatted files pass", async () => {
+    await write("biome.json", "{}")
+    await write("src/a.ts", "export const x=1\n")
+    const cfg = config([
+      {
+        id: "format",
+        kind: "format",
+        command: `${BIOME} format --reporter=json`,
+        parser: "biome",
+        touchedArgs: true,
+        extensions: [".ts"],
+      },
+    ])
+    await trust(cfg)
+    // The engine arm, not the sandbox: pin bwrap away so the command runs
+    // directly (containers without overlayfs cannot sandbox; see #239).
+    resetBwrapProbe(false)
+    try {
+      const red = await gates({ touched: ["src/a.ts"], config: cfg })
+      expect(red.checks.find((check) => check.id === "format")?.status).toBe("fail")
+      expect(red.findings.find((finding) => finding.rule === "format/biome")).toMatchObject({
+        file: "src/a.ts",
+        severity: "error",
+      })
+      await write("src/a.ts", "export const x = 1;\n")
+      const green = await gates({ touched: ["src/a.ts"], config: cfg })
+      expect(green.findings.some((finding) => finding.rule === "format/biome")).toBe(false)
+    } finally {
+      resetBwrapProbe()
+    }
+  })
+
+  test("typecheck runs at gate level: errors fail, clean files pass, present tools are not missing", async () => {
+    const TSC = path.resolve(import.meta.dir, "../../../node_modules/.bin/tsc")
+    await write("tsconfig.json", JSON.stringify({ compilerOptions: { strict: true, noEmit: true }, include: ["src"] }))
+    await write("src/a.ts", 'export const x: number = "nope"\n')
+    const cfg = config([
+      { id: "typecheck", kind: "typecheck", command: `${TSC} --noEmit -p tsconfig.json`, parser: "tsc" },
+    ])
+    await trust(cfg)
+    resetBwrapProbe(false)
+    try {
+      const red = await gates({ touched: ["src/a.ts"], config: cfg })
+      expect(red.checks.find((check) => check.id === "typecheck")?.status).toBe("fail")
+      expect(red.findings.some((finding) => finding.file === "src/a.ts" && finding.check === "typecheck")).toBe(true)
+      await write("src/a.ts", "export const x: number = 1\n")
+      const green = await gates({ touched: ["src/a.ts"], config: cfg })
+      expect(green.checks.find((check) => check.id === "typecheck")?.status).toBe("pass")
+      expect(green.findings.some((finding) => finding.rule === "gates/tool-missing")).toBe(false)
+      expect(green.findings.some((finding) => finding.rule === "gates/sandbox-missing")).toBe(false)
+    } finally {
+      resetBwrapProbe()
+    }
+  })
+
+  test("a failing test command fails the gate (fail arm, not pass-only)", async () => {
+    const cfg = config([{ id: "test", kind: "test", command: "bun -e 'process.exit(1)'", parser: "generic" }])
+    await trust(cfg)
+    resetBwrapProbe(false)
+    try {
+      const report = await gates({ scope: "full", config: cfg })
+      expect(report.checks.find((check) => check.id === "test")?.status).toBe("fail")
+      expect(report.testsFailed).toBe(true)
+      expect(report.findings.some((finding) => finding.rule === "test/command-failed")).toBe(true)
+    } finally {
+      resetBwrapProbe()
+    }
+  })
+
+  test("budget pass arms: small, simple, tested changes are quiet; diff-size has both arms", async () => {
+    await write("src/a.ts", "export const a = 1\n")
+    await write("src/a.test.ts", 'import { a } from "./a"\n')
+    const quiet = await gates({
+      touched: ["src/a.ts", "src/a.test.ts"],
+      config: config([], { budgets: { maxFileLines: 20, maxComplexity: 10 } }),
+    })
+    for (const rule of ["budget/file-length", "budget/complexity", "budget/test-with-behavior"])
+      expect([rule, quiet.findings.some((finding) => finding.rule === rule)]).toEqual([rule, false])
+    const budgets = {
+      maxFileLines: 800,
+      maxComplexity: 15,
+      maxDiffLines: 10,
+      requireDepJustification: false,
+      requireTestWithBehavior: false,
+    }
+    const over = await checkBudgets({ dir: fx.root, files: [], budgets, diff: { added: 6, removed: 5 } })
+    expect(over.find((finding) => finding.rule === "budget/diff-size")?.severity).toBe("error")
+    const under = await checkBudgets({ dir: fx.root, files: [], budgets, diff: { added: 5, removed: 5 } })
+    expect(under.some((finding) => finding.rule === "budget/diff-size")).toBe(false)
+  })
+
+  test("a phase that touches only source passes tool-config (pass arm)", async () => {
+    const base = await commit("base")
+    await write("src/a.ts", "export const a = 1\n")
+    const report = await gates({ scope: "full", base, phaseId: "p1", config: config([]) })
+    expect(report.findings.some((finding) => finding.rule === "integrity/tool-config-changed")).toBe(false)
+  })
+
+  test("a valid gates.json loads with no problem (pass arm)", async () => {
+    await write(".factory/gates.json", JSON.stringify({ commands: [] }))
+    const { config: loaded, problem } = await loadGatesConfig(fx.root)
+    expect(problem).toBeUndefined()
+    expect(loaded.commands).toEqual([])
+  })
+
+  test("artifact validation flags a malformed frontier and passes when artifacts are absent", async () => {
+    expect(await validateArtifacts(fx.root, fx.state)).toEqual([])
+    await write(".factory/frontier.json", "{}")
+    const findings = await validateArtifacts(fx.root, fx.state)
+    expect(findings.find((finding) => finding.rule === "schema/frontier")?.file).toBe(".factory/frontier.json")
+  })
+
+  test("formatReport renders the summary, the findings and the overflow pointer", () => {
+    const report: GateReport = {
+      passed: false,
+      findings: [
+        {
+          file: "src/a.ts",
+          line: 2,
+          rule: "lint/suspicious/noDebugger",
+          severity: "error",
+          message: "No debugger",
+          check: "lint",
+        },
+      ],
+      totalFindings: 3,
+      waived: 0,
+      checks: [{ id: "lint", status: "fail", durationMs: 1, findings: 3 }],
+      summary: "Gates failed: 3 error(s)",
+      failedTests: [],
+      testsFailed: false,
+      logDir: "/tmp/logs",
+    }
+    const text = formatReport(report)
+    expect(text).toContain("Gates failed: 3 error(s)")
+    expect(text).toContain("src/a.ts:2 lint/suspicious/noDebugger")
+    expect(text).toContain("… 2 more in /tmp/logs/summary.json")
+  })
+
+  test("the lsp gate reports error diagnostics and passes on clean files", async () => {
+    await write("src/a.ts", "export const a = 1\n")
+    const red = await gates({
+      touched: ["src/a.ts"],
+      config: config([]),
+      lsp: {
+        diagnostics: async () => [
+          { severity: 1, message: "boom", source: "ts", range: { start: { line: 0, character: 0 } } },
+        ],
+      },
+    })
+    expect(red.findings.find((finding) => finding.rule === "lsp/ts")).toMatchObject({ file: "src/a.ts", line: 1 })
+    const green = await gates({
+      touched: ["src/a.ts"],
+      config: config([]),
+      lsp: { diagnostics: async () => [] },
+    })
+    expect(green.findings.some((finding) => finding.check === "lsp")).toBe(false)
+  })
+
+  test("gitleaks: empty input is a skip; without the binary it never runs", async () => {
+    expect(await gitleaks(fx.root, [])).toBeUndefined()
+    if (!installed("gitleaks")) expect(await gitleaks(fx.root, ["README.md"])).toBeUndefined()
+  })
+
+  test("control drift is an integrity/control-drift gate finding, not just a halt", async () => {
+    const { rebaseline } = await import("../src/trust/index.ts")
+    await rebaseline(fx.root, "human:tester")
+    await write(".factory/gates.json", '{"commands":[]}\n')
+    const report = await gates({ scope: "full", config: config([]) })
+    expect(report.findings.find((finding) => finding.rule === "integrity/control-drift")).toMatchObject({
+      file: ".factory",
+      severity: "error",
+      check: "integrity",
+    })
   })
 })

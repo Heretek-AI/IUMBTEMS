@@ -11,7 +11,9 @@ import {
   factoryLayout,
   normalizeClaim,
   normalizeForQuote,
+  normalizeSourceText,
   SourceCache,
+  sha256,
   writeJson,
 } from "@heretek-ai/es-core"
 import {
@@ -35,12 +37,17 @@ async function rig(withRetraction = false) {
   await mkdir(sources, { recursive: true })
   const sealed = new SourceCache(sources, state)
   const entry = await sealed.put({ url: "https://example.com/bun", text: SOURCE_TEXT, provider: "fetch" })
-  const plain = new SourceCache(sources)
-  const unsealed = await plain.put({
-    url: "https://example.com/plain",
-    text: `Plain source text. ${QUOTE}.`,
-    provider: "fetch",
-  })
+  // No constructor can produce unsealed entries anymore (#251): the
+  // unsealed fixture is written to disk directly, laid out as put() would
+  // leave it minus the seal, so the explorer still has an "unsealed" case.
+  const plainText = normalizeSourceText(`Plain source text. ${QUOTE}.`)
+  const plainHash = sha256(plainText)
+  await writeFile(path.join(sources, `${plainHash}.md`), plainText)
+  await writeFile(
+    path.join(sources, `${plainHash}.json`),
+    `${JSON.stringify({ sha256: plainHash, url: "https://example.com/plain", retrieved: new Date().toISOString(), provider: "fetch", bytes: Buffer.byteLength(plainText) })}\n`,
+  )
+  const unsealed = { meta: { sha256: plainHash } }
   const claim = normalizeClaim({
     tag: "VERIFIED",
     statement: "Bun starts in about twelve milliseconds.",

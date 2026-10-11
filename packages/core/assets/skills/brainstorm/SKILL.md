@@ -1,10 +1,10 @@
 ---
 name: brainstorm
-description: Divergent lens fan-out with deterministic dedupe, rubric scoring, and a diversified shortlist with a forced outlier.
+description: Divergent lens fan-out (eight-lens registry; six by default, four lean for callable runs) with deterministic dedupe, rubric scoring, and a diversified shortlist with a forced outlier whenever the shortlist has ≥2 slots.
 ---
 # Brainstorm
 
-Lateral ideation on an idea, run as a fan-out of divergent lenses and distilled mechanically. Never bug fixes, never implementation plans.
+Lateral ideation on an idea, run as a fan-out of divergent lenses (eight in the registry; six by default, four lean for callable runs) and distilled mechanically. Never bug fixes, never implementation plans.
 
 ## When to use
 - The human runs `/brainstorm <idea>` or asks for ideas, directions or alternatives.
@@ -15,7 +15,7 @@ Lateral ideation on an idea, run as a fan-out of divergent lenses and distilled 
 2. Launch every lens subagent in parallel, by exact ID (`es-lens-<lens>`), each with the brief. Fast tier; one lens each: inversion, constraint-removal, scamper, cross-domain, extreme-user, scale-shift, failure-first, adjacent-possible.
 3. `es_brainstorm_record` — one call per lens. Caps are enforced; near-duplicates are collapsed against earlier ideas (convergence is a signal).
 4. `es-brainstorm-critic` — scores every surviving idea 1-5 on novelty, upside, feasibility and fit via `es_brainstorm_score`.
-5. `es_brainstorm_complete` — re-checks coverage and scores, ranks, and writes the diversified shortlist with one forced outlier slot to `.factory/brainstorm/`.
+5. `es_brainstorm_complete` — re-checks coverage and scores, ranks, and writes the diversified shortlist with one forced outlier slot (whenever the shortlist has ≥2 slots) to `.factory/brainstorm/`.
 
 ## Output
 `.factory/brainstorm/brainstorm.json` (machine-readable) and `BRAINSTORM.md` (the shortlist, the full ranked field, collapsed duplicates, coverage and gaps). Report the shortlist to the human; do not paste the whole field.

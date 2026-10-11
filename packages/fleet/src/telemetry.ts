@@ -285,7 +285,11 @@ interface HttpResponder {
 
 const jsonBody = (res: HttpResponder, code: number, value: unknown): void => {
   const text = JSON.stringify(value)
-  res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(text) })
+  res.writeHead(code, {
+    ...WEB_SECURITY_HEADERS,
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(text),
+  })
   res.end(text)
 }
 
@@ -430,7 +434,7 @@ export class TelemetryServer {
     if ((field(headers, "upgrade") ?? "").toLowerCase() === "websocket" && target === "/fleet/ws")
       return this.handleUpgrade(socket, headers, res)
     if (!this.hostOk(field(headers, "host"))) {
-      res.writeHead(403, { "content-length": 0, connection: "close" })
+      res.writeHead(403, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
       res.end()
       return
     }
@@ -440,7 +444,7 @@ export class TelemetryServer {
       // (bearer or session), submit is browser-only (cookie + Origin + CSRF).
       if (method === "POST" && target === "/fleet/approve/preview") return this.approvePreview(headers, rest, res)
       if (method === "POST" && target === "/fleet/approve") return this.approveSubmit(headers, rest, res)
-      res.writeHead(404, { "content-length": 0, connection: "close" })
+      res.writeHead(404, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
       res.end()
       return
     }
@@ -448,7 +452,7 @@ export class TelemetryServer {
       // A presented session cookie that cannot authorize is a forbidden
       // CSRF/origin failure (403); wholly missing credentials are 401.
       const code = parseSessionCookie(field(headers, "cookie")) !== undefined ? 403 : 401
-      res.writeHead(code, { "content-length": 0, connection: "close" })
+      res.writeHead(code, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
       res.end()
       return
     }
@@ -509,7 +513,7 @@ export class TelemetryServer {
       res.end()
     }
     if (this.options.webRoot === undefined) {
-      res.writeHead(404, { "content-length": 0, connection: "close" })
+      res.writeHead(404, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
       res.end()
       return
     }
@@ -580,7 +584,7 @@ export class TelemetryServer {
       // Same convention as read-only RPC: a presented session cookie that
       // cannot authorize is a forbidden CSRF/origin failure (403).
       const code = parseSessionCookie(field(headers, "cookie")) !== undefined ? 403 : 401
-      res.writeHead(code, { "content-length": 0, connection: "close" })
+      res.writeHead(code, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
       res.end()
       return
     }
@@ -637,12 +641,12 @@ export class TelemetryServer {
   private async approveSubmit(headers: Map<string, string>, rest: Buffer, res: HttpResponder): Promise<void> {
     const session = parseSessionCookie(field(headers, "cookie")) ?? ""
     if (!this.sessions.valid(session)) {
-      res.writeHead(401, { "content-length": 0, connection: "close" })
+      res.writeHead(401, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
       res.end()
       return
     }
     if (!loopbackOriginOk(field(headers, "origin")) || !this.csrf.check(session, field(headers, "x-csrf"))) {
-      res.writeHead(403, { "content-length": 0, connection: "close" })
+      res.writeHead(403, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
       res.end()
       return
     }
@@ -730,13 +734,21 @@ export class TelemetryServer {
 
   private ok(res: HttpResponder, value: unknown): void {
     const text = JSON.stringify(value)
-    res.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(text) })
+    res.writeHead(200, {
+      ...WEB_SECURITY_HEADERS,
+      "content-type": "application/json",
+      "content-length": Buffer.byteLength(text),
+    })
     res.end(text)
   }
 
   private fail(res: HttpResponder, code: number, message: string, extra: Record<string, unknown> = {}): void {
     const text = JSON.stringify({ error: message, ...extra })
-    res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(text) })
+    res.writeHead(code, {
+      ...WEB_SECURITY_HEADERS,
+      "content-type": "application/json",
+      "content-length": Buffer.byteLength(text),
+    })
     res.end(text)
   }
 
@@ -818,7 +830,7 @@ export class TelemetryServer {
       (!this.bearerOk(field(headers, "authorization")) && !cookieOk)
     ) {
       const code = !this.hostOk(field(headers, "host")) || !this.originOk(field(headers, "origin")) ? 403 : 401
-      res.writeHead(code, { "content-length": 0, connection: "close" })
+      res.writeHead(code, { ...WEB_SECURITY_HEADERS, "content-length": 0, connection: "close" })
       res.end()
       return
     }

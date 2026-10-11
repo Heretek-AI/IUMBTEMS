@@ -13,6 +13,8 @@ export interface WorkspacePackage {
   /** Directory under packages/ (also the short name scripts use). */
   readonly dir: string
   readonly name: string
+  /** Manifest version string (publish parity: a skew ships green otherwise). */
+  readonly version: string
   readonly private: boolean
   /** Publish order for release packages; undefined when not released. */
   readonly order: number | undefined
@@ -45,6 +47,7 @@ export async function workspacePackages(root?: string): Promise<WorkspacePackage
     found.push({
       dir: entry.name,
       name: manifest.name,
+      version: typeof manifest.version === "string" ? manifest.version : "0.0.0",
       private: manifest.private === true,
       order,
       conditions,

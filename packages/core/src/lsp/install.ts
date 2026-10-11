@@ -1,7 +1,10 @@
 // Pinned, checksummed, ask-once installs of language servers. A human
 // consents once per server (CLI or TUI); the installer fetches the exact npm
 // tarball, verifies its sha512 against the pinned integrity, and installs it
-// with scripts disabled into the user-global state dir.
+// with scripts disabled into the user-global state dir. Installs are not
+// bwrap-sandboxed (the fetch needs the network): consent + SRI pins +
+// --ignore-scripts + a scrubbed environment is the whole mitigation stack,
+// pinned by the installer tests (#275).
 import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir, userInfo } from "node:os"

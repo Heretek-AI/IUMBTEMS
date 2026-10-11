@@ -18,7 +18,7 @@ import { DEFAULT_LICENSE_WHITELIST, type HarvestProfile } from "../schema/harves
 import { SCOUT_VERSION, type ScoutAdvisory, type ScoutAssessment, ScoutAssessmentSchema } from "../schema/scout.ts"
 import { relativeTo } from "../trust/paths.ts"
 import { atomicWrite } from "../util/fs.ts"
-import { renderScoutReport } from "./report.ts"
+import { type AdvisoryCheck, renderScoutReport } from "./report.ts"
 import {
   readAssessments,
   readScoutAdvisories,
@@ -256,7 +256,29 @@ export function scoutTools(context: ScoutOpsContext): EsToolDef[] {
           throw new ToolRefusal(
             `${candidate.id} is not a registry package: give the ecosystem (${Object.values(OSV_ECOSYSTEMS).join(", ")}) and the package name it publishes.`,
           )
-        const version = input.version ?? profile?.release
+        // A registry candidate must be queried at its own coordinates (#257):
+        // a hand-supplied wrong ecosystem/package returns a clean bill for
+        // code that was never checked.
+        if (source.kind === "registry") {
+          const derived = { ecosystem: OSV_ECOSYSTEMS[source.registry], name: source.name }
+          const sameEcosystem =
+            input.ecosystem === undefined || String(input.ecosystem).toLowerCase() === derived.ecosystem.toLowerCase()
+          const samePackage = input.package === undefined || String(input.package) === derived.name
+          if (!sameEcosystem || !samePackage)
+            throw new ToolRefusal(
+              `Advisories for ${candidate.id} must be queried for the scanned source (${derived.ecosystem}:${derived.name}); ` +
+                `got ${input.ecosystem ?? ecosystem}:${input.package ?? name}. Query the candidate's own package, not another one.`,
+            )
+        }
+        // The version is pinned to the scanned release when one is known
+        // (#257): pointing the query at a fixed release hides its advisories.
+        const release = profile?.release
+        if (release !== undefined && input.version !== undefined && String(input.version) !== release)
+          throw new ToolRefusal(
+            `Version ${input.version} does not match the scanned release ${release} of ${candidate.id}. ` +
+              `Query ${release}, or omit the version to check every release.`,
+          )
+        const version = input.version ?? release
         const result = await queryOsv(
           { ecosystem, name: String(name), ...(version ? { version: String(version) } : {}) },
           cache,
@@ -275,7 +297,14 @@ export function scoutTools(context: ScoutOpsContext): EsToolDef[] {
           fixed: [...advisory.fixed],
           source: result.sha256,
         }))
-        await writeScoutAdvisories(root, candidate.id, advisories)
+        await writeScoutAdvisories(root, candidate.id, {
+          query: {
+            ecosystem,
+            package: String(name),
+            ...(version !== undefined ? { version: String(version) } : {}),
+          },
+          advisories,
+        })
         return [
           `${advisories.length} OSV advisor${advisories.length === 1 ? "y" : "ies"} for ${ecosystem}:${name}${version ? `@${version}` : ""}, cached as sha256:${result.sha256}.`,
           ...advisories.map(
@@ -337,7 +366,7 @@ export function scoutTools(context: ScoutOpsContext): EsToolDef[] {
           ...(input.lastRelease ? { lastRelease: String(input.lastRelease) } : {}),
           ...(input.releasesPerYear !== undefined ? { releasesPerYear: Number(input.releasesPerYear) } : {}),
           maintenance: input.maintenance,
-          advisories: (await readScoutAdvisories(root, candidate.id).catch(() => undefined)) ?? [],
+          advisories: (await readScoutAdvisories(root, candidate.id).catch(() => undefined))?.advisories ?? [],
           proposal: input.proposal,
           rationale: String(input.rationale ?? ""),
           ...(input.blueprint ? { blueprint: String(input.blueprint) } : {}),
@@ -351,7 +380,7 @@ export function scoutTools(context: ScoutOpsContext): EsToolDef[] {
     {
       name: "es_scout_complete",
       description:
-        "Scout only: when every candidate is scanned and recorded, recompute the verdicts (adopt survives only for a verified, whitelisted, permissive license), flag severe advisories, rank, and write .factory/scout/REPORT.md, scout.json and dossier.json.",
+        "Scout only: when every candidate is scanned, recorded, and checked for advisories (queried, or an explicit NEGATIVE_KNOWLEDGE skip), recompute the verdicts (adopt survives only for a verified, whitelisted, permissive license), flag severe advisories, rank, and write .factory/scout/REPORT.md, scout.json and dossier.json.",
       input: object({}),
       execute: async (_input, toolContext) => {
         await guard(toolContext.agent)
@@ -359,6 +388,7 @@ export function scoutTools(context: ScoutOpsContext): EsToolDef[] {
         const assessments = new Map((await readAssessments(root)).map((item) => [item.candidate, item]))
         const profiles = new Map<string, HarvestProfile>()
         const evidence: CandidateEvidence[] = []
+        const checks = new Map<string, AdvisoryCheck>()
         const missing: string[] = []
         for (const candidate of current.candidates) {
           const profile = await readScoutProfile(root, candidate.id).catch(() => undefined)
@@ -367,7 +397,32 @@ export function scoutTools(context: ScoutOpsContext): EsToolDef[] {
           if (!assessment) missing.push(`${candidate.id}: record it (es_scout_record)`)
           if (!profile || !assessment) continue
           profiles.set(candidate.id, profile)
-          const advisories = (await readScoutAdvisories(root, candidate.id).catch(() => undefined)) ?? []
+          // The advisories step is mandatory (#257): skipping it, querying a
+          // wrong package, or pointing the version at a fixed release all
+          // used to yield a clean adopt with zero citations. Either the
+          // query ran (its coordinates are pinned at query time), or the
+          // assessment records explicit NEGATIVE_KNOWLEDGE that it was
+          // skipped — a silent skip refuses here.
+          const advisoryFile = await readScoutAdvisories(root, candidate.id).catch(() => undefined)
+          const skipped =
+            !advisoryFile &&
+            assessment.claims.some(
+              (claim) =>
+                claim.tag === "NEGATIVE_KNOWLEDGE" &&
+                /advisori/i.test([claim.statement, claim.query ?? "", claim.finding ?? ""].join(" ")),
+            )
+          if (!advisoryFile && !skipped)
+            missing.push(
+              `${candidate.id}: query its advisories (es_scout_advisories), or record explicit NEGATIVE_KNOWLEDGE that the step was skipped`,
+            )
+          if (!advisoryFile && !skipped) continue
+          const advisories = advisoryFile?.advisories ?? []
+          checks.set(
+            candidate.id,
+            advisoryFile
+              ? { query: advisoryFile.query, skipped: false, count: advisories.length }
+              : { skipped: true, count: 0 },
+          )
           evidence.push({
             id: candidate.id,
             name: candidate.name,
@@ -398,7 +453,7 @@ export function scoutTools(context: ScoutOpsContext): EsToolDef[] {
           throw new ToolRefusal(`The scout dossier could not be written: ${error.message}`)
         })
         await writeScoutResult(root, result)
-        await atomicWrite(paths.report, renderScoutReport(current, result, profiles, assessments))
+        await atomicWrite(paths.report, renderScoutReport(current, result, profiles, assessments, checks))
         return [
           `Scout complete: ${current.objective}`,
           ...verdicts.map(

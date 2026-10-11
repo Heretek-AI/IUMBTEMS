@@ -34,15 +34,25 @@ export const LEGACY_CONSTITUTION: Constitution = {
   retractionPolicy: "standard",
 }
 
-export const constitutionFromPack = (pack: DomainPack): Constitution => ({
-  tierWeights: { __default__: 1, ...pack.tierWeights },
-  negBonus: pack.negBonus,
-  rejectPenalty: pack.rejectPenalty,
-  acceptThreshold: pack.acceptThreshold,
-  bannedDomains: pack.bannedDomains,
-  mandatoryTags: pack.mandatoryTags,
-  retractionPolicy: pack.retractionPolicy,
-})
+export const constitutionFromPack = (pack: DomainPack): Constitution => {
+  // Tierless claims weigh at or below the lowest verified tier (#252): an
+  // unclassifiable host falling back to a full 1.0 outscores verified
+  // preprints and rewards citing worse sources.
+  const tiered = Object.entries(pack.tierWeights)
+    .filter(([tier]) => tier !== "__default__")
+    .map(([, weight]) => weight)
+  const floor = tiered.length ? Math.min(...tiered) : 1
+  const fallback = pack.tierWeights.__default__ ?? 1
+  return {
+    tierWeights: { ...pack.tierWeights, __default__: Math.min(fallback, floor) },
+    negBonus: pack.negBonus,
+    rejectPenalty: pack.rejectPenalty,
+    acceptThreshold: pack.acceptThreshold,
+    bannedDomains: pack.bannedDomains,
+    mandatoryTags: pack.mandatoryTags,
+    retractionPolicy: pack.retractionPolicy,
+  }
+}
 
 export const weightFor = (constitution: Constitution, tier: string | undefined): number =>
   (tier !== undefined && constitution.tierWeights[tier] !== undefined
@@ -131,7 +141,7 @@ export interface ClaimVerdictOptions {
 /**
  * The per-claim ACCEPTED/REJECTED gate used by domain packs. A claim is
  * REJECTED when the legacy structural rules fire (VERIFIED needs its source
- * hash + verbatim quote or a code location; INFERRED needs its reasoning;
+ * hash + quote (verbatim after documented normalisation) or a code location; INFERRED needs its reasoning;
  * HYPOTHESIS needs its falsification; NEGATIVE_KNOWLEDGE needs query and
  * finding), when any pack rule fires (parent unresolved, missing mandatory
  * tag, banned domain), or when the retraction policy is zero_tolerance and
@@ -165,7 +175,8 @@ export function claimVerdict(claim: ConstitutionClaim, options: ClaimVerdictOpti
     if (!nonEmpty(claim.query)) reasons.push("NEG_KNOWLEDGE_REQUIRES_QUERY: query missing")
     if (!nonEmpty(claim.finding)) reasons.push("NEG_KNOWLEDGE_REQUIRES_FINDING: finding missing")
   }
-  if (constitution.mandatoryTags.length && !claim.tag) reasons.push("MISSING_TAG: tag required by constitution")
+  if (constitution.mandatoryTags.length && !constitution.mandatoryTags.includes(claim.tag ?? ""))
+    reasons.push(`MISSING_TAG: tag '${claim.tag ?? ""}' is not one of the constitution's mandatory tags`)
   const url = claim.source?.url
   if (constitution.bannedDomains.length && typeof url === "string" && url) {
     const lower = url.toLowerCase()
@@ -199,7 +210,8 @@ export interface ScoreBreakdown {
  * Verified claims contribute their tier weight when the constitution weights
  * any tier away from 1.0 (otherwise a flat 1.0, preserving legacy numbers);
  * rejected claims cost `rejectPenalty`; counted negative knowledge earns
- * `negBonus`. Valid, deduplicated NK rows only, via the M1 port of the legacy
+ * `negBonus` and counts as assertions, so stuffing NK rows cannot inflate the
+ * score past the threshold (#252). Valid, deduplicated NK rows only, via the M1 port of the legacy
  * normalized key. The score is clamped to [0, 1] and rounded to 3 places.
  */
 export function computeEpistemicScoreFromClaims(
@@ -238,7 +250,10 @@ export function computeEpistemicScoreFromClaims(
     } else if (claim.tag === "INFERRED") counts.inferred++
     else if (claim.tag === "HYPOTHESIS") counts.hypotheses++
   }
-  const totalAssertions = Math.max(1, counts.verified + counts.inferred + counts.hypotheses + counts.rejected)
+  const totalAssertions = Math.max(
+    1,
+    counts.verified + counts.inferred + counts.hypotheses + counts.rejected + negKnowledge,
+  )
   const rawScore =
     (weightSum + constitution.negBonus * negKnowledge - constitution.rejectPenalty * counts.rejected) / totalAssertions
   const score = Math.max(0, Math.min(1, Math.round(rawScore * 1000) / 1000))

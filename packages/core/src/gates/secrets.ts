@@ -1,5 +1,7 @@
 // Built-in secret scanner (always on, no external binary). High-precision
 // patterns are errors; the generic assignment heuristic is a warning.
+import { open } from "node:fs/promises"
+import path from "node:path"
 import type { GateFinding } from "../schema/gates.ts"
 
 const PATTERNS: ReadonlyArray<{ rule: string; regex: RegExp; description: string; severity?: "warning" }> = [
@@ -55,4 +57,49 @@ export function scanForSecrets(content: string, file: string): GateFinding[] {
     }
   })
   return findings
+}
+
+// Per-path cache keyed by mtime+size (mirrors structure/graph.ts), so repeated
+// gate runs re-read only changed files. The scan itself is deliberately NOT
+// count-capped the way gitleaks is: a cap would fail open, silently skipping a
+// secret past the cap, while the cache bounds the repeated-run cost instead.
+const fileCache = new Map<string, { mtimeMs: number; size: number; findings: GateFinding[] }>()
+let cacheHits = 0
+
+/**
+ * Scan one file for secrets, cached by mtime+size. Missing, non-regular and
+ * oversized (>2MB, as before) files yield no findings, as do binary files.
+ */
+export async function scanFileForSecrets(dir: string, file: string): Promise<GateFinding[]> {
+  const absolute = path.join(dir, file)
+  // Open once and stat the descriptor, so the size/mtime check and the read
+  // cannot race with a concurrent replacement of the path.
+  const handle = await open(absolute, "r").catch(() => undefined)
+  if (!handle) return []
+  try {
+    const info = await handle.stat()
+    if (!info.isFile() || info.size > 2_000_000) return []
+    const cached = fileCache.get(absolute)
+    if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
+      cacheHits += 1
+      return cached.findings
+    }
+    const findings = scanForSecrets(await handle.readFile("utf8"), file)
+    if (fileCache.size > 50_000) fileCache.clear()
+    fileCache.set(absolute, { mtimeMs: info.mtimeMs, size: info.size, findings })
+    return findings
+  } finally {
+    await handle.close()
+  }
+}
+
+/** Cache observability: entries held and hits served since the last clear. */
+export function secretScanStats(): { entries: number; hits: number } {
+  return { entries: fileCache.size, hits: cacheHits }
+}
+
+/** For tests: forget cached findings and reset the hit count. */
+export function clearSecretScanCache(): void {
+  fileCache.clear()
+  cacheHits = 0
 }

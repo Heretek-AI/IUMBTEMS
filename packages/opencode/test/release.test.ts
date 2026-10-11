@@ -1,9 +1,12 @@
-// Release base-branch safety on the real host (issue #202): with a local
-// bare remote standing in for GitHub (file transport, no network) and a fake
-// `gh` on PATH (no real GitHub CLI), the release opener pushes the run's
-// `factory/...` integration branch only, opens the PR as a draft, and refuses
-// `branch === base` before anything is pushed. The harness itself runs with
-// `pr: "off"`, so the `es_release` tool refuses and the base SHA is unchanged.
+// Release base-branch safety: the factory release pushes a `factory/`
+// branch only, `branch == base` (or a non-`factory/` branch) is refused
+// before anything is pushed, and the base SHA on the remote is
+// byte-identical afterwards.
+// Union of the audit (#202) and remediation suites at the #290 merge: the
+// remediation side proves refusal and push shape against a fast local
+// bare-remote fixture (no host boot); the audit side drives a full run to
+// RELEASE on the real host and proves the argv, the real push, the
+// es_release refusal and recordPr-to-DONE through it.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -11,6 +14,7 @@ import path from "node:path"
 import {
   buildPrArgs,
   Factory,
+  git,
   type HumanSigner,
   recordApproval,
   researchSourcesDir,
@@ -23,11 +27,107 @@ import {
 import { boot, directiveScript, type Harness } from "@heretek-ai/es-testkit"
 import { ghPrOpener } from "../src/pr.ts"
 
+const BASE = "rewrite"
+const BRANCH = "factory/run-test-1/integration"
+
+interface Remote {
+  readonly root: string
+  readonly remote: string
+  readonly baseSha: string
+  cleanup(): Promise<void>
+}
+
+/** A repo with a base branch pushed to a local bare remote, plus one factory-branch commit. */
+async function bareRemote(): Promise<Remote> {
+  const root = await mkdtemp(path.join(tmpdir(), "es-release-"))
+  const remote = await mkdtemp(path.join(tmpdir(), "es-release-remote-"))
+  const cleanup = async () => {
+    await rm(root, { recursive: true, force: true })
+    await rm(remote, { recursive: true, force: true })
+  }
+  try {
+    await git(remote, ["init", "--bare", "-q"])
+    await git(root, ["init", "-q", "-b", BASE])
+    await writeFile(path.join(root, "README.md"), "# release fixture\n")
+    await git(root, ["add", "-A"])
+    await git(root, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"])
+    await git(root, ["remote", "add", "origin", remote])
+    await git(root, ["push", "-q", "-u", "origin", `${BASE}:${BASE}`])
+    const baseSha = (await git(root, ["rev-parse", BASE])).stdout.trim()
+    await git(root, ["checkout", "-q", "-b", BRANCH])
+    await writeFile(path.join(root, "work.txt"), "factory work\n")
+    await git(root, ["add", "-A"])
+    await git(root, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "factory work"])
+    return { root, remote, baseSha, cleanup }
+  } catch (error) {
+    await cleanup()
+    throw error
+  }
+}
+
+const remoteSha = async (remote: string, ref: string) =>
+  (await git(remote, ["rev-parse", "--verify", ref])).stdout.trim()
+
+const remoteBranches = async (remote: string) =>
+  (await git(remote, ["for-each-ref", "--format=%(refname)", "refs/heads/"])).stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+describe("release against a local bare remote", () => {
+  test("branch == base is refused and the remote is untouched", async () => {
+    const fx = await bareRemote()
+    try {
+      await expect(ghPrOpener.open({ root: fx.root, branch: BASE, base: BASE, title: "t", body: "b" })).rejects.toThrow(
+        `refusing to push "${BASE}"`,
+      )
+      expect(await remoteBranches(fx.remote)).toEqual(["refs/heads/rewrite"])
+      expect(await remoteSha(fx.remote, "refs/heads/rewrite")).toBe(fx.baseSha)
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test("a non-factory/ branch is refused and the remote is untouched", async () => {
+    const fx = await bareRemote()
+    try {
+      await expect(
+        ghPrOpener.open({ root: fx.root, branch: "feature/x", base: BASE, title: "t", body: "b" }),
+      ).rejects.toThrow(/refusing to push/)
+      expect(await remoteBranches(fx.remote)).toEqual(["refs/heads/rewrite"])
+      expect(await remoteSha(fx.remote, "refs/heads/rewrite")).toBe(fx.baseSha)
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test("the authorized push lands only the factory branch; the base SHA is byte-identical", async () => {
+    const fx = await bareRemote()
+    try {
+      const local = (await git(fx.root, ["rev-parse", BRANCH])).stdout.trim()
+      // The same argv `pr.ts` pushes with (the `gh pr create` spawn never
+      // runs in tests: no `gh` invocation here).
+      await git(fx.root, ["push", "--set-upstream", "origin", `${BRANCH}:${BRANCH}`])
+      expect(await remoteBranches(fx.remote)).toEqual(
+        ["refs/heads/factory/run-test-1/integration", "refs/heads/rewrite"].sort(),
+      )
+      expect(await remoteSha(fx.remote, `refs/heads/${BRANCH}`)).toBe(local)
+      expect(await remoteSha(fx.remote, "refs/heads/rewrite")).toBe(fx.baseSha)
+      // The release PR itself is a draft against the base.
+      const argv = buildPrArgs({ branch: BRANCH, base: BASE, title: "t", body: "b" })
+      expect(argv.slice(0, 4)).toEqual(["gh", "pr", "create", "--draft"])
+      expect(argv.slice(argv.indexOf("--base") + 1, argv.indexOf("--base") + 2)).toEqual([BASE])
+    } finally {
+      await fx.cleanup()
+    }
+  })
+})
+
 const pluginDir = path.resolve(import.meta.dir, "..")
 const call = (name: string, args: Record<string, unknown> = {}) => `@@CALL ${name} ${JSON.stringify(args)}@@`
 const green = { passed: true, findings: [] as never[], summary: "green" }
 
-const git = (cwd: string, ...args: string[]) => {
+const gitSync = (cwd: string, ...args: string[]) => {
   const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" })
   if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr.toString().trim()}`)
   return result.stdout.toString().trim()
@@ -55,10 +155,10 @@ beforeAll(async () => {
   })
   // A local bare remote stands in for GitHub: file transport, no network.
   bare = await mkdtemp(path.join(tmpdir(), "es-release-bare-"))
-  git(h.directory, "init", "-q", "--bare", bare)
-  git(h.directory, "remote", "add", "origin", bare)
-  git(h.directory, "push", "-q", "origin", "main")
-  baseBefore = git(h.directory, "rev-parse", "main")
+  gitSync(h.directory, "init", "-q", "--bare", bare)
+  gitSync(h.directory, "remote", "add", "origin", bare)
+  gitSync(h.directory, "push", "-q", "origin", "main")
+  baseBefore = gitSync(h.directory, "rev-parse", "main")
 
   // A fake `gh`: `auth status` succeeds, `pr create` captures its argv and
   // reports a PR URL. The capture path is baked in because the runner
@@ -162,7 +262,7 @@ describe("release on the real host against a local bare remote", () => {
     await expect(ghPrOpener.open({ root: h.directory, branch: base, base, title: "t", body: "b" })).rejects.toThrow(
       /refusing to push/,
     )
-    expect(git(h.directory, "ls-remote", bare).split("\n")).toHaveLength(1)
+    expect(gitSync(h.directory, "ls-remote", bare).split("\n")).toHaveLength(1)
   }, 120_000)
 
   test("the real opener pushes factory/... only; the base SHA is unchanged; es_release stays refused", async () => {
@@ -193,7 +293,7 @@ describe("release on the real host against a local bare remote", () => {
       // The remote gained exactly the run branch; the base SHA is unchanged
       // on disk and on the remote.
       const refs = new Map(
-        git(h.directory, "ls-remote", bare)
+        gitSync(h.directory, "ls-remote", bare)
           .split("\n")
           .filter(Boolean)
           .map((line: string) => {
@@ -203,16 +303,16 @@ describe("release on the real host against a local bare remote", () => {
       )
       expect([...refs.keys()].sort()).toEqual(["refs/heads/main", `refs/heads/${branch}`].sort())
       expect(refs.get("refs/heads/main")).toBe(baseBefore)
-      expect(refs.get(`refs/heads/${branch}`)).toBe(git(h.directory, "rev-parse", branch))
-      expect(git(h.directory, "rev-parse", "main")).toBe(baseBefore)
+      expect(refs.get(`refs/heads/${branch}`)).toBe(gitSync(h.directory, "rev-parse", branch))
+      expect(gitSync(h.directory, "rev-parse", "main")).toBe(baseBefore)
 
       // With `pr: "off"` the host tool refuses instead of pushing: the stage
       // stays RELEASE for the human, and the remote does not move.
-      const refsBeforeTool = git(h.directory, "ls-remote", bare)
+      const refsBeforeTool = gitSync(h.directory, "ls-remote", bare)
       const refused = await h.run(`ship ${call("es_release", {})}`, { agent: "factory" })
       expect(refused.tools[0]?.status).toBe("error")
       expect((await factory().read())?.stage).toBe("RELEASE")
-      expect(git(h.directory, "ls-remote", bare)).toBe(refsBeforeTool)
+      expect(gitSync(h.directory, "ls-remote", bare)).toBe(refsBeforeTool)
 
       // The human records the PR; the run is DONE.
       const done = await factory().recordPr("tester", "https://example.test/pr/9")

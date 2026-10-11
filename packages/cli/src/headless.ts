@@ -520,23 +520,28 @@ export function runHeadless(options: HeadlessOptions): AsyncGenerator<HeadlessEv
     agent: "factory",
     prompt: async (state, factory) =>
       `${await factory.summary(state)}\n${headline(state, await readLiveness(options.root, state))}\nContinue the factory run from its current stage. This is a headless run: no human will answer questions.`,
-    finished: async (state) => {
-      if (state.stage === "DONE")
-        return { type: "done", ...(state.release?.prUrl ? { prUrl: state.release.prUrl } : {}) }
-      const pending = await pendingApprovals(options.root)
-      if (pending.length)
-        return {
-          type: "waiting",
-          reason: "a human must approve (es approve <stage>)",
-          stages: pending.map((item) => item.stage),
-        }
-      if (state.stage === "GRILL")
-        return { type: "waiting", reason: "the grill needs a human; run /grill interactively" }
-      return undefined
-    },
+    finished: (state) => headlessFinished(options.root, state),
     // Research artifacts and seat outcomes count as progress, not just the stage machine.
     progress: async (state) => progressPrint(state, await readLiveness(options.root, state)),
   })
+}
+
+/**
+ * One headless end condition (#247.1): DONE carries the release PR url when
+ * the run released one, a pending approval waits on a human, and the grill
+ * needs a human. Anything else keeps driving.
+ */
+export async function headlessFinished(root: string, state: FactoryState): Promise<HeadlessEvent | undefined> {
+  if (state.stage === "DONE") return { type: "done", ...(state.release?.prUrl ? { prUrl: state.release.prUrl } : {}) }
+  const pending = await pendingApprovals(root)
+  if (pending.length)
+    return {
+      type: "waiting",
+      reason: "a human must approve (es approve <stage>)",
+      stages: pending.map((item) => item.stage),
+    }
+  if (state.stage === "GRILL") return { type: "waiting", reason: "the grill needs a human; run /grill interactively" }
+  return undefined
 }
 
 export const LOG_LEVELS = ["quiet", "info", "debug"] as const

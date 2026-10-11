@@ -97,7 +97,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     },
     lsp: {
       support: "enforced",
-      detail: "The lsp config key is read and served by our own manager (v2 accepts but does not run it).",
+      detail:
+        "The `lsp` key in v2's `opencode.json` — not an ES config key (ES layers strict-reject it) — is read and served by our own manager (v2 accepts but does not run it).",
       test: "packages/opencode/test/lsp.test.ts",
     },
     panels: {
@@ -115,7 +116,7 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     brainstorm: {
       support: "enforced",
       detail:
-        "Lens fan-out, record/score/complete tools, dedupe, rubric, shortlist with a forced outlier. Runs are id-scoped (the human's /brainstorm is the default run); the grill and the factory run callable brainstorms at depth 1 and get the shortlist as JSON.",
+        "Lens fan-out, record/score/complete tools, dedupe, rubric, shortlist with a forced outlier whenever the shortlist has ≥2 slots. Runs are id-scoped (the human's /brainstorm is the default run); the grill and the factory run callable brainstorms at depth 1 and get the shortlist as JSON.",
       test: "packages/opencode/test/brainstorm.test.ts",
     },
     harvest: {
@@ -145,8 +146,8 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     scout: {
       support: "enforced",
       detail:
-        "OSS scout: cached-only web under an offline (--unshare-net) sandbox, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited.",
-      test: "packages/opencode/test/fires.test.ts",
+        "OSS scout: cached-only web under an offline (--unshare-net) sandbox, fail-closed license verdicts computed by core (adopt only for verified permissive licenses), OSV advisories cited (canned-OSV content in core's scout suite).",
+      test: "packages/opencode/test/scout-host.test.ts",
     },
     "research-fires": {
       support: "enforced",

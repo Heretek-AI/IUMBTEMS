@@ -9,7 +9,7 @@ import { workspacePackages } from "../../../scripts/packages.ts"
 import { type HumanSigner, sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import { exportBrief } from "../src/claims/brief.ts"
 import { normalizeClaim } from "../src/claims/claim.ts"
-import { buildDossier, writeDossier } from "../src/claims/dossier.ts"
+import { buildDossier } from "../src/claims/dossier.ts"
 import { factoryLayout } from "../src/layout.ts"
 import { normalizeSourceText, researchSourcesDir, SourceCache } from "../src/research/cache.ts"
 import { scoutTools } from "../src/scout/ops.ts"
@@ -109,7 +109,6 @@ describe("H3: brief export refuses planted entries", () => {
   test("exportBrief re-witnesses against the sealed cache: planted quotes fail", async () => {
     const text = "Independent benchmark reached 9.5 GB/s throughput on reference hardware."
     const hash = await plantUnsealed("https://evil.test/bench", text)
-    const legacy = new SourceCache(researchSourcesDir(root))
     const claim = normalizeClaim({
       tag: "VERIFIED",
       statement: "The benchmark is reproducible.",
@@ -117,14 +116,15 @@ describe("H3: brief export refuses planted entries", () => {
     })
     await mkdir(factoryLayout(root).research, { recursive: true })
     await writeFile(factoryLayout(root).researchReport, "# R\n")
-    // A legacy dossier (written before sealing) witnesses fine unsealed.
-    await writeDossier(
-      factoryLayout(root).researchDossier,
-      buildDossier({ mode: "research", subject: "s", claims: [claim] }),
-      {
-        cache: legacy,
-      },
-    )
+    // A dossier as written before sealing (#251): the planted bytes
+    // witnessed fine unsealed, so the file carries an ok witness.
+    // writeDossier always verifies now and could never produce one, so the
+    // legacy artifact is laid out directly in its on-disk shape.
+    const { writeJson } = await import("../src/util/fs.ts")
+    await writeJson(factoryLayout(root).researchDossier, {
+      ...buildDossier({ mode: "research", subject: "s", claims: [claim] }),
+      claims: [{ ...claim, witness: { ok: true, checkedAt: "2026-01-01T00:00:00.000Z" } }],
+    })
     const { brief } = await exportBrief(root, { signer, stateDir: state })
     expect(brief.claims[0]!.witness.ok).toBe(false)
     expect(brief.sources[hash]).toBeUndefined()
