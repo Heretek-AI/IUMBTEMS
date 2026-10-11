@@ -40,6 +40,13 @@ export interface SandboxProbe {
   readonly exists: (file: string) => boolean
   /** bwrap supports --overlay-src/--tmp-overlay (0.10+). */
   readonly overlay: boolean
+  /**
+   * Per-directory overlay support (#231): an overlay mount can fail on one
+   * filesystem while it succeeds on another (a btrfs home vs tmpfs /tmp), so
+   * a probe that only tries /tmp misreports the mount that matters. Absent:
+   * `overlay` answers for every directory.
+   */
+  readonly overlayFor?: (dir: string) => boolean
   readonly uid?: number
 }
 
@@ -106,6 +113,9 @@ export function sandboxArgv(
   const writableRoot = spec.kind === "user" || spec.kind === "seat"
   const writable = spec.kind === "programmer" || spec.kind === "gate" ? spec.writable : undefined
   const protectedRel = user ? PROTECTED_ALWAYS : [...PROTECTED_ALWAYS, ...PROTECTED_FOR_SEATS]
+  // Graceful degradation (#231): when the per-dir probe refuses a mount, the
+  // overlay args are omitted instead of emitting a mount that fails at runtime.
+  const overlayFor = (dir: string) => probe.overlayFor?.(dir) ?? probe.overlay
   const protectedIn = (dir: string, names: readonly string[]) =>
     names.map((name) => path.join(dir, name)).filter((file) => probe.exists(file))
   const args: string[] = ["bwrap", writableRoot ? "--bind" : "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
@@ -116,9 +126,9 @@ export function sandboxArgv(
     // A private /tmp; projects and homes that live under /tmp are bound back in.
     args.push("--tmpfs", "/tmp")
     // Tool caches under home stay usable; writes there are thrown away.
-    if (probe.overlay && probe.exists(home)) args.push("--overlay-src", home, "--tmp-overlay", home)
+    if (overlayFor(home) && probe.exists(home)) args.push("--overlay-src", home, "--tmp-overlay", home)
     else if (inside("/tmp", home) && probe.exists(home)) roBind(home)
-    if (inside("/tmp", spec.root) && !(probe.overlay && inside(home, spec.root))) roBind(spec.root)
+    if (inside("/tmp", spec.root) && !(overlayFor(home) && inside(home, spec.root))) roBind(spec.root)
   }
   // Project control paths are read-only.
   for (const file of protectedIn(spec.root, protectedRel)) roBind(file)
@@ -131,7 +141,7 @@ export function sandboxArgv(
       for (const file of protectedIn(writable, [...PROTECTED_IN_WORKTREE, ...protectedRel])) roBind(file)
   }
   // A read-only seat's writes in its cwd land in a throwaway layer (when bwrap can).
-  if (spec.kind === "readonly" && probe.overlay) args.push("--overlay-src", spec.cwd, "--tmp-overlay", spec.cwd)
+  if (spec.kind === "readonly" && overlayFor(spec.cwd)) args.push("--overlay-src", spec.cwd, "--tmp-overlay", spec.cwd)
 
   // Secrets, for every kind.
   if (probe.exists(spec.stateDir)) args.push("--tmpfs", spec.stateDir)
@@ -158,32 +168,44 @@ export function sandboxArgv(
   return args
 }
 
-let overlayCache: boolean | undefined
-/** Whether this bwrap supports --tmp-overlay (Ubuntu 24.04 ships 0.9, which does not). */
-export function bwrapOverlay(): boolean {
-  if (overlayCache !== undefined) return overlayCache
+const overlayCache = new Map<string, boolean>()
+/**
+ * Whether this bwrap can overlay-mount `dir` (Ubuntu 24.04 ships bwrap 0.9,
+ * which has no overlay support at all). Probed per directory and cached: an
+ * overlay mount can fail on one filesystem while it succeeds on another (a
+ * btrfs home vs tmpfs /tmp, #231), so probing only /tmp misreports the mount
+ * that matters.
+ */
+export function bwrapOverlay(dir = "/tmp"): boolean {
+  const cached = overlayCache.get(dir)
+  if (cached !== undefined) return cached
   try {
     // bwrap is resolved from PATH by design (it may be absent).
     const probe = spawnSync(
       // NOSONAR
       "bwrap",
-      ["--ro-bind", "/", "/", "--dev", "/dev", "--overlay-src", "/tmp", "--tmp-overlay", "/tmp", "--", "true"],
+      ["--ro-bind", "/", "/", "--dev", "/dev", "--overlay-src", dir, "--tmp-overlay", dir, "--", "true"],
       { timeout: 5000 },
     )
-    overlayCache = probe.status === 0
+    overlayCache.set(dir, probe.status === 0)
   } catch {
-    overlayCache = false
+    overlayCache.set(dir, false)
   }
-  return overlayCache
+  return overlayCache.get(dir)!
 }
 
 function liveProbe(): SandboxProbe {
-  return { exists: existsSync, overlay: bwrapOverlay(), uid: process.getuid?.() }
+  return {
+    exists: existsSync,
+    overlay: bwrapOverlay(),
+    overlayFor: (dir) => bwrapOverlay(dir),
+    uid: process.getuid?.(),
+  }
 }
 
-/** For tests: forget the cached overlay probe. */
+/** For tests: forget the cached overlay probes. */
 export const resetOverlayProbe = () => {
-  overlayCache = undefined
+  overlayCache.clear()
 }
 
 /** Why a sandbox cannot run here, for refusal messages. */

@@ -15,6 +15,8 @@ import {
   FORMS,
   harvestBytesSha256,
   harvestManifest,
+  readTokens,
+  renderGuide,
   verifyCiteGate,
 } from "../src/index.ts"
 
@@ -98,6 +100,19 @@ describe("es_design_harvest", () => {
     tokens.$edited = true
     await writeFile(designPaths(root).tokens, `${JSON.stringify(tokens, null, 2)}\n`)
     expect(await verifyCiteGate(receipt, root)).toContainEqual(expect.stringContaining("stale/forged receipt refused"))
+  })
+
+  test("a missing probes.json fails the cite-gate contrast QA, never verifies vacuous (#270)", async () => {
+    await completeInterview()
+    await call("es_design_harvest", {})
+    const receipt = await readFile(bundlePath(root, "cite-gate-demo.md"), "utf8")
+    expect(await verifyCiteGate(receipt, root)).toEqual([])
+    // The #270 repro: delete probes.json and re-render the guide with [].
+    const tokens = await readTokens(root)
+    await rm(designPaths(root).probes)
+    await writeFile(designPaths(root).guide, renderGuide(tokens, []))
+    const errors = await verifyCiteGate(receipt, root)
+    expect(errors.some((error) => error.includes("contrast") && error.includes("probe"))).toBe(true)
   })
 
   test("hand edits to the bundle or ledger are drift", async () => {

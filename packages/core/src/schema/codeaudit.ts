@@ -19,7 +19,7 @@ export const AuditFindingSchema = z
     /** POSIX path relative to the audited tree's root. */
     file: z.string().min(1),
     lines: z.tuple([z.number().int().positive(), z.number().int().positive()]),
-    /** Verbatim code from those lines (at least 12 characters). */
+    /** Verbatim code from those lines (the witness enforces the 12-char floor via verifySpan; the schema keeps min(1) so the witness reports the reason). */
     excerpt: z.string().min(1),
     detail: z.string().min(8),
     remediation: z.string().optional(),

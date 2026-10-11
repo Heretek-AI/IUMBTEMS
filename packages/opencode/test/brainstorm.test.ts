@@ -112,6 +112,18 @@ describe("brainstorm on the real host", () => {
     expect(critic.tools[0]?.status).toBe("error")
   })
 
+  test("a lens seat and the critic cannot launch nested subagents (depth-1 refusal, #269)", async () => {
+    // Callable brainstorms run lenses at depth 1; nothing runs at depth 2:
+    // lens and critic seats have empty spawns, so the seat policy refuses
+    // the launch before anything starts.
+    for (const agent of ["es-lens-inversion", "es-brainstorm-critic"]) {
+      const { tools } = await h.run(`go ${delegate("es-lens-scamper", "Nested diverge.")}`, { agent })
+      expect([agent, ...tools.map((tool) => `${tool.name}:${tool.status}`)]).toEqual([agent, "subagent:error"])
+      // Empty spawns: the host never offers these seats the tool at all.
+      expect(tools[0]?.text).toContain('No tool named "subagent"')
+    }
+  })
+
   test("#108: the grill runs a 2-lens brainstorm at depth 1 and gets the shortlist JSON", async () => {
     const run = "grill-fanout"
     const beforeDefault = JSON.stringify((await readResult(h.directory)) ?? null)

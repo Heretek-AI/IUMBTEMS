@@ -43,6 +43,12 @@ export interface HarnessOptions {
   readonly files?: Record<string, string>
   /** Initialise a git repository and commit `files` (author "test"). */
   readonly git?: boolean
+  /**
+   * The fake provider's model id (default `scripted`). The host picks the
+   * write tools from it: an id containing `gpt-` is offered `patch` and loses
+   * `edit`/`write`; every other id gets `edit`/`write` and no `patch`.
+   */
+  readonly model?: string
 }
 
 async function git(cwd: string, ...args: string[]) {
@@ -104,13 +110,14 @@ export async function boot(options: HarnessOptions = {}): Promise<Harness> {
   const llm = startFakeLLM(options.script)
   const previousConfigHome = process.env.XDG_CONFIG_HOME
   process.env.XDG_CONFIG_HOME = configDir
+  const model = options.model ?? "scripted"
   const config = {
-    model: "fake/scripted",
+    model: `fake/${model}`,
     providers: {
       fake: {
         package: "@opencode/ai/providers/openai-compatible",
         settings: { baseURL: llm.url, apiKey: "test" },
-        models: { scripted: { limit: { context: 100000, output: 4000 } } },
+        models: { [model]: { limit: { context: 100000, output: 4000 } } },
       },
     },
     plugins: (options.plugins ?? []).map((entry) =>

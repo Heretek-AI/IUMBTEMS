@@ -90,6 +90,8 @@ describe("transcripts", () => {
     expect(transcript.tokens).toEqual({ input: 150, output: 15, reasoning: 2, cacheRead: 4, cacheWrite: 6 })
     // Missing or non-numeric fields count as zero rather than poisoning the sum.
     expect(readTranscript([{ type: "step_finish", part: { cost: "n/a" } }]).costUSD).toBe(0)
+    // Negative costs clamp to zero: a hostile stream must not unbind spend (#211).
+    expect(readTranscript([{ type: "step_finish", part: { cost: -5 } }]).costUSD).toBe(0)
   })
 
   test("a completed call's output is graded text, except raw evidence and errored calls", () => {
@@ -132,6 +134,10 @@ describe("step caps", () => {
     expect(caseStepCap(8, 6)).toBe(6)
     expect(caseStepCap(undefined, 16)).toBe(DEFAULT_CASE_STEPS)
     expect(caseStepCap(undefined, 3)).toBe(3)
+  })
+
+  test("a NaN maxSteps falls back to the default instead of disabling the cap (#211)", () => {
+    expect(caseStepCap(Number.NaN, 16)).toBe(DEFAULT_CASE_STEPS)
   })
 })
 

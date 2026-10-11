@@ -103,7 +103,13 @@ async function readText(file: string): Promise<string | undefined> {
 
 /** Whether this machine holds a sealed human key (`es key seal` has run). */
 export async function hasHumanKey(dir = stateDir()): Promise<boolean> {
-  return (await readText(path.join(dir, SEALED_FILE))) !== undefined
+  // Both halves are required (#213): a lone human.key (or human.pub) is a
+  // half-deleted brick, and unlock would refuse it as tampered or partial.
+  const [sealed, pub] = await Promise.all([
+    readText(path.join(dir, SEALED_FILE)),
+    readText(path.join(dir, PUBLIC_FILE)),
+  ])
+  return sealed !== undefined && pub !== undefined
 }
 
 async function publicKey(dir: string): Promise<KeyObject | undefined> {

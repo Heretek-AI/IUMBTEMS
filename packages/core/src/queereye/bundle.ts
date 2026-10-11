@@ -153,8 +153,11 @@ export async function verifyCiteGate(receipt: string, root: string): Promise<str
     if (!new RegExp(`\\[VERIFIED:\\s*${hash}\\s*\\]`, "i").test(receipt))
       errors.push(`cite-gate: receipt missing structured dossier hash [VERIFIED: ${hash}]`)
 
-  // QA gate: contrast probes.
+  // QA gate: contrast probes. An empty probe set verifies vacuously, so
+  // missing probes are an error here, not a green pass (#270).
   const probes = (await readProbes(root).catch(() => undefined)) ?? []
+  if (probes.length === 0)
+    errors.push("cite-gate QA contrast: probes.json is missing or empty (the contrast gate needs at least one pair)")
   for (const row of probes) for (const error of row.errors) errors.push(`cite-gate QA contrast ${row.name}: ${error}`)
   for (const row of probes)
     if (!row.pass && row.errors.length === 0) errors.push(`cite-gate QA contrast ${row.name}: pair does not pass`)

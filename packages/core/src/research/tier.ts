@@ -2,7 +2,8 @@
 // source sits on (preprint, peer-reviewed, docs, press), so domain packs can
 // weight verified claims by source quality. Rules are host-based and
 // auditable; unknown hosts stay tierless and fall back to `__default__`.
-// Packs may add a `tierDomains` override, which wins over the built-ins.
+// Callers may pass a `tierDomains` override map, which wins over the
+// built-ins.
 import { DOC_DOMAINS } from "./url.ts"
 
 const PREPRINT = ["arxiv.org", "biorxiv.org", "medrxiv.org", "ssrn.com"] as const
@@ -36,7 +37,7 @@ const matches = (host: string, domain: string): boolean => host === domain || ho
 
 /**
  * Classify a source URL into a tier, or undefined when no rule fires.
- * `overrides` (a pack's `tierDomains`) is checked first and wins.
+ * `overrides` (a caller's `tierDomains` map) is checked first and wins.
  */
 export function classifySourceTier(
   url: string,
@@ -49,12 +50,9 @@ export function classifySourceTier(
       if (domains.some((domain) => matches(host, domain.toLowerCase()))) return tier
   if (PREPRINT.some((domain) => matches(host, domain))) return "PREPRINT"
   if (PEER_REVIEWED.some((domain) => matches(host, domain))) return "PEER_REVIEWED"
-  if (
-    (DOC_DOMAINS as readonly string[]).some((domain) => matches(host, domain)) ||
-    host.startsWith("docs.") ||
-    host.startsWith("developer.")
-  )
-    return "TECHNICAL_DOCUMENTATION"
+  // Only curated documentation hosts count (#252): a bare docs./developer.
+  // prefix rule would let docs.<attacker> claim curated weight.
+  if ((DOC_DOMAINS as readonly string[]).some((domain) => matches(host, domain))) return "TECHNICAL_DOCUMENTATION"
   if (host.endsWith(".gov")) return "PRIMARY_PRESS"
   return undefined
 }
