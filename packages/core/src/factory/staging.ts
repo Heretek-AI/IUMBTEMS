@@ -11,6 +11,7 @@
 // The proof shape mirrors `GateProofBundle` (#164) field-for-field, so once
 // both land a machine proof passes here structurally with zero adaptation.
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { randomInt } from "node:crypto"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import * as Git from "../worktree/git.ts"
@@ -111,7 +112,7 @@ export async function landOnStaging(root: string, options: LandOptions): Promise
       "worktree",
       "add",
       "-B",
-      `es-staging-scratch-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
+      `es-staging-scratch-${Date.now()}-${randomInt(1_000_000)}`,
       worktree,
       stagingExists ? STAGING_BRANCH : options.branch,
     ])
