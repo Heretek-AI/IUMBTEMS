@@ -1,8 +1,10 @@
 // Clean-room isolation (#159): the workspace test, lint and typecheck entry
 // points stay inside packages/. Local-only reference checkouts (review/,
 // evals/results/) and nested worktrees carry third-party suites that hang and
-// biome.json files that are nested roots, so nothing may walk them. Each test
-// runs the real root config against a throwaway tree with planted intruders.
+// biome.json files that are nested roots, so nothing may walk them. Web
+// provider keys exported in the developer's shell are the same kind of leak
+// (#312). Each test runs the real root config against a throwaway tree with
+// planted intruders.
 import { afterEach, describe, expect, test } from "bun:test"
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -44,6 +46,8 @@ async function fixture(options: { bunfig: boolean }) {
   if (options.bunfig) await cp(path.join(repo, "bunfig.toml"), path.join(root, "bunfig.toml"))
   await mkdir(path.join(root, "scripts"))
   await cp(path.join(repo, "scripts/packages.ts"), path.join(root, "scripts/packages.ts"))
+  // bunfig.toml names a preload, so it travels with the config.
+  if (options.bunfig) await cp(path.join(repo, "scripts/test-preload.ts"), path.join(root, "scripts/test-preload.ts"))
 
   // beta takes the `--conditions=browser` leg of the test script, alpha the other.
   const manifests = {
@@ -64,12 +68,12 @@ async function fixture(options: { bunfig: boolean }) {
   return root
 }
 
-async function run(root: string, cmd: string[]) {
+async function run(root: string, cmd: string[], env: Record<string, string> = {}) {
   const log = path.join(root, "loaded.log")
   await writeFile(log, "")
   const proc = Bun.spawn(cmd, {
     cwd: root,
-    env: { ...process.env, CLEAN_ROOM_LOG: log },
+    env: { ...process.env, ...env, CLEAN_ROOM_LOG: log },
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -101,6 +105,39 @@ describe("test runner isolation", () => {
     const root = await fixture({ bunfig: true })
     const result = await run(root, ["bun", "test", "packages/alpha"])
     expect(result.loaded).toEqual(["own:alpha"])
+    expect(result.exit).toBe(0)
+  })
+})
+
+describe("ambient environment isolation", () => {
+  // Every setting the research providers and the gateway backend read.
+  const PROVIDER_KEYS = [
+    "BRAVE_API_KEY",
+    "FIRECRAWL_API_KEY",
+    "FIRECRAWL_API_URL",
+    "SEARXNG_URL",
+    "ES_SCRAPER_SWARM_URL",
+    "ES_SCRAPER_SWARM_TOKEN",
+  ]
+
+  test("web provider settings from the developer shell never reach a suite", async () => {
+    const root = await fixture({ bunfig: true })
+    await writeFile(
+      path.join(root, "packages/alpha/test/env.test.ts"),
+      [
+        'import { expect, test } from "bun:test"',
+        'import { appendFileSync } from "node:fs"',
+        "",
+        `const seen = ${JSON.stringify(PROVIDER_KEYS)}.filter((key) => process.env[key] !== undefined)`,
+        'appendFileSync(process.env.CLEAN_ROOM_LOG!, "leaked:" + seen.join(",") + "\\n")',
+        "",
+        'test("probe", () => expect(seen).toEqual([]))',
+        "",
+      ].join("\n"),
+    )
+    const ambient = Object.fromEntries(PROVIDER_KEYS.map((key) => [key, "ambient-must-not-leak"]))
+    const result = await run(root, ["bun", "test", "./packages/alpha/test/env.test.ts"], ambient)
+    expect(result.loaded).toEqual(["leaked:"])
     expect(result.exit).toBe(0)
   })
 })
