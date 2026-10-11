@@ -43,6 +43,17 @@ export {
   SOURCE_TEXT_CAP,
 } from "./evidence.ts"
 export {
+  type FleetHeartbeat,
+  FleetHeartbeatSchema,
+  HEARTBEAT_VERSION,
+  type HeartbeatTask,
+  HeartbeatTaskSchema,
+  heartbeatPath,
+  loadFleetHeartbeat,
+  readFleetHeartbeat,
+  recordFleetHeartbeat,
+} from "./heartbeat.ts"
+export {
   assertHumanStart,
   FleetError,
   type FleetHandle,
@@ -54,6 +65,7 @@ export {
   stopFleet,
 } from "./lifecycle.ts"
 export { readTaskLiveness, type TaskLiveness } from "./liveness.ts"
+export { loadRoadmapFile, type RoadmapFile, type RunDagOptions, runDag } from "./run-dag.ts"
 export {
   applyDecision,
   type CancelEntry,
