@@ -126,6 +126,8 @@ describe("brainstorm on the real host", () => {
 
   test("#108: the grill runs a 2-lens brainstorm at depth 1 and gets the shortlist JSON", async () => {
     const run = "grill-fanout"
+    const beforeDefault = JSON.stringify((await readResult(h.directory)) ?? null)
+    const beforeDefaultIdeas = JSON.stringify(await readIdeas(h.directory))
     const planned = await h.run(
       call("es_brainstorm_plan", {
         idea: "Make onboarding instant",
@@ -184,13 +186,9 @@ describe("brainstorm on the real host", () => {
     const parsed = JSON.parse(json!) as { run: string; shortlist: Array<{ id: string; outlier: boolean }> }
     expect(parsed.run).toBe(run)
     expect(parsed.shortlist.map((entry) => entry.id).sort()).toEqual(["b001", "b002"])
-    // The human's default run is untouched by the grill's run: the grill
-    // wrote run "grill-fanout", while default still holds the brainstormer's
-    // shortlist from the earlier test in this file (one shared harness, so
-    // "untouched" means unchanged, not absent).
+    // The human's default run is untouched by the grill's run: re-read it (#269).
     expect(await readResult(h.directory, run)).toBeDefined()
-    const untouched = await readResult(h.directory)
-    expect(untouched?.shortlist).toHaveLength(1)
-    expect(untouched?.ranked[0]).toEqual({ id: "b001", total: 17 })
+    expect(JSON.stringify((await readResult(h.directory)) ?? null)).toBe(beforeDefault)
+    expect(JSON.stringify(await readIdeas(h.directory))).toBe(beforeDefaultIdeas)
   })
 })
