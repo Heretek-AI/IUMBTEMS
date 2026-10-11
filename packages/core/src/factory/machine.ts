@@ -319,7 +319,10 @@ export class Factory {
     // (CI-only es_build_start refusal). Real transitions still enforce it.
     if (!options.skipControl) {
       const control = await verifyControl(this.root)
-      if (!control.clean) return halt(`control files changed outside a human action: ${control.violations.join("; ")}`)
+      if (!control.clean)
+        return halt(
+          `control files changed outside a human action (integrity/control-drift): ${control.violations.join("; ")}. The structured finding is in .factory/runs/${state.runId}/gates/*/summary.json; a human must review and rebaseline.`,
+        )
     }
     if (state.spendCeilingUSD !== undefined && state.spend.usd >= state.spendCeilingUSD)
       return halt(
