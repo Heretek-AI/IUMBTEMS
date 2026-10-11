@@ -240,6 +240,18 @@ describe("the pack gates completeResearch", () => {
     await expect(unpacked.completeResearch("factory")).resolves.toBeDefined()
   })
 
+  test("a below-threshold report is refused at completion, naming the score (#256.2)", async () => {
+    // A preprint-only report passes every claim verdict under biopharma but
+    // scores 0.3 against its 0.7 threshold: the machine.ts refusal path.
+    const factory = await toResearch("biopharma")
+    await report(
+      "https://arxiv.org/abs/1234",
+      "A model predicts surrogate endpoints in this preprint.",
+      "predicts surrogate endpoints",
+    )
+    await expect(factory.completeResearch("factory")).rejects.toThrow("below its threshold")
+  })
+
   test("an unknown configured pack fails closed at completion time", async () => {
     const factory = await toResearch("no-such-pack")
     await report("https://journal.example/clean", "A finding rests on a cached source.", "cached source")
@@ -460,5 +472,63 @@ describe("scoring integrity (#252)", () => {
       claimVerdict({ id: "v", tag: "VERIFIED", source: { sha256: "a".repeat(64), quote: "q" } }, { constitution: pack })
         .verdict,
     ).toBe("ACCEPTED")
+  })
+})
+
+describe("pack coverage (#256)", () => {
+  test("each pack pins its thresholds, weights and penalties", async () => {
+    // A typo or deletion in a pack file stays green under mechanism-only
+    // tests, so the values are pinned exactly (SECONDARY_MEDIA was removed:
+    // the classifier never emits it, #256.3).
+    const biopharma = await loadDomainPack("biopharma")
+    expect(biopharma.tierWeights).toEqual({
+      __default__: 1,
+      PEER_REVIEWED: 1,
+      TECHNICAL_DOCUMENTATION: 0.8,
+      PRIMARY_PRESS: 0.7,
+      PREPRINT: 0.3,
+    })
+    expect([biopharma.acceptThreshold, biopharma.negBonus, biopharma.rejectPenalty]).toEqual([0.7, 0.5, 2.5])
+    expect(biopharma.retractionPolicy).toBe("zero_tolerance")
+    const quant = await loadDomainPack("quant")
+    expect(quant.tierWeights).toEqual({
+      __default__: 1,
+      PEER_REVIEWED: 0.9,
+      TECHNICAL_DOCUMENTATION: 1,
+      PRIMARY_PRESS: 0.6,
+      PREPRINT: 0.5,
+    })
+    expect([quant.acceptThreshold, quant.negBonus, quant.rejectPenalty]).toEqual([0.7, 0.75, 3])
+    const legal = await loadDomainPack("legal")
+    expect(legal.tierWeights).toEqual({
+      __default__: 1,
+      PEER_REVIEWED: 0.8,
+      TECHNICAL_DOCUMENTATION: 0.7,
+      PRIMARY_PRESS: 1,
+      PREPRINT: 0.2,
+    })
+    expect([legal.acceptThreshold, legal.negBonus, legal.rejectPenalty]).toEqual([0.65, 0.5, 2.5])
+  })
+
+  test("quant and legal ban their own mirrors, not just biopharma's", async () => {
+    // Only biopharma's banned domains appeared in fixtures; per-pack
+    // behavior is asserted directly here.
+    const quant = constitutionFromPack(await loadDomainPack("quant"))
+    const legal = constitutionFromPack(await loadDomainPack("legal"))
+    const bio = await biopharma()
+    const vendorMirror = {
+      id: "q",
+      tag: "VERIFIED",
+      source: { sha256: "b".repeat(64), quote: "backtest", url: "https://vendor-whitepaper-mirror.example/p" },
+    }
+    expect(claimVerdict(vendorMirror, { constitution: quant }).verdict).toBe("REJECTED")
+    expect(claimVerdict(vendorMirror, { constitution: bio }).verdict).toBe("ACCEPTED")
+    const sponsored = {
+      id: "l",
+      tag: "VERIFIED",
+      source: { sha256: "c".repeat(64), quote: "holding", url: "https://undisclosed-sponsored-content.example/x" },
+    }
+    expect(claimVerdict(sponsored, { constitution: legal }).verdict).toBe("REJECTED")
+    expect(claimVerdict(sponsored, { constitution: bio }).verdict).toBe("ACCEPTED")
   })
 })
