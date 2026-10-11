@@ -37,6 +37,10 @@ describe("mergeTypeScriptImports", () => {
     expect(merged).toContain(`from "./b"`)
   })
 
+  test("hostile input terminates with a decision instead of hanging (ReDoS)", () => {
+    const hostile = `import ${"a\t".repeat(2000)}from"\n`
+    expect(mergeTypeScriptImports(hostile, `import { b } from "./m"\n`)).toBeUndefined()
+  })
   test("bails on multi-line imports instead of guessing", () => {
     expect(mergeTypeScriptImports(`import {\n  a,\n} from "./m"\n`, `import { b } from "./m"\n`)).toBeUndefined()
   })
@@ -71,6 +75,18 @@ describe("resolveConflict", () => {
 })
 
 describe("cascadeRebase", () => {
+  /** From-base/upstream/downstream stack: from-br carries the fix, to-br the downstream work. */
+  const divergedPair = async (file: string, base: string, upstream: string, downstream: string) => {
+    await commitFile(fx.root, file, base, "base")
+    await Git.git(fx.root, ["branch", "stack-base", "HEAD"])
+    await commitFile(fx.root, file, upstream, "upstream")
+    await Git.git(fx.root, ["branch", "-f", "from-br", "HEAD"])
+    await Git.git(fx.root, ["checkout", "-q", "stack-base"])
+    await commitFile(fx.root, file, downstream, "downstream")
+    await Git.git(fx.root, ["branch", "to-br", "HEAD"])
+    await Git.git(fx.root, ["checkout", "-q", "main"])
+  }
+
   test("clean cascade replays downstream commits onto the upstream tip", async () => {
     await commitFile(fx.root, "fix.txt", "upstream fix\n", "upstream fix")
     await Git.git(fx.root, ["branch", "from-br", "HEAD"])
@@ -96,19 +112,12 @@ describe("cascadeRebase", () => {
   })
 
   test("conflicting imports auto-merge and the cascade succeeds", async () => {
-    await commitFile(fx.root, "src/x.ts", `import { shared } from "./m"\nexport const v = 1\n`, "base")
-    await Git.git(fx.root, ["branch", "stack-base", "HEAD"])
-    await commitFile(fx.root, "src/x.ts", `import { shared, fix } from "./m"\nexport const v = 1\n`, "upstream import")
-    await Git.git(fx.root, ["branch", "-f", "from-br", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "stack-base"])
-    await commitFile(
-      fx.root,
+    await divergedPair(
       "src/x.ts",
+      `import { shared } from "./m"\nexport const v = 1\n`,
+      `import { shared, fix } from "./m"\nexport const v = 1\n`,
       `import { shared, feat } from "./m"\nexport const v = 1\n`,
-      "downstream import",
     )
-    await Git.git(fx.root, ["branch", "to-br", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "main"])
 
     const result = await cascadeRebase(fx.root, { from: "from-br", to: "to-br", runTests: async () => true })
     expect(result.ok).toBe(true)
@@ -139,14 +148,7 @@ describe("cascadeRebase", () => {
   })
 
   test("an unresolvable conflict aborts with the target untouched", async () => {
-    await commitFile(fx.root, "code.txt", "line one\n", "base")
-    await Git.git(fx.root, ["branch", "stack-base", "HEAD"])
-    await commitFile(fx.root, "code.txt", "upstream line\n", "upstream")
-    await Git.git(fx.root, ["branch", "-f", "from-br", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "stack-base"])
-    await commitFile(fx.root, "code.txt", "downstream line\n", "downstream")
-    await Git.git(fx.root, ["branch", "to-br", "HEAD"])
-    await Git.git(fx.root, ["checkout", "-q", "main"])
+    await divergedPair("code.txt", "line one\n", "upstream line\n", "downstream line\n")
     const before = await Git.revParse(fx.root, "to-br")
 
     const result = await cascadeRebase(fx.root, { from: "from-br", to: "to-br", runTests: async () => true })

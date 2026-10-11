@@ -6,6 +6,8 @@
 // target branch moves ONLY when the post-rebase tests pass — otherwise the
 // previous SHA is restored (the monotonic test guarantee). `to` is never
 // touched before the green verdict, so a failure always leaves it intact.
+
+import { randomInt } from "node:crypto"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -30,10 +32,24 @@ export function mergeTypeScriptImports(ours: string, theirs: string): string | u
     readonly typeOnly: boolean
     readonly raw: string
   }
+  /**
+   * Single-line import parser with no backtracking (linear scan): split the
+   * trailing quoted module first, then require a `from` keyword. The naive
+   * `import\s+(.+?)\s+from…` regex is polynomial-ReDoS on hostile input.
+   */
   const parse = (line: string): Parsed | undefined => {
-    const match = /^\s*import\s+(.+?)\s+from\s*(["'])(.+?)\2\s*;?\s*$/.exec(line)
-    if (!match) return undefined
-    const clause = match[1]!
+    let rest = line.trim()
+    if (!rest.startsWith("import")) return undefined
+    rest = rest.slice("import".length)
+    if (!rest.startsWith(" ") && !rest.startsWith("\t")) return undefined
+    rest = rest.trimStart()
+    const tail = /(["'])([^"']+)\1\s*;?$/.exec(rest)
+    if (!tail || tail[2] === undefined) return undefined
+    let clause = rest.slice(0, rest.length - tail[0].length).trimEnd()
+    if (!/from$/.test(clause)) return undefined
+    clause = clause.slice(0, clause.length - "from".length).trim()
+    // A surviving inner `from` means the line is not the simple shape we merge.
+    if (!clause || /\bfrom\b/.test(clause)) return undefined
     const typeOnly = /^type\b/.test(clause.trim())
     const bare = typeOnly
       ? clause
@@ -50,16 +66,13 @@ export function mergeTypeScriptImports(ours: string, theirs: string): string | u
     if (/^\{/.test(bare) && !named.length) return undefined
     const def = /^\{/.test(bare) ? undefined : bare || undefined
     if (def === undefined && !named.length) return undefined
-    return { module: match[3]!, def, named, typeOnly, raw: line }
+    return { module: tail[2]!, def, named, typeOnly, raw: line }
   }
   const oursLines = ours.split("\n")
   const theirsLines = theirs.split("\n")
   // Only import lines may differ; anything else means a real code conflict.
   const strip = (lines: string[]) => lines.filter((line) => line.trim() && !/^\s*import\s+/.test(line)).join("\n")
   if (strip(oursLines) !== strip(theirsLines)) return undefined
-  for (const line of [...oursLines, ...theirsLines])
-    if (line.trim() && !/^\s*import\s+/.test(line) && !/^\s*$/.test(line)) {
-    }
   const merged = new Map<string, Parsed>()
   for (const line of [...oursLines, ...theirsLines]) {
     if (!line.trim() || !/^\s*import\s+/.test(line)) continue
@@ -266,7 +279,7 @@ export async function cascadeRebase(root: string, options: CascadeOptions): Prom
       "worktree",
       "add",
       "-B",
-      `es-rebase-scratch-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
+      `es-rebase-scratch-${Date.now()}-${randomInt(1_000_000)}`,
       worktree,
       options.to,
     ])
