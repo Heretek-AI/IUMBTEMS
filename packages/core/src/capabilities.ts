@@ -29,6 +29,17 @@ export const CAPABILITIES = [
   "audit",
   "scout",
   "research-fires",
+  "worktree-lease",
+  "fleet-run-dag",
+  "machine-key",
+  "rebase",
+  "staging",
+  "mutation",
+  "models",
+  "benchmarks",
+  "optimizer",
+  "trajectories",
+  "canary",
 ] as const
 export type Capability = (typeof CAPABILITIES)[number]
 
@@ -154,6 +165,72 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
       detail:
         "Research fires: the whole research loop on the real host with loopback-only servers — grounded quotes survive the audit, failover records provenance, blocked never fails over, planted sources are refused, retractions degrade to STALE, renders snapshot.",
       test: "packages/opencode/test/fires-research.test.ts",
+    },
+    "worktree-lease": {
+      support: "enforced",
+      detail:
+        "Atomic heartbeat leases (O_CREAT|O_EXCL, TTL 120s) per .worktrees/ checkout; expiry/dead-holder reclaim, token-holder-only heartbeat/release; es worktree prune deletes orphaned checkouts, never branches. Not yet wired into factory/headless runs (lands in #340).",
+      test: "packages/core/test/audit-fleet.test.ts",
+    },
+    "fleet-run-dag": {
+      support: "enforced",
+      detail:
+        "Validated ticket-scoped task DAG (cycles/unknown/dup refused) ticked to full settlement with heartbeats, per-task failure policy and late-settlement guard; es-fleet run-dag is human-only. Daemon ships private, unwired to the scheduler (lands in #346).",
+      test: "packages/fleet/test/audit-fleet.test.ts",
+    },
+    "machine-key": {
+      support: "enforced",
+      detail:
+        "In-memory Ed25519 machine key (WeakMap-held) scoped to integration/* and factory/*; signs only green proof bundles, refuses release merges and main targets fail-closed. Proof commit is signature-bound, not tip-bound (tip binding lives in landOnStaging); stage-transition wiring lands in #344.",
+      test: "packages/core/test/audit-keys.test.ts",
+    },
+    rebase: {
+      support: "enforced",
+      detail:
+        "Scratch-worktree semantic cascade (TS import union, semver-wins deps, JSON deep-merge); target moves only on green post-rebase tests incl. fast-forward with SHA restore; main refused. --no-verify is an operator override that voids the green-gate claim by design.",
+      test: "packages/core/test/worktree-rebase.test.ts",
+    },
+    staging: {
+      support: "enforced",
+      detail:
+        "Green-proof-only off-branch landing on staging/autonomous; cutRelease mints UNSIGNED cuts, openReleasePr refuses unsigned. countersignReleaseCut refuses malformed machine signers by shape (a well-formed look-human stub passes shape only — terminal passphrase countersign stays human-only; hardened in #345).",
+      test: "packages/core/test/audit-staging.test.ts",
+    },
+    mutation: {
+      support: "enforced",
+      detail:
+        "In-house mutation gate (0.8 kill threshold, zero-mutant fails closed); sources restored after every mutant; test-aware fingerprint reruns on edited tests. Opt-in via .factory/gates.json (touches the trusted command hash). Crash-interrupt journal recovery is best-effort.",
+      test: "packages/core/test/audit-mutation.test.ts",
+    },
+    models: {
+      support: "enforced",
+      detail:
+        "Per-seat model resolution with shared-provider programmer/QA refusal at build start and seat launch; unset seats unverified unless requireDiversity. MCP path is best-effort (unreadable config skips the check — filed gap); provider identity is gateway-prefix, not weights.",
+      test: "packages/core/test/audit-models.test.ts",
+    },
+    benchmarks: {
+      support: "enforced",
+      detail:
+        "54 deterministic oracle-graded instances (16 algorithms, 12 refactoring, 12 API integration, 14 debugging); oracle never copied into model workspaces; --model runs are spend-bearing and never CI-blocking. Perf budgets run on shared-runner timing and can flip close verdicts (filed gap).",
+      test: "packages/core/test/audit-benchmarks.test.ts",
+    },
+    optimizer: {
+      support: "enforced",
+      detail:
+        "Pareto-only prompt winners (zero regressions + strictly better, vacuous baselines refused) as review-only proposals; applyPromptPatch is record-gated (presence, not signature verification — filed gap). No holdout split (lands in #341).",
+      test: "packages/core/test/audit-optimizer.test.ts",
+    },
+    trajectories: {
+      support: "enforced",
+      detail:
+        "Verified-only trajectory harvest (green gates + audit chain from disk) with full-string secret scrub (incl. URL/env/JWT families fixed in audit) and DPO pairs that never invent negatives; skips recorded (export-time in manifest, harvest-time in stdout). Agent-safe by design.",
+      test: "packages/core/test/audit-trajectories.test.ts",
+    },
+    canary: {
+      support: "enforced",
+      detail:
+        "OFF-by-default canary (enabled:true + recorded human approval, record-checked); isolated sandbox build, atomic symlink promote, instant rollback; frozen target with symlink-confined guarded writes (fixed in audit); crash mid-promote leaves the link valid. Scheduler wiring lands in #346.",
+      test: "packages/fleet/test/audit-canary.test.ts",
     },
   }),
   claude: [
