@@ -80,6 +80,43 @@ export interface GateFindingLike {
   readonly fixHint?: string
 }
 
+/**
+ * #361: whether a refusal finding is human-clearable (trust/waiver/approval/
+ * audit dismissal, control drift) vs needing code changes (acceptance, TDD,
+ * no-changes, gate failures). The factory's blocked summary marks each.
+ */
+export function isHumanClearableFinding(finding: Pick<GateFindingLike, "rule">): boolean {
+  const rule = finding.rule
+  return (
+    rule.startsWith("integrity/") ||
+    rule.startsWith("control-drift") ||
+    rule.startsWith("trust") ||
+    rule.startsWith("waiver") ||
+    rule.startsWith("approval") ||
+    rule.startsWith("audit/")
+  )
+}
+
+/** #361: every refusal finding on one line, human-clearable ones marked. */
+export function describeBlockedFindings(findings: readonly GateFindingLike[]): string[] {
+  return findings.map(
+    (finding) =>
+      `- ${finding.rule} ${finding.file}: ${finding.message}${isHumanClearableFinding(finding) ? " (human-clearable: es trust / es waive / es approve / es audit dismiss / es rebaseline)" : " (needs code changes)"}`,
+  )
+}
+
+/**
+ * #361: a context-only grill prompt names no change (empty or a project
+ * description without a delta). The grill asks one question — what is the
+ * change? — before round 1 instead of running premise rounds.
+ */
+export function needsDeltaQuestion(idea: unknown): boolean {
+  if (typeof idea !== "string") return true
+  const text = idea.trim()
+  if (text.length < 20) return true
+  return /\b(no change|no delta|context only|describe the project|what we have)\b/i.test(text)
+}
+
 export interface GateRunLike {
   readonly passed: boolean
   readonly findings: readonly GateFindingLike[]
@@ -784,7 +821,7 @@ export class Factory {
           notes: `${findings.length} findings`,
         })
       })
-      return { ok: false, summary: `Not complete: ${gates.summary}`, findings, criteria }
+      return { ok: false, summary: `Not complete: ${gates.summary}\nBlocked findings:\n${describeBlockedFindings(findings).join("\n")}`, findings, criteria }
     }
     await this.mutate(`agent:${agentId}`, async (state) => {
       this.requireStage(state, "BUILD")
