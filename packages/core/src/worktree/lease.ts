@@ -56,8 +56,15 @@ export interface LeaseRecord extends LeaseInfo {
 }
 
 export interface LeaseManagerOptions {
-  /** Lease file dir (default `<root>/.worktrees/.leases`). */
+  /** Lease file dir (default `<worktreeRoot>/.leases`). */
   readonly leaseDir?: string
+  /**
+   * Checkout root the lease dirs must live under (#340: the factory uses
+   * `<root>/.factory/worktrees`, the fleet `<root>/.fleet/worktrees`;
+   * default `<root>/.worktrees`). Confinement is still enforced, only the
+   * root is parameterized; atomicity, TTL and token rules are unchanged.
+   */
+  readonly worktreeRoot?: string
   /** Heartbeat TTL in ms (default 120s). */
   readonly ttlMs?: number
   /** Clock override (tests, determinism). */
@@ -112,7 +119,7 @@ export class WorktreeLeaseManager {
     readonly repoRoot: string,
     options: LeaseManagerOptions = {},
   ) {
-    this.worktreeRoot = path.join(repoRoot, ".worktrees")
+    this.worktreeRoot = options.worktreeRoot ?? path.join(repoRoot, ".worktrees")
     this.leaseDir = options.leaseDir ?? path.join(this.worktreeRoot, ".leases")
     this.ttlMs = options.ttlMs ?? DEFAULT_LEASE_TTL_MS
     if (!(this.ttlMs > 0) || !Number.isFinite(this.ttlMs))
@@ -320,18 +327,21 @@ const underRoot = (root: string, dir: string): boolean => {
 }
 
 /**
- * Garbage-collect one checkout's `.worktrees/`: drop expired and
+ * Garbage-collect one checkout root: drop expired and
  * dead-holder leases, then force-remove every registered git worktree under
  * the managed root that no live lease covers. Stray (unregistered) dirs and
  * all branches are left alone: prune deletes checkouts, never history.
- * Agent-safe: called by `es worktree prune` and on factory startup.
+ * Agent-safe: called by `es worktree prune` and on factory startup. Pass
+ * `worktreeRoot` to collect a custom root (factory/fleet worktrees, #340);
+ * the default keeps the `<root>/.worktrees` behaviour.
  */
 export async function pruneWorktrees(repoRoot: string, options: LeaseManagerOptions = {}): Promise<PruneReport> {
   const manager = new WorktreeLeaseManager(repoRoot, options)
   const dropped: string[] = []
   const removed: string[] = []
   const kept: string[] = []
-  const leaseDir = path.join(repoRoot, ".worktrees", ".leases")
+  const workRoot = options.worktreeRoot ?? path.join(repoRoot, ".worktrees")
+  const leaseDir = options.leaseDir ?? path.join(workRoot, ".leases")
   await withLock(options.leaseDir ?? leaseDir, async () => {
     const leases = await manager.list()
     const live = new Map<string, LeaseRecord>()
@@ -340,11 +350,11 @@ export async function pruneWorktrees(repoRoot: string, options: LeaseManagerOpti
         live.set(lease.dir, lease)
         kept.push(lease.slug)
       } else {
-        await rm(path.join(options.leaseDir ?? leaseDir, `${lease.slug}.json`), { force: true })
+        await rm(path.join(leaseDir, `${lease.slug}.json`), { force: true })
         dropped.push(lease.slug)
       }
     }
-    const root = path.join(repoRoot, ".worktrees")
+    const root = workRoot
     for (const entry of await listedWorktrees(repoRoot)) {
       if (!underRoot(root, entry.dir)) continue
       if (!live.has(entry.dir)) {

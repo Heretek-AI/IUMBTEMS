@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { readFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Factory } from "../src/factory/machine.ts"
+import { exists } from "../src/util/fs.ts"
 import * as Git from "../src/worktree/git.ts"
 import { DEFAULT_LEASE_TTL_MS, LeaseError, pruneWorktrees, WorktreeLeaseManager } from "../src/worktree/lease.ts"
 import { type Fixture, gitRepo } from "./helpers.ts"
@@ -191,5 +192,73 @@ describe("factory startup prunes orphaned worktrees (#160)", () => {
     const factory = new Factory(fx.root, { gates, stateDir: fx.state })
     await factory.begin("human:tester")
     expect(await Bun.file(orphanDir).exists()).toBe(false)
+  })
+})
+
+describe("worktree lease with a custom worktree root (#340)", () => {
+  const customRoot = () => path.join(fx.root, ".factory", "worktrees")
+  const opts = (extra: Record<string, unknown> = {}) => ({ worktreeRoot: customRoot(), ...extra })
+  const finfo = (slug: string) => ({
+    branch: `factory/run-1/phase-${slug}`,
+    dir: path.join(customRoot(), slug),
+  })
+
+  test("acquire → heartbeat → release round-trips under a custom root", async () => {
+    const leases = new WorktreeLeaseManager(fx.root, opts())
+    const first = await leases.acquire("alpha", finfo("alpha"))
+    expect(first.slug).toBe("alpha")
+    expect(first.branch).toBe("factory/run-1/phase-alpha")
+    const beat = await leases.heartbeat("alpha")
+    expect(Date.parse(beat.heartbeatAt)).toBeGreaterThanOrEqual(Date.parse(first.heartbeatAt))
+    await leases.release("alpha")
+    expect(await leases.list()).toEqual([])
+  })
+
+  test("a live lease under a custom root refuses a second acquisition", async () => {
+    const leases = new WorktreeLeaseManager(fx.root, opts())
+    await leases.acquire("alpha", finfo("alpha"))
+    const other = new WorktreeLeaseManager(fx.root, opts())
+    await expect(other.acquire("alpha", finfo("alpha"))).rejects.toThrow(LeaseError)
+    await leases.release("alpha")
+  })
+
+  test("dirs outside the custom root are refused (confinement preserved)", async () => {
+    const leases = new WorktreeLeaseManager(fx.root, opts())
+    // Inside the default `.worktrees/` root but outside the custom one.
+    await expect(
+      leases.acquire("alpha", {
+        branch: "phase/6-alpha",
+        dir: path.join(fx.root, ".worktrees", "alpha"),
+      }),
+    ).rejects.toThrow(LeaseError)
+    await expect(leases.acquire("alpha", { branch: "phase/6-alpha", dir: "/tmp/not-managed" })).rejects.toThrow(
+      LeaseError,
+    )
+  })
+
+  test("prune with a custom root collects only that root", async () => {
+    const base = await Git.headCommit(fx.root)
+    let nowMs = Date.now()
+    const now = () => nowMs
+    // Orphan under the custom root: stale lease + registered checkout.
+    const customOrphan = path.join(customRoot(), "orphan")
+    await Git.addWorktree(fx.root, customOrphan, "factory/run-1/phase-orphan", base)
+    const customLeases = new WorktreeLeaseManager(fx.root, { ...opts(), ttlMs: 1000, now })
+    await customLeases.acquire("orphan", { branch: "factory/run-1/phase-orphan", dir: customOrphan })
+    // Orphan under the default root: stale lease + registered checkout.
+    const defaultOrphan = path.join(fx.root, ".worktrees", "orphan")
+    await Git.addWorktree(fx.root, defaultOrphan, "phase/6-orphan", base)
+    const defaultLeases = new WorktreeLeaseManager(fx.root, { ttlMs: 1000, now })
+    await defaultLeases.acquire("orphan", { branch: "phase/6-orphan", dir: defaultOrphan })
+    nowMs += 5000
+
+    const report = await pruneWorktrees(fx.root, { ...opts(), now })
+    expect(report.dropped).toEqual(["orphan"])
+    expect(report.removed).toEqual([customOrphan])
+    expect(await exists(customOrphan)).toBe(false)
+    // The default root is untouched by a custom-root prune.
+    expect(await exists(defaultOrphan)).toBe(true)
+    expect(await Git.branchExists(fx.root, "phase/6-orphan")).toBe(true)
+    await pruneWorktrees(fx.root, { now })
   })
 })
