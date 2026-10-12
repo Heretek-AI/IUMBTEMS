@@ -21,8 +21,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdtemp, readFile, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { AGENTS } from "@heretek-ai/es-core"
+import { AGENTS, bwrapAvailable, bwrapOverlay } from "@heretek-ai/es-core"
 import { boot, directiveScript, type Harness } from "@heretek-ai/es-testkit"
+import { seatShellSandboxMode } from "../src/policy.ts"
 
 const pluginDir = path.resolve(import.meta.dir, "..")
 const call = (name: string, args: Record<string, unknown> = {}) => `@@CALL ${name} ${JSON.stringify(args)}@@`
@@ -223,23 +224,39 @@ describe("symlink and case-variant bypasses on the real host (#182)", () => {
     expect(await readFile(path.join(h.directory, ".factory/approvals/spec.json"), "utf8")).toBe(APPROVALS_FIXTURE)
   })
 
-  test("a shell through the symlink passes the text layer and never executes the write", async () => {
+  test("a shell through the symlink passes the text layer and asserts the host sandbox mode (#182, #326)", async () => {
     // "docs/link/spec.json" names no control file, so the text rule allows it;
-    // enforcement is the sandbox around the seat's shell. On a healthy host
-    // the read-only .factory bind fails the redirect (EROFS); on hosts where
-    // bubblewrap cannot construct the sandbox (this container's kernel rejects
-    // its overlay mounts) the command never runs at all — fail-closed either
-    // way. The && chain proves the redirect itself never succeeded, and the
-    // refusal text proves the text layer was not the enforcer.
+    // enforcement is the sandbox around the seat's shell. The designed
+    // behaviour depends on the mode the host is in (#326), chosen by the
+    // product's own overlay probe and named in every assertion payload below
+    // (never skipped, per #178):
+    // - sandboxed: the seat's cwd sits under a throwaway overlay, so the
+    //   redirect can "succeed" inside the discarded layer (the marker may
+    //   print); the security property is that nothing persists;
+    // - host-fallback / unavailable: no overlay absorbs the write (or the
+    //   shell is refused outright), so the redirect itself never succeeds.
+    const mode = seatShellSandboxMode(h.directory)
+    expect(mode).toBe(bwrapAvailable() ? (bwrapOverlay(h.directory) ? "sandboxed" : "host-fallback") : "unavailable")
     const { tools } = await h.run(
       `link ${call("shell", { command: "echo pwned > docs/link/spec.json && echo WRITE-SUCCEEDED" })}`,
       { agent: "es-manager" },
     )
     expect(tools).toHaveLength(1)
     expect(tools[0]?.name).toBe("shell")
-    expect(tools[0]?.text).not.toContain("WRITE-SUCCEEDED")
-    expect(tools[0]?.text).not.toMatch(/may not reference control files/)
-    expect(await readFile(path.join(h.directory, ".factory/approvals/spec.json"), "utf8")).toBe(APPROVALS_FIXTURE)
+    const text = tools[0]?.text ?? ""
+    // The text layer never enforces this one: the path names no control file.
+    expect({ mode, textLayerRefused: /may not reference control files/.test(text) }).toEqual({
+      mode,
+      textLayerRefused: false,
+    })
+    if (mode === "sandboxed") {
+      // Absorbed or blocked, the write must never persist.
+      expect(await readFile(path.join(h.directory, ".factory/approvals/spec.json"), "utf8")).toBe(APPROVALS_FIXTURE)
+    } else {
+      // The && chain proves the redirect itself never succeeded.
+      expect({ mode, wrote: text.includes("WRITE-SUCCEEDED") }).toEqual({ mode, wrote: false })
+      expect(await readFile(path.join(h.directory, ".factory/approvals/spec.json"), "utf8")).toBe(APPROVALS_FIXTURE)
+    }
   })
 
   test("case-variant edit and shell are refused end to end", async () => {
@@ -256,5 +273,20 @@ describe("symlink and case-variant bypasses on the real host (#182)", () => {
     expect(tools[1]?.text).not.toContain("WRITE-SUCCEEDED")
     expect(await readFile(path.join(h.directory, ".factory/gates.json"), "utf8")).toBe(GATES_FIXTURE)
     expect(await Bun.file(path.join(h.directory, ".FACTORY/GATES.json")).exists()).toBe(false)
+  })
+})
+
+describe("seat-shell sandbox mode naming (#326)", () => {
+  // Fast and host-free: the mode the symlink test above asserts for is named
+  // by seatShellSandboxMode from the product's own probes. Whether /tmp
+  // overlays mount varies by host; the assertions follow the probe either
+  // way, and a nonexistent path never overlays.
+  test("names sandboxed vs host-fallback from the overlay probe, without changing enforcement", () => {
+    if (!bwrapAvailable()) {
+      expect(seatShellSandboxMode(tmpdir())).toBe("unavailable")
+      return
+    }
+    expect(seatShellSandboxMode(tmpdir())).toBe(bwrapOverlay(tmpdir()) ? "sandboxed" : "host-fallback")
+    expect(seatShellSandboxMode(`/nonexistent-es-mode-probe-${process.pid}`)).toBe("host-fallback")
   })
 })
