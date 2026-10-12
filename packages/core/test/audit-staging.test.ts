@@ -77,9 +77,7 @@ describe("audit #333: the human release veto", () => {
     // Has a human-like keyId but no sign function: cannot sign.
     expect(() => countersignReleaseCut(cut, { keyId: "human-lookalike" } as never)).toThrow(/cannot sign/i)
     // sign is not a function.
-    expect(() =>
-      countersignReleaseCut(cut, { keyId: "x", sign: "not-a-function" } as never),
-    ).toThrow(/cannot sign/i)
+    expect(() => countersignReleaseCut(cut, { keyId: "x", sign: "not-a-function" } as never)).toThrow(/cannot sign/i)
     // Empty keyId.
     expect(() =>
       countersignReleaseCut(cut, { keyId: "", sign: () => ({ alg: "ed25519", keyId: "", sig: "s" }) } as never),
