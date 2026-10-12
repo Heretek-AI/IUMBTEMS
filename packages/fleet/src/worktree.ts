@@ -20,9 +20,11 @@ import {
   GitError,
   git as gitRun,
   headCommit,
+  LeaseError,
   readJson,
   removeWorktree,
   revParse,
+  WorktreeLeaseManager,
   withLock,
   writeJson,
 } from "@heretek-ai/es-core"
@@ -101,6 +103,58 @@ async function persistRegistry(paths: ReturnType<typeof fleetPaths>, registry: W
 /** Throwing git: like core's `git` but without the allow-fail escape hatch. */
 async function git(root: string, args: readonly string[]) {
   return gitRun(root, args)
+}
+
+/**
+ * Heartbeat leases over the fleet's task worktrees (#340). The registry +
+ * repo lock stay the mutual-exclusion authority (pre-registered `allocating`
+ * records, stale takeover, gc); the lease is liveness evidence with crash
+ * reclaim through core's atomic manager. One manager per repo root,
+ * shared process-wide so an allocate in one call is heartbeatable in the
+ * next; a restarted daemon reclaims its dead predecessor's lease on entry.
+ */
+const taskLeaseManagers = new Map<string, WorktreeLeaseManager>()
+const taskLeases = (repoRoot: string): WorktreeLeaseManager => {
+  const cached = taskLeaseManagers.get(repoRoot)
+  if (cached) return cached
+  const manager = new WorktreeLeaseManager(repoRoot, { worktreeRoot: path.join(repoRoot, ".fleet", "worktrees") })
+  taskLeaseManagers.set(repoRoot, manager)
+  return manager
+}
+
+/** Best-effort heartbeat: keeps a held lease live, reclaims a dead one, never refuses (the locks decide). */
+async function touchTaskLease(repoRoot: string, taskId: string, info: { branch: string; dir: string }): Promise<void> {
+  const manager = taskLeases(repoRoot)
+  try {
+    await manager.heartbeat(taskId)
+  } catch {
+    try {
+      await manager.acquire(taskId, info)
+    } catch {
+      // Live elsewhere or raced: the registry and repo locks decide.
+    }
+  }
+}
+
+/** Best-effort release for terminal paths; never throws. A live lease held elsewhere is left alone. */
+async function releaseTaskLease(
+  repoRoot: string,
+  taskId: string,
+  info: { branch: string; dir: string },
+): Promise<void> {
+  const manager = taskLeases(repoRoot)
+  try {
+    await manager.release(taskId)
+    return
+  } catch {
+    // Not held here: try the reclaim path for a dead predecessor.
+  }
+  try {
+    await manager.acquire(taskId, info)
+    await manager.release(taskId)
+  } catch {
+    // Another live holder, or nothing to release: leave it.
+  }
 }
 
 /**
@@ -224,13 +278,26 @@ export async function allocateWorktree(
     const record: WorktreeRecord = { taskId, dir, branch, base, createdAt: now, status: "allocating" }
     await persistRegistry(paths, { v: REGISTRY_VERSION, worktrees: { ...registry.worktrees, [taskId]: record } })
   })
-  // Git work under the per-repo admin lock (the fleet lock is not held).
+  // The checkout is held under a heartbeat lease first (#340): a live lease
+  // held elsewhere refuses the allocation instead of double-creating it.
+  // Git work then runs under the per-repo admin lock (the fleet lock is not held).
+  try {
+    await taskLeases(repoRoot).acquire(taskId, { branch, dir })
+  } catch (error) {
+    await dropAllocating(paths, stateRoot, taskId, dir)
+    if (error instanceof LeaseError)
+      throw new FleetError(
+        `Task ${JSON.stringify(taskId)} worktree is leased by a live holder; refusing a second checkout.`,
+      )
+    throw error
+  }
   try {
     await withRepoLock(repoRoot, async () => {
       await addWorktree(repoRoot, dir, branch, base)
     })
   } catch (error) {
     await dropAllocating(paths, stateRoot, taskId, dir)
+    await releaseTaskLease(repoRoot, taskId, { branch, dir })
     throw error
   }
   await options.hooks?.afterAdd?.()
@@ -311,6 +378,8 @@ export async function releaseWorktree(
     (registry) => registry?.worktrees[taskId],
   )
   if (current?.status !== "allocated") return { released: false }
+  // A restarted daemon adopts its dead predecessor's lease here (#340).
+  await touchTaskLease(repoRoot, taskId, { branch: current.branch, dir: current.dir })
   await withRepoLock(repoRoot, async () => {
     try {
       await removeWorktree(repoRoot, current.dir)
@@ -335,6 +404,8 @@ export async function releaseWorktree(
         worktrees: { ...registry.worktrees, [taskId]: { ...record, status: kind } },
       })
   })
+  // Terminal path: the checkout is gone, so the lease goes too (#340).
+  await releaseTaskLease(repoRoot, taskId, { branch: current.branch, dir: current.dir })
   return { released: true }
 }
 
@@ -381,6 +452,8 @@ export async function landTask(
   const record = (await loadRegistry(stateRoot))?.worktrees[taskId]
   if (record?.status !== "allocated")
     return { landed: false, reason: `no allocated worktree for task ${JSON.stringify(taskId)}` }
+  // Landing works the checkout for a while: keep its lease live (#340).
+  await touchTaskLease(repoRoot, taskId, { branch: record.branch, dir: record.dir })
   const gates = await checkGates(record.dir)
   if (!gates.ok) return { landed: false, reason: gates.reason ?? "gates failed", gateFailed: true }
   const integration = integrationBranch(dagId)

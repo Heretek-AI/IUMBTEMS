@@ -2,10 +2,10 @@
 // registry, salvage + cleanup, gc, and gated transactional landing. Every
 // case asserts the base branch never moves.
 import { describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { git as coreGit } from "@heretek-ai/es-core"
+import { git as coreGit, WorktreeLeaseManager } from "@heretek-ai/es-core"
 import {
   allocateWorktree,
   fleetBranch,
@@ -229,6 +229,79 @@ describe("gc", () => {
       const report = await gcWorktrees(root, fresh)
       expect(report.removed.length).toBe(1)
       expect(report.salvaged).toContain("fleet/task-a")
+      expect(await tip(root, "main")).toBe(base)
+    } finally {
+      await cleanup()
+      await rm(state, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("task worktrees hold heartbeat leases (#340)", () => {
+  const leases = (root: string) =>
+    new WorktreeLeaseManager(root, { worktreeRoot: path.join(root, ".fleet", "worktrees") })
+  const liveLease = async (root: string, taskId: string) => {
+    const manager = leases(root)
+    const record = (await manager.list()).find((lease) => lease.slug === taskId)
+    return record && manager.isLive(record) ? record : undefined
+  }
+
+  test("allocate takes a live lease over the task worktree", async () => {
+    const { root, base, cleanup } = await fixture()
+    const state = await stateRoot()
+    try {
+      const record = await allocateWorktree(root, state, "task-a", { base })
+      const lease = await liveLease(root, "task-a")
+      expect(lease).toBeDefined()
+      expect(lease!.dir).toBe(record.dir)
+      expect(lease!.branch).toBe("fleet/task-a")
+      expect(await tip(root, "main")).toBe(base)
+    } finally {
+      await cleanup()
+      await rm(state, { recursive: true, force: true })
+    }
+  })
+
+  test("a second allocate is refused and the first lease still stands", async () => {
+    const { root, base, cleanup } = await fixture()
+    const state = await stateRoot()
+    try {
+      await allocateWorktree(root, state, "task-a", { base })
+      const before = await readFile(path.join(root, ".fleet", "worktrees", ".leases", "task-a.json"), "utf8")
+      await expect(allocateWorktree(root, state, "task-a", { base })).rejects.toThrow(/already has a worktree/)
+      const after = await readFile(path.join(root, ".fleet", "worktrees", ".leases", "task-a.json"), "utf8")
+      expect(JSON.parse(after).token).toBe(JSON.parse(before).token)
+      expect(await liveLease(root, "task-a")).toBeDefined()
+      expect(await tip(root, "main")).toBe(base)
+    } finally {
+      await cleanup()
+      await rm(state, { recursive: true, force: true })
+    }
+  })
+
+  test("landing keeps the lease live; release drops it", async () => {
+    const { root, base, cleanup } = await fixture()
+    const state = await stateRoot()
+    try {
+      await allocateWorktree(root, state, "task-a", { base })
+      expect(await landTask(root, state, "task-a", "dag-1", gatesOk)).toMatchObject({ landed: true })
+      expect(await liveLease(root, "task-a")).toBeDefined()
+      await releaseWorktree(root, state, "task-a", "merged")
+      expect(await liveLease(root, "task-a")).toBeUndefined()
+      expect(await tip(root, "main")).toBe(base)
+    } finally {
+      await cleanup()
+      await rm(state, { recursive: true, force: true })
+    }
+  })
+
+  test("abandoning releases the worktree lease", async () => {
+    const { root, base, cleanup } = await fixture()
+    const state = await stateRoot()
+    try {
+      await allocateWorktree(root, state, "task-a", { base })
+      await releaseWorktree(root, state, "task-a", "abandoned")
+      expect(await liveLease(root, "task-a")).toBeUndefined()
       expect(await tip(root, "main")).toBe(base)
     } finally {
       await cleanup()
