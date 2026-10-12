@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.5.0 — 2026-10-12
+
+Phase 11 autonomy wiring. Machine-signed stage transitions move headless
+runs through allowed stages on `integration/*` and `factory/*` branches
+without a passphrase at each exit (ADR 0004, human acceptance pending);
+green integration branches land on `staging/autonomous` with the human
+release veto enforced; the canary runs behind explicit human enablement;
+the self-dogfood preset turns on the mutation gate and model-diversity
+refusal. Releases, `main` targets, trust, waivers and key operations stay
+human-only for good. The published trio releases in lockstep as 2.5.0.
+
+**What is reachable in this release.**
+
+- Reachable: machine-signed stage exits in factory + headless runs (#344);
+  staging land + suites + unsigned-cut veto with terminal countersign (#345);
+  scheduler canary seam behind opt-in (#346); preset Goodhart defaults (#347).
+- Human-only surface: ADR 0004 acceptance, terminal countersign, canary
+  enablement, and the 2.5.0 publish itself.
+
 ## 2.4.0 — 2026-10-12
 
 Phase 10 hardening & verification. This release wires the audited 2.3.0

@@ -1,5 +1,5 @@
 /** The `es` CLI version. Single source: kept equal to the package version by test/cli.test.ts. */
-export const VERSION = "2.4.0"
+export const VERSION = "2.5.0"
 
 /** Parse a semver "major.minor.patch" into numbers; undefined when malformed. */
 export function parseVersion(value: string): { major: number; minor: number; patch: number } | undefined {
