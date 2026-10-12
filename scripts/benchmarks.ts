@@ -99,13 +99,22 @@ function printReport(label: string, attempts: readonly BenchmarkAttempt[], basel
 
 if (!modelMode) {
   // Oracle smoke: the oracle must accept every reference and reject every seed.
+  // The tracked baseline keeps pass/fail per case; durations are timing noise,
+  // so a case whose verdict is unchanged keeps its previous duration (#327).
+  const previous = await readBaseline()
   const baseline: Record<string, { pass: boolean; durationMs: number }> = {}
   const attempts: BenchmarkAttempt[] = []
   const failures: string[] = []
   for (const testCase of BENCHMARKS) {
     const ref = await gradeBenchmarkSolution(testCase, testCase.reference)
     const seed = await gradeBenchmarkSolution(testCase, testCase.files)
-    baseline[testCase.id] = { pass: ref.pass, durationMs: ref.durationMs }
+    const prev = previous[testCase.id]
+    baseline[testCase.id] = {
+      pass: ref.pass,
+      durationMs: prev !== undefined && prev.pass === ref.pass && typeof prev.durationMs === "number"
+        ? prev.durationMs
+        : ref.durationMs,
+    }
     attempts.push({
       caseId: testCase.id,
       category: testCase.category,
@@ -116,7 +125,6 @@ if (!modelMode) {
     if (!ref.pass) failures.push(`reference red: ${testCase.id}: ${ref.failures.join("; ")}`)
     if (seed.pass) failures.push(`seed green (oracle blind): ${testCase.id}`)
   }
-  const previous = await readBaseline()
   await mkdir(benchDir, { recursive: true })
   await writeFile(baselineFile, `${JSON.stringify(baseline, null, 2)}\n`)
   printReport("oracle smoke (references)", attempts, previous)
