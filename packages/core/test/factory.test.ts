@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, readlink, symlink, truncate, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, readlink, rm, symlink, truncate, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { approvalSubject, recordApproval, verifyApproval } from "../src/approval/index.ts"
@@ -17,7 +17,10 @@ import {
   readLiveness,
 } from "../src/factory/index.ts"
 import { factoryLayout } from "../src/layout.ts"
+import { exists } from "../src/util/fs.ts"
 import { run } from "../src/util/proc.ts"
+import * as Git from "../src/worktree/git.ts"
+import { WorktreeLeaseManager } from "../src/worktree/lease.ts"
 import { type Fixture, frontier, gitRepo, writeGoal, writeReport, writeSpecs } from "./helpers.ts"
 
 let fx: Fixture
@@ -728,4 +731,164 @@ describe("research-only runs (#110)", () => {
     const runs = await listRuns(fx.state)
     expect(runs.map((entry) => [entry.stage, entry.root])).toContainEqual(["RESEARCH", dir])
   })
+})
+
+describe("phase worktrees hold heartbeat leases (#340)", () => {
+  const leases = () => new WorktreeLeaseManager(fx.root, { worktreeRoot: path.join(fx.root, ".factory", "worktrees") })
+  const liveLease = async (slug: string) => {
+    const manager = leases()
+    const record = (await manager.list()).find((lease) => lease.slug === slug)
+    return record && manager.isLive(record) ? record : undefined
+  }
+
+  /** Full flow to RELEASE with the module factory (module gates stay green). */
+  async function toRelease() {
+    await toBuild()
+    await programmerCycle("alpha")
+    await factory.qaVerdict("es-qa-functional", "pass", "ok")
+    await factory.qaVerdict("es-qa-adversarial", "pass", "ok")
+    const state = (await factory.read())!
+    expect(state.stage).toBe("RELEASE")
+    return state
+  }
+
+  test("startBuild takes a live lease on the phase worktree", async () => {
+    const state = await toBuild()
+    const record = await liveLease("alpha")
+    expect(record).toBeDefined()
+    expect(record!.dir).toBe(path.join(fx.root, ".factory", "worktrees", "alpha"))
+    expect(record!.branch).toBe(`factory/${state.runId}/phase-alpha`)
+    expect(record!.pid).toBe(process.pid)
+  })
+
+  test("complete runs gates under a live phase lease; passPhase releases it", async () => {
+    let sawLivePhaseLease = false
+    factory = make({
+      gates: async (request) => {
+        const record = await liveLease("alpha")
+        sawLivePhaseLease = record !== undefined && request.dir.endsWith(".factory/worktrees/alpha")
+        return green
+      },
+    })
+    await toBuild()
+    await programmerCycle("alpha")
+    expect(sawLivePhaseLease).toBe(true)
+    await factory.qaVerdict("es-qa-functional", "pass", "ok")
+    await factory.qaVerdict("es-qa-adversarial", "pass", "ok")
+    expect((await factory.read())!.stage).toBe("RELEASE")
+    expect(await liveLease("alpha")).toBeUndefined()
+    expect(await exists(path.join(fx.root, ".factory", "worktrees", "alpha"))).toBe(false)
+  })
+
+  test("a killed holder's lease (dead pid, fresh heartbeat) is reclaimed by startBuild", async () => {
+    await factory.begin("human:tester")
+    await factory.writeFrontier("grill", frontier())
+    await approve("frontier")
+    await factory.beginResearch("human:tester")
+    await writeReport(fx.root, fx.state)
+    await factory.completeResearch("factory")
+    await writeSpecs(fx.root, ["alpha"])
+    await approve("spec")
+    // A crashed predecessor: lease file with an unusable pid but a fresh heartbeat, no release.
+    const script = path.join(fx.root, "dead-holder.mjs")
+    await writeFile(
+      script,
+      `import { WorktreeLeaseManager } from ${JSON.stringify(new URL("../src/worktree/lease.ts", import.meta.url).href)};
+const leases = new WorktreeLeaseManager(${JSON.stringify(fx.root)}, { worktreeRoot: ${JSON.stringify(path.join(fx.root, ".factory", "worktrees"))} });
+await leases.acquire("alpha", { branch: "factory/dead/phase-alpha", dir: ${JSON.stringify(path.join(fx.root, ".factory", "worktrees", "alpha"))} });
+process.exit(0);\n`,
+    )
+    const child = Bun.spawn(["bun", script], { stdout: "pipe", stderr: "pipe" })
+    await child.exited
+    await Bun.file(script)
+      .exists()
+      .then((exists) => exists && rm(script, { force: true }).catch(() => undefined))
+    const state = await factory.startBuild("factory")
+    const record = await liveLease("alpha")
+    expect(state.stage).toBe("BUILD")
+    expect(record).toBeDefined()
+    expect(record!.pid).toBe(process.pid)
+  })
+
+  test("begin() collects a stale factory lease and its orphaned checkout, then proceeds", async () => {
+    const orphanDir = path.join(fx.root, ".factory", "worktrees", "orphan")
+    await Git.addWorktree(fx.root, orphanDir, "factory/dead/phase-orphan", "HEAD")
+    const past = () => 1_000
+    const dead = new WorktreeLeaseManager(fx.root, {
+      worktreeRoot: path.join(fx.root, ".factory", "worktrees"),
+      ttlMs: 1000,
+      now: past,
+    })
+    await dead.acquire("orphan", { branch: "factory/dead/phase-orphan", dir: orphanDir })
+    const state = await factory.begin("human:tester")
+    expect(state.stage).toBe("GRILL")
+    expect(await exists(orphanDir)).toBe(false)
+    expect(await leases().list()).toEqual([])
+  })
+
+  test("begin() on an existing run refuses without deleting its worktree", async () => {
+    await toBuild()
+    const dir = await worktreeOf()
+    await expect(factory.begin("human:tester")).rejects.toThrow(/already exists/)
+    expect(await exists(dir)).toBe(true)
+    expect(await liveLease("alpha")).toBeDefined()
+  })
+
+  test("a failed release-check releases its lease and removes the checkout", async () => {
+    await toRelease()
+    let sawLiveReleaseLease = false
+    const failing = make({
+      gates: async () => {
+        sawLiveReleaseLease = (await liveLease("release")) !== undefined
+        return { passed: false, findings: [], summary: "red" }
+      },
+    })
+    await expect(failing.release("factory")).rejects.toThrow(/Release gates failed/)
+    expect(sawLiveReleaseLease).toBe(true)
+    expect(await liveLease("release")).toBeUndefined()
+    expect(await exists(path.join(fx.root, ".factory", "worktrees", "release"))).toBe(false)
+  })
+
+  test("a green release-check holds its lease during gates and releases it after", async () => {
+    await toRelease()
+    let sawLiveReleaseLease = false
+    const observing = make({
+      gates: async () => {
+        sawLiveReleaseLease = (await liveLease("release")) !== undefined
+        return green
+      },
+    })
+    const done = await observing.release("factory")
+    expect(done.stage).toBe("DONE")
+    expect(sawLiveReleaseLease).toBe(true)
+    expect(await liveLease("release")).toBeUndefined()
+  })
+
+  test("two concurrent release() calls elect one holder", async () => {
+    const state = await toRelease()
+    expect(state.stage).toBe("RELEASE")
+    let loserDone = false
+    const barrier = async () => {
+      const start = Date.now()
+      while (!loserDone && Date.now() - start < 10_000) await new Promise((resolve) => setTimeout(resolve, 5))
+      return green
+    }
+    const attempt = (f: typeof factory) =>
+      f.release("factory").then(
+        (value) => {
+          loserDone = true
+          return { ok: true as const, value }
+        },
+        (error: Error) => {
+          loserDone = true
+          return { ok: false as const, error }
+        },
+      )
+    const [first, second] = await Promise.all([attempt(make({ gates: barrier })), attempt(make({ gates: barrier }))])
+    const winners = [first, second].filter((result) => result.ok)
+    const losers = [first, second].filter((result) => !result.ok)
+    expect(winners.length).toBe(1)
+    expect(losers.length).toBe(1)
+    expect(String((losers[0] as { error: Error }).error.message)).toMatch(/leas|held/i)
+  }, 30_000)
 })
