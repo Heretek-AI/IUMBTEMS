@@ -28,6 +28,7 @@ import { readRetractions } from "../claims/degrade.ts"
 import { buildDossier, writeDossier } from "../claims/dossier.ts"
 import { claimsFromAudit } from "../claims/research.ts"
 import { ClaimStore } from "../claims/store.ts"
+import { loadGatesConfig } from "../gates/engine.ts"
 import { stateDir as defaultStateDir, factoryLayout } from "../layout.ts"
 import { auditMarkdown, formatCoverage } from "../research/auditor.ts"
 import { researchCache } from "../research/ops.ts"
@@ -38,6 +39,7 @@ import { RoadmapSchema } from "../schema/roadmap.ts"
 import { rebaseline, repinControl, verifyControl } from "../trust/control.ts"
 import { type SidecarProblem, signEngineFile, verifyEngineFile } from "../trust/sidecar.ts"
 import { checkStopFile } from "../trust/stop.ts"
+import { commandSetHash, isTrusted } from "../trust/store.ts"
 import { appendLine, exists, readJson, relativeInside, withLock, writeJson } from "../util/fs.ts"
 import { sha256 } from "../util/hash.ts"
 import { run, splitCommand } from "../util/proc.ts"
@@ -620,6 +622,23 @@ export class Factory {
       const check = await verifyApproval(this.root, "spec", { stateDir: this.deps.stateDir })
       if (!check.ok) throw new FactoryError(check.reason)
       if (!(await Git.isRepo(this.root))) throw new FactoryError("The project must be a git repository to build.")
+      // Gate commands run project code, so a human must trust the exact set
+      // before the build starts (#359). Refusing here holds the run at the
+      // SPEC to BUILD boundary — no worktree, no branch, no programmer seat —
+      // with the trust step named. Agents may request trust, never grant it.
+      const { config: gateConfig } = await loadGatesConfig(this.root)
+      if (gateConfig.commands.length) {
+        const { hash } = await commandSetHash(this.root, gateConfig.commands)
+        if (!(await isTrusted(this.root, hash, this.deps.stateDir))) {
+          const store = this.deps.stateDir ?? defaultStateDir()
+          await this.audit(`agent:${agentId}`, "stage.build-refused", { reason: "trust/untrusted", hash })
+          throw new FactoryError(
+            `waiting on you: trust — this project's gate commands are not trusted yet, so the build cannot start. ` +
+              `A human reviews and approves them with \`es trust\` (or /es-trust) run in ${this.root}, then repeats es_build_start. ` +
+              `(trust/untrusted ${hash.slice(0, 12)}; project root ${this.root}; trust store ${store})`,
+          )
+        }
+      }
       const roadmap = RoadmapSchema.parse(JSON.parse(await readFile(this.layout.roadmap, "utf8")))
       if (roadmap.phases.length > this.limits.maxPhases)
         throw new FactoryError(`Roadmap exceeds ${this.limits.maxPhases} phases.`)

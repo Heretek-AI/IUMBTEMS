@@ -360,6 +360,40 @@ describe("build and QA", () => {
     expect((await run(["git", "check-ignore", "-q", "node_modules"], { cwd: dir })).code).toBe(0)
   })
 
+  test("#359: startBuild refuses with untrusted gates; the run waits at SPEC for a human trust", async () => {
+    // Pinned before any approval, so the baseline covers it.
+    await mkdir(path.join(fx.root, ".factory"), { recursive: true })
+    await writeFile(
+      path.join(fx.root, ".factory/gates.json"),
+      JSON.stringify({ commands: [{ id: "unit", kind: "test", command: "bun test" }] }),
+    )
+    await factory.begin("human:tester")
+    await factory.writeFrontier("grill", frontier())
+    await approve("frontier")
+    await factory.beginResearch("human:tester")
+    await writeReport(fx.root, fx.state)
+    await factory.completeResearch("factory")
+    await writeSpecs(fx.root, ["alpha"])
+    await approve("spec")
+    await expect(factory.startBuild("factory")).rejects.toThrow("waiting on you: trust")
+    // The run waits at the SPEC to BUILD boundary: no phases, no worktree, no
+    // run branch, so no programmer seat can launch before gates are trusted.
+    const state = (await factory.read())!
+    expect(state.stage).toBe("SPEC")
+    expect(state.phases).toEqual([])
+    expect(state.activePhase).toBeUndefined()
+    expect(await factory.activeWorktree()).toBeUndefined()
+    const branches = (await run(["git", "branch", "--list", "factory/*"], { cwd: fx.root })).stdout
+    expect(branches).not.toContain("integration")
+    // After a human trusts the exact command set, the same call builds.
+    const { loadGatesConfig } = await import("../src/gates/engine.ts")
+    const { commandSetHash, trustProject } = await import("../src/trust/store.ts")
+    const { config } = await loadGatesConfig(fx.root)
+    const { hash, lines } = await commandSetHash(fx.root, config.commands)
+    await trustProject(fx.root, hash, lines, { signer, stateDir: fx.state })
+    expect((await factory.startBuild("factory")).stage).toBe("BUILD")
+  })
+
   test("complete is gated: seat, changes, red-first evidence, criteria, and gates in the worktree", async () => {
     await toBuild()
     await expect(factory.complete("es-qa-functional")).rejects.toThrow("Only the programmer seat")
