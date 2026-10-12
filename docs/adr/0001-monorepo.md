@@ -16,6 +16,11 @@ These pieces must change together. That is why core, CLI and plugin release in l
 
 **Consequences.**
 - Core must not import the CLI or the plugin, and the CLI must not import the plugin. `scripts/deps.ts` enforces this in `bun run check`.
+- Zod is a build-time contract language, not a runtime export (decided
+  2026-10-12, #157): packages export their schemas and inferred TypeScript
+  types (plus the generated JSON Schema files), but never the `zod` library
+  object itself — consumers bring their own zod, so no version couples
+  across the trio.
 - The workspace is one list: `scripts/packages.ts` reads `packages/*/package.json` (release order from each manifest's `esRelease.order`). The typecheck loop, `pack-smoke.sh` and `publish.yml` all take their lists from it; a new package adds its manifest (plus `esRelease.order` when it publishes) and a `BOUNDARIES` entry in `scripts/deps.ts`, or the gate fails.
 - New packages get path-filtered CI jobs so core's CI stays fast: a separate workflow with `paths:` filters on the package's directories (or a SHA-pinned paths-filter action), while the `check` job stays unfiltered and keeps running on every push and PR. They version on their own or stay private; only the trust trio (core, CLI, plugin) releases in lockstep.
 - Scraper-Swarm stays its own repository. It is a deployed service on its own toolchain (pnpm plus Python), so core integrates with it over MCP JSON-RPC, with recorded-fixture contract tests here.

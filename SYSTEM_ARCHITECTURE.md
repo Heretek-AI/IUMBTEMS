@@ -118,8 +118,12 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
    audit records, scout and harvest state, and the design artifacts
    (`trust/control.ts`).
 3. **Gate command sets are trust-pinned by hash**; untrusted commands never run.
-4. **Every `.factory/` write is atomic and lock-protected** (`util/fs.ts`).
-5. **Search as policy, under a sandbox**: research, scout and auditor seats
+4. **Runs are attributable to a branch**: detached checkouts are refused
+   wherever a run needs branch attribution (decided 2026-10-12, #157 —
+   seat worktrees, machine transitions, headless `--cwd`); read-only
+   inspection outside a run is unaffected.
+5. **Every `.factory/` write is atomic and lock-protected** (`util/fs.ts`).
+6. **Search as policy, under a sandbox**: research, scout and auditor seats
    are `web: "cached"` (host websearch/webfetch denied, web facts only
    through the cached, citable `es_research_*` tools) and run under an
    `--unshare-net` bubblewrap sandbox, so no live network hides behind the
@@ -130,12 +134,12 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
    private state dir and service credentials masked; factory seats are
    refused a shell without bubblewrap and the user's agents fall back to the
    weaker argv-aware text policy.
-6. **Generated files are never hand-edited**; `docs:check` fails on drift
+7. **Generated files are never hand-edited**; `docs:check` fails on drift
    (schemas, capability proofs, config docs, and the prompt/skill/registry
    asset drift checker with its canary).
-7. **The factory never pushes the base branch**; release opens a draft PR a
+8. **The factory never pushes the base branch**; release opens a draft PR a
    human merges, and publish runs through OIDC trusted publishing.
-8. **Engine-owned run state is sealed.** `.factory/runtime/state.json` carries
+9. **Engine-owned run state is sealed.** `.factory/runtime/state.json` carries
    a signed sidecar (HMAC under the masked engine key); reads refuse a
    missing or forged seal, and only a human re-signs reviewed files
    (`es reseal --sign`, terminal passphrase confirm; agents have no reseal
@@ -145,7 +149,7 @@ domain packs (quant · biopharma · legal) ──▶ banned domains, mandatory t
    human re-fetches the source. Verifiers never create the engine key:
    a reader that cannot see it (an agent sandbox, another state dir) reports
    a missing key, not a forged seal.
-9. **Seats run in the foreground, one writer per research file.** A seat's
+10. **Seats run in the foreground, one writer per research file.** A seat's
    `subagent` call with `background: true` is refused, as is launching a
    seat that is still running; parallel seats are several calls in one
    message. The plugin's seat tracker records each seat's state and last

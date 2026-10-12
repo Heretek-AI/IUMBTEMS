@@ -1,6 +1,6 @@
 # ADR 0004: Machine-signed stage transitions
 
-- **Status:** Proposed (awaiting human acceptance)
+- **Status:** Accepted (human selection 2026-10-12, quoted on #343)
 - **Date:** 2026-10-12
 - **Epic:** #321 · **Milestone:** Phase 11 · Autonomy wiring · 2.5.0
 - **Tickets:** #343 (this record, no code) · #344 (wiring, gated by this ADR)
@@ -233,3 +233,16 @@ C1–C14 checklist above. **Before marking this ADR accepted, the human must
 confirm in their own words or selection; quote the confirmation here and
 flip the status to Accepted.** Until then, #344 must not merge. (The quote
 is added by a human — never by the wiring session.)
+
+## Acceptance (recorded 2026-10-12)
+
+Maintainer selection, quoted verbatim from the decision prompt:
+
+> "Accept as-is (Recommended)" — on the M1/M2 scope (GRILL→RESEARCH and
+> SPEC→BUILD on `integration/*` and `factory/*` with a fully green proof;
+> releases, `main`, trust, waivers, keys and resume human-only), and
+> "Accept both (Recommended)" — on the B1 (tip binding at staging landings)
+> and B2 (in-memory key identity) boundaries as documented, not fixed.
+
+Status flipped to Accepted on this confirmation. #344 wiring (built and
+probed against the C1–C14 checklist) is released by this acceptance.

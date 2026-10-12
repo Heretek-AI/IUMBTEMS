@@ -44,6 +44,12 @@ human-only), `task list [--json]`, `task cancel <id>` (human-only).
 
 ## Worktree coordinator (#124)
 
+Branching policy (decided 2026-10-12, #157, human selection "Ratify
+current"): one branch per task (`fleet/<taskId>`), landings onto
+`fleet/integration/<dagId>`, abandoned branches anchored at
+`refs/fleet-salvage/<taskId>` before deletion, merged branches kept for the
+audit trail, and the base branch never checked out, reset, or merged.
+
 - One worktree per task at `<repo>/.fleet/worktrees/<taskId>/` (gitignored)
   on branch `fleet/<taskId>`, from a recorded base commit. Absolute symlinks
   pointing into the repo are rebased to the worktree on allocation.

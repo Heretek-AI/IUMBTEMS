@@ -99,7 +99,10 @@ export function getBackend(id: string, extra?: readonly SourceBackend[]): Source
   return extra?.find((backend) => backend.id === id) ?? builtinBackends()[id]
 }
 
-/** Today's selection order: the self-hosted gateway first when configured, then today's providers. */
+/** Today's selection order: the self-hosted gateway first when configured, then today's providers.
+ * Decided 2026-10-12 (#157, human selection "Keep current"): scraper-swarm,
+ * then brave, firecrawl, searxng, direct. Explicit `research.backends` config
+ * always wins; this default only applies when nothing is configured. */
 export const DEFAULT_BACKEND_ORDER: readonly string[] = ["scraper-swarm", "brave", "firecrawl", "searxng", "direct"]
 
 /**
