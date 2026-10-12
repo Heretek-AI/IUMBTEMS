@@ -384,6 +384,30 @@ const seatForbiddenGit = (command: string) =>
       (sub === "branch" && args.some((arg) => /^-[a-zA-Z]*D/.test(arg))),
   )
 
+/** `es worktree` verbs that create or drop checkouts (prune stays agent-safe, #160). */
+const ES_WORKTREE_MANAGING = new Set(["create", "release"])
+
+/**
+ * `es worktree create|release` calls in a command, however flagged
+ * (`es --cwd . worktree create …`). Reads the same argv grammar as the CLI
+ * (#97): unknown flags count both as taking a value and not, like the
+ * human-only check above.
+ */
+function seatForbiddenEsWorktree(command: string): { verb: string } | undefined {
+  for (const segment of segments(unquoteShell(command))) {
+    const tokens = words(segment)
+    for (let i = 0; i < tokens.length; i++) {
+      if (!ES_BINARY.test(tokens[i]!)) continue
+      for (const verb of nextPositionals(tokens, { at: i + 1, literal: false })) {
+        if (tokens[verb.at] !== "worktree") continue
+        for (const sub of nextPositionals(tokens, { at: verb.at + 1, literal: verb.literal }))
+          if (ES_WORKTREE_MANAGING.has(tokens[sub.at] ?? "")) return { verb: tokens[sub.at]! }
+      }
+    }
+  }
+  return undefined
+}
+
 /**
  * Commands that only read (each pipeline segment). No `env` (it runs any
  * program), and no tool with an output-file option: `sort -o`, `uniq IN OUT`,
@@ -447,6 +471,18 @@ export function evaluateShell(
         reason:
           "Factory seats may not reference other tasks' fleet worktrees (.fleet/) from the shell; work only inside your own task worktree.",
       }
+    // Leased worktrees (#340): phase worktrees are held by the engine and
+    // `.worktrees/` checkouts by whoever ran `es worktree create`. Seats
+    // manage neither from the shell; user agents may use the agent-safe
+    // create/release pair (a live checkout held elsewhere is refused there).
+    if (!isPlainHelp(command)) {
+      const managed = seatForbiddenEsWorktree(command)
+      if (managed)
+        return {
+          effect: "deny",
+          reason: `Factory seats may not manage worktrees from the shell (es worktree ${managed.verb}); phase worktrees are held under a heartbeat lease by the engine.`,
+        }
+    }
     const git = seatForbiddenGit(command)
     if (git)
       return {
