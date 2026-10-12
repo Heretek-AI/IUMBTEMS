@@ -322,3 +322,185 @@ describe("release on the real host against a local bare remote", () => {
     }
   }, 120_000)
 })
+
+// Publish workflow guards (#328): the new `publish.yml` steps are executed
+// here with fake `bun`/`git`/`gh` binaries, the existing fake-binary style.
+// The guard refuses a non-dry-run publish when the three release manifests
+// disagree with each other or with the top CHANGELOG entry, or when the tag
+// already exists; the tag-and-release step tags the published commit and
+// releases the CHANGELOG notes.
+const workflowRoot = path.resolve(import.meta.dir, "../../..")
+const readWorkflow = () => readFile(path.join(workflowRoot, ".github/workflows/publish.yml"), "utf8")
+
+/** The `run: |` body of the step called `name`, dedented. Fails when absent. */
+const extractStep = (yml: string, name: string): string => {
+  const lines = yml.split("\n")
+  const plain = (line: string) => line.trim().replace(/^(- name: )"(.*)"$/, "$1$2")
+  const at = lines.findIndex((line) => plain(line) === `- name: ${name}`)
+  expect(at).toBeGreaterThan(-1)
+  const runAt = lines.findIndex((line, index) => index > at && /^\s*run: \|/.test(line))
+  expect(runAt).toBeGreaterThan(-1)
+  const indent = lines[runAt]!.search(/\S/)
+  const body: string[] = []
+  for (let i = runAt + 1; i < lines.length; i++) {
+    const line = lines[i]!
+    if (line.trim() === "") {
+      body.push("")
+      continue
+    }
+    if (line.search(/\S/) <= indent) break
+    body.push(line.slice(indent + 2))
+  }
+  const script = body.join("\n").replace(/\n+$/, "")
+  expect(script).not.toBe("")
+  return script
+}
+
+interface GuardFixture {
+  readonly root: string
+  readonly bin: string
+  readonly log: string
+}
+
+/** A fixture repo root with three release manifests, a CHANGELOG and fake binaries. */
+const guardFixture = async (
+  versions: readonly [string, string, string],
+  changelogTop: string,
+): Promise<GuardFixture> => {
+  const root = await mkdtemp(path.join(tmpdir(), "es-publish-guard-"))
+  const bin = await mkdtemp(path.join(tmpdir(), "es-publish-guard-bin-"))
+  const log = path.join(bin, "calls.txt")
+  const dirs = ["core", "cli", "opencode"] as const
+  for (let i = 0; i < dirs.length; i++) {
+    await mkdir(path.join(root, "packages", dirs[i]!), { recursive: true })
+    await writeFile(
+      path.join(root, "packages", dirs[i]!, "package.json"),
+      `${JSON.stringify({ name: `@scope/${dirs[i]}`, version: versions[i] }, null, 2)}\n`,
+    )
+  }
+  await writeFile(
+    path.join(root, "CHANGELOG.md"),
+    `# Changelog\n\n## ${changelogTop} — 2026-10-11\n\nThe headline feature ships.\n\n## 2.2.0 — 2026-10-11\n\nOlder notes.\n`,
+  )
+  await writeFile(
+    path.join(bin, "bun"),
+    `#!/bin/sh\nif [ "$1" = "scripts/packages.ts" ]; then\nprintf 'core heretek-ai-es-core\\ncli heretek-ai-es-cli\\nopencode heretek-ai-epistemic-swarm\\n'\nexit 0\nfi\necho "fake bun: unexpected $*" >&2\nexit 99\n`,
+  )
+  await writeFile(
+    path.join(bin, "git"),
+    `#!/bin/sh\necho "git $*" >> '${log}'\nif [ "$1" = "ls-remote" ]; then\nif [ "\${FAKE_GIT_TAG_EXISTS:-0}" = "1" ]; then exit 0; else exit 1; fi\nfi\nexit 0\n`,
+  )
+  await writeFile(path.join(bin, "gh"), `#!/bin/sh\necho "gh $*" >> '${log}'\nexit 0\n`)
+  for (const tool of ["bun", "git", "gh"]) await chmod(path.join(bin, tool), 0o755)
+  return { root, bin, log }
+}
+
+const rmGuard = async (fx: GuardFixture) => {
+  await rm(fx.root, { recursive: true, force: true })
+  await rm(fx.bin, { recursive: true, force: true })
+}
+
+/** Run an extracted workflow script with the fixture on PATH; env keys override process.env. */
+const runStep = (script: string, fx: GuardFixture, env: Record<string, string>) => {
+  // NOTE: Bun.spawnSync does not pick up process.env mutations, so the
+  // environment is passed explicitly (spread first, so the current PATH
+  // and HOME survive under the fake bin dir).
+  const result = Bun.spawnSync(["bash", "-e", "-o", "pipefail", "-c", script], {
+    cwd: fx.root,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, ...env, PATH: `${fx.bin}${path.delimiter}${process.env.PATH}` },
+  })
+  return { exitCode: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() }
+}
+
+describe("publish workflow guards (#328)", () => {
+  test("agreeing manifests and CHANGELOG pass the guard; the tag stays free", async () => {
+    const fx = await guardFixture(["2.3.0", "2.3.0", "2.3.0"], "2.3.0")
+    try {
+      const script = extractStep(await readWorkflow(), "Publish guard: version parity and free tag")
+      const run = runStep(script, fx, { DRY_RUN: "false", FAKE_GIT_TAG_EXISTS: "0" })
+      expect(run.exitCode).toBe(0)
+      expect(run.stdout).toMatch(/2\.3\.0 agreed/)
+    } finally {
+      await rmGuard(fx)
+    }
+  })
+
+  test("manifests disagree → refuse before anything is published", async () => {
+    const fx = await guardFixture(["2.3.0", "2.3.0", "9.9.9"], "2.3.0")
+    try {
+      const script = extractStep(await readWorkflow(), "Publish guard: version parity and free tag")
+      const run = runStep(script, fx, { DRY_RUN: "false", FAKE_GIT_TAG_EXISTS: "0" })
+      expect(run.exitCode).not.toBe(0)
+      expect(run.stderr).toMatch(/disagree/)
+    } finally {
+      await rmGuard(fx)
+    }
+  })
+
+  test("a CHANGELOG skew → refuse before anything is published", async () => {
+    const fx = await guardFixture(["2.3.0", "2.3.0", "2.3.0"], "9.9.9")
+    try {
+      const script = extractStep(await readWorkflow(), "Publish guard: version parity and free tag")
+      const run = runStep(script, fx, { DRY_RUN: "false", FAKE_GIT_TAG_EXISTS: "0" })
+      expect(run.exitCode).not.toBe(0)
+      expect(run.stderr).toMatch(/CHANGELOG/)
+    } finally {
+      await rmGuard(fx)
+    }
+  })
+
+  test("an existing tag → refuse a second publish of the same version", async () => {
+    const fx = await guardFixture(["2.3.0", "2.3.0", "2.3.0"], "2.3.0")
+    try {
+      const script = extractStep(await readWorkflow(), "Publish guard: version parity and free tag")
+      const run = runStep(script, fx, { DRY_RUN: "false", FAKE_GIT_TAG_EXISTS: "1" })
+      expect(run.exitCode).not.toBe(0)
+      expect(run.stderr).toMatch(/already exists/)
+    } finally {
+      await rmGuard(fx)
+    }
+  })
+
+  test("a dry run skips every guard check", async () => {
+    const fx = await guardFixture(["2.3.0", "2.3.0", "9.9.9"], "9.9.9")
+    try {
+      const script = extractStep(await readWorkflow(), "Publish guard: version parity and free tag")
+      const run = runStep(script, fx, { DRY_RUN: "true", FAKE_GIT_TAG_EXISTS: "1" })
+      expect(run.exitCode).toBe(0)
+    } finally {
+      await rmGuard(fx)
+    }
+  })
+
+  test("tag and release: the published commit is tagged and the CHANGELOG notes released", async () => {
+    const fx = await guardFixture(["2.3.0", "2.3.0", "2.3.0"], "2.3.0")
+    try {
+      const script = extractStep(await readWorkflow(), "Create tag and GitHub release")
+      const run = runStep(script, fx, { GITHUB_SHA: "abc123" })
+      expect(run.exitCode).toBe(0)
+      const calls = await readFile(fx.log, "utf8")
+      expect(calls).toContain("tag -a v2.3.0")
+      expect(calls).toContain("abc123")
+      expect(calls).toContain("push origin v2.3.0")
+      expect(calls).toContain("release create v2.3.0")
+      expect(calls).toContain("--target abc123")
+      expect(calls).toContain("The headline feature ships.")
+    } finally {
+      await rmGuard(fx)
+    }
+  })
+
+  test("contents:write is scoped to the tag job; the tag job follows a guarded publish", async () => {
+    const yml = await readWorkflow()
+    expect(yml).toMatch(/^permissions:\n {2}contents: read/m)
+    expect(yml.match(/^\s*contents: write$/gm)).toHaveLength(1)
+    const tagJobAt = yml.indexOf("tag-and-release:")
+    expect(tagJobAt).toBeGreaterThan(-1)
+    const writeAt = yml.search(/^\s*contents: write$/m)
+    expect(writeAt).toBeGreaterThan(tagJobAt)
+    expect(yml.slice(tagJobAt)).toMatch(/needs:\s*\[?publish\]?/)
+    expect(yml.slice(tagJobAt)).toMatch(/inputs\.dry_run == false/)
+  })
+})

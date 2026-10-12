@@ -93,9 +93,13 @@ describe("#189: /research deep on the real host", () => {
       `@@PARALLEL@@ ${delegate("es-research-alpha", `Gather the thesis ${child("write", { path: ".factory/research/alpha.md", content: `# Alpha\n\n${thesis}\n` })} done`)} ${delegate("es-research-beta", `Attack it ${child("write", { path: ".factory/research/beta.md", content: `# Beta\n\n${antithesis}\n` })} done`)}`,
       { agent: "deep-researcher" },
     )
-    expect(fanout.tools.map((tool) => `${tool.name}:${tool.status}`)).toEqual([
-      "subagent:completed",
-      "subagent:completed",
+    // #325: compare name, status AND text, so a `subagent:error` flake
+    // prints its error message in the failure diff instead of losing it.
+    // `stringContaining` tolerates the per-run session id in the success
+    // wrapper; an error still fails the match and shows its full text.
+    expect(fanout.tools.map((tool) => ({ name: tool.name, status: tool.status, text: tool.text }))).toEqual([
+      { name: "subagent", status: "completed", text: expect.stringContaining(".factory/research/alpha.md") },
+      { name: "subagent", status: "completed", text: expect.stringContaining(".factory/research/beta.md") },
     ])
     expect(await Bun.file(path.join(h.directory, ".factory/research/alpha.md")).text()).toContain(sha!)
     expect(await Bun.file(path.join(h.directory, ".factory/research/beta.md")).text()).toContain("NEGATIVE_KNOWLEDGE")
