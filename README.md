@@ -5,12 +5,11 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 2.4.0.** Phase 10 hardening & verification: leased factory/fleet
-> worktrees (`es worktree create|release`), human-only `es improve optimize`
-> with holdout receipts, browser config apply, pinned eval gates and publish
-> hardening. The 2.3.0 library APIs are independently audited (#329–#339);
-> machine-key, staging and canary wiring land in Phase 11. See the CHANGELOG
-> for what is reachable.
+> **Status: 2.5.0.** Phase 11 autonomy wiring: machine-signed stage exits on
+> integration/factory branches (ADR 0004, human acceptance pending),
+> staging landings with the human release veto, opt-in canary cycles, and
+> Goodhart defaults in the self-dogfood preset. Releases, `main`, trust,
+> waivers and keys stay human-only. See the CHANGELOG for what is reachable.
 > Install from npm (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`,
 > `@heretek-ai/es-cli`); run `es key seal` once.
 

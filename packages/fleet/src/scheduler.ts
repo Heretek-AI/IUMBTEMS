@@ -2,6 +2,8 @@
 // same DAG and caps give the same decision, with no clock reads. Time enters
 // only through `applyDecision`/`reportTask`, which stamp the transitions.
 // Iteration is always id-sorted.
+
+import { type CanaryCycleOutcome, type CanaryOptions, maybeRunCanaryCycle } from "./canary.ts"
 import { FleetError } from "./lifecycle.ts"
 import { type DagState, type Task, TERMINAL, validateDag } from "./tasks.ts"
 
@@ -252,4 +254,32 @@ export function markGateFailed(
     },
     changed: true,
   }
+}
+
+/**
+ * Pure canary gate (#346): the scheduler runs a canary cycle only on
+ * explicit human enablement. Anything else schedules nothing. Note
+ * `enabled: true` without a recorded human approval still plans a run here
+ * and then fails closed inside `CanaryRunner.create` before anything builds.
+ */
+export function planCanaryCycle(canary: CanaryOptions | undefined): { readonly run: boolean } {
+  return { run: canary?.enabled === true }
+}
+
+export interface ScheduledCanaryRequest {
+  /** Explicit human enablement; anything but `enabled: true` with a recorded approval runs nothing. */
+  readonly canary?: CanaryOptions | undefined
+  readonly sourceDir: string
+}
+
+/**
+ * Scheduler canary entry (#346): one explicitly-enabled cycle, otherwise
+ * nothing. The recorded approval and the frozen rollback target are enforced
+ * by `CanaryRunner.create`; a red shadow run rolls back inside the single
+ * `runCanary` call with no manual step. Tests drive the pipeline with
+ * harness doubles — a live daemon never executes a canary from here.
+ */
+export async function runScheduledCanaryCycle(request: ScheduledCanaryRequest): Promise<CanaryCycleOutcome> {
+  if (!planCanaryCycle(request.canary).run) return { ran: false }
+  return maybeRunCanaryCycle(request)
 }

@@ -17,6 +17,8 @@ import {
   cascadeRebase,
   checkDrift,
   compileToCssVars,
+  countersignReleaseCut,
+  cutRelease,
   designPaths,
   exportBrief,
   Factory,
@@ -29,6 +31,7 @@ import {
   git,
   HookEngine,
   harvestPaths,
+  humanKeyId,
   installServer,
   LENSES,
   LspManager,
@@ -59,6 +62,7 @@ import {
   researchTools,
   resetHumanKey,
   SlotLoop,
+  STAGING_BRANCH,
   scanSource,
   startRun as startBrainstorm,
   stateDir as userStateDir,
@@ -135,6 +139,10 @@ Checkpoints and exceptions
 Gates
   gates run [--full] [--staged] [--base <ref>] [--json] [files…]
   gates install-git [--uninstall]   Opt-in pre-commit/pre-push gates   [human, TTY]
+
+Staging
+  staging countersign --title <title> --body <body> [--base main|rewrite] [--json]
+                                Countersign a release cut with the human key   [human, TTY]
 
 Other
   hooks                         Hook bridge status, trust and per-harness capability loss
@@ -235,6 +243,74 @@ const worktreeLeases = (root: string): WorktreeLeaseManager => {
 const WORKTREE_USAGE =
   "Usage: es worktree prune | es worktree create <slug> [--branch <branch>] [--from <ref>] | es worktree release <slug>"
 
+const STAGING_COUNTERSIGN_USAGE =
+  "Usage: es staging countersign --title <title> --body <body> [--base main|rewrite] [--json]"
+
+/**
+ * Countersign a release cut with the HUMAN key (#345, human-only TTY).
+ * Code only: mints an UNSIGNED cut from --title/--body, previews it, unlocks
+ * the human key via the passphrase (echo off), and countersigns with a
+ * terminal-bound invocation plus an expectedKeyId binding to human.pub. The
+ * signed cut prints (JSON with --json); opening the draft PR from it
+ * (openReleasePr) and the human merge stay separate human steps. Agents may
+ * request, never grant: a non-terminal caller is refused before any signing.
+ */
+async function stagingCountersign(context: HumanContext, args: Args, io: MainIO): Promise<number> {
+  const title = flag(args, "title")
+  const body = flag(args, "body")
+  const baseRaw = flag(args, "base") ?? "main"
+  if (!title || !body) {
+    io.print(STAGING_COUNTERSIGN_USAGE)
+    return 2
+  }
+  if (baseRaw !== "main" && baseRaw !== "rewrite") {
+    io.print(`Bad --base "${baseRaw}". Use main or rewrite.`)
+    return 2
+  }
+  const base = baseRaw as "main" | "rewrite"
+  if (!io.confirm.interactive) throw new NotInteractive("es staging countersign")
+  const lines = [
+    `Title: ${title}`,
+    `Head:  ${STAGING_BRANCH} (staging/autonomous)`,
+    `Base:  ${base} (a human merges the release PR)`,
+    "",
+    ...body.split("\n").slice(0, 12),
+    "Signs the cut with the human Ed25519 key. An unsigned cut never opens a PR.",
+  ]
+  const signer = await confirmHuman(io.confirm, `Countersign release "${title}"`, lines, {
+    ...(context.stateDir ? { stateDir: context.stateDir } : {}),
+    root: context.root,
+    stage: "countersign",
+    channel: "cli",
+  })
+  if (!signer) {
+    io.print("Cancelled; nothing was signed.")
+    return 1
+  }
+  try {
+    const expectedKeyId = await humanKeyId(context.stateDir)
+    const cut = cutRelease({ title, body, base })
+    const signed = countersignReleaseCut(cut, signer, {
+      invocation: { terminal: true, channel: "cli" },
+      ...(expectedKeyId ? { expectedKeyId } : {}),
+    })
+    if (args.flags.json === true) {
+      io.print(JSON.stringify(signed, null, 2))
+      return 0
+    }
+    io.print(
+      [
+        `Countersigned "${signed.title}" (${signed.head} → ${signed.base}) as ${signed.signedBy}.`,
+        `Signature: ed25519 ${signed.signature?.keyId} ${(signed.signature?.sig ?? "").slice(0, 16)}…`,
+        "Next: open the consolidated draft PR from the signed cut; a human merges it.",
+      ].join("\n"),
+    )
+    return 0
+  } finally {
+    signer.destroy()
+  }
+}
+
 export async function main(argv: readonly string[], io: MainIO): Promise<number> {
   const args = parseArgs(argv, BOOLEAN_FLAGS)
   const [command, sub, ...rest] = args.positionals
@@ -270,6 +346,7 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
       command === "rebaseline" ||
       command === "reseal" ||
       command === "waive" ||
+      (command === "staging" && sub === "countersign") ||
       (command === "key" && (sub === "seal" || sub === "reset")) ||
       (command === "factory" && (sub === "resume" || sub === "pr" || sub === "init"))
     if (humanOnly) {
@@ -830,6 +907,11 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         if (sub === "run") return await gatesRun(context, subArgs(2))
         if (sub === "install-git") return await installGitHooks(context, subArgs(2))
         break
+      case "staging": {
+        if (sub === "countersign") return await stagingCountersign(context, args, io)
+        io.print("Usage: es staging countersign --title <title> --body <body> [--base main|rewrite] [--json]")
+        return 2
+      }
       case "mcp": {
         // Heterogeneous models (#170): the MCP build path enforces the same
         // policy as the plugin. Best-effort: an unreadable config cannot

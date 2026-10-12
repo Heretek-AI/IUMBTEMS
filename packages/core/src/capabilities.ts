@@ -199,13 +199,13 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     mutation: {
       support: "enforced",
       detail:
-        "In-house mutation gate (0.8 kill threshold, zero-mutant fails closed); sources restored after every mutant; test-aware fingerprint reruns on edited tests. Opt-in via .factory/gates.json (touches the trusted command hash). Crash-interrupt journal recovery is best-effort.",
+        "In-house mutation gate (0.8 kill threshold, zero-mutant fails closed); sources restored after every mutant; test-aware fingerprint reruns on edited tests. Opt-in via .factory/gates.json (touches the trusted command hash); ON by default in the self-dogfood preset (2.5.0). Crash-interrupt journal recovery is best-effort.",
       test: "packages/core/test/audit-mutation.test.ts",
     },
     models: {
       support: "enforced",
       detail:
-        "Per-seat model resolution with shared-provider programmer/QA refusal at build start and seat launch; unset seats unverified unless requireDiversity. MCP path is best-effort (unreadable config skips the check — filed gap); provider identity is gateway-prefix, not weights.",
+        "Per-seat model resolution with shared-provider programmer/QA refusal at build start and seat launch; unset seats unverified unless requireDiversity. MCP path is best-effort (unreadable config skips the check — filed gap); provider identity is gateway-prefix, not weights. requireDiversity ON by default in the self-dogfood preset (2.5.0); plain installs stay opt-in.",
       test: "packages/core/test/audit-models.test.ts",
     },
     benchmarks: {

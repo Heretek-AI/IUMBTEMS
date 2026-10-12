@@ -22,5 +22,10 @@
       "parser": "generic",
       "timeoutMs": 300000
     }
-  ]
+  ],
+  "mutation": {
+    "enabled": true,
+    "threshold": 0.8,
+    "maxMutants": 50
+  }
 }

@@ -76,3 +76,17 @@ index (`es runs`) at headless start.
 {"v":1,"at":"…","runId":"run-7","kind":"turn-metrics","event":{"type":"turn-metrics","turn":1,"costUSD":0.04,"tools":[{"name":"read","ok":true}]}}
 {"v":1,"at":"…","runId":"run-7","kind":"cancelled","event":{"type":"cancelled","reason":"cancelled by signal; the run state is untouched, re-run to resume"}}
 ```
+
+## Subagent nesting depth (upstream OpenCode v2 behavior)
+
+OpenCode v2 ends a built-in agent's tool chain at depth 1 even when
+`subagent_depth` is configured higher (observed on v2.0.26, #150): a seat
+that spawns a subagent cannot have that child spawn further — the nesting
+stops. The remediation and factory orchestration therefore use a Depth-1
+Director dispatch pattern: the root Director (depth 0) deploys squads
+directly as depth-1 subagents in isolated git worktrees under serialized
+two-phase locking (`flock .worktrees/.git_lock`), sequentially or in
+parallel batches, and merges their branches itself. Child leads never
+dispatch recursively; cross-squad needs go up as `CROSS-SQUAD REQUEST`s and
+the Director routes them. If a future host supports deeper nesting, this
+section (and the squad prompt template) is where the pattern changes.

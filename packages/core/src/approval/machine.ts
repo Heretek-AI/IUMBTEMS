@@ -70,6 +70,11 @@ export interface MachineKeyStore {
 const MACHINE_BRANCH = /^(integration|factory)\//
 const COMMIT_HEX = /^[0-9a-f]{40}$/
 
+/** Whether a branch is inside machine scope (ADR 0004: integration/*, factory/* only). */
+export function isMachineScope(branch: string): boolean {
+  return MACHINE_BRANCH.test(branch)
+}
+
 /**
  * The private halves live here, keyed by store identity — never as a
  * property on the store object, so a holder of the store (or its JSON)
