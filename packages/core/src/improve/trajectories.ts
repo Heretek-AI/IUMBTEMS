@@ -55,10 +55,19 @@ export class TrajectoryError extends Error {
 const SCRUBBERS: ReadonlyArray<{ pattern: RegExp; replacement: string }> = [
   { pattern: /(ghp|ghu|gho|ghs|ghr|github_pat)_[A-Za-z0-9_]+/g, replacement: "[REDACTED github token]" },
   { pattern: /sk-ant-[A-Za-z0-9_-]+/g, replacement: "[REDACTED anthropic key]" },
-  { pattern: /sk-[A-Za-z0-9]{16,}/g, replacement: "[REDACTED api key]" },
+  { pattern: /sk-[A-Za-z0-9_-]{16,}/g, replacement: "[REDACTED api key]" },
   { pattern: /AKIA[0-9A-Z]{16}/g, replacement: "[REDACTED aws key]" },
   { pattern: /xox[bpras]-[A-Za-z0-9-]+/g, replacement: "[REDACTED slack token]" },
   { pattern: /Bearer [A-Za-z0-9._~+/=-]+/g, replacement: "[REDACTED bearer token]" },
+  { pattern: /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, replacement: "[REDACTED jwt]" },
+  // URL credentials (user:pass@host): redact the userinfo, keep scheme + host.
+  { pattern: /([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/\s@]+@/g, replacement: "$1[REDACTED]@" },
+  // Env-style assignments (KEY=secret): KEY names a secret family, value is opaque.
+  {
+    pattern:
+      /\b([A-Z][A-Z0-9_]*?(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD|PWD|URL)[A-Z0-9_]*)\s*=\s*("[^"\n]*"|'[^'\n]*'|\S+)/g,
+    replacement: "$1=[REDACTED]",
+  },
   {
     pattern: /\b(password|passwd|pwd|secret|api[_-]?key|auth[_-]?token)\b\s*[:=]\s*("[^"\n]*"|'[^'\n]*'|\S+)/gi,
     replacement: "[REDACTED credential]",
@@ -92,9 +101,13 @@ export function scrubSecretsText(text: string): { text: string; redactions: numb
   let current = text
   for (const scrubber of SCRUBBERS) {
     scrubber.pattern.lastIndex = 0
-    current = current.replace(scrubber.pattern, () => {
+    // Function replacement (counting) with $1..$9 expansion, so URL and env
+    // scrubbers keep their key/scheme while redacting the secret.
+    current = current.replace(scrubber.pattern, (...args: unknown[]) => {
       redactions++
-      return scrubber.replacement
+      let out = scrubber.replacement
+      for (let i = 1; i < args.length - 2; i++) out = out.split(`$${i}`).join(String(args[i] ?? ""))
+      return out
     })
   }
   const blocked = scrubKeyBlocks(current.split("\n"))
