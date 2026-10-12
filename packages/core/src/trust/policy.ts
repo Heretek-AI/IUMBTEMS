@@ -208,6 +208,8 @@ export const HUMAN_VERBS: ReadonlyArray<HumanVerbRule> = [
   // Audit and scout runs drive a harness CLI: an agent must not start nested headless runs.
   ["audit", (next) => next !== undefined && next !== "verify" && next !== "show"],
   ["scout", (next) => next !== undefined && next !== "show"],
+  // Prompt optimization grades candidates with model runs: human-only like audit/scout (#341).
+  ["improve", (next) => next === "optimize"],
 ]
 
 /**

@@ -93,7 +93,7 @@ import {
   trust,
   waive,
 } from "./human.ts"
-import { improveDistill, improveExportDataset, improveHarvest } from "./improve.ts"
+import { improveDistill, improveExportDataset, improveHarvest, improveOptimize } from "./improve.ts"
 import { auditCommand, auditDismiss, auditShow, researchDeepCommand, scoutCommand, scoutShow } from "./jobs.ts"
 import { keySeal, keyStatus } from "./key.ts"
 import { serveStdio } from "./mcp.ts"
@@ -156,6 +156,7 @@ Other
   improve distill --telemetry <file> --out <dir> [--open-pr]   Cluster telemetry into reviewable proposals
         [--open-pr opens a draft PR from a topic branch; human-run, refused without a terminal]
   improve export-dataset --format jsonl --kind <sft|dpo> --worktrees <dir>[,<dir>] --output <path>   Export verified trajectories as distillation datasets
+  improve optimize --telemetry <file> --prompt <file> --baseline <file> --out <dir> --max-usd N   Evolve prompt candidates with a holdout split; writes review-only proposals   [human]
   design [status]               Design interview progress (resumes from .factory/design)
   design render                 Re-render tokens.css + STYLE_GUIDE.md from tokens.json
   design check                  Fail on render drift, invalid tokens or one-off mints
@@ -781,8 +782,10 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         if (sub === "distill")
           return await improveDistill(subArgs(2), { print: io.print, cwd: io.cwd, confirm: io.confirm }, root)
         if (sub === "export-dataset") return await improveExportDataset(subArgs(2), { print: io.print, cwd: io.cwd })
+        if (sub === "optimize")
+          return await improveOptimize(subArgs(2), { print: io.print, cwd: io.cwd, confirm: io.confirm }, root)
         io.print(
-          "Usage: es improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file> | distill --telemetry <file> --out <dir> [--open-pr] | export-dataset --format jsonl --kind <sft|dpo> --worktrees <dir>[,<dir>] --output <path>",
+          "Usage: es improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file> | distill --telemetry <file> --out <dir> [--open-pr] | export-dataset --format jsonl --kind <sft|dpo> --worktrees <dir>[,<dir>] --output <path> | optimize --telemetry <file> --prompt <file> --baseline <file> --out <dir> --max-usd <USD>",
         )
         return 2
       }
