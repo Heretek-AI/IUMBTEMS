@@ -15,6 +15,7 @@ import {
   OptimizerError,
   paretoDominates,
   receiptFor,
+  splitHoldout,
   writeOptimizerProposals,
 } from "../src/improve/optimizer.ts"
 import type { RunTelemetry, Telemetry } from "../src/schema/improve.ts"
@@ -219,6 +220,124 @@ describe("writeOptimizerProposals", () => {
     expect(dropped).toHaveLength(result.dominated.length)
     expect(dropped[0].reasons.join(" ")).toContain("regressions")
     await rm(dir, { recursive: true, force: true })
+  })
+})
+
+describe("holdout split (#341)", () => {
+  const four = {
+    a: { pass: true, durationMs: 4 },
+    b: { pass: false, durationMs: 4 },
+    c: { pass: true, durationMs: 4 },
+    d: { pass: false, durationMs: 4 },
+  }
+
+  test("the split is deterministic and stable across orderings and runs", async () => {
+    const first = splitHoldout(["d", "b", "a", "c"])
+    const second = splitHoldout(["a", "b", "c", "d"])
+    expect(first).toEqual(second)
+    expect([...first.selection, ...first.holdout].sort()).toEqual(["a", "b", "c", "d"])
+    expect(first.selection.length).toBeGreaterThan(0)
+    expect(first.holdout.length).toBeGreaterThan(0)
+    expect(first.selection.filter((id) => first.holdout.includes(id))).toEqual([])
+    const run = () =>
+      evolvePrompts({
+        basePrompt: BASE,
+        basePromptId: "programmer",
+        telemetry: failingTelemetry(),
+        baseline: four,
+        grade: async () => ({
+          attempts: [attempt("a", true), attempt("b", true), attempt("c", true), attempt("d", true)],
+          costUSD: 0.02,
+          steps: 8,
+        }),
+      })
+    const one = await run()
+    const two = await run()
+    expect(one.selection).toEqual(first.selection)
+    expect(one.holdout).toEqual(first.holdout)
+    expect(two.selection).toEqual(one.selection)
+    expect(two.holdout).toEqual(one.holdout)
+  })
+
+  test("a candidate that wins on selection but regresses the holdout is rejected", async () => {
+    // Sorted head [a] is held out, selection is [b, c, d]: fix b and d but regress a.
+    const grade = async () => ({
+      attempts: [attempt("a", false), attempt("b", true), attempt("c", true), attempt("d", true)],
+      costUSD: 0.01,
+      steps: 4,
+    })
+    const result = await evolvePrompts({
+      basePrompt: BASE,
+      basePromptId: "programmer",
+      telemetry: failingTelemetry(),
+      baseline: four,
+      grade,
+    })
+    expect(result.winners).toEqual([])
+    expect(result.dominated.length).toBeGreaterThan(0)
+    expect(result.dominated).toHaveLength(result.receipts.length)
+    expect(result.dominated[0]!.holdoutRegressions).toContain("a")
+  })
+
+  test("a selection win with a clean holdout is kept, and the receipt names the split", async () => {
+    const grade = async () => ({
+      attempts: [attempt("a", true), attempt("b", true), attempt("c", true), attempt("d", true)],
+      costUSD: 0.02,
+      steps: 8,
+    })
+    const result = await evolvePrompts({
+      basePrompt: BASE,
+      basePromptId: "programmer",
+      telemetry: failingTelemetry(),
+      baseline: four,
+      grade,
+    })
+    expect(result.winners.length).toBeGreaterThan(0)
+    for (const winner of result.winners) {
+      expect(winner.receipt.holdoutRegressions).toEqual([])
+      expect(winner.receipt.selection).toEqual(result.selection)
+      expect(winner.receipt.holdout).toEqual(result.holdout)
+      expect(winner.before.selection).toEqual(result.selection)
+      expect(winner.before.holdout).toEqual(result.holdout)
+    }
+    const dir = await mkdtemp(path.join(tmpdir(), "es-opt-holdout-"))
+    try {
+      const { written } = await writeOptimizerProposals(dir, result, BASE)
+      expect(written).toHaveLength(result.winners.length)
+      for (const entry of written) {
+        const proposal = JSON.parse(await readFile(path.join(entry.dir, "proposal.json"), "utf8"))
+        expect(proposal.after.selection).toEqual(result.selection)
+        expect(proposal.after.holdout).toEqual(result.holdout)
+        expect(proposal.before.selection).toEqual(result.selection)
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a candidate that skips held-out cases cannot win (ungraded is not proof)", async () => {
+    const grade = async () => ({
+      attempts: [attempt("b", true), attempt("c", true), attempt("d", true)],
+      costUSD: 0.01,
+      steps: 3,
+    })
+    const result = await evolvePrompts({
+      basePrompt: BASE,
+      basePromptId: "programmer",
+      telemetry: failingTelemetry(),
+      baseline: four,
+      grade,
+    })
+    expect(result.winners).toEqual([])
+    const dir = await mkdtemp(path.join(tmpdir(), "es-opt-ungraded-"))
+    try {
+      const { droppedFile } = await writeOptimizerProposals(dir, result, BASE)
+      const dropped = JSON.parse(await readFile(droppedFile, "utf8")) as Array<{ reasons: string[] }>
+      expect(dropped.length).toBeGreaterThan(0)
+      expect(dropped[0]!.reasons.join(" ")).toContain("ungraded")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
 
