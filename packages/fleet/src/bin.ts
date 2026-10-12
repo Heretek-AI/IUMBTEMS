@@ -56,6 +56,17 @@ export function startDecision(input: {
 export const START_GRANT_TYPE = "es-fleet-start-grant" as const
 /** IPC message type carrying the child's pidfile-written report to the parent. */
 export const STARTED_TYPE = "es-fleet-started" as const
+/** CLI flag opting one canary cycle into the daemon scheduler (#346). OFF unless present. */
+export const CANARY_FLAG = "--enable-canary" as const
+/**
+ * Canary opt-in (#346): true only with an explicit `--enable-canary` flag.
+ * The flag alone never cuts a canary — the scheduler seam additionally
+ * refuses without a recorded human approval, and the real build/spawn/shadow
+ * pipeline plus the approval record are a human exercise.
+ */
+export function canaryEnabled(argv: readonly string[]): boolean {
+  return argv.includes(CANARY_FLAG)
+}
 /** How long a TTY-less child waits for the parent's grant. */
 export const START_GRANT_TIMEOUT_MS = 5_000
 /** How long the parent waits for the child's pidfile-written report. */
@@ -168,6 +179,7 @@ const HELP = `es-fleet ${VERSION} — Epistemic Swarm fleet daemon (human-only, 
 Usage:
   es-fleet start --max-usd <n> [--concurrency <k>] [--foreground]   start the daemon (TTY + confirmation)
         [--repo <dir>] [--es-bin <path>] [--port <n>] [--interval-ms <ms>]
+        [--enable-canary]   allow one explicitly-approved canary cycle (OFF by default)
   es-fleet stop                                                     stop the daemon
   es-fleet status [--json] [--token]                              show daemon status (agent-safe, except --token)
   es-fleet task add --file <task.json>                              add a task from a JSON file (human-only)

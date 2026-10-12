@@ -228,3 +228,25 @@ export class CanaryRunner {
     return { promoted: true, versionDir: candidate, log: shadow.log, approvedBy }
   }
 }
+
+export interface CanaryCycleRequest {
+  /** Explicit human enablement; anything but `enabled: true` with a recorded approval runs nothing. */
+  readonly canary?: CanaryOptions | undefined
+  readonly sourceDir: string
+}
+
+export type CanaryCycleOutcome = { readonly ran: false } | { readonly ran: true; readonly result: CanaryResult }
+
+/**
+ * Scheduler seam (#346): run one canary cycle when a human explicitly
+ * enabled it, otherwise do nothing. Enablement reuses `CanaryRunner.create`,
+ * so `enabled: true` without a recorded human approval throws fail-closed
+ * before anything builds; runner semantics (sandbox build, atomic promote,
+ * instant red rollback, frozen rollback target) are unchanged.
+ */
+export async function maybeRunCanaryCycle(request: CanaryCycleRequest): Promise<CanaryCycleOutcome> {
+  const canary = request.canary
+  if (canary?.enabled !== true) return { ran: false }
+  const runner = CanaryRunner.create(canary)
+  return { ran: true, result: await runner.runCanary(request.sourceDir) }
+}
