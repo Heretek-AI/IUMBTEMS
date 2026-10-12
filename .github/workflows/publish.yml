@@ -137,6 +137,8 @@ jobs:
         with:
           bun-version: "1.4.2"
       - name: Create tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="$(bun scripts/packages.ts --release | while read -r pkg _slug; do
             grep -m1 '"version"' "packages/$pkg/package.json" | sed 's/.*"version": *"//;s/".*//'

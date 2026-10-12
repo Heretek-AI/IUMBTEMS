@@ -390,7 +390,12 @@ const guardFixture = async (
     path.join(bin, "git"),
     `#!/bin/sh\necho "git $*" >> '${log}'\nif [ "$1" = "ls-remote" ]; then\nif [ "\${FAKE_GIT_TAG_EXISTS:-0}" = "1" ]; then exit 0; else exit 1; fi\nfi\nexit 0\n`,
   )
-  await writeFile(path.join(bin, "gh"), `#!/bin/sh\necho "gh $*" >> '${log}'\nexit 0\n`)
+  await writeFile(
+    path.join(bin, "gh"),
+    // The real `gh` inside Actions refuses when GH_TOKEN is unset (exit 4);
+    // mirror that so a missing token wiring fails here, not in the release.
+    `#!/bin/sh\nif [ "$1" = "release" ] && [ -z "$GH_TOKEN" ]; then\necho "gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable." >&2\nexit 4\nfi\necho "gh $*" >> '${log}'\nexit 0\n`,
+  )
   for (const tool of ["bun", "git", "gh"]) await chmod(path.join(bin, tool), 0o755)
   return { root, bin, log }
 }
@@ -478,7 +483,8 @@ describe("publish workflow guards (#328)", () => {
     const fx = await guardFixture(["2.3.0", "2.3.0", "2.3.0"], "2.3.0")
     try {
       const script = extractStep(await readWorkflow(), "Create tag and GitHub release")
-      const run = runStep(script, fx, { GITHUB_SHA: "abc123" })
+      // GH_TOKEN is what the workflow's step-level `env:` provides in Actions.
+      const run = runStep(script, fx, { GITHUB_SHA: "abc123", GH_TOKEN: "fake-token" })
       expect(run.exitCode).toBe(0)
       const calls = await readFile(fx.log, "utf8")
       expect(calls).toContain("tag -a v2.3.0")
@@ -490,6 +496,19 @@ describe("publish workflow guards (#328)", () => {
     } finally {
       await rmGuard(fx)
     }
+  })
+
+  test("the release step authenticates gh: GH_TOKEN is wired to github.token", async () => {
+    const yml = await readWorkflow()
+    const lines = yml.split("\n")
+    const at = lines.findIndex((line) => line.trim() === "- name: Create tag and GitHub release")
+    expect(at).toBeGreaterThan(-1)
+    const runAt = lines.findIndex((line, index) => index > at && /^\s*run: \|/.test(line))
+    expect(runAt).toBeGreaterThan(at)
+    // The `env:` block sits between `- name:` and `run: |`; it must hand the
+    // Actions token to `gh release create` (exit 4 without it, 2026-10-12).
+    const header = lines.slice(at, runAt).join("\n")
+    expect(header).toMatch(/GH_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/)
   })
 
   test("contents:write is scoped to the tag job; the tag job follows a guarded publish", async () => {
