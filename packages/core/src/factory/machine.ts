@@ -12,7 +12,7 @@
 //   the spend ceiling and the runtime cap, halting on any breach.
 // - Side effects (worktrees, commits, branch moves, PRs) are journaled.
 import { randomBytes } from "node:crypto"
-import { readFile, symlink } from "node:fs/promises"
+import { mkdir, readdir, readFile, readlink, symlink } from "node:fs/promises"
 import path from "node:path"
 import { assertModelDiversity, ModelDiversityError, type SeatModelMap } from "../agents/models.ts"
 import { seatOf } from "../agents/registry.ts"
@@ -28,6 +28,7 @@ import { readRetractions } from "../claims/degrade.ts"
 import { buildDossier, writeDossier } from "../claims/dossier.ts"
 import { claimsFromAudit } from "../claims/research.ts"
 import { ClaimStore } from "../claims/store.ts"
+import { loadGatesConfig } from "../gates/engine.ts"
 import { stateDir as defaultStateDir, factoryLayout } from "../layout.ts"
 import { auditMarkdown, formatCoverage } from "../research/auditor.ts"
 import { researchCache } from "../research/ops.ts"
@@ -38,6 +39,7 @@ import { RoadmapSchema } from "../schema/roadmap.ts"
 import { rebaseline, repinControl, verifyControl } from "../trust/control.ts"
 import { type SidecarProblem, signEngineFile, verifyEngineFile } from "../trust/sidecar.ts"
 import { checkStopFile } from "../trust/stop.ts"
+import { commandSetHash, isTrusted } from "../trust/store.ts"
 import { appendLine, exists, readJson, relativeInside, withLock, writeJson } from "../util/fs.ts"
 import { sha256 } from "../util/hash.ts"
 import { run, splitCommand } from "../util/proc.ts"
@@ -78,6 +80,43 @@ export interface GateFindingLike {
   readonly severity: "error" | "warning"
   readonly message: string
   readonly fixHint?: string
+}
+
+/**
+ * #361: whether a refusal finding is human-clearable (trust/waiver/approval/
+ * audit dismissal, control drift) vs needing code changes (acceptance, TDD,
+ * no-changes, gate failures). The factory's blocked summary marks each.
+ */
+export function isHumanClearableFinding(finding: Pick<GateFindingLike, "rule">): boolean {
+  const rule = finding.rule
+  return (
+    rule.startsWith("integrity/") ||
+    rule.startsWith("control-drift") ||
+    rule.startsWith("trust") ||
+    rule.startsWith("waiver") ||
+    rule.startsWith("approval") ||
+    rule.startsWith("audit/")
+  )
+}
+
+/** #361: every refusal finding on one line, human-clearable ones marked. */
+export function describeBlockedFindings(findings: readonly GateFindingLike[]): string[] {
+  return findings.map(
+    (finding) =>
+      `- ${finding.rule} ${finding.file}: ${finding.message}${isHumanClearableFinding(finding) ? " (human-clearable: es trust / es waive / es approve / es audit dismiss / es rebaseline)" : " (needs code changes)"}`,
+  )
+}
+
+/**
+ * #361: a context-only grill prompt names no change (empty or a project
+ * description without a delta). The grill asks one question — what is the
+ * change? — before round 1 instead of running premise rounds.
+ */
+export function needsDeltaQuestion(idea: unknown): boolean {
+  if (typeof idea !== "string") return true
+  const text = idea.trim()
+  if (text.length < 20) return true
+  return /\b(no change|no delta|context only|describe the project|what we have)\b/i.test(text)
 }
 
 export interface GateRunLike {
@@ -171,9 +210,10 @@ function sealProblemMessage(problem: SidecarProblem, dir: string | undefined): s
     const sandbox = process.env.ES_SANDBOX
     return (
       `Cannot verify .factory/runtime/state.json: there is no engine key at ${key}. ` +
+      `If engine.key was deleted by hand (for example while replacing the human key with \`es key reset\`), restart opencode to recreate it, then review the state and run \`es reseal --sign\` (the re-sign is audited); cached sources sealed under the old key stop verifying. ` +
       (sandbox
-        ? `This is an agent shell (sandbox "${sandbox}"), where Epistemic Swarm's private state dir is masked: call the es_status tool instead of \`es status\`.`
-        : "The plugin may be using another state dir (its stateDir option): point this shell at it with ES_STATE_DIR, then retry.")
+        ? `This is also an agent shell (sandbox "${sandbox}"), where Epistemic Swarm's private state dir is masked: call the es_status tool instead of \`es status\`.`
+        : "Otherwise the plugin may be using another state dir (its stateDir option): point this shell at it with ES_STATE_DIR, then retry.")
     )
   }
   if (problem === "missing sidecar")
@@ -620,6 +660,23 @@ export class Factory {
       const check = await verifyApproval(this.root, "spec", { stateDir: this.deps.stateDir })
       if (!check.ok) throw new FactoryError(check.reason)
       if (!(await Git.isRepo(this.root))) throw new FactoryError("The project must be a git repository to build.")
+      // Gate commands run project code, so a human must trust the exact set
+      // before the build starts (#359). Refusing here holds the run at the
+      // SPEC to BUILD boundary — no worktree, no branch, no programmer seat —
+      // with the trust step named. Agents may request trust, never grant it.
+      const { config: gateConfig } = await loadGatesConfig(this.root)
+      if (gateConfig.commands.length) {
+        const { hash } = await commandSetHash(this.root, gateConfig.commands)
+        if (!(await isTrusted(this.root, hash, this.deps.stateDir))) {
+          const store = this.deps.stateDir ?? defaultStateDir()
+          await this.audit(`agent:${agentId}`, "stage.build-refused", { reason: "trust/untrusted", hash })
+          throw new FactoryError(
+            `waiting on you: trust — this project's gate commands are not trusted yet, so the build cannot start. ` +
+              `A human reviews and approves them with \`es trust\` (or /es-trust) run in ${this.root}, then repeats es_build_start. ` +
+              `(trust/untrusted ${hash.slice(0, 12)}; project root ${this.root}; trust store ${store})`,
+          )
+        }
+      }
       const roadmap = RoadmapSchema.parse(JSON.parse(await readFile(this.layout.roadmap, "utf8")))
       if (roadmap.phases.length > this.limits.maxPhases)
         throw new FactoryError(`Roadmap exceeds ${this.limits.maxPhases} phases.`)
@@ -659,10 +716,18 @@ export class Factory {
   }
 
   private async ensureExcludes() {
-    const exclude = path.join((await Git.git(this.root, ["rev-parse", "--git-path", "info/exclude"])).stdout.trim())
-    const file = path.isAbsolute(exclude) ? exclude : path.join(this.root, exclude)
+    await this.ensureExcluded(this.root, [
+      ".factory/runtime/",
+      ".factory/runs/",
+      ".factory/worktrees/",
+      ".factory/STOP",
+    ])
+  }
+
+  private async ensureExcluded(cwd: string, wanted: string[]) {
+    const exclude = path.join((await Git.git(cwd, ["rev-parse", "--git-path", "info/exclude"])).stdout.trim())
+    const file = path.isAbsolute(exclude) ? exclude : path.join(cwd, exclude)
     const current = await readFile(file, "utf8").catch(() => "")
-    const wanted = [".factory/runtime/", ".factory/runs/", ".factory/worktrees/", ".factory/STOP"]
     const missing = wanted.filter((line) => !current.split("\n").includes(line))
     if (missing.length) await appendLine(file, `# epistemic-swarm\n${missing.join("\n")}`)
   }
@@ -680,12 +745,79 @@ export class Factory {
     for (const name of ["node_modules", ".venv", "venv"])
       if ((await exists(path.join(this.root, name))) && !(await exists(path.join(dir, name))))
         await symlink(path.join(this.root, name), path.join(dir, name), "dir").catch(() => undefined)
+    // Mirror workspace package links (#358): members resolve their own
+    // node_modules first, so without this a fresh worktree cannot typecheck
+    // until a seat reinstalls. Keep the factory's links out of phase commits
+    // and status whatever the project's ignore rules say.
+    await this.linkWorkspacePackages(dir)
+    await this.ensureExcluded(dir, ["/node_modules", "/.venv", "/venv"])
     phase.baseCommit = result.base
     phase.status = "building"
     phase.qa = {}
     state.activePhase = phase.id
     state.stage = "BUILD"
     phase.history.push({ at: this.now().toISOString(), event: "activated", notes: phase.branch })
+  }
+
+  /**
+   * Mirror workspace package links into a fresh phase worktree (#358). The
+   * root store is shared by symlink (above), but each workspace member
+   * resolves its own `node_modules` first: recreate every symlink the package
+   * manager left under each member's `node_modules`, so sibling links resolve
+   * inside the worktree instead of leaking into the main checkout. Relative
+   * targets are copied verbatim (they stay valid at the mirrored layout);
+   * absolute targets under the project root are rewritten to the worktree.
+   * Real files and directories are never copied.
+   */
+  private async linkWorkspacePackages(dir: string) {
+    const pkgText = await readFile(path.join(this.root, "package.json"), "utf8").catch(() => undefined)
+    if (!pkgText) return
+    let raw: { workspaces?: unknown }
+    try {
+      raw = JSON.parse(pkgText) as { workspaces?: unknown }
+    } catch {
+      return
+    }
+    const workspaces = Array.isArray(raw.workspaces)
+      ? raw.workspaces
+      : typeof raw.workspaces === "object" &&
+          raw.workspaces !== null &&
+          Array.isArray((raw.workspaces as { packages?: unknown }).packages)
+        ? (raw.workspaces as { packages: unknown[] }).packages
+        : []
+    const pkgDirs = new Set<string>()
+    for (const pattern of workspaces) {
+      if (typeof pattern !== "string" || pattern.startsWith("!")) continue
+      if (pattern.endsWith("/*")) {
+        const parent = pattern.slice(0, -2)
+        const entries = await readdir(path.join(this.root, parent), { withFileTypes: true }).catch(() => [])
+        for (const entry of entries) if (entry.isDirectory()) pkgDirs.add(path.join(parent, entry.name))
+      } else pkgDirs.add(pattern)
+    }
+    for (const pkg of pkgDirs)
+      await this.mirrorLinks(dir, path.join(this.root, pkg, "node_modules"), path.join(dir, pkg, "node_modules"))
+  }
+
+  private async mirrorLinks(worktree: string, from: string, to: string) {
+    const entries = await readdir(from, { withFileTypes: true }).catch(() => undefined)
+    if (!entries) return
+    for (const entry of entries) {
+      const src = path.join(from, entry.name)
+      const dst = path.join(to, entry.name)
+      if (entry.isSymbolicLink()) {
+        if (await exists(dst)) continue
+        let target = await readlink(src).catch(() => undefined)
+        if (target === undefined) continue
+        if (path.isAbsolute(target)) {
+          const rel = relativeInside(this.root, target)
+          if (rel !== undefined) target = path.join(worktree, rel)
+        }
+        await mkdir(path.dirname(dst), { recursive: true })
+        await symlink(target, dst, "dir").catch(() => undefined)
+      } else if (entry.isDirectory()) {
+        await this.mirrorLinks(worktree, src, dst)
+      }
+    }
   }
 
   /** Absolute path of the active phase worktree (for policy and gates). */
@@ -784,7 +916,12 @@ export class Factory {
           notes: `${findings.length} findings`,
         })
       })
-      return { ok: false, summary: `Not complete: ${gates.summary}`, findings, criteria }
+      return {
+        ok: false,
+        summary: `Not complete: ${gates.summary}\nBlocked findings:\n${describeBlockedFindings(findings).join("\n")}`,
+        findings,
+        criteria,
+      }
     }
     await this.mutate(`agent:${agentId}`, async (state) => {
       this.requireStage(state, "BUILD")

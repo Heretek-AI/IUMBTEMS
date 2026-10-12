@@ -163,6 +163,63 @@ describe("ordered failover", () => {
     }
     await expect(runSearchChain([down], "q", {})).rejects.toMatchObject({ kind: "upstream" })
   })
+
+  test("#357: a 403 from host A does not fail host B (scripted clock)", async () => {
+    let current = 1_000_000
+    const clock = () => current
+    const cooldowns = new Map<string, { until: number; kind: "auth" }>()
+    const refused: SourceBackend = {
+      id: "direct",
+      capabilities: { search: false, fetch: true },
+      available: () => true,
+      fetch: async (url: string) => {
+        if (url.includes("hostA.test")) {
+          throw Object.assign(new Error("Fetching https://hostA.test/x failed: HTTP 403"), { status: 403 })
+        }
+        return { url, text: "host B serves fine", contentType: "text/plain" }
+      },
+    }
+    await expect(runFetchChain([refused], "https://hostA.test/x", { now: clock, cooldowns })).rejects.toMatchObject({
+      kind: "auth",
+    })
+    // Same chain, other host, still inside hostA's cooldown: succeeds.
+    const ok = await runFetchChain([refused], "https://hostB.test/y", { now: clock, cooldowns })
+    expect(ok.value.text).toContain("host B serves fine")
+    // Host A while its own cooldown holds reports the cooldown with retry time.
+    current += 5_000
+    const failure = await runFetchChain([refused], "https://hostA.test/x", { now: clock, cooldowns }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(failure).toBeInstanceOf(BackendError)
+    expect((failure as BackendError).message).toMatch(/cooling.*retry in \d+s/)
+  })
+
+  test("#357: cooling-only fetch reports retry time, never search-provider text (scripted clock)", async () => {
+    let current = 2_000_000
+    const clock = () => current
+    const cooldowns = new Map<string, { until: number; kind: "auth" }>()
+    const flaky: SourceBackend = {
+      id: "direct",
+      capabilities: { search: false, fetch: true },
+      available: () => true,
+      fetch: async () => {
+        throw Object.assign(new Error("Fetching https://solo.test/x failed: HTTP 403"), { status: 403 })
+      },
+    }
+    await expect(runFetchChain([flaky], "https://solo.test/x", { now: clock, cooldowns })).rejects.toMatchObject({
+      kind: "auth",
+    })
+    current += 1_000
+    const failure = await runFetchChain([flaky], "https://solo.test/x", { now: clock, cooldowns }).then(
+      () => "no-throw",
+      (error: unknown) => error,
+    )
+    expect(failure).toBeInstanceOf(BackendError)
+    expect((failure as BackendError).message).toMatch(/Every fetch backend is cooling/)
+    expect((failure as BackendError).message).toMatch(/retry in \d+s/)
+    expect((failure as BackendError).message).not.toContain("search provider")
+  })
 })
 
 describe("backend order resolution", () => {

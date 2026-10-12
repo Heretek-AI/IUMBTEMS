@@ -80,6 +80,17 @@ it in a terminal).
 
 ## 4. Autonomous build
 
+Gate commands run project code, so a human trusts the exact set before the
+first build — the run refuses `es_build_start` until then (`waiting on you:
+trust`, still at SPEC, no seat launched):
+
+- terminal: `es trust` in the project (previews the commands, asks for your
+  passphrase, records the approval); or
+- TUI: `/es-trust`.
+
+Trust is per command set: editing `.factory/gates.json` (or a `package.json`
+script a gate reaches) afterwards revokes it and asks again.
+
 `/factory` again; after the spec approval the run is autonomous: worktree per
 phase, gates (including the new complexity check once built), dual QA
 (functional + adversarial), manager tiebreak, retries bounded. Watch it as

@@ -7,6 +7,7 @@ import path from "node:path"
 import {
   agentSpec,
   bwrapAvailable,
+  bwrapOverlay,
   checkStopFile,
   evaluateRead,
   evaluateShell,
@@ -37,6 +38,28 @@ export function patchTargets(patchText: string): string[] {
     if (target) targets.push(target)
   }
   return targets
+}
+
+/**
+ * The seat-shell sandbox mode for `cwd` (#326): "sandboxed" when bubblewrap
+ * can build the seat sandbox including the overlay mounts the shell backstop
+ * needs, "host-fallback" when bwrap is present but the overlay is unavailable
+ * for `cwd` (e.g. a btrfs mount without userxattr — the shell then runs
+ * without the read-only backstop, the #294 fallback), "unavailable" when
+ * there is no bwrap at all (seat shells are refused outright).
+ *
+ * Naming only: enforcement is unchanged. Whether the fallback stays or the
+ * shell fails closed on such hosts is the human's product decision on #326;
+ * this names the mode so the control matrix asserts the designed behaviour
+ * for the mode the host is in, with the mode in the assertion output.
+ */
+export function seatShellSandboxMode(cwd: string): "sandboxed" | "host-fallback" | "unavailable" {
+  if (!bwrapAvailable()) return "unavailable"
+  try {
+    return bwrapOverlay(cwd) ? "sandboxed" : "host-fallback"
+  } catch {
+    return "host-fallback"
+  }
 }
 
 const deny = (message: string): never => {

@@ -53,6 +53,11 @@ export async function commitAll(
   author = "Epistemic Swarm <factory@epistemic-swarm.local>",
 ) {
   await git(dir, ["add", "-A"])
+  // The factory links dependency stores into phase worktrees (see activate in
+  // factory/machine.ts). A `node_modules/` ignore line matches directories,
+  // not those symlinks, so unstage them explicitly: a phase commit never
+  // carries factory-created links, whatever the project's ignore rules say.
+  await git(dir, ["reset", "-q", "--", "node_modules", ".venv", "venv"], { allowFail: true })
   const staged = await git(dir, ["diff", "--cached", "--quiet"], { allowFail: true })
   if (staged.code === 0) return undefined
   const [name, email] = /^([^<]*) <([^>]*)>$/.exec(author)?.slice(1) ?? [

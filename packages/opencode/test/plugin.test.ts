@@ -321,6 +321,25 @@ describe("a factory run end to end on the real host", () => {
     "",
   ].join("\n")
 
+  test("gate commands only run after a human trusts them", async () => {
+    const before = await h.run(call("es_gates_run", { scope: "full" }), { agent: "factory" })
+    expect(before.tools[0]?.text).toContain("trust/untrusted")
+    const rpc = rpcFor(h)
+    const preview = await rpc.previewTrust({}, where(h))
+    expect(preview.lines.join("\n")).toContain("bun test")
+    expect(typeof (rpc as any).trust).not.toBe("function")
+    const { config } = await loadGatesConfig(h.directory)
+    const gates = await commandSetHash(h.directory, config.commands)
+    const hooks = (await HookEngine.create({ root: h.directory, stateDir: state, audit: false })).status()
+    await trustProject(h.directory, gates.hash, gates.lines, { stateDir: state, signer })
+    if (hooks.projectHash)
+      await trustProject(h.directory, hooks.projectHash, hooks.projectLines, {
+        stateDir: state,
+        kind: "hooks",
+        signer,
+      })
+  }, 60_000)
+
   test("grill → human approves frontier → research → spec → human approves spec → build", async () => {
     const grill = await h.run(
       `${call("es_frontier_write", { frontier })} ${call("es_request_approval", { stage: "frontier" })}`,
@@ -378,29 +397,15 @@ describe("a factory run end to end on the real host", () => {
     const spec = await rpc.previewApproval({ stage: "spec" }, where(h))
     expect(spec.ok).toBe(true)
     await approveStage(h.directory, { stage: "spec", channel: "cli", signer, stateDir: state })
+    // #359: BUILD starts only with trusted gates. The test models the human
+    // `es trust` step at the SPEC to BUILD boundary before starting the build.
+    const { config } = await loadGatesConfig(h.directory)
+    const gates = await commandSetHash(h.directory, config.commands)
+    await trustProject(h.directory, gates.hash, gates.lines, { stateDir: state, signer })
     const build = await h.run(call("es_build_start"), { agent: "factory" })
     expect(build.tools[0]?.status).toBe("completed")
     expect(build.tools[0]?.text).toContain(`worktree:.factory/worktrees/${phase}`)
   }, 120_000)
-
-  test("gate commands only run after a human trusts them", async () => {
-    const before = await h.run(call("es_gates_run", { scope: "full" }), { agent: "factory" })
-    expect(before.tools[0]?.text).toContain("trust/untrusted")
-    const rpc = rpcFor(h)
-    const preview = await rpc.previewTrust({}, where(h))
-    expect(preview.lines.join("\n")).toContain("bun test")
-    expect(typeof (rpc as any).trust).not.toBe("function")
-    const { config } = await loadGatesConfig(h.directory)
-    const gates = await commandSetHash(h.directory, config.commands)
-    const hooks = (await HookEngine.create({ root: h.directory, stateDir: state, audit: false })).status()
-    await trustProject(h.directory, gates.hash, gates.lines, { stateDir: state, signer })
-    if (hooks.projectHash)
-      await trustProject(h.directory, hooks.projectHash, hooks.projectLines, {
-        stateDir: state,
-        kind: "hooks",
-        signer,
-      })
-  }, 60_000)
 
   test("programmer: red test first, implement in the worktree, gated complete", async () => {
     const worktree = path.join(h.directory, ".factory/worktrees", phase)

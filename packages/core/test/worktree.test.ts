@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, symlink, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { run } from "../src/util/proc.ts"
 import * as Git from "../src/worktree/index.ts"
 import { type Fixture, gitRepo } from "./helpers.ts"
 
@@ -39,5 +40,29 @@ describe("git worktree ops", () => {
     const before = await Git.treeFingerprint(fx.root)
     await writeFile(path.join(fx.root, "new.txt"), "x")
     expect(await Git.treeFingerprint(fx.root)).not.toBe(before)
+  })
+
+  test("#358: phase commits never contain factory dependency symlinks, even when .gitignore uses `node_modules/`", async () => {
+    // The dogfood condition: a trailing-slash ignore matches directories, not symlinks.
+    const git = (...args: string[]) => run(["git", ...args], { cwd: fx.root })
+    await writeFile(
+      path.join(fx.root, ".gitignore"),
+      ".factory/runtime/\n.factory/worktrees/\n.factory/runs/\nnode_modules/\n",
+    )
+    await git("add", "-A")
+    await git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "ignore node_modules")
+    const base = await Git.headCommit(fx.root)
+    const dir = path.join(fx.root, ".factory/worktrees/p1")
+    await Git.addWorktree(fx.root, dir, "factory/run/phase-p1", base)
+    // The factory's dependency link (machine.ts activate()): a symlink, which
+    // `node_modules/` does not ignore.
+    await symlink(fx.state, path.join(dir, "node_modules"), "dir")
+    expect((await run(["git", "check-ignore", "-q", "node_modules"], { cwd: dir })).code).toBe(1)
+
+    await mkdir(path.join(dir, "src"), { recursive: true })
+    await writeFile(path.join(dir, "src/a.ts"), "export const a = 1\n")
+    const commit = await Git.commitAll(dir, "phase p1")
+    expect(commit).toMatch(/^[0-9a-f]{40}$/)
+    expect((await Git.commitFiles(dir, base))[0]?.files).toEqual(["src/a.ts"])
   })
 })

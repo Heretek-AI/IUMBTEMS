@@ -18,8 +18,9 @@ import {
   sign,
   verify,
 } from "node:crypto"
-import { mkdir, open, readFile } from "node:fs/promises"
+import { mkdir, open, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { appendAuditEntry } from "../audit/chain.ts"
 import { stateDir } from "../layout.ts"
 import { canonicalJson } from "../util/hash.ts"
 
@@ -131,6 +132,28 @@ export async function sealHumanKey(passphrase: string, dir = stateDir()): Promis
   if (passphrase.length < MIN_PASSPHRASE)
     throw new HumanKeyError(`the passphrase must be at least ${MIN_PASSPHRASE} characters`)
   await mkdir(dir, { recursive: true, mode: 0o700 })
+  const { sealed, pubPem, keyId } = await buildSealed(passphrase)
+  // Exclusive creates: a key that already exists (or was planted) is never replaced silently.
+  for (const [name, text] of [
+    [SEALED_FILE, `${JSON.stringify(sealed, null, 2)}\n`],
+    [PUBLIC_FILE, pubPem],
+  ] as const) {
+    try {
+      const handle = await open(path.join(dir, name), "wx", 0o600)
+      await handle.writeFile(text)
+      await handle.close()
+    } catch (error: any) {
+      if (error?.code === "EEXIST")
+        throw new HumanKeyError(
+          `${path.join(dir, name)} already exists: this machine already has a human key (replace it with \`es key reset\` at a terminal, then re-record approvals)`,
+        )
+      throw error
+    }
+  }
+  return { keyId }
+}
+
+async function buildSealed(passphrase: string): Promise<{ sealed: SealedKey; pubPem: string; keyId: string }> {
   const pair = generateKeyPairSync("ed25519")
   const salt = randomBytes(16)
   const iv = randomBytes(12)
@@ -146,24 +169,45 @@ export async function sealHumanKey(passphrase: string, dir = stateDir()): Promis
     cipher: { name: "aes-256-gcm", iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64") },
     data: data.toString("base64"),
   }
-  // Exclusive creates: a key that already exists (or was planted) is never replaced silently.
-  for (const [name, text] of [
-    [SEALED_FILE, `${JSON.stringify(sealed, null, 2)}\n`],
-    [PUBLIC_FILE, pair.publicKey.export({ type: "spki", format: "pem" }).toString()],
-  ] as const) {
-    try {
-      const handle = await open(path.join(dir, name), "wx", 0o600)
-      await handle.writeFile(text)
-      await handle.close()
-    } catch (error: any) {
-      if (error?.code === "EEXIST")
-        throw new HumanKeyError(
-          `${path.join(dir, name)} already exists: this machine already has a human key (remove ${SEALED_FILE} and ${PUBLIC_FILE} by hand to replace it, then re-record approvals)`,
-        )
-      throw error
-    }
+  return { sealed, pubPem: pair.publicKey.export({ type: "spki", format: "pem" }).toString(), keyId }
+}
+
+/**
+ * #354: guarded human-key replacement (human, TTY via `es key reset`).
+ * Replaces ONLY the human key pair — the engine key is never touched, so
+ * run verification and sealed caches survive. Overwrites atomically (temp
+ * + rename); a half-deleted brick (lone human.key) is repaired, not refused.
+ * Approvals, waivers and trust signed by the old key must be recorded again.
+ */
+export async function resetHumanKey(
+  passphrase: string,
+  dir = stateDir(),
+): Promise<{ keyId: string; mustRerecord: string }> {
+  if (passphrase.length < MIN_PASSPHRASE)
+    throw new HumanKeyError(`the passphrase must be at least ${MIN_PASSPHRASE} characters`)
+  await mkdir(dir, { recursive: true, mode: 0o700 })
+  const { sealed, pubPem, keyId } = await buildSealed(passphrase)
+  // Atomic overwrites of the two human files only: engine.key is never
+  // listed here, so a replacement cannot silently unseal engine state.
+  await writeFile(path.join(dir, `${SEALED_FILE}.tmp`), `${JSON.stringify(sealed, null, 2)}\n`, { mode: 0o600 })
+  await writeFile(path.join(dir, `${PUBLIC_FILE}.tmp`), pubPem, { mode: 0o600 })
+  const { rename } = await import("node:fs/promises")
+  await rename(path.join(dir, `${SEALED_FILE}.tmp`), path.join(dir, SEALED_FILE))
+  await rename(path.join(dir, `${PUBLIC_FILE}.tmp`), path.join(dir, PUBLIC_FILE))
+  return {
+    keyId,
+    mustRerecord: "approvals, waivers and trust signed by the old key must be recorded again",
   }
-  return { keyId }
+}
+
+/**
+ * #354: audit a human re-sign of engine files (`es reseal --sign`).
+ * Names every file re-signed so the recovery is visible in the audit log.
+ * The CLI calls this after signEngineFile; agents have no path to it.
+ */
+export async function auditEngineResign(root: string, files: readonly string[], actor: string): Promise<void> {
+  if (!files.length) return
+  await appendAuditEntry(root, { actor, action: "engine.resign", payload: { files: [...files] } })
 }
 
 /** Unlock the human key with its passphrase. A wrong passphrase fails the AES-GCM tag check. */

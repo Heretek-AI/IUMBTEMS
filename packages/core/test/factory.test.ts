@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, truncate, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, readlink, symlink, truncate, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { approvalSubject, recordApproval, verifyApproval } from "../src/approval/index.ts"
@@ -325,6 +325,73 @@ describe("build and QA", () => {
     const branches = (await run(["git", "branch", "--list", "factory/*"], { cwd: fx.root })).stdout
     expect(branches).toContain(`factory/${state.runId}/integration`)
     expect(branches).toContain(`factory/${state.runId}/phase-alpha`)
+  })
+
+  test("#358: a fresh phase worktree mirrors workspace package links, so tools resolve with no seat action", async () => {
+    // A workspace monorepo: what `bun install` leaves behind is a root store
+    // plus per-package relative links into it and into sibling packages.
+    await writeFile(path.join(fx.root, "package.json"), JSON.stringify({ private: true, workspaces: ["packages/*"] }))
+    await mkdir(path.join(fx.root, "packages/app"), { recursive: true })
+    await mkdir(path.join(fx.root, "packages/lib"), { recursive: true })
+    await writeFile(
+      path.join(fx.root, "packages/app/package.json"),
+      JSON.stringify({ name: "app", dependencies: { lib: "workspace:*" } }),
+    )
+    await writeFile(path.join(fx.root, "packages/lib/package.json"), JSON.stringify({ name: "lib" }))
+    const git = (...args: string[]) => run(["git", ...args], { cwd: fx.root })
+    await git("add", "package.json", "packages")
+    await git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "workspace")
+    await mkdir(path.join(fx.root, "node_modules"), { recursive: true })
+    await writeFile(path.join(fx.root, "node_modules/.store-marker"), "root store\n")
+    await mkdir(path.join(fx.root, "packages/app/node_modules/@scope"), { recursive: true })
+    await symlink("../../../lib", path.join(fx.root, "packages/app/node_modules/@scope/lib"), "dir")
+
+    await toBuild()
+    const dir = await worktreeOf()
+    // The root store is shared; per-package links are mirrored so they resolve
+    // inside the worktree (not back into the main checkout).
+    expect(await readlink(path.join(dir, "node_modules"))).toBe(path.join(fx.root, "node_modules"))
+    const mirrored = path.join(dir, "packages/app/node_modules/@scope/lib")
+    expect(await readlink(mirrored)).toBe("../../../lib")
+    const { realpath } = await import("node:fs/promises")
+    expect(await realpath(mirrored)).toBe(await realpath(path.join(dir, "packages/lib")))
+    // The factory's links stay out of `git status` and phase commits whatever
+    // the project's ignore rules say.
+    expect((await run(["git", "check-ignore", "-q", "node_modules"], { cwd: dir })).code).toBe(0)
+  })
+
+  test("#359: startBuild refuses with untrusted gates; the run waits at SPEC for a human trust", async () => {
+    // Pinned before any approval, so the baseline covers it.
+    await mkdir(path.join(fx.root, ".factory"), { recursive: true })
+    await writeFile(
+      path.join(fx.root, ".factory/gates.json"),
+      JSON.stringify({ commands: [{ id: "unit", kind: "test", command: "bun test" }] }),
+    )
+    await factory.begin("human:tester")
+    await factory.writeFrontier("grill", frontier())
+    await approve("frontier")
+    await factory.beginResearch("human:tester")
+    await writeReport(fx.root, fx.state)
+    await factory.completeResearch("factory")
+    await writeSpecs(fx.root, ["alpha"])
+    await approve("spec")
+    await expect(factory.startBuild("factory")).rejects.toThrow("waiting on you: trust")
+    // The run waits at the SPEC to BUILD boundary: no phases, no worktree, no
+    // run branch, so no programmer seat can launch before gates are trusted.
+    const state = (await factory.read())!
+    expect(state.stage).toBe("SPEC")
+    expect(state.phases).toEqual([])
+    expect(state.activePhase).toBeUndefined()
+    expect(await factory.activeWorktree()).toBeUndefined()
+    const branches = (await run(["git", "branch", "--list", "factory/*"], { cwd: fx.root })).stdout
+    expect(branches).not.toContain("integration")
+    // After a human trusts the exact command set, the same call builds.
+    const { loadGatesConfig } = await import("../src/gates/engine.ts")
+    const { commandSetHash, trustProject } = await import("../src/trust/store.ts")
+    const { config } = await loadGatesConfig(fx.root)
+    const { hash, lines } = await commandSetHash(fx.root, config.commands)
+    await trustProject(fx.root, hash, lines, { signer, stateDir: fx.state })
+    expect((await factory.startBuild("factory")).stage).toBe("BUILD")
   })
 
   test("complete is gated: seat, changes, red-first evidence, criteria, and gates in the worktree", async () => {
