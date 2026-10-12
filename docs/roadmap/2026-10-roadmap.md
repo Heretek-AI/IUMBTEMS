@@ -176,7 +176,7 @@ sequenceDiagram
 
 #### Key Components:
 1. **Scraper-Swarm Gateway Integration:**
-   - Direct connection to Heretek-AI/scraper-swarm via its gateway JSON-RPC `/mcp` endpoint.
+   - Direct connection to the Scraper-Swarm gateway (Heretek-AI/scraper-swarm) via its JSON-RPC `/mcp` endpoint.
    - Authenticated via scoped agent tokens (`["search", "scrape"]`) issued by `panel-api`.
    - Leverages Scraper-Swarm's SSRF protection (`deny_reason_for_url`), Smokescreen outbound proxy, and rate-limiting bucket.
    - Built-in fallback: If Scraper-Swarm gateway is offline, gracefully degrades to cached SearXNG/Brave or host websearch.
