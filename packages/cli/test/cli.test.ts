@@ -1564,6 +1564,33 @@ describe("release version", () => {
   })
 })
 
+describe("CLI/plugin version skew (#356)", () => {
+  test("checkVersionSkew: older minor warns, older major refuses human-only", async () => {
+    const { checkVersionSkew } = await import("../src/version.ts")
+    expect(checkVersionSkew(VERSION, undefined)).toMatchObject({ warn: false, refuseHuman: false })
+    expect(checkVersionSkew(VERSION, VERSION)).toMatchObject({ warn: false, refuseHuman: false })
+    const minor = checkVersionSkew("2.3.0", "2.4.0")
+    expect(minor.warn).toBe(true)
+    expect(minor.refuseHuman).toBe(false)
+    expect(minor.message).toContain("npm i -g @heretek-ai/es-cli@2.4.0")
+    const major = checkVersionSkew("1.6.0", "2.3.0")
+    expect(major).toMatchObject({ warn: true, refuseHuman: true })
+    expect(major.message).toContain("npm i -g")
+  })
+
+  test("an older es reading newer run state warns with the upgrade command", async () => {
+    await new Factory(root, { gates: gateRunner({ stateDir: state }), stateDir: state }).begin("human:tester")
+    const file = factoryLayout(root).state
+    const raw = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>
+    await writeFile(file, JSON.stringify({ ...raw, writerVersion: "9.9.0" }))
+    const { signEngineFile } = await import("@heretek-ai/es-core")
+    await signEngineFile(file, state)
+    const result = await run(["status"])
+    expect(result.out).toContain("older than the version that wrote this run's state")
+    expect(result.out).toContain("npm i -g @heretek-ai/es-cli@9.9.0")
+  })
+})
+
 describe("status and runs (1.1.3)", () => {
   const begin = (at: string = root) =>
     new Factory(at, { gates: gateRunner({ stateDir: state }), stateDir: state }).begin("human:tester")

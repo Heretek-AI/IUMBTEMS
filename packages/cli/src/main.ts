@@ -96,7 +96,7 @@ import { keySeal, keyStatus } from "./key.ts"
 import { serveStdio } from "./mcp.ts"
 import { runsCommand, statusCommand } from "./status.ts"
 import { type ConfirmIO, confirmHuman, NotInteractive, terminalIO } from "./tty.ts"
-import { VERSION } from "./version.ts"
+import { checkVersionSkew, VERSION } from "./version.ts"
 import { terminalWatchIO, type WatchIO, watchCommand } from "./watch.ts"
 
 export { VERSION }
@@ -228,6 +228,31 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
     return 2
   }
   const root = indexed?.root ?? (await projectRoot(path.resolve(io.cwd, flag(args, "cwd") ?? ".")))
+  // #356: the plugin (opencode cache) and the CLI (global npm) drift
+  // silently. Newer run states carry `writerVersion`; an older `es` warns
+  // once, and a different major refuses human-only commands.
+  const writerVersion = await readFile(factoryLayout(root).state, "utf8")
+    .then((text) => (JSON.parse(text) as { writerVersion?: unknown }).writerVersion)
+    .then((value) => (typeof value === "string" ? value : undefined))
+    .catch(() => undefined)
+  const skew = checkVersionSkew(VERSION, writerVersion)
+  if (skew.warn && skew.message) io.print(`Warning: ${skew.message}`)
+  if (skew.refuseHuman) {
+    const humanOnly =
+      command === "approve" ||
+      command === "trust" ||
+      command === "rebaseline" ||
+      command === "reseal" ||
+      command === "waive" ||
+      (command === "key" && (sub === "seal" || sub === "reset")) ||
+      (command === "factory" && (sub === "resume" || sub === "pr" || sub === "init"))
+    if (humanOnly) {
+      io.print(
+        `Refused: ${skew.message} Run the human step with an up-to-date es instead; nothing was signed or recorded.`,
+      )
+      return 1
+    }
+  }
   const context: HumanContext = {
     root,
     io: io.confirm,
