@@ -44,6 +44,10 @@ jobs:
   # configured; the key is exported as vars.ES_EVAL_KEY_VAR (default
   # ANTHROPIC_API_KEY). Scheduled and manual runs only: on push, the E2E
   # feedback workflow runs the same evals once, with a debug report.
+  # Exit meaning (#322): 0 when every failure carries a `modelLimited` note
+  # (an explicit, reviewed statement in the case file; listed as
+  # FAIL (model-limited)), 1 on any other failure. The model is chosen by a
+  # human (recorded on #322), never by an agent.
   evals:
     if: github.event_name != 'push'
     runs-on: ubuntu-latest
