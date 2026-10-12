@@ -9,7 +9,7 @@ exports[`agent assets prompt snapshot: a changed prompt must bump its version 1`
   "deep-researcher": "v1:2c436cd49fd6aaf8",
   "designer": "v2:745908a2a4abff0b",
   "factory": "v10:d87aa973b1517d02",
-  "grill": "v4:722c43eeb12d95bb",
+  "grill": "v5:45ebabe97a3ebfa5",
   "harvester": "v2:c63fbc079e1cbbbe",
   "lens-adjacent-possible": "v1:d6d768502ed2adf2",
   "lens-constraint-removal": "v1:b6510755131beee1",
