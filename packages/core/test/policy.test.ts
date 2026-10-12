@@ -101,6 +101,23 @@ describe("write policy", () => {
     expect(shell.effect).toBe("deny")
   })
 
+  test("the evals acknowledgment file is human-only, in the editor and the shell (#323)", () => {
+    for (const agent of [undefined, "build", "factory", "es-programmer", "es-manager", "qa"]) {
+      expect(effect(evaluateWrite(ctx(), agent, "evals/acknowledgments.json"))).toBe("deny")
+      expect(effect(evaluateWrite(ctx(), agent, path.join(root, "evals/acknowledgments.json")))).toBe("deny")
+      expect(effect(evaluateWrite(ctx(), agent, "docs/../evals/acknowledgments.json"))).toBe("deny")
+      expect(effect(evaluateWrite(ctx(), agent, "EVALS/ACKNOWLEDGMENTS.JSON"))).toBe("deny")
+    }
+    const seatShell = evaluateShell(ctx(), "es-programmer", "cat evals/acknowledgments.json", {
+      sandboxAvailable: true,
+    })
+    expect(seatShell.effect).toBe("deny")
+    const agentShell = evaluateShell(ctx(), undefined, `echo '{}' > evals/acknowledgments.json`, {
+      sandboxAvailable: false,
+    })
+    expect(agentShell.effect).toBe("deny")
+  })
+
   test("engine-owned brainstorm/harvest/design state is tool-only; seats keep notes", () => {
     const engine = [
       ".factory/harvest/matrix.json",

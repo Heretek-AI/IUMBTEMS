@@ -31,6 +31,9 @@ export interface PolicyContext {
 const allow: Decision = { effect: "allow" }
 const deny = (reason: string): Decision => ({ effect: "deny", reason })
 
+/** Evals regression acknowledgments (#323): tracked, human-only, like a control file. */
+const EVAL_ACKNOWLEDGMENTS = "evals/acknowledgments.json"
+
 const SCOPE_GLOBS: Record<Exclude<WriteScope, "worktree">, readonly string[]> = {
   "factory-docs": [
     ".factory/roadmap.json",
@@ -79,6 +82,14 @@ export function evaluateWrite(context: PolicyContext, agentId: string | undefine
       if (spec) return deny(`"${relative}" is host configuration; factory seats may not change it.`)
       return { effect: "ask", reason: `"${relative}" controls plugins or hooks. Allow this agent to change it?` }
     }
+    // Evals regression acknowledgments (#323): a tracked human-only file
+    // with the same deny-write standing as a factory control file. No
+    // agent — seat or user agent — writes it; a human records the case id,
+    // reason, issue link and date by hand.
+    if (relative.replace(/^\.\//, "").toLowerCase() === EVAL_ACKNOWLEDGMENTS)
+      return deny(
+        `"${relative}" is a human-only acknowledgment file. Agents cannot write it; a human records the case id, reason, issue link and date by hand.`,
+      )
   }
 
   // Fleet isolation (#124): task worktrees live under `.fleet/`. Any agent
@@ -330,7 +341,7 @@ const MENTION_HINT =
   " If it only names the verb in text (a here-doc, a commit message, a `--body` argument), the rule still reads a call: write the text to a file with the edit tool and pass the file (`gh … --body-file`, `git commit -F`)."
 
 const CONTROL_MENTION =
-  /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|audits\b|improve\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design|scout)\/(?!notes\/)[^\s'"]*)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b/i
+  /\.factory\/(gates\.json|config\.json|frontier\.json|waivers|approvals|runtime|STOP|git-hooks|claims\b|audits\b|improve\b|research\/(sources\b|(coverage|dossier|brief\.pcrb)\.json)|(brainstorm|harvest|design|scout)\/(?!notes\/)[^\s'"]*)|\.git\/(config|hooks)|\.opencode\/(hooks\.json|plugins|opencode\.jsonc?)|\.claude\/settings|opencode\.jsonc?\b|evals\/acknowledgments\.json/i
 /** Any mention of the factory dir (a `cd .factory` reaches control files without naming them). */
 const FACTORY_MENTION = /(^|[\s/=:])\.factory(\/|[\s;|&]|$)/i
 /** Any mention of fleet isolation state (task worktrees live under `.fleet/`). */
