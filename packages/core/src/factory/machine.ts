@@ -16,7 +16,8 @@ import { mkdir, readdir, readFile, readlink, symlink } from "node:fs/promises"
 import path from "node:path"
 import { assertModelDiversity, ModelDiversityError, type SeatModelMap } from "../agents/models.ts"
 import { seatOf } from "../agents/registry.ts"
-import { readApproval, verifyApproval } from "../approval/record.ts"
+import { isMachineScope, type MachineTransitionApproval, verifyMachineTransition } from "../approval/machine.ts"
+import { approvalSubject, readApproval, verifyApproval } from "../approval/record.ts"
 import { appendAuditEntry } from "../audit/chain.ts"
 import {
   claimVerdict,
@@ -525,6 +526,85 @@ export class Factory {
   }
 
   /**
+   * ADR 0004 M1: GRILL → RESEARCH under a machine signature instead of a
+   * human frontier approval. The record must authorize the GRILL exit on the
+   * current checkout (integration/* or factory/*) with a green gate proof;
+   * the grill's settled frontier must exist, and the spend ceiling is
+   * human-set (never minted by the machine).
+   */
+  async beginResearchWithMachine(input: {
+    readonly record: MachineTransitionApproval
+    readonly publicKeyPem: string
+    readonly ceilingUSD: number
+  }): Promise<FactoryState> {
+    const actor = `machine:${input.record.keyId}`
+    return this.mutate(actor, async (state) => {
+      this.requireStage(state, "GRILL")
+      this.requireAuditsClear(state)
+      await this.requireMachineRecord(input, "GRILL")
+      const frontier = await readFrontier(this.root).catch((error: Error) => {
+        throw new FactoryError(error.message)
+      })
+      if (!frontier?.settled)
+        throw new FactoryError("The grill has not settled a frontier yet; run /grill interactively first.")
+      if (!(input.ceilingUSD > 0))
+        throw new FactoryError(
+          "The machine GRILL exit needs a human-set spend ceiling in USD (--max-usd <USD>); the machine never sets one.",
+        )
+      state.spendCeilingUSD = input.ceilingUSD
+      state.stage = "RESEARCH"
+      await this.audit(actor, "stage.research", { spendCeilingUSD: state.spendCeilingUSD, machine: true })
+      await this.clearPending("frontier")
+      return state
+    })
+  }
+
+  /**
+   * The machine authorizes stage exits; it never mints human authority.
+   * Re-check kind, stage, branch and target explicitly (clear errors), then
+   * fail closed through verifyMachineTransition (scope, target, proof and
+   * signature re-checked). Returns the checkout branch the record is bound to.
+   */
+  private async requireMachineRecord(
+    input: { readonly record: MachineTransitionApproval; readonly publicKeyPem: string },
+    expectedStage: string,
+  ): Promise<string> {
+    const { record, publicKeyPem } = input
+    if (record.kind !== "stage-transition")
+      throw new FactoryError("release merges are human-only: a machine record cannot authorize this transition")
+    if (record.stage !== expectedStage)
+      throw new FactoryError(
+        `This machine record authorizes the ${record.stage} exit, not ${expectedStage}; it cannot authorize this transition.`,
+      )
+    if (record.target === "main" || record.target.startsWith("main/"))
+      throw new FactoryError("updates targeting main are human-only: a machine record cannot authorize them")
+    const branch = await Git.currentBranch(this.root)
+    if (branch === undefined)
+      throw new FactoryError(
+        "refusing the machine transition: no current branch here (detached HEAD or not a repo checkout), so the run is not attributable",
+      )
+    if (!isMachineScope(branch) || record.branch !== branch)
+      throw new FactoryError(
+        `the machine record is for "${record.branch}", which does not match this checkout ("${branch}"): outside machine scope (integration/*, factory/*) a human must sign this transition`,
+      )
+    if (!(await verifyMachineTransition(record, publicKeyPem)))
+      throw new FactoryError(
+        "machine transition refused: the record does not verify (scope, target, proof or signature)",
+      )
+    return branch
+  }
+
+  /** Satisfy one pending approval through a machine exit (only that exit's own stage). */
+  private async clearPending(stage: string): Promise<void> {
+    const pending = (await readJson<Array<{ stage: string }>>(this.layout.pending).catch(() => undefined)) ?? []
+    if (pending.some((item) => item.stage === stage))
+      await writeJson(
+        this.layout.pending,
+        pending.filter((item) => item.stage !== stage),
+      )
+  }
+
+  /**
    * Start a research-only run (#110, Option A): no frontier, no approvals, no
    * git repo needed. The run enters RESEARCH directly with an objective and a
    * mandatory spend ceiling, and completes at DONE. Spend tracking, STOP,
@@ -684,60 +764,104 @@ export class Factory {
       this.requireAuditsClear(state)
       const check = await verifyApproval(this.root, "spec", { stateDir: this.deps.stateDir })
       if (!check.ok) throw new FactoryError(check.reason)
-      if (!(await Git.isRepo(this.root))) throw new FactoryError("The project must be a git repository to build.")
-      // Gate commands run project code, so a human must trust the exact set
-      // before the build starts (#359). Refusing here holds the run at the
-      // SPEC to BUILD boundary — no worktree, no branch, no programmer seat —
-      // with the trust step named. Agents may request trust, never grant it.
-      const { config: gateConfig } = await loadGatesConfig(this.root)
-      if (gateConfig.commands.length) {
-        const { hash } = await commandSetHash(this.root, gateConfig.commands)
-        if (!(await isTrusted(this.root, hash, this.deps.stateDir))) {
-          const store = this.deps.stateDir ?? defaultStateDir()
-          await this.audit(`agent:${agentId}`, "stage.build-refused", { reason: "trust/untrusted", hash })
-          throw new FactoryError(
-            `waiting on you: trust — this project's gate commands are not trusted yet, so the build cannot start. ` +
-              `A human reviews and approves them with \`es trust\` (or /es-trust) run in ${this.root}, then repeats es_build_start. ` +
-              `(trust/untrusted ${hash.slice(0, 12)}; project root ${this.root}; trust store ${store})`,
-          )
-        }
-      }
-      const roadmap = RoadmapSchema.parse(JSON.parse(await readFile(this.layout.roadmap, "utf8")))
-      if (roadmap.phases.length > this.limits.maxPhases)
-        throw new FactoryError(`Roadmap exceeds ${this.limits.maxPhases} phases.`)
-      // A preset-seeded run pins its release base: the grill must have kept
-      // baseBranch when it rewrote the roadmap, otherwise the run would
-      // silently release onto the wrong branch (falling back to the checkout
-      // or "main"). Refuse to advance instead.
-      if (state.preset === SELF_DOGFOOD_PRESET && roadmap.baseBranch !== SELF_DOGFOOD_BASE_BRANCH)
-        throw new FactoryError(
-          `Preset "${SELF_DOGFOOD_PRESET}" requires roadmap.baseBranch "${SELF_DOGFOOD_BASE_BRANCH}" (the grill must keep it when rewriting the roadmap); found ${roadmap.baseBranch === undefined ? "no baseBranch" : `"${roadmap.baseBranch}"`}. Restore it, then start the build again.`,
-        )
-      const hashes = new Map(check.record.subject.map((item) => [item.path, item.sha256]))
-      state.phases = roadmap.phases.map((phase) => ({
-        id: phase.id,
-        title: phase.title,
-        status: "pending" as const,
-        goalHash: hashes.get(`.factory/specs/${phase.id}/GOAL.md`)!,
-        failures: 0,
-        replanned: false,
-        qa: {},
-        history: [],
-      }))
-      state.baseBranch = roadmap.baseBranch ?? (await Git.currentBranch(this.root)) ?? "main"
-      state.runBranch = `factory/${state.runId}/integration`
-      await this.ensureExcludes()
-      const base = await Git.revParse(this.root, state.baseBranch)
-      await once(this.root, `${state.runId}:run-branch`, async () => {
-        await Git.setBranch(this.root, state.runBranch!, base)
-        return { base }
-      })
-      state.autonomyStartedAt = this.now().toISOString()
-      state.stage = "BUILD"
-      await this.audit(`agent:${agentId}`, "stage.build", { phases: state.phases.map((phase) => phase.id), base })
-      await this.activate(state, state.phases[0]!)
+      await this.enterBuild(`agent:${agentId}`, state, check.record.subject)
       return state
     })
+  }
+
+  /**
+   * ADR 0004 M2: SPEC → BUILD under a machine signature instead of a human
+   * spec approval. Every other guard stays: audits, model diversity, gate
+   * trust, roadmap limits, the preset pin. With no approval subject, goalHash
+   * binds the validated on-disk bytes at build start, so later edits are
+   * still caught.
+   */
+  async startBuildWithMachine(input: {
+    readonly record: MachineTransitionApproval
+    readonly publicKeyPem: string
+  }): Promise<FactoryState> {
+    const actor = `machine:${input.record.keyId}`
+    try {
+      assertModelDiversity(this.deps.models)
+    } catch (error) {
+      if (error instanceof ModelDiversityError) throw new FactoryError(error.message)
+      throw error
+    }
+    return this.mutate(actor, async (state) => {
+      this.requireStage(state, "SPEC")
+      this.requireAuditsClear(state)
+      await this.requireMachineRecord(input, "SPEC")
+      const { subject } = await approvalSubject(this.root, "spec").catch((error: Error) => {
+        throw new FactoryError(error.message)
+      })
+      await this.enterBuild(actor, state, subject)
+      await this.clearPending("spec")
+      return state
+    })
+  }
+
+  /**
+   * SPEC → BUILD entry shared by the human path (subject from the signed
+   * approval) and the machine path (subject from the validated bytes on
+   * disk). Trust, roadmap, branches and activation are identical.
+   */
+  private async enterBuild(
+    actor: string,
+    state: FactoryState,
+    subject: ReadonlyArray<{ readonly path: string; readonly sha256: string }>,
+  ): Promise<void> {
+    if (!(await Git.isRepo(this.root))) throw new FactoryError("The project must be a git repository to build.")
+    // Gate commands run project code, so a human must trust the exact set
+    // before the build starts (#359). Refusing here holds the run at the
+    // SPEC to BUILD boundary — no worktree, no branch, no programmer seat —
+    // with the trust step named. Agents may request trust, never grant it.
+    const { config: gateConfig } = await loadGatesConfig(this.root)
+    if (gateConfig.commands.length) {
+      const { hash } = await commandSetHash(this.root, gateConfig.commands)
+      if (!(await isTrusted(this.root, hash, this.deps.stateDir))) {
+        const store = this.deps.stateDir ?? defaultStateDir()
+        await this.audit(actor, "stage.build-refused", { reason: "trust/untrusted", hash })
+        throw new FactoryError(
+          `waiting on you: trust — this project's gate commands are not trusted yet, so the build cannot start. ` +
+            `A human reviews and approves them with \`es trust\` (or /es-trust) run in ${this.root}, then repeats es_build_start. ` +
+            `(trust/untrusted ${hash.slice(0, 12)}; project root ${this.root}; trust store ${store})`,
+        )
+      }
+    }
+    const roadmap = RoadmapSchema.parse(JSON.parse(await readFile(this.layout.roadmap, "utf8")))
+    if (roadmap.phases.length > this.limits.maxPhases)
+      throw new FactoryError(`Roadmap exceeds ${this.limits.maxPhases} phases.`)
+    // A preset-seeded run pins its release base: the grill must have kept
+    // baseBranch when it rewrote the roadmap, otherwise the run would
+    // silently release onto the wrong branch (falling back to the checkout
+    // or "main"). Refuse to advance instead.
+    if (state.preset === SELF_DOGFOOD_PRESET && roadmap.baseBranch !== SELF_DOGFOOD_BASE_BRANCH)
+      throw new FactoryError(
+        `Preset "${SELF_DOGFOOD_PRESET}" requires roadmap.baseBranch "${SELF_DOGFOOD_BASE_BRANCH}" (the grill must keep it when rewriting the roadmap); found ${roadmap.baseBranch === undefined ? "no baseBranch" : `"${roadmap.baseBranch}"`}. Restore it, then start the build again.`,
+      )
+    const hashes = new Map(subject.map((item) => [item.path, item.sha256]))
+    state.phases = roadmap.phases.map((phase) => ({
+      id: phase.id,
+      title: phase.title,
+      status: "pending" as const,
+      goalHash: hashes.get(`.factory/specs/${phase.id}/GOAL.md`)!,
+      failures: 0,
+      replanned: false,
+      qa: {},
+      history: [],
+    }))
+    state.baseBranch = roadmap.baseBranch ?? (await Git.currentBranch(this.root)) ?? "main"
+    state.runBranch = `factory/${state.runId}/integration`
+    await this.ensureExcludes()
+    const base = await Git.revParse(this.root, state.baseBranch)
+    await once(this.root, `${state.runId}:run-branch`, async () => {
+      await Git.setBranch(this.root, state.runBranch!, base)
+      return { base }
+    })
+    state.autonomyStartedAt = this.now().toISOString()
+    state.stage = "BUILD"
+    await this.audit(actor, "stage.build", { phases: state.phases.map((phase) => phase.id), base })
+    await this.activate(state, state.phases[0]!)
   }
 
   private async ensureExcludes() {

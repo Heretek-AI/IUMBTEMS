@@ -9,11 +9,13 @@ import path from "node:path"
 import { createInterface } from "node:readline"
 import {
   checkStopFile,
+  createMachineKeyStore,
   currentBranch,
   stateDir as defaultStateDir,
   exists,
   Factory,
   type FactoryState,
+  type GateProofBundle,
   gateRunner,
   git,
   headline,
@@ -23,6 +25,8 @@ import {
   progressPrint,
   readLiveness,
   seatOf,
+  signStageTransition,
+  verifyMachineTransition,
 } from "@heretek-ai/es-core"
 import { z } from "zod"
 
@@ -515,15 +519,126 @@ export async function* driveHeadless(options: HeadlessOptions, job: HeadlessJob)
 }
 
 /** The factory run: until DONE, a pending approval, or the grill (which needs a human). */
-export function runHeadless(options: HeadlessOptions): AsyncGenerator<HeadlessEvent> {
+export function runHeadless(
+  options: HeadlessOptions & { readonly machine?: MachineSupplier },
+): AsyncGenerator<HeadlessEvent> {
   return driveHeadless(options, {
     agent: "factory",
     prompt: async (state, factory) =>
       `${await factory.summary(state)}\n${headline(state, await readLiveness(options.root, state))}\nContinue the factory run from its current stage. This is a headless run: no human will answer questions.`,
-    finished: (state) => headlessFinished(options.root, state),
+    finished: (state) => headlessFinishedWithMachine(options, state),
     // Research artifacts and seat outcomes count as progress, not just the stage machine.
     progress: async (state) => progressPrint(state, await readLiveness(options.root, state)),
   })
+}
+
+/**
+ * Gate evidence for one machine-signable exit, supplied by the caller (a
+ * future gate-proof builder; the runner never fabricates proofs). Undefined
+ * means no proof is available, so the run waits for a human.
+ */
+export interface MachineSupplier {
+  /** Human-set spend ceiling for the GRILL exit (a human flag, never an agent value). */
+  readonly ceilingUSD: number
+  proofFor(stage: "frontier" | "spec", state: FactoryState): Promise<GateProofBundle | undefined>
+}
+
+export interface MachineStageRequest {
+  /** Stage exit being authorized: only GRILL and SPEC are machine-signable (ADR 0004). */
+  readonly transition: string
+  /** Gate evidence the machine signature binds (never fabricated here). */
+  readonly proof: GateProofBundle
+  /** Human-set spend ceiling (required for the GRILL exit). */
+  readonly ceilingUSD?: number
+}
+
+/**
+ * Authorize one factory stage exit with a machine signature (ADR 0004 M1/M2).
+ * Mints an ephemeral in-memory key, signs the supplied proof for the current
+ * checkout branch, verifies fail-closed, dispatches to the factory's machine
+ * path, then destroys the key. Releases, main checkouts, detached HEADs, red
+ * proofs and missing ceilings are refused with the run state untouched.
+ */
+export async function attemptMachineStageTransition(
+  root: string,
+  request: MachineStageRequest,
+  options: { readonly stateDir?: string } = {},
+): Promise<FactoryState> {
+  if (request.transition !== "GRILL" && request.transition !== "SPEC")
+    throw new Error(
+      `${request.transition} is human-only: the machine key authorizes GRILL and SPEC exits only (ADR 0004)`,
+    )
+  if (request.transition === "GRILL" && !(request.ceilingUSD !== undefined && request.ceilingUSD > 0))
+    throw new Error(
+      "The machine GRILL exit needs a human-set spend ceiling in USD (--max-usd <USD>); the machine never sets one.",
+    )
+  const branch = await currentBranch(root)
+  if (branch === undefined)
+    throw new Error(
+      "refusing the machine transition: no current branch here (detached HEAD or not a repo checkout), so the run is not attributable",
+    )
+  const store = createMachineKeyStore()
+  try {
+    const record = signStageTransition(store, {
+      branch,
+      target: branch,
+      kind: "stage-transition",
+      stage: request.transition,
+      proof: request.proof,
+    })
+    // Fail closed before touching the run, even though the factory verifies again.
+    if (!(await verifyMachineTransition(record, store.publicKeyPem)))
+      throw new Error("machine transition refused: the record does not verify")
+    const factory = new Factory(root, {
+      gates: gateRunner(options.stateDir ? { stateDir: options.stateDir } : {}),
+      ...(options.stateDir ? { stateDir: options.stateDir } : {}),
+    })
+    if (request.transition === "GRILL")
+      return await factory.beginResearchWithMachine({
+        record,
+        publicKeyPem: store.publicKeyPem,
+        ceilingUSD: request.ceilingUSD!,
+      })
+    return await factory.startBuildWithMachine({ record, publicKeyPem: store.publicKeyPem })
+  } finally {
+    store.destroy()
+  }
+}
+
+/**
+ * The headless end condition with an opt-in machine path: a frontier/spec
+ * wait on an in-scope branch with a supplied green proof exits through the
+ * machine signature and keeps driving; anything refused (main, release,
+ * red proof, missing ceiling) stays waiting on a human.
+ */
+async function headlessFinishedWithMachine(
+  options: HeadlessOptions & { readonly machine?: MachineSupplier },
+  state: FactoryState,
+): Promise<HeadlessEvent | undefined> {
+  const waiting = await headlessFinished(options.root, state)
+  if (waiting?.type !== "waiting" || !options.machine) return waiting
+  const stages = waiting.stages ?? []
+  const exit =
+    state.stage === "GRILL" && stages.includes("frontier")
+      ? ("GRILL" as const)
+      : state.stage === "SPEC" && stages.includes("spec")
+        ? ("SPEC" as const)
+        : undefined
+  if (!exit) return waiting
+  const proof = await options.machine.proofFor(exit === "GRILL" ? "frontier" : "spec", state).catch(() => undefined)
+  if (!proof) return waiting
+  try {
+    await attemptMachineStageTransition(
+      options.root,
+      exit === "GRILL"
+        ? { transition: exit, proof, ceilingUSD: options.machine.ceilingUSD }
+        : { transition: exit, proof },
+      { ...(options.stateDir ? { stateDir: options.stateDir } : {}) },
+    )
+  } catch {
+    return waiting
+  }
+  return undefined
 }
 
 /**
