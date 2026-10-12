@@ -322,11 +322,16 @@ async function runCommandCheck(
   const failed = result.code !== 0 || result.timedOut || findings.some((finding) => finding.severity === "error")
   if (failed && !findings.some((finding) => finding.severity === "error")) {
     const tail = output.trim().split("\n").slice(-8).join("\n")
+    // A kill at the limit (#360) must read as a timeout with its cap, never as
+    // a bare "exit null": the deciding detail is the limit that was exceeded.
+    const cause = result.timedOut
+      ? `timed out after ${check.timeoutMs}ms (exceeded the ${check.timeoutMs}ms limit; conventional exit 124)`
+      : `exited ${result.code}`
     findings.push({
       file: ".",
       rule: result.timedOut ? `${check.id}/timeout` : `${check.id}/command-failed`,
       severity: "error",
-      message: `${check.command} ${result.timedOut ? "timed out" : `exited ${result.code}`}${context.scope === "touched" && (check.kind === "typecheck" || check.kind === "lint") ? " (no findings in touched files; see log)" : ""}`,
+      message: `${check.command} ${cause}${context.scope === "touched" && (check.kind === "typecheck" || check.kind === "lint") ? " (no findings in touched files; see log)" : ""}`,
       fixHint: `${tail.slice(0, 600)}\nFull log: ${log}`,
       check: check.id,
     })
