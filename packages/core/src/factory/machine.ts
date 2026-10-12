@@ -44,7 +44,7 @@ import { appendLine, exists, readJson, relativeInside, withLock, writeJson } fro
 import { sha256 } from "../util/hash.ts"
 import { run, splitCommand } from "../util/proc.ts"
 import * as Git from "../worktree/git.ts"
-import { pruneWorktrees } from "../worktree/lease.ts"
+import { LeaseError, pruneWorktrees, WorktreeLeaseManager } from "../worktree/lease.ts"
 import { once } from "./journal.ts"
 import { readPresetSeed, SELF_DOGFOOD_BASE_BRANCH, SELF_DOGFOOD_PRESET } from "./preset.ts"
 import { indexRun } from "./runs.ts"
@@ -198,6 +198,24 @@ const newRunId = (now: Date) =>
 
 const TEST_FILE =
   /(^|\/)(test|tests|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.(py|go)$/
+
+/**
+ * Heartbeat leases over the factory's phase and release-check worktrees
+ * (#340). One manager per repo root, shared by every Factory instance in
+ * this process, so an acquire in one call can be heartbeated in the next:
+ * each factory invocation is short-lived, and without the shared tokens the
+ * next call could never heartbeat. A new process reclaims the dead holder's
+ * lease through the normal acquire path; a live holder (a concurrent run)
+ * refuses with FactoryError instead.
+ */
+const factoryLeaseManagers = new Map<string, WorktreeLeaseManager>()
+const factoryLeases = (root: string): WorktreeLeaseManager => {
+  const cached = factoryLeaseManagers.get(root)
+  if (cached) return cached
+  const manager = new WorktreeLeaseManager(root, { worktreeRoot: path.join(root, ".factory", "worktrees") })
+  factoryLeaseManagers.set(root, manager)
+  return manager
+}
 
 /**
  * Why the run state cannot be read, and what fixes it. A missing key is not
@@ -410,6 +428,13 @@ export class Factory {
     // Factory startup garbage-collects crashed runs' human-process worktrees
     // (#160): best-effort, so a corrupt lease can never block a new run.
     await pruneWorktrees(this.root).catch(() => undefined)
+    // #340: collect this run's own phase/release-check leases too, but only
+    // when no run exists: a halted run keeps its worktree for resume and
+    // forensics, and the next op re-takes its lease on entry.
+    if (!(await exists(this.layout.state)))
+      await pruneWorktrees(this.root, { worktreeRoot: path.join(this.root, ".factory", "worktrees") }).catch(
+        () => undefined,
+      )
     return this.mutate(
       actor,
       async (state) => {
@@ -732,15 +757,95 @@ export class Factory {
     if (missing.length) await appendLine(file, `# epistemic-swarm\n${missing.join("\n")}`)
   }
 
+  /**
+   * Take the heartbeat lease for a phase or release-check worktree (#340).
+   * Acquire first so two runs racing the same worktree path elect one
+   * holder; a same-process retry lands on our own live lease (heartbeat
+   * proves it); a live lease held anywhere else refuses instead of stealing.
+   */
+  private async acquireWorktreeLease(slug: string, branch: string, dir: string): Promise<void> {
+    const manager = factoryLeases(this.root)
+    try {
+      await manager.acquire(slug, { branch, dir })
+      return
+    } catch (error) {
+      if (!(error instanceof LeaseError)) throw error
+      try {
+        await manager.heartbeat(slug)
+        return
+      } catch {
+        // Not ours: refuse below.
+      }
+      throw new FactoryError(
+        `Worktree ${JSON.stringify(dir)} is leased by another live run (${error.message}); refusing to take it by force.`,
+      )
+    }
+  }
+
+  /**
+   * Refresh the held lease before touching a worktree (#340): heartbeat
+   * when this process holds it, reclaim a dead or expired one, refuse when
+   * another live holder owns it. Fail-closed: running unleased is worse
+   * than stopping.
+   */
+  private async touchWorktreeLease(slug: string, branch: string, dir: string): Promise<void> {
+    const manager = factoryLeases(this.root)
+    try {
+      await manager.heartbeat(slug)
+      return
+    } catch {
+      // Not held here: reclaim a dead/stale lease or refuse below.
+    }
+    try {
+      await manager.acquire(slug, { branch, dir })
+    } catch (error) {
+      if (error instanceof LeaseError)
+        throw new FactoryError(
+          `Worktree ${JSON.stringify(dir)} is leased by another live run (${error.message}); refusing to work unleased.`,
+        )
+      throw error
+    }
+  }
+
+  /**
+   * Best-effort release for terminal paths (#340): release our own lease,
+   * else reclaim-then-release a dead predecessor's. A live lease held
+   * elsewhere is left alone. Never throws.
+   */
+  private async releaseWorktreeLease(slug: string, branch: string, dir: string): Promise<void> {
+    const manager = factoryLeases(this.root)
+    try {
+      await manager.release(slug)
+      return
+    } catch {
+      // Not held here: try the reclaim path for a dead predecessor.
+    }
+    try {
+      await manager.acquire(slug, { branch, dir })
+      await manager.release(slug)
+    } catch {
+      // Another live holder, or nothing to release: leave it.
+    }
+  }
+
   private async activate(state: FactoryState, phase: PhaseRuntime) {
     const dir = this.layout.worktree(phase.id)
     phase.branch = `factory/${state.runId}/phase-${phase.id}`
     phase.worktree = path.relative(this.root, dir).split(path.sep).join("/")
     const from = await Git.revParse(this.root, state.runBranch!)
-    const result = await once(this.root, `${state.runId}:${phase.id}:worktree`, async () => {
-      await Git.addWorktree(this.root, dir, phase.branch!, from)
-      return { base: from }
-    })
+    // The lease is taken before the checkout (#340): concurrent runs elect
+    // exactly one holder, and a crashed run's stale lease is reclaimed here.
+    await this.acquireWorktreeLease(phase.id, phase.branch, dir)
+    let result: { base: string }
+    try {
+      result = await once(this.root, `${state.runId}:${phase.id}:worktree`, async () => {
+        await Git.addWorktree(this.root, dir, phase.branch!, from)
+        return { base: from }
+      })
+    } catch (error) {
+      await this.releaseWorktreeLease(phase.id, phase.branch, dir)
+      throw error
+    }
     // Share installed dependencies so gate tools resolve inside the worktree.
     for (const name of ["node_modules", ".venv", "venv"])
       if ((await exists(path.join(this.root, name))) && !(await exists(path.join(dir, name))))
@@ -868,6 +973,9 @@ export class Factory {
     })
     const { phase, goal } = snapshot
     const dir = path.join(this.root, phase.worktree!)
+    // The seat worked since the last factory call: re-establish a live lease
+    // before reading the worktree (#340). Refuses when another live run holds it.
+    await this.touchWorktreeLease(phase.id, phase.branch!, dir)
     const changed = await Git.changedFiles(dir, phase.baseCommit!)
     const findings: GateFindingLike[] = []
     if (changed.length === 0)
@@ -1064,6 +1172,8 @@ export class Factory {
         `Phase ${phase.id} needs a passed or human-dismissed audit first (audit.phase is required: open one with es_audit_open, or a human runs \`es audit dismiss <id> --reason …\`).`,
       )
     const runBranch = state.runBranch!
+    // QA seats worked since `complete`: refresh the lease before the merge (#340).
+    await this.touchWorktreeLease(phase.id, phase.branch!, path.join(this.root, phase.worktree!))
     await once(this.root, `${state.runId}:${phase.id}:merge`, async () => {
       const tip = await Git.revParse(this.root, runBranch)
       if (!(await Git.isAncestor(this.root, tip, phase.headCommit!)))
@@ -1077,6 +1187,8 @@ export class Factory {
       await Git.removeWorktree(this.root, path.join(this.root, phase.worktree!))
       return true
     })
+    // The checkout is gone: drop the lease too, on success paths (#340).
+    await this.releaseWorktreeLease(phase.id, phase.branch!, path.join(this.root, phase.worktree!))
     phase.status = "passed"
     phase.history.push({ at: this.now().toISOString(), event: "passed", notes: phase.headCommit ?? "" })
     await this.audit("system", "phase.pass", { phase: phase.id, commit: phase.headCommit })
@@ -1105,6 +1217,10 @@ export class Factory {
       }
       state.stage = "HALTED"
       await this.audit("system", "factory.halt", { reason: state.halt.reason })
+      // Terminal failure: the checkout stays for forensics but the lease is
+      // dropped, so a later run re-takes it on entry instead of tripping on
+      // a dead holder (#340).
+      await this.releaseWorktreeLease(phase.id, phase.branch!, path.join(this.root, phase.worktree!))
       return
     }
     if (phase.failures === this.limits.replanAfterFailures && !phase.replanned) {
@@ -1350,15 +1466,26 @@ export class Factory {
     })
     const runBranch = state.runBranch!
     const dir = this.layout.worktree("release")
+    const branch = `factory/${state.runId}/release-check`
     const head = await Git.revParse(this.root, runBranch)
-    await Git.addWorktree(this.root, dir, `factory/${state.runId}/release-check`, head)
+    // The release check runs gates in a scratch worktree: hold it under a
+    // lease like a phase worktree, so concurrent releasers elect one holder (#340).
+    await this.acquireWorktreeLease("release", branch, dir)
+    try {
+      await Git.addWorktree(this.root, dir, branch, head)
+    } catch (error) {
+      await this.releaseWorktreeLease("release", branch, dir)
+      throw error
+    }
     let gates: GateRunLike
     try {
       const base = await Git.revParse(this.root, state.baseBranch!)
       gates = await this.deps.gates({ root: this.root, dir, scope: "full", base, runId: state.runId })
     } finally {
       await Git.removeWorktree(this.root, dir)
-      await Git.git(this.root, ["branch", "-D", `factory/${state.runId}/release-check`], { allowFail: true })
+      await Git.git(this.root, ["branch", "-D", branch], { allowFail: true })
+      // Released on failure as well as success (#340).
+      await this.releaseWorktreeLease("release", branch, dir)
     }
     if (!gates.passed) throw new FactoryError(`Release gates failed: ${gates.summary}`)
     const pr = this.deps.pr

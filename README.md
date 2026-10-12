@@ -5,13 +5,12 @@
 > phases under dual QA, and open a PR a human merges. Mechanical gates and a
 > human-only approval channel keep autonomous runs honest.
 
-> **Status: 2.3.0.** Phase 9 recursive self-improvement & model distillation:
-> passed phase worktrees export scrubbed SFT/DPO datasets
-> (`es improve export-dataset`). Also included as tested library APIs that
-> no run calls yet: a prompt optimizer behind a strict Pareto gate
-> (`improve/optimizer`), a human-enabled canary hot-swap harness, and the
-> Phase 7 machine key and staging pipeline (#164, #166, #174, #176). See
-> the CHANGELOG for what is reachable.
+> **Status: 2.4.0.** Phase 10 hardening & verification: leased factory/fleet
+> worktrees (`es worktree create|release`), human-only `es improve optimize`
+> with holdout receipts, browser config apply, pinned eval gates and publish
+> hardening. The 2.3.0 library APIs are independently audited (#329–#339);
+> machine-key, staging and canary wiring land in Phase 11. See the CHANGELOG
+> for what is reachable.
 > Install from npm (`@heretek-ai/epistemic-swarm`, `@heretek-ai/es-core`,
 > `@heretek-ai/es-cli`); run `es key seal` once.
 

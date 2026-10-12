@@ -1,22 +1,38 @@
-// Read-only config preview (#132, preview-only mode): the browser edits
-// project config and gates against strict-schema validation with exact
-// hash diffs, but applying stays terminal-only (ADR 0002 I7) — nothing in
-// this module writes. `get` reads the current layers, hashes and drift;
-// `plan` validates proposed file content with the same schemas the terminal
-// path uses and previews the new hash, changed keys and the exact `es`
-// commands the human runs. There is deliberately no apply: the bus must
-// keep refusing `fleet.config.apply` with "unknown method".
-import { createHash } from "node:crypto"
-import { readFile } from "node:fs/promises"
+// Config preview + browser apply (#132 preview, #145 apply): the browser
+// edits project config and gates against strict-schema validation with
+// exact hash diffs. Previewing (`get`/`plan`) reads only. Applying writes
+// project-config bytes only, and only through the ticketed human path
+// below: a preview-bound single-use ticket (I3) plus the passphrase and
+// the CSRF/Origin checks reused from #131 (I1/I2/I4/I6/I8). Gates content
+// stays terminal-only (I7) — `request` and `apply` both refuse it. There
+// is deliberately no `fleet.config.apply` RPC method: the bus must keep
+// refusing it with "unknown method" so no agent or MCP tool can reach the
+// write (I6); the HTTP route (wired by the daemon bus from `web.ts`) calls
+// `applyConfigEdit` with the session CSRF and Origin it already checked
+// for approvals.
+import { createHash, randomBytes } from "node:crypto"
+import { mkdir, readFile } from "node:fs/promises"
+import path from "node:path"
 import {
+  appendAuditEntry,
+  checkApprovalAttempts,
   EsConfigSchema,
   factoryLayout,
   GatesConfigSchema,
   globalConfigFile,
   mergeConfig,
+  noteApprovalSuccess,
+  noteWrongPassphrase,
   PROJECT_FORBIDDEN_KEYS,
+  rebaseline,
+  unlockHumanKey,
   verifyControl,
+  withLock,
+  writeJson,
 } from "@heretek-ai/es-core"
+import { CONFIG_TICKET_TTL_MS, type CsrfTokens } from "./approve.ts"
+import { fleetPaths } from "./state.ts"
+import { assertConfigHumanEnv, configApplyOriginOk } from "./web.ts"
 
 const sha256 = (text: string | Buffer): string => createHash("sha256").update(text).digest("hex")
 /** Canonical bytes `writeJson` would emit: the previewed hash is exact. */
@@ -178,4 +194,175 @@ export async function planConfigFile(
     changedKeys: changed,
     commands: changed.map((key) => `es config set ${key} ${JSON.stringify(proposed[key])}`),
   }
+}
+
+// ------------------------------------------------------------------ browser apply (#145)
+
+export const GATES_TERMINAL_ONLY =
+  "gates edits stay terminal-only: run them in a terminal with `es rebaseline`; the browser applies project config only"
+
+/** A mutating apply refusal: `status` mirrors the HTTP layer (403/409/423/400). */
+export class ConfigApplyError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly details: Record<string, unknown> = {},
+  ) {
+    super(message)
+    this.name = "ConfigApplyError"
+  }
+}
+
+export interface ConfigApplyTicket {
+  readonly file: "config"
+  readonly content: Record<string, unknown>
+  readonly newHash: string
+  readonly oldHash: string | null
+}
+
+/**
+ * Preview-bound single-use tickets (I3, #131 semantics reused): redeeming
+ * deletes the ticket whether it validates or not, so a failed attempt
+ * cannot be retried on the same ticket — the human previews again.
+ */
+export class ConfigTickets {
+  private readonly live = new Map<string, { entry: ConfigApplyTicket; exp: number }>()
+
+  constructor(private readonly ttlMs: number = CONFIG_TICKET_TTL_MS) {}
+
+  issue(entry: ConfigApplyTicket): string {
+    this.purge()
+    const ticket = randomBytes(32).toString("hex")
+    this.live.set(ticket, { entry, exp: Date.now() + this.ttlMs })
+    return ticket
+  }
+
+  /** Single-use claim: the ticket dies on redeem, valid or not. */
+  redeem(ticket: string): ConfigApplyTicket | undefined {
+    const found = this.live.get(ticket)
+    this.live.delete(ticket)
+    if (!found || found.exp <= Date.now()) return undefined
+    return found.entry
+  }
+
+  private purge(): void {
+    const now = Date.now()
+    for (const [ticket, record] of this.live) if (record.exp <= now) this.live.delete(ticket)
+  }
+}
+
+/**
+ * Validate a project-config preview and bind it to a single-use ticket.
+ * Gates content is refused here (terminal-only, I7) and invalid content
+ * never mints a ticket.
+ */
+export async function requestConfigTicket(
+  repoRoot: string,
+  input: { readonly file: "config" | "gates"; readonly content: unknown },
+  tickets: ConfigTickets,
+): Promise<{ readonly ticket: string; readonly newHash: string; readonly oldHash: string | null }> {
+  if (input.file !== "config") throw new ConfigApplyError(GATES_TERMINAL_ONLY, 403)
+  if (!isObject(input.content)) throw new ConfigApplyError("content must be a JSON object", 400)
+  const plan = await planConfigFile(repoRoot, { file: "config", content: input.content })
+  if (!plan.ok || plan.newHash === null) throw new ConfigApplyError(`invalid config: ${plan.errors.join("; ")}`, 400)
+  const ticket = tickets.issue({
+    file: "config",
+    content: input.content,
+    newHash: plan.newHash,
+    oldHash: plan.oldHash,
+  })
+  return { ticket, newHash: plan.newHash, oldHash: plan.oldHash }
+}
+
+export interface ConfigApplyCall {
+  readonly repoRoot: string
+  /** User state dir holding the sealed human key (passphrase check, I2). */
+  readonly stateRoot: string
+  readonly tickets: ConfigTickets
+  /** Per-session CSRF tokens shared with the approval path (I6). */
+  readonly csrfTokens: CsrfTokens
+  readonly session: string
+  readonly csrf: string | undefined
+  readonly origin: string | undefined
+  readonly ticket: string
+  readonly file: "config" | "gates"
+  readonly content: unknown
+  /** Live-typed passphrase: never stored, logged or returned (I1). */
+  readonly passphrase: string
+  readonly env?: NodeJS.ProcessEnv
+}
+
+export interface ConfigApplyResult {
+  readonly ok: true
+  readonly file: "config"
+  readonly newHash: string
+  readonly oldHash: string | null
+}
+
+/**
+ * Apply exactly the previewed project-config edit (I3): the ticket binds
+ * the preview hash, and the write lands only when every guard passes, in
+ * this order — sandbox (P6), gates scope (P8), Origin (P5), CSRF, attempt
+ * budget (I4), ticket claim (P1–P3), hash re-derivation plus staleness
+ * (P4), passphrase (P7) — then write, re-pin and audit (P9). Transport
+ * refusals happen before the ticket is looked at, so the ticket survives
+ * them; the claim itself is single-use, so a failed auth still consumes
+ * it. Throws ConfigApplyError; never echoes the passphrase.
+ */
+export async function applyConfigEdit(call: ConfigApplyCall): Promise<ConfigApplyResult> {
+  try {
+    assertConfigHumanEnv(call.env ?? process.env)
+  } catch (error) {
+    throw new ConfigApplyError(error instanceof Error ? error.message : String(error), 403)
+  }
+  if (call.file !== "config") throw new ConfigApplyError(GATES_TERMINAL_ONLY, 403)
+  if (!configApplyOriginOk(call.origin))
+    throw new ConfigApplyError("refused: the config apply must be opened on loopback with a loopback Origin", 403)
+  if (!call.csrfTokens.check(call.session, call.csrf))
+    throw new ConfigApplyError("refused: missing or wrong CSRF token; preview again", 403)
+  const webDir = path.join(fleetPaths(call.stateRoot).dir, "web-config")
+  await mkdir(webDir, { recursive: true })
+  const attempts = await checkApprovalAttempts(webDir)
+  if (!attempts.allowed)
+    throw new ConfigApplyError("too many wrong passphrases", 423, { retryAfterSec: attempts.retryAfterSec })
+  const entry = call.tickets.redeem(call.ticket)
+  if (!entry) throw new ConfigApplyError("unknown or expired ticket; preview again", 403)
+  if (!isObject(call.content)) throw new ConfigApplyError("content must be a JSON object", 400)
+  if (sha256(canon(call.content)) !== entry.newHash)
+    throw new ConfigApplyError(
+      "the preview is stale: the submitted content differs from the previewed edit; preview again",
+      409,
+    )
+  const plan = await planConfigFile(call.repoRoot, { file: "config", content: call.content })
+  if (!plan.ok || plan.newHash === null) throw new ConfigApplyError(`invalid config: ${plan.errors.join("; ")}`, 400)
+  if (plan.newHash !== entry.newHash || plan.oldHash !== entry.oldHash)
+    throw new ConfigApplyError("the preview is stale: the config changed since the preview; preview again", 409)
+  let signer: Awaited<ReturnType<typeof unlockHumanKey>>
+  try {
+    signer = await unlockHumanKey(call.passphrase, call.stateRoot)
+  } catch {
+    const check = await noteWrongPassphrase({ dir: webDir, root: call.repoRoot, stage: "config", channel: "web" })
+    if (check.allowed) throw new ConfigApplyError("wrong passphrase", 403, { remaining: check.remaining })
+    throw new ConfigApplyError("too many wrong passphrases", 423, { retryAfterSec: check.retryAfterSec })
+  }
+  try {
+    const layout = factoryLayout(call.repoRoot)
+    await withLock(layout.config, async () => {
+      const current = await readBytes(layout.config)
+      const currentHash = current ? sha256(current) : null
+      if (currentHash !== entry.oldHash)
+        throw new ConfigApplyError("the preview is stale: the config changed since the preview; preview again", 409)
+      await writeJson(layout.config, call.content)
+    })
+  } finally {
+    signer.destroy()
+  }
+  await rebaseline(call.repoRoot, "human:web (browser config apply)")
+  await noteApprovalSuccess(webDir)
+  await appendAuditEntry(call.repoRoot, {
+    actor: "human:web",
+    action: "config.apply",
+    payload: { file: "config", newHash: entry.newHash, channel: "web" },
+  })
+  return { ok: true, file: "config", newHash: entry.newHash, oldHash: entry.oldHash }
 }

@@ -325,6 +325,17 @@ describe("shell policy", () => {
     // Deep-research runs drive a harness CLI too: human-only, like audit/scout.
     expect(shell("build", "es research deep 'what queue' --output /tmp/r --max-usd 5").effect).toBe("deny")
     expect(shell("factory", "es research deep 'what queue' --output /tmp/r --max-usd 5").effect).toBe("deny")
+    // #341: es improve optimize grades candidates against benchmarks (model
+    // spend), so it is human-only like audit/scout runs. The read-only
+    // improve verbs stay agent-safe.
+    for (const agent of [undefined, "build", "factory", "es-programmer", "es-research-alpha"])
+      expect([
+        agent,
+        shell(agent, "es improve optimize --telemetry t.json --prompt p.md --baseline b.json --out o --max-usd 5")
+          .effect,
+      ]).toEqual([agent, "deny"])
+    expect(shell("build", "es improve distill --telemetry t.json --out o").effect).toBe("allow")
+    expect(shell("build", "es improve harvest --runs d --out f").effect).toBe("allow")
     expect(shell("build", "es research search x").effect).toBe("allow")
     // Rendering signs nothing: any seat may render, but export/retract stay human-only.
     expect(shell("build", "es research render --format html").effect).toBe("allow")
@@ -831,6 +842,7 @@ const SUBS: Readonly<Record<string, readonly [readonly string[], readonly string
     ["verify", "show"],
   ],
   scout: [["leftpad"], ["show"]],
+  improve: [["optimize"], ["harvest", "distill", "export-dataset"]],
 }
 
 describe("argv parity: the policy denies whatever the CLI would run as human-only (#97)", () => {

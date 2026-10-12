@@ -55,6 +55,13 @@ export interface OptimizerReceipt {
   /** Baseline-green cases now red: any entry vetoes Pareto dominance. */
   readonly regressions: readonly string[]
   readonly fixes: readonly string[]
+  /** Deterministic holdout split (#341): selection drives the win, the held-out part must not regress. */
+  readonly selection: readonly string[]
+  readonly holdout: readonly string[]
+  /** Regressions on held-out cases: any entry vetoes the win even when selection dominates. */
+  readonly holdoutRegressions: readonly string[]
+  /** Baseline cases with no graded attempt: any entry vetoes the win (ungraded is not proof). */
+  readonly ungraded: readonly string[]
 }
 
 /** A recorded human approval to apply one proposal to one prompt file. */
@@ -78,6 +85,11 @@ export interface OptimizerWinner {
 
 /** Content hash of a prompt (approval binding + deterministic ids). */
 export const hashPrompt = (prompt: string): string => sha256(prompt)
+
+/** Re-exported for the `es improve optimize` grader (CLI wiring, #341): the
+ * benchmark catalog and the oracle graders it runs per candidate. */
+export { BENCHMARKS } from "../evals/benchmark-cases.ts"
+export { benchmarkPrompt, gradeBenchmarkSolution, readWorktreeSolution } from "../evals/benchmarks.ts"
 
 const candidateId = (operator: PromptOperator, prompt: string): string =>
   `prompt-${operator}-${shortHash(hashPrompt(`${operator}:${prompt}`))}`
@@ -154,6 +166,23 @@ export function generatePromptCandidates(
   return out
 }
 
+/** Deterministic holdout split (#341): the sorted head (first third, at
+ * least one case when there are two or more) is held out, the rest selects.
+ * Same case ids always split the same way, however ordered. A single case
+ * cannot be split: selection keeps it and the holdout stays empty.
+ */
+export interface HoldoutSplit {
+  readonly selection: readonly string[]
+  readonly holdout: readonly string[]
+}
+
+export function splitHoldout(caseIds: readonly string[]): HoldoutSplit {
+  const sorted = [...new Set(caseIds)].sort(compareStrings)
+  if (sorted.length < 2) return { selection: sorted, holdout: [] }
+  const held = Math.max(1, Math.floor(sorted.length / 3))
+  return { selection: sorted.slice(held), holdout: sorted.slice(0, held) }
+}
+
 /** Before/after receipt for one candidate's attempts against the baseline. */
 export function receiptFor(
   candidateIdValue: string,
@@ -162,6 +191,9 @@ export function receiptFor(
   totals?: { costUSD?: number; steps?: number },
 ): OptimizerReceipt {
   const report = benchmarkReport(attempts, baseline)
+  const { selection, holdout } = splitHoldout(Object.keys(baseline))
+  const held = new Set(holdout)
+  const graded = new Set(attempts.map((attempt) => attempt.caseId))
   return {
     candidateId: candidateIdValue,
     passAt1: report.passAt1,
@@ -169,6 +201,12 @@ export function receiptFor(
     avgSteps: totals?.steps !== undefined ? totals.steps / Math.max(1, attempts.length) : report.avgSteps,
     regressions: [...report.regressions].sort(compareStrings),
     fixes: [...report.fixes].sort(compareStrings),
+    selection: [...selection],
+    holdout: [...holdout],
+    holdoutRegressions: [...report.regressions].filter((caseId) => held.has(caseId)).sort(compareStrings),
+    ungraded: Object.keys(baseline)
+      .filter((caseId) => !graded.has(caseId))
+      .sort(compareStrings),
   }
 }
 
@@ -201,14 +239,20 @@ export interface EvolveResult {
   readonly receipts: OptimizerReceipt[]
   readonly winners: OptimizerWinner[]
   readonly dominated: OptimizerReceipt[]
+  /** The deterministic holdout split every receipt in this run was gated on. */
+  readonly selection: readonly string[]
+  readonly holdout: readonly string[]
 }
 
 /**
  * Run the evolutionary loop: generate candidates, grade each against the
- * benchmark suite, keep Pareto winners, and breed one `combine` generation
- * from the winners' guidance. Fail-closed: a baseline with no cases is
- * refused (non-degradation must be proven, never vacuous), and candidates
- * grading zero attempts are dropped with a reason instead of winning.
+ * benchmark suite, keep holdout-gated winners, and breed one `combine`
+ * generation from the winners' guidance. Fail-closed: a baseline with no
+ * cases is refused (non-degradation must be proven, never vacuous), and
+ * candidates grading zero attempts are dropped with a reason instead of
+ * winning. Winners are selected on the holdout split (#341): Pareto
+ * dominance on the selection cases plus zero regressions on the held-out
+ * cases, with every baseline case graded (ungraded is not proof).
  */
 export async function evolvePrompts(input: EvolveInput): Promise<EvolveResult> {
   const cases = Object.keys(input.baseline)
@@ -217,10 +261,25 @@ export async function evolvePrompts(input: EvolveInput): Promise<EvolveResult> {
   const generations = input.generations ?? 1
   if (!Number.isInteger(generations) || generations < 1)
     throw new OptimizerError("generations must be a positive integer")
-  const graded = async (candidate: PromptCandidate): Promise<OptimizerReceipt | { dropped: string }> => {
+  const { selection, holdout } = splitHoldout(cases)
+  const selected = new Set(selection)
+  const held = new Set(holdout)
+  const selectionBaseline: BenchmarkBaseline = Object.fromEntries(
+    selection.map((caseId) => [caseId, input.baseline[caseId]!]),
+  )
+  const holdoutBaseline: BenchmarkBaseline = Object.fromEntries(
+    holdout.map((caseId) => [caseId, input.baseline[caseId]!]),
+  )
+  const graded = async (
+    candidate: PromptCandidate,
+  ): Promise<{ receipt: OptimizerReceipt; attempts: readonly BenchmarkAttempt[] } | { dropped: string }> => {
     const result = await input.grade(candidate.prompt)
     if (result.attempts.length === 0) return { dropped: `${candidate.id}: graded zero attempts` }
-    return receiptFor(candidate.id, result.attempts, input.baseline, { costUSD: result.costUSD, steps: result.steps })
+    const receipt = receiptFor(candidate.id, result.attempts, input.baseline, {
+      costUSD: result.costUSD,
+      steps: result.steps,
+    })
+    return { receipt, attempts: result.attempts }
   }
   let population = generatePromptCandidates(input.basePrompt, input.telemetry, { maxCandidates: input.maxCandidates })
   const seen = new Map<string, PromptCandidate>(population.map((candidate) => [candidate.id, candidate]))
@@ -237,27 +296,52 @@ export async function evolvePrompts(input: EvolveInput): Promise<EvolveResult> {
     })),
     input.baseline,
   )
+  const selectionBaselineReceipt = receiptFor(
+    "baseline:selection",
+    selection.map((caseId) => ({
+      caseId,
+      category: "algorithms" as const,
+      pass: input.baseline[caseId]!.pass,
+      failures: [],
+      durationMs: input.baseline[caseId]!.durationMs,
+    })),
+    selectionBaseline,
+  )
+  // A win has to generalise: Pareto dominance on the selection cases (same
+  // spend/steps as the full receipt — grading cost is global) with no
+  // regressions on the held-out cases and no ungraded baseline case.
+  const winsHoldout = (receipt: OptimizerReceipt, attempts: readonly BenchmarkAttempt[]): boolean => {
+    if (receipt.ungraded.length > 0) return false
+    const selectionAttempts = attempts.filter((attempt) => selected.has(attempt.caseId))
+    const selectionReport = benchmarkReport(selectionAttempts, selectionBaseline)
+    const selectionReceipt: OptimizerReceipt = {
+      ...receipt,
+      passAt1: selectionReport.passAt1,
+      regressions: [...selectionReport.regressions].sort(compareStrings),
+      fixes: [...selectionReport.fixes].sort(compareStrings),
+    }
+    if (!paretoDominates(selectionReceipt, selectionBaselineReceipt)) return false
+    const holdoutAttempts = attempts.filter((attempt) => held.has(attempt.caseId))
+    return benchmarkReport(holdoutAttempts, holdoutBaseline).regressions.length === 0
+  }
   const receipts: OptimizerReceipt[] = []
+  const attemptsById = new Map<string, readonly BenchmarkAttempt[]>()
   for (let generation = 0; generation < generations; generation++) {
     for (const candidate of population) {
-      const receipt = await graded(candidate)
-      if ("dropped" in receipt) continue
-      receipts.push(receipt)
+      const gradedCandidate = await graded(candidate)
+      if ("dropped" in gradedCandidate) continue
+      receipts.push(gradedCandidate.receipt)
+      attemptsById.set(gradedCandidate.receipt.candidateId, gradedCandidate.attempts)
     }
     if (generation + 1 >= generations) break
-    // Breed one `combine` child from this generation's Pareto winners.
-    const guidance = [
-      ...new Set(
-        receipts
-          .filter((receipt) => paretoDominates(receipt, baselineReceipt))
-          .flatMap((receipt) => seen.get(receipt.candidateId)?.guidance ?? []),
-      ),
-    ]
+    // Breed one `combine` child from this generation's holdout winners.
+    const winning = receipts.filter((receipt) => winsHoldout(receipt, attemptsById.get(receipt.candidateId) ?? []))
+    const guidance = [...new Set(winning.flatMap((receipt) => seen.get(receipt.candidateId)?.guidance ?? []))]
     if (guidance.length < 2) break
     const prompt = `${input.basePrompt.trimEnd()}\n\n${guidance.join("\n")}\n`
     const child: PromptCandidate = {
       id: candidateId("combine", prompt),
-      parentIds: receipts.filter((receipt) => paretoDominates(receipt, baselineReceipt)).map((r) => r.candidateId),
+      parentIds: winning.map((receipt) => receipt.candidateId),
       operator: "combine",
       guidance,
       prompt,
@@ -272,12 +356,21 @@ export async function evolvePrompts(input: EvolveInput): Promise<EvolveResult> {
   for (const receipt of receipts) {
     const before = { ...baselineReceipt, candidateId: receipt.candidateId }
     const candidate = seen.get(receipt.candidateId)
-    if (candidate && paretoDominates(receipt, baselineReceipt)) winners.push({ candidate, receipt, before })
+    if (candidate && winsHoldout(receipt, attemptsById.get(receipt.candidateId) ?? []))
+      winners.push({ candidate, receipt, before })
     else dominated.push(receipt)
   }
   winners.sort((a, b) => compareStrings(a.candidate.id, b.candidate.id))
   dominated.sort((a, b) => compareStrings(a.candidateId, b.candidateId))
-  return { basePromptId: input.basePromptId, baselineReceipt, receipts, winners, dominated }
+  return {
+    basePromptId: input.basePromptId,
+    baselineReceipt,
+    receipts,
+    winners,
+    dominated,
+    selection: [...selection],
+    holdout: [...holdout],
+  }
 }
 
 export interface WrittenOptimizerProposal {
@@ -288,10 +381,10 @@ export interface WrittenOptimizerProposal {
 }
 
 /**
- * Write one proposal dir per Pareto winner: `proposal.json` (candidate +
- * before/after receipts), `prompt.patch.md` (before/after diff), and
- * `receipt.json`. Writes nowhere else — prompts are never touched here.
- * Dominated candidates land in `dropped.json` with their reasons.
+ * Write one proposal dir per holdout-gated winner: `proposal.json` (candidate +
+ * before/after receipts, including the selection/holdout split), `prompt.patch.md`
+ * (before/after diff), and `receipt.json`. Writes nowhere else — prompts are
+ * never touched here. Dominated candidates land in `dropped.json` with their reasons.
  */
 export async function writeOptimizerProposals(
   out: string,
@@ -352,9 +445,13 @@ export async function writeOptimizerProposals(
   const droppedBody = result.dominated.map((receipt) => ({
     candidateId: receipt.candidateId,
     reasons:
-      receipt.regressions.length > 0
-        ? [`regressions: ${receipt.regressions.join(", ")}`]
-        : ["dominated: no axis strictly improves"],
+      receipt.ungraded.length > 0
+        ? [`ungraded: ${receipt.ungraded.join(", ")} (every baseline case must be graded)`]
+        : receipt.holdoutRegressions.length > 0
+          ? [`holdout regressions: ${receipt.holdoutRegressions.join(", ")}`]
+          : receipt.regressions.length > 0
+            ? [`regressions: ${receipt.regressions.join(", ")}`]
+            : ["dominated: no axis strictly improves on selection"],
   }))
   await withLock(droppedFile, () => atomicWrite(droppedFile, `${JSON.stringify(droppedBody, null, 2)}\n`))
   return { written, droppedFile }

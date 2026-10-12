@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.4.0 — 2026-10-12
+
+Phase 10 hardening & verification. This release wires the audited 2.3.0
+library pieces into operational surfaces, pins the eval and E2E gates, and
+cleans up tooling hygiene. The published trio (core/CLI/plugin) releases in
+lockstep as 2.4.0.
+
+**What is reachable in this release.**
+
+- Reachable: worktree leases held by factory and fleet runs with an
+  agent-safe `es worktree create|release` pair (#340); `es improve optimize`
+  (human-only, spend-capped) with a deterministic train/holdout split and
+  review-only proposals (#341); browser config apply behind ticket,
+  passphrase and Origin guards (#145); model-limited eval exit policy with
+  sticky-red E2E acknowledgments (#322, #323); disarmed audit-fires plant
+  with scanner path exclusion (#324); publish guard + tag-and-release
+  workflow (#328).
+- Library only, not called: the machine key and proof-carrying transitions
+  (#164, wired in #344), the staging pipeline (#166, wired in #345) and the
+  canary scheduler integration (#176, wired in #346). Stage exits still need
+  the human passphrase.
+- Not in the npm packages: `es-fleet run-dag` (#161) and the canary harness
+  (#176) live in the private `packages/fleet`.
+
+**Behaviour changes.** See the 2.3.0 entry below for the audited feature
+claims; the audit verdict tables live on #329–#339, with follow-up gaps
+filed as #365 (staging countersign shape), #366 (MCP config-skip), #367
+(benchmark timing budgets) and #368 (optimizer approval record).
+
 ## 2.3.0 — 2026-10-11
 
 Phase 9 recursive self-improvement & model distillation. This release adds

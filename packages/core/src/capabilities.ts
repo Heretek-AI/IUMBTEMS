@@ -169,7 +169,7 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     "worktree-lease": {
       support: "enforced",
       detail:
-        "Atomic heartbeat leases (O_CREAT|O_EXCL, TTL 120s) per .worktrees/ checkout; expiry/dead-holder reclaim, token-holder-only heartbeat/release; es worktree prune deletes orphaned checkouts, never branches. Not yet wired into factory/headless runs (lands in #340).",
+        "Atomic heartbeat leases (O_CREAT|O_EXCL, TTL 120s) per .worktrees/ checkout; expiry/dead-holder reclaim, token-holder-only heartbeat/release; es worktree prune deletes orphaned checkouts, never branches. Wired in 2.4.0: factory phase/release-check and fleet task worktrees hold heartbeat leases; agent-safe es worktree create|release replaces flock.",
       test: "packages/core/test/audit-fleet.test.ts",
     },
     "fleet-run-dag": {
@@ -217,7 +217,7 @@ export const CAPABILITY_MATRIX: Readonly<Record<Harness, readonly CapabilityRow[
     optimizer: {
       support: "enforced",
       detail:
-        "Pareto-only prompt winners (zero regressions + strictly better, vacuous baselines refused) as review-only proposals; applyPromptPatch is record-gated (presence, not signature verification — filed gap). No holdout split (lands in #341).",
+        "Pareto-only prompt winners (zero regressions + strictly better, vacuous baselines refused) as review-only proposals; applyPromptPatch is record-gated (presence, not signature verification — filed gap). Wired in 2.4.0: es improve optimize (human-only, spend-capped) with a deterministic train/holdout split recorded in the receipt.",
       test: "packages/core/test/audit-optimizer.test.ts",
     },
     trajectories: {

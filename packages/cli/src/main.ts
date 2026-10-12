@@ -6,6 +6,7 @@ import { appendFile, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import {
   type Args,
+  addWorktree,
   aliasReuseRatio,
   atomicWrite,
   BOOLEAN_FLAGS,
@@ -50,6 +51,7 @@ import {
   readProbes,
   readTokens,
   recordConsent,
+  removeWorktree,
   renderBrainstorm,
   renderGuide,
   renderResearchRun,
@@ -63,6 +65,7 @@ import {
   validateTokens,
   verifyAuditChain,
   verifyBrief,
+  WorktreeLeaseManager,
   writeArtifacts,
   writeProfile,
 } from "@heretek-ai/es-core"
@@ -90,7 +93,7 @@ import {
   trust,
   waive,
 } from "./human.ts"
-import { improveDistill, improveExportDataset, improveHarvest } from "./improve.ts"
+import { improveDistill, improveExportDataset, improveHarvest, improveOptimize } from "./improve.ts"
 import { auditCommand, auditDismiss, auditShow, researchDeepCommand, scoutCommand, scoutShow } from "./jobs.ts"
 import { keySeal, keyStatus } from "./key.ts"
 import { serveStdio } from "./mcp.ts"
@@ -153,6 +156,7 @@ Other
   improve distill --telemetry <file> --out <dir> [--open-pr]   Cluster telemetry into reviewable proposals
         [--open-pr opens a draft PR from a topic branch; human-run, refused without a terminal]
   improve export-dataset --format jsonl --kind <sft|dpo> --worktrees <dir>[,<dir>] --output <path>   Export verified trajectories as distillation datasets
+  improve optimize --telemetry <file> --prompt <file> --baseline <file> --out <dir> --max-usd N   Evolve prompt candidates with a holdout split; writes review-only proposals   [human]
   design [status]               Design interview progress (resumes from .factory/design)
   design render                 Re-render tokens.css + STYLE_GUIDE.md from tokens.json
   design check                  Fail on render drift, invalid tokens or one-off mints
@@ -171,6 +175,10 @@ Other
   scout show [--json]           The scout's ranked verdicts
   mcp                           Serve the factory tools over MCP (stdio)
   worktree prune              Drop stale worktree leases and remove orphaned .worktrees/ checkouts
+  worktree create <slug> [--branch <branch>] [--from <ref>]
+                              Create a .worktrees/ checkout under a heartbeat lease (agent-safe)
+  worktree release <slug>     Release the lease and remove the checkout (never a live
+                              holder's checkout, never the branch; agent-safe)
   rebase cascade --from <branch> --to <branch> [--no-verify]
                               Replay <to>'s commits onto <from> with TS/JSON conflict
                               resolution; <to> moves only when post-rebase checks pass
@@ -208,6 +216,24 @@ async function projectRoot(cwd: string): Promise<string> {
   const top = await git(cwd, ["rev-parse", "--show-toplevel"], { allowFail: true })
   return top.code === 0 ? top.stdout.trim() : cwd
 }
+
+/**
+ * Heartbeat lease managers for the agent-safe worktree pair (#340): one per
+ * repo root, shared process-wide so a create in one call is releasable in
+ * the next. A release from another process never steals: a live lease held
+ * elsewhere is refused, a dead or expired one reclaimed.
+ */
+const worktreeLeaseManagers = new Map<string, WorktreeLeaseManager>()
+const worktreeLeases = (root: string): WorktreeLeaseManager => {
+  const cached = worktreeLeaseManagers.get(root)
+  if (cached) return cached
+  const manager = new WorktreeLeaseManager(root)
+  worktreeLeaseManagers.set(root, manager)
+  return manager
+}
+
+const WORKTREE_USAGE =
+  "Usage: es worktree prune | es worktree create <slug> [--branch <branch>] [--from <ref>] | es worktree release <slug>"
 
 export async function main(argv: readonly string[], io: MainIO): Promise<number> {
   const args = parseArgs(argv, BOOLEAN_FLAGS)
@@ -756,8 +782,10 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
         if (sub === "distill")
           return await improveDistill(subArgs(2), { print: io.print, cwd: io.cwd, confirm: io.confirm }, root)
         if (sub === "export-dataset") return await improveExportDataset(subArgs(2), { print: io.print, cwd: io.cwd })
+        if (sub === "optimize")
+          return await improveOptimize(subArgs(2), { print: io.print, cwd: io.cwd, confirm: io.confirm }, root)
         io.print(
-          "Usage: es improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file> | distill --telemetry <file> --out <dir> [--open-pr] | export-dataset --format jsonl --kind <sft|dpo> --worktrees <dir>[,<dir>] --output <path>",
+          "Usage: es improve harvest --runs <dir>[,<dir>] [--evals <dir>] --out <file> | distill --telemetry <file> --out <dir> [--open-pr] | export-dataset --format jsonl --kind <sft|dpo> --worktrees <dir>[,<dir>] --output <path> | optimize --telemetry <file> --prompt <file> --baseline <file> --out <dir> --max-usd <USD>",
         )
         return 2
       }
@@ -853,7 +881,97 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
           )
           return 0
         }
-        io.print("Usage: es worktree prune")
+        if (sub === "create") {
+          const slug = rest[0]
+          if (!slug) {
+            io.print("Usage: es worktree create <slug> [--branch <branch>] [--from <ref>]")
+            return 2
+          }
+          const branch = flag(args, "branch") ?? slug
+          const fromFlag = flag(args, "from")
+          const head = fromFlag ? undefined : await git(root, ["rev-parse", "HEAD"], { allowFail: true })
+          if (!fromFlag && head!.code !== 0) {
+            io.print(`Error: cannot resolve a base commit in ${root} (pass --from <ref>).`)
+            return 1
+          }
+          const from = fromFlag ?? head!.stdout.trim()
+          const dir = path.join(root, ".worktrees", slug)
+          const manager = worktreeLeases(root)
+          let ttlMs: number
+          try {
+            ttlMs = (await manager.acquire(slug, { branch, dir })).ttlMs
+          } catch (error) {
+            io.print(`Error: ${error instanceof Error ? error.message : String(error)}`)
+            return 1
+          }
+          try {
+            await addWorktree(root, dir, branch, from)
+          } catch (error) {
+            await manager.release(slug).catch(() => undefined)
+            io.print(`Error: ${error instanceof Error ? error.message : String(error)}`)
+            return 1
+          }
+          io.print(
+            `Created ${dir} on branch ${branch} under lease ${JSON.stringify(slug)} (heartbeat every ${ttlMs}ms).`,
+          )
+          return 0
+        }
+        if (sub === "release") {
+          const slug = rest[0]
+          if (!slug) {
+            io.print("Usage: es worktree release <slug>")
+            return 2
+          }
+          const manager = worktreeLeases(root)
+          const record = (await manager.list()).find((lease) => lease.slug === slug)
+          if (record && manager.isLive(record)) {
+            // A live lease may be ours (same process, token held) or another
+            // holder's: heartbeat proves ownership, and a failed heartbeat
+            // writes nothing, so refusal has no side effects.
+            const owned = await manager.heartbeat(slug).then(
+              () => true,
+              () => false,
+            )
+            if (!owned) {
+              io.print(
+                `Refusing: worktree ${JSON.stringify(slug)} is leased by a live holder (pid ${record.pid} on ${record.host}, heartbeat ${record.heartbeatAt}). Only a stale (expired or dead-holder) lease can be reclaimed.`,
+              )
+              return 1
+            }
+          }
+          const dir = record?.dir ?? path.join(root, ".worktrees", slug)
+          const branch = record?.branch ?? slug
+          let acquiredHere = false
+          if (record && !manager.isLive(record)) {
+            // Reclaim the dead lease so this process holds the token. A lease
+            // that turned live in the meantime refuses here instead of stealing.
+            try {
+              await manager.acquire(slug, { branch, dir })
+              acquiredHere = true
+            } catch (error) {
+              io.print(`Refusing: ${error instanceof Error ? error.message : String(error)}`)
+              return 1
+            }
+          }
+          try {
+            await removeWorktree(root, dir).catch(async () => {
+              await git(root, ["worktree", "remove", "--force", dir])
+            })
+          } catch (error) {
+            // A checkout we cannot remove keeps its lease: drop only a lease
+            // reclaimed above, never one we already held.
+            if (acquiredHere) await manager.release(slug).catch(() => undefined)
+            io.print(`Error: ${error instanceof Error ? error.message : String(error)}`)
+            return 1
+          }
+          // Prune invariant: the checkout goes, the branch stays. Our own
+          // lease (held or just reclaimed) is dropped; another holder's live
+          // lease was refused above and is never touched.
+          if (record) await manager.release(slug).catch(() => undefined)
+          io.print(`Released ${JSON.stringify(slug)}: removed ${dir} (branch ${branch} kept).`)
+          return 0
+        }
+        io.print(WORKTREE_USAGE)
         return 2
       }
       case "factory": {
