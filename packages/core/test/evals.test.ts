@@ -418,3 +418,26 @@ describe("eval cases (evals/cases)", () => {
       expect([file, typeof prog.files[`.factory/worktrees/phase-01/${file}`]]).toEqual([file, "string"])
   })
 })
+
+describe("audit-fires fixture (#324)", () => {
+  const repo = path.resolve(import.meta.dir, "../../..")
+  const leak = path.join(repo, "packages/core/test/fixtures/fires/audit/src/leak.ts")
+
+  test("the plant carries no comment telling a reader the key is harmless", () => {
+    const content = readFileSync(leak, "utf8")
+    expect(content).not.toContain("NOSONAR")
+    expect(content.toLowerCase()).not.toContain("not a credential")
+    expect(content.toLowerCase()).not.toContain("harmless")
+  })
+
+  test("the planted lines stay pinned at lines 2 and 7", () => {
+    const lines = readFileSync(leak, "utf8").split("\n")
+    expect(lines[1]).toContain('apiKey: "hunter2-not-a-real-key-planted-for-fires"')
+    expect(lines[6]).toContain("JSON.stringify(config)")
+  })
+
+  test("the scanner exclusion config covers the fixture path", () => {
+    const config = readFileSync(path.join(repo, "sonar-project.properties"), "utf8")
+    expect(config).toContain("packages/core/test/fixtures/fires")
+  })
+})

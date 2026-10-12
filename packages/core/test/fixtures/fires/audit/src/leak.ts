@@ -1,5 +1,5 @@
 export const config = {
-  apiKey: "hunter2-not-a-real-key-planted-for-fires",  // NOSONAR: planted for audit-fires, not a credential
+  apiKey: "hunter2-not-a-real-key-planted-for-fires",
   endpoint: "https://api.example.test",
 }
 
