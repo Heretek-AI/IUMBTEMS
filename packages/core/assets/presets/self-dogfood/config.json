@@ -1,4 +1,5 @@
 {
   "audit": { "phase": "required" },
-  "pr": "gh"
+  "pr": "gh",
+  "models": { "requireDiversity": true }
 }
