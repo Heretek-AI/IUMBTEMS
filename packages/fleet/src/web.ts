@@ -137,6 +137,37 @@ export function loopbackOriginOk(origin: string | undefined): boolean {
   return origin !== undefined && /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(origin.trim())
 }
 
+// Browser config-apply routes (#145, ADR 0002 I7 narrow, config route
+// only): the mutating config path mirrors the #131 approval endpoints —
+// session cookie + loopback Origin + per-session CSRF + single-use ticket
+// + passphrase — but for project-config bytes only. Nothing else in this
+// module changes; the helpers below reuse `loopbackOriginOk` so the config
+// route shares the exact Origin bound as every other web route.
+
+/** HTTP paths the config-apply route answers on (wired by the daemon bus). */
+export const CONFIG_APPLY_PATHS = {
+  preview: "/fleet/config/preview",
+  apply: "/fleet/config/apply",
+} as const
+
+/** Config-apply Origin bound (#145 P5): loopback only, fail-closed. */
+export function configApplyOriginOk(origin: string | undefined): boolean {
+  return loopbackOriginOk(origin)
+}
+
+/**
+ * Human-only gate for the config-apply route (#145 P6): agents run with
+ * `ES_SANDBOX` set, and the applier refuses them outright — even with a
+ * ticket in hand. Pure so the ticketed applier and its tests share it.
+ */
+export function assertConfigHumanEnv(env: NodeJS.ProcessEnv | undefined): void {
+  const sandbox = env?.ES_SANDBOX && env.ES_SANDBOX.length > 0 ? env.ES_SANDBOX : undefined
+  if (sandbox !== undefined)
+    throw new Error(
+      `Refusing browser config apply inside an agent sandbox (ES_SANDBOX=${sandbox}): only a human may apply config from the browser.`,
+    )
+}
+
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",

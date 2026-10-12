@@ -9,6 +9,15 @@ import { randomBytes, timingSafeEqual } from "node:crypto"
 /** Preview tickets live this long (I3: TTL ≤ 120 s). */
 export const APPROVE_TICKET_TTL_MS = 120_000
 
+/**
+ * Browser config-apply tickets (#145, ADR 0002 I7 narrow) reuse the same
+ * single-use TTL-bound semantics as approval preview tickets (I3): the
+ * config ticket store in `configview.ts` defaults to this TTL, so the two
+ * surfaces share one lifetime bound and no new auth mechanism is invented
+ * here. This constant is the only config-apply surface in this module.
+ */
+export const CONFIG_TICKET_TTL_MS = APPROVE_TICKET_TTL_MS
+
 export interface ApproveTicket {
   readonly repoDir: string
   readonly stage: "frontier" | "spec"
