@@ -441,3 +441,14 @@ describe("audit-fires fixture (#324)", () => {
     expect(config).toContain("packages/core/test/fixtures/fires")
   })
 })
+
+describe("nightly evals spend cap (#322)", () => {
+  const repo = path.resolve(import.meta.dir, "../../..")
+
+  test("the nightly evals job enforces the human-recorded per-run budget", () => {
+    const yml = readFileSync(path.join(repo, ".github/workflows/nightly.yml"), "utf8")
+    // The cap recorded on #322 ($1.00/run, 2026-10-12) must reach the runner:
+    // scripts/evals.ts refuses a non-positive value and kills the run past it.
+    expect(yml).toMatch(/ES_EVAL_MAX_USD:\s*"1\.00"/)
+  })
+})

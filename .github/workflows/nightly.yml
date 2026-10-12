@@ -73,6 +73,7 @@ jobs:
           ES_EVAL_KEY_VAR: ${{ vars.ES_EVAL_KEY_VAR || 'ANTHROPIC_API_KEY' }}
           ES_EVAL_MAX_STEPS: "24"
           ES_EVAL_TIMEOUT_MS: "300000"
+          ES_EVAL_MAX_USD: "1.00"
         run: |
           if [ -z "$ES_EVAL_API_KEY" ] || [ -z "$ES_EVAL_MODEL" ]; then
             echo "evals: secrets.ES_EVAL_API_KEY and vars.ES_EVAL_MODEL are not both set; skipping."
