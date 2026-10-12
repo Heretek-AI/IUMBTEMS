@@ -70,6 +70,37 @@ export function createRpcHandlers(
       reason: error instanceof Error ? error.message : String(error),
     })
 
+  // #355: an unreadable run state (missing/forged seal) is a status value,
+  // not a throw — otherwise the 5 s footer poll logs `rpc handler failed`
+  // every poll. The problem is logged once per distinct problem.
+  let lastSealProblem: string | undefined
+  const isSealProblem = (error: unknown): string | undefined => {
+    const message = error instanceof Error ? error.message : String(error)
+    return /Cannot verify \.factory\/runtime\/state\.json|\.factory\/runtime\/state\.json has a|is a version .* run/i.test(
+      message,
+    )
+      ? message
+      : undefined
+  }
+  const noteSealProblem = (message: string) => {
+    if (lastSealProblem !== message) {
+      lastSealProblem = message
+      console.warn(`[epistemic-swarm] run state unreadable: ${message}`)
+    }
+  }
+  const clearSealProblem = () => {
+    if (lastSealProblem !== undefined) {
+      lastSealProblem = undefined
+      console.warn("[epistemic-swarm] run state readable again")
+    }
+  }
+  const sealFix = (message: string): string => {
+    if (message.includes("es reseal --sign")) return "es reseal --sign"
+    if (message.includes("ES_STATE_DIR")) return "ES_STATE_DIR"
+    if (message.includes("/grill")) return "/grill"
+    return "see status"
+  }
+
   /** Everything a trust approval covers: gate commands and project hooks. */
   const trustSubject = async () => {
     const { config } = await loadGatesConfig(runtime.root)
@@ -87,7 +118,24 @@ export function createRpcHandlers(
 
   return {
     status: async () => {
-      const state = await runtime.factory.read()
+      let state: Awaited<ReturnType<Runtime["factory"]["read"]>>
+      try {
+        state = await runtime.factory.read()
+      } catch (error) {
+        const problem = isSealProblem(error)
+        if (problem === undefined) throw error
+        noteSealProblem(problem)
+        const fix = sealFix(problem)
+        return {
+          summary: `<factory-state>State unreadable: ${problem}</factory-state>`,
+          stage: "ERROR",
+          pending: [],
+          headline: `State unreadable: ${problem}`,
+          footer: `ES · state unreadable · ${problem.slice(0, 100)} · fix: ${fix}`,
+          sealProblem: problem,
+        }
+      }
+      clearSealProblem()
       const liveness = await readLiveness(runtime.root, state)
       const paused = live.paused?.()
       const footer = footerLine(state, liveness, paused)
@@ -106,7 +154,26 @@ export function createRpcHandlers(
       warnings: [...runtime.warnings],
     }),
     factoryState: async () => {
-      const state = await runtime.factory.read()
+      let state: Awaited<ReturnType<Runtime["factory"]["read"]>>
+      try {
+        state = await runtime.factory.read()
+      } catch (error) {
+        const problem = isSealProblem(error)
+        if (problem === undefined) throw error
+        noteSealProblem(problem)
+        return {
+          headline: `State unreadable: ${problem}`,
+          seats: [],
+          events: [],
+          phases: [],
+          audits: [],
+          pending: [],
+          spend: { usd: 0, estimated: false },
+          stage: "ERROR",
+          sealProblem: problem,
+        }
+      }
+      clearSealProblem()
       const frontier = await readFrontier(runtime.root).catch(() => undefined)
       const liveness = await readLiveness(runtime.root, state)
       const research = researchLine(liveness)

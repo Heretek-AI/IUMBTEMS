@@ -51,7 +51,7 @@ export interface ApproveTuiInput {
 export type ApproveTuiOutcome =
   | { readonly ok: true; readonly record: Approval }
   | { readonly ok: false; readonly fallback: true; readonly reason: string }
-  | { readonly ok: false; readonly locked: true; readonly retryAfterSec: number }
+  | { readonly ok: false; readonly locked: true; readonly retryAfterSec: number; readonly retryAt: string }
   | { readonly ok: false; readonly cancelled: true }
 
 const TERMINAL_FALLBACK = (stage: ApprovalStage) =>
@@ -71,6 +71,13 @@ export const APPROVAL_PREVIEW_TTL_MS = 120_000
  */
 export async function approveInTui(input: ApproveTuiInput): Promise<ApproveTuiOutcome> {
   const dir = input.stateDir ?? defaultStateDir()
+  const clock = input.now ?? Date.now
+  const locked = (retryAfterSec: number): ApproveTuiOutcome => ({
+    ok: false,
+    locked: true,
+    retryAfterSec,
+    retryAt: new Date(clock() + retryAfterSec * 1000).toISOString(),
+  })
   // A TUI that cannot see the project root and the sealed key (a remote
   // attach) keeps the "approve in a terminal" alert instead of signing
   // anywhere else.
@@ -78,12 +85,22 @@ export async function approveInTui(input: ApproveTuiInput): Promise<ApproveTuiOu
     return { ok: false, fallback: true, reason: TERMINAL_FALLBACK(input.stage) }
 
   const gate = await checkApprovalAttempts(dir)
-  if (!gate.allowed) return { ok: false, locked: true, retryAfterSec: gate.retryAfterSec ?? 0 }
+  if (!gate.allowed) return locked(gate.retryAfterSec ?? 0)
 
-  const title = `Approve ${input.stage} as ${input.approvedBy ?? userInfo().username}`
+  const base = `Approve ${input.stage} as ${input.approvedBy ?? userInfo().username}`
+  // #353: the reopened dialog names the failure reason and the attempts
+  // left, so a wrong passphrase is visible instead of silent.
+  let feedback: string | undefined
   for (;;) {
+    const title = feedback ? `${base} — ${feedback}` : base
     const codepoints = await input.readPassphrase(title)
     if (codepoints === undefined) return { ok: false, cancelled: true }
+    // #353: an empty Enter cancels like the CLI ("empty cancels"), and
+    // records no failure.
+    if (codepoints.length === 0) {
+      zeroCodepoints(codepoints)
+      return { ok: false, cancelled: true }
+    }
     // The string cannot be zeroed in JS (same as the CLI's echo-off input):
     // it lives in this local only, and the array is zeroed at once.
     const passphrase = codepoints.join("")
@@ -115,7 +132,8 @@ export async function approveInTui(input: ApproveTuiInput): Promise<ApproveTuiOu
     } catch (error) {
       if (error instanceof HumanKeyError && error.message === "wrong passphrase") {
         const check = await noteWrongPassphrase({ dir, root: input.root, stage: input.stage, channel: "tui" })
-        if (!check.allowed) return { ok: false, locked: true, retryAfterSec: check.retryAfterSec ?? 0 }
+        if (!check.allowed) return locked(check.retryAfterSec ?? 0)
+        feedback = `Wrong passphrase. ${check.remaining ?? 0} attempts left.`
         continue
       }
       throw error

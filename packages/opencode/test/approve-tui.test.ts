@@ -242,4 +242,71 @@ describe("approveInTui", () => {
       await fx.cleanup()
     }
   })
+
+  test("#353: a wrong passphrase reopens with attempts left, then succeeds", async () => {
+    const fx = await setup()
+    try {
+      const titles: string[] = []
+      let calls = 0
+      const outcome = await approveInTui({
+        root: fx.root,
+        stage: "frontier",
+        expectedSubjectHash: await fx.hash(),
+        stateDir: fx.state,
+        readPassphrase: async (title) => {
+          titles.push(title)
+          calls++
+          return calls === 1 ? [..."wrong-passphrase-000"] : [...PASSPHRASE]
+        },
+      })
+      expect(outcome.ok).toBe(true)
+      expect(titles).toHaveLength(2)
+      expect(titles[1]).toMatch(/Wrong passphrase.*4 attempts left/)
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test("#353: empty Enter cancels without recording a failure", async () => {
+    const fx = await setup()
+    try {
+      let reads = 0
+      const outcome = await approveInTui({
+        root: fx.root,
+        stage: "frontier",
+        expectedSubjectHash: await fx.hash(),
+        stateDir: fx.state,
+        readPassphrase: async () => {
+          reads++
+          return []
+        },
+      })
+      expect(outcome).toEqual({ ok: false, cancelled: true })
+      expect(reads).toBe(1)
+      expect(await checkApprovalAttempts(fx.state)).toMatchObject({ allowed: true, remaining: 5 })
+    } finally {
+      await fx.cleanup()
+    }
+  })
+
+  test("#353: lockout names the retry clock time as well as seconds", async () => {
+    const fx = await setup()
+    try {
+      const outcome = await approveInTui({
+        root: fx.root,
+        stage: "frontier",
+        expectedSubjectHash: await fx.hash(),
+        stateDir: fx.state,
+        now: () => 1_700_000_000_000,
+        readPassphrase: async () => [..."wrong-passphrase-000"],
+      })
+      expect(outcome).toMatchObject({ ok: false, locked: true })
+      if (outcome.ok || !("locked" in outcome)) return
+      expect(outcome.retryAfterSec).toBeGreaterThan(0)
+      expect(typeof outcome.retryAt).toBe("string")
+      expect(Date.parse(outcome.retryAt)).toBe(1_700_000_000_000 + outcome.retryAfterSec * 1000)
+    } finally {
+      await fx.cleanup()
+    }
+  })
 })

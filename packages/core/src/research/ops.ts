@@ -102,6 +102,8 @@ export function researchTools(context: ResearchOpsContext): EsToolDef[] {
     context.chain ?? order.map((id) => getBackend(id)).filter((backend) => backend !== undefined)
   // One cooldown map per tools instance (one per plugin process): a down
   // backend is skipped for a while instead of retried on every call (#106).
+  // Direct-fetch cooldowns key per origin hostname (#357: a 403 from host A
+  // never cools host B); see cooldownKey in backends/index.ts.
   const cooldowns = new Map<string, { until: number; kind: BackendErrorKind }>()
   const signals = (toolContext: { signal?: AbortSignal }): AbortSignal | undefined => {
     const list = [
