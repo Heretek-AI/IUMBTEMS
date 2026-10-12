@@ -10,9 +10,13 @@
 //   step_finish cost). Once it is spent, the remaining cases are not run.
 // A failed case keeps its workspace, event stream and stderr under
 // evals/results/<stamp>/<case>/ for debugging.
+// Exit policy (#322): 0 when every failure carries a `modelLimited` note
+// (an explicit, reviewed statement in the case file), 1 on any other
+// failure. The header prints the model id the run graded against.
 import { accessSync, constants } from "node:fs"
 import { cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { decideEvalsExit } from "../packages/core/src/evals/exit.ts"
 import { gradeFireCase } from "../packages/core/src/evals/fires.ts"
 import { caseStepCap, type EvalCase, evalWorkspace, runEvalCase } from "../packages/core/src/evals/run.ts"
 import { renderEvalPrompt, startServeFixtures, usesFixtureServer } from "../packages/core/src/evals/serve.ts"
@@ -68,6 +72,9 @@ if (!binary || !model) {
 
 const stamp = new Date().toISOString().replace(/[:.]/g, "-")
 const files = (await readdir(casesDir)).filter((file) => file.endsWith(".json")).sort()
+console.log(
+  `evals: model ${model}, ${files.length} case(s), step ceiling ${stepCeiling}${budgetUSD === undefined ? "" : `, budget $${budgetUSD}`}.`,
+)
 // Fixture pages for fetch cases ({{SERVE_URL}} in prompts); localhost only.
 const serve = await startServeFixtures(path.join(root, "evals/serve"))
 const results = []
@@ -184,7 +191,7 @@ for (const file of files) {
       ...(kept ? { kept } : {}),
     })
     console.log(
-      `${result.pass ? "PASS" : "FAIL"} ${result.id} (${result.transcript.steps}/${maxSteps} step(s), $${result.transcript.costUSD.toFixed(4)})${result.pass ? "" : ` — ${result.failures.join("; ")}`}`,
+      `${result.pass ? "PASS" : testCase.modelLimited ? "FAIL (model-limited)" : "FAIL"} ${result.id} (${result.transcript.steps}/${maxSteps} step(s), $${result.transcript.costUSD.toFixed(4)})${result.pass ? "" : ` — ${result.failures.join("; ")}`}`,
     )
   } finally {
     await workspace.cleanup()
@@ -198,4 +205,6 @@ await writeFile(
   `${JSON.stringify({ at: stamp, model, stepCeiling, budgetUSD, spentUSD, results }, null, 2)}\n`,
 )
 console.log(`evals: spent $${spentUSD.toFixed(4)}${budgetUSD === undefined ? "" : ` of $${budgetUSD}`}.`)
-if (results.some((result) => !result.pass)) process.exit(1)
+const limited = results.filter((result) => !result.pass && result.modelLimited).map((result) => result.id)
+if (limited.length) console.log(`evals: ${limited.length} model-limited failure(s): ${limited.join(", ")}.`)
+process.exit(decideEvalsExit(results.map((row: { pass: boolean; modelLimited?: string }) => row)))

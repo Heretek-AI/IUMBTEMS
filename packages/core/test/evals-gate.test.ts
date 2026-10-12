@@ -4,6 +4,7 @@
 // renamed suite also exited 0. Unknown IDs are regressions; zero history
 // with failures is a distinct exit 2 ("no history", not "no regression").
 import { describe, expect, test } from "bun:test"
+import { decideEvalsExit } from "../src/evals/exit.ts"
 import { decideGateVerdict } from "../src/evals/gate.ts"
 
 describe("e2e gate verdict (#210)", () => {
@@ -39,5 +40,23 @@ describe("e2e gate verdict (#210)", () => {
       known: ["stable-case", "flaky-case"],
     })
     expect(verdict.exit).toBe(0)
+  })
+})
+
+describe("evals exit policy (#322)", () => {
+  test("all pass → 0", () => {
+    expect(decideEvalsExit([{ pass: true }, { pass: true }])).toBe(0)
+    expect(decideEvalsExit([])).toBe(0)
+  })
+
+  test("only model-limited failures → 0", () => {
+    expect(decideEvalsExit([{ pass: false, modelLimited: "free model misses this plant" }])).toBe(0)
+    expect(decideEvalsExit([{ pass: true }, { pass: false, modelLimited: "free model misses this plant" }])).toBe(0)
+  })
+
+  test("any other failure → 1", () => {
+    expect(decideEvalsExit([{ pass: false }])).toBe(1)
+    expect(decideEvalsExit([{ pass: false, modelLimited: "" }])).toBe(1)
+    expect(decideEvalsExit([{ pass: false, modelLimited: "free model misses this plant" }, { pass: false }])).toBe(1)
   })
 })
