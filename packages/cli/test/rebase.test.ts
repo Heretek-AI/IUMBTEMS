@@ -62,4 +62,38 @@ describe("es rebase cascade (#165)", () => {
     expect(result.code).toBe(0)
     expect(result.out).toContain("rebase cascade --from <branch> --to <branch>")
   })
+
+  test("audit #332: cascading onto main is refused from the CLI", async () => {
+    // Both directions refuse: main advances through the human release flow
+    // only (core RebaseError surfaces as exit 1, branches unmoved).
+    await writeFile(path.join(root, "a.txt"), "x\n")
+    await git("add", "-A")
+    await git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a")
+    await git("branch", "to-br", "HEAD")
+    const onto = await run(["rebase", "cascade", "--from", "to-br", "--to", "main"])
+    expect(onto.code).toBe(1)
+    expect(onto.out).toMatch(/main/i)
+    const from = await run(["rebase", "cascade", "--from", "main", "--to", "to-br"])
+    expect(from.code).toBe(1)
+    expect(from.out).toMatch(/main/i)
+  })
+
+  test("audit #332: --no-verify pins the skip semantics (post-rebase tests only)", async () => {
+    // A fast-forward onto invalid JSON fails the default marker/JSON sanity
+    // but succeeds with --no-verify: the flag replaces runTests with
+    // () => true (packages/cli/src/main.ts), skipping ONLY the green-tests
+    // gate — main refusal and conflict handling still apply.
+    await git("branch", "to-br", "HEAD")
+    await writeFile(path.join(root, "bad.json"), "{invalid json")
+    await git("add", "-A")
+    await git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "bad json")
+    await git("branch", "from-br", "HEAD")
+    await git("checkout", "-q", "main")
+    const strict = await run(["rebase", "cascade", "--from", "from-br", "--to", "to-br"])
+    expect(strict.code).toBe(1)
+    expect(strict.out).toMatch(/post-rebase tests failed|Cascade failed/i)
+    const skipped = await run(["rebase", "cascade", "--from", "from-br", "--to", "to-br", "--no-verify"])
+    expect(skipped.code).toBe(0)
+    expect(skipped.out).toContain("Rebased to-br onto from-br")
+  })
 })

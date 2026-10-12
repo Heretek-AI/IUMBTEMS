@@ -197,4 +197,20 @@ describe("cascadeRebase", () => {
     expect(red.rolledBack).toBe(true)
     expect(await Git.revParse(fx.root, "to-br")).toBe(before)
   })
+
+  test("audit #332: an unhandled-type conflict aborts with both branches untouched", async () => {
+    // notes.txt is neither TS nor JSON: resolveConflict bails (a human must
+    // rebase by hand), so the cascade fails without moving either branch.
+    await divergedPair("notes.txt", "line one\n", "upstream line\n", "downstream line\n")
+    const beforeTo = await Git.revParse(fx.root, "to-br")
+    const beforeFrom = await Git.revParse(fx.root, "from-br")
+    expect(resolveConflict("notes.txt", "upstream line\n", "downstream line\n")).toBeUndefined()
+
+    const result = await cascadeRebase(fx.root, { from: "from-br", to: "to-br", runTests: async () => true })
+    expect(result.ok).toBe(false)
+    expect(result.rolledBack).toBe(true)
+    expect(result.reason).toMatch(/conflict|human/i)
+    expect(await Git.revParse(fx.root, "to-br")).toBe(beforeTo)
+    expect(await Git.revParse(fx.root, "from-br")).toBe(beforeFrom)
+  })
 })
