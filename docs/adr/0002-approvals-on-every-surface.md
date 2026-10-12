@@ -127,8 +127,13 @@ prompt-injected agent acting through a seat or user-agent shell.
   the web path requires a localhost-only server started by a human-only verb,
   which refuses under `ES_SANDBOX`, checks origin and Host, and needs a
   one-time URL token.
-- **I7** Trust, waive, resume, key seal, config set and export stay
-  terminal-only.
+- **I7** Trust, waive, resume, key seal, gates edits, rebaseline and export
+  stay terminal-only. Project-config edits (the `config set` semantics for
+  `.factory/config.json` only) may additionally be applied from the browser
+  through the #145 path — a preview-bound single-use ticket plus the
+  passphrase and the CSRF/Origin checks reused from #131. All of I1–I6 and
+  I8 apply to that path (see "In force since #145" below); nothing else
+  human-only moves.
 - **I8** Browser key handling follows option (b): the sealed key never leaves
   the machine's state dir; the passphrase travels only over loopback to the
   local server. **Confirmed by the user (2026-10-11), quoted under "To
@@ -167,6 +172,12 @@ HEAD `477d607`); line numbers are approximate.
 | 23 | Docs `README.md`, `docs/DOGFOOD.md` approval steps | Change in #119. |
 | 24 | `CHANGELOG.md` 1.1.1 entries | Keep: history. |
 | 25 | Waiver channel copies (`schema/waiver.ts`, `gates/waivers.ts`) | Change in #117: one shared channel schema incl. `"web"`. |
+| 26 | `packages/fleet/src/configview.ts` (config preview + ticket-bound project-config apply) | Change in #145: `plan` stays read-only; `apply` writes only the previewed `config` content through the single-use ticket + passphrase path below. Gates content is never appliable here. |
+| 27 | `packages/fleet/src/approve.ts` + `packages/fleet/src/web.ts` (ticket, CSRF and Origin path) | Change in #145, reuse only: the config apply reuses `ApproveTickets` semantics (single-use, TTL ≤ 120 s), the per-session `CsrfTokens` check, the loopback `Origin`/`Host` checks and the one-time URL token from #131; no new auth mechanism. |
+| 28 | `packages/web/src/config.ts` (config editor apply control) | Change in #145: after a successful `config` preview the editor offers a masked passphrase input + Apply that submits exactly the previewed content; gates panes never offer it. The passphrase lives in one local, never in reactive state. |
+| 29 | `packages/cli/src/*` `es config set` terminal path | Keep: the terminal path is unchanged and still human-only; the browser path writes the same bytes through core. |
+| 30 | Gates edits, `es rebaseline`, trust, waive, resume, key seal and export | Keep: terminal-only (I7). The browser config path refuses `gates` content outright, and there is no browser rebaseline. |
+| 31 | Tests `packages/fleet/test/configview-apply.test.ts` + `packages/web/test/config-apply.test.ts` (browser condition) | New in #145: the six refusals plus the happy path (preview → apply equals disk) and the I1 passphrase-hygiene probe. |
 
 ## Adversarial-review checklist (gates #119 and #131)
 
@@ -269,3 +280,71 @@ refuses `fleet.config.apply`, the UI has no apply button, and `config set`
 stays terminal-only. Ticket #145 carries the work, which includes amending
 I7 and the inventory above and reusing the ticket, passphrase and
 CSRF/Origin path from #131.
+
+## In force since #145: config edits from the browser (project config only)
+
+The "not yet in force" note above is superseded for project config only.
+The user's authorization is the selection quoted there (Allow browser
+apply, 2026-10-11, recorded on #156; recommended option "Preview only" not
+selected): "The browser can apply config changes with your authorization."
+This ticket puts that authorization in force for `.factory/config.json`
+edits and nothing else. Gates edits and rebaseline, trust, waive, resume,
+key seal and export stay terminal-only (I7 as narrowed above).
+
+Which invariants govern the browser config-apply path:
+
+- **I1** The passphrase is collected only by the masked browser input and
+  held only in a local for the unlock call; the input is cleared before the
+  request leaves. It never enters reactive state, logs, telemetry, RPC
+  events, snapshots or model context.
+- **I2** The private key is decrypted only in the applying process via
+  `unlockHumanKey` (passphrase check) and destroyed after; it never crosses
+  a network boundary. The apply signs nothing new — the unlock proves a
+  live human typed the passphrase.
+- **I3** The browser signs nothing it did not preview: `plan` returns the
+  exact `newHash`, the apply ticket is single-use with TTL ≤ 120 s and
+  bound to that hash, and apply re-derives the content hash plus the
+  on-disk `oldHash` and refuses any mismatch or staleness.
+- **I4** Attempts are limited exactly like #131 (5 wrong passphrases per
+  10 min, then lockout with an audit entry), in a separate `web-config`
+  bucket so config and approval lockouts do not cross-trip.
+- **I5** The channel is recorded as `web` and audited (`config.apply`
+  entry alongside the `config.set` semantics).
+- **I6** The mutating endpoint is unreachable from agent contexts: no RPC
+  method (`fleet.config.apply` stays unknown), no agent tool and no MCP
+  tool; the HTTP path needs the loopback session cookie, a loopback
+  `Origin`, the session CSRF token and the single-use ticket, and refuses
+  under `ES_SANDBOX`.
+- **I8** Option (b) as for approvals: the sealed key never leaves the
+  machine's state dir; the passphrase travels only over loopback to the
+  local server.
+
+## Config-apply probes (#145)
+
+Each probe is run against the built surface and its result posted on #145
+before merge. P1–P6 are the ticket's required refusals; P7–P9 pin the
+hygiene and scope boundaries.
+
+1. **P1 no ticket:** apply without a ticket (missing or unknown) is
+   refused; nothing is written.
+2. **P2 reused ticket:** redeeming the same ticket twice fails; the second
+   apply is refused even when the first failed auth.
+3. **P3 expired ticket:** a ticket past its TTL (≤ 120 s) is refused.
+4. **P4 hash mismatch:** submitting content whose hash differs from the
+   previewed `newHash`, or applying after the on-disk file changed since
+   the preview (`oldHash` stale), is refused with no write.
+5. **P5 wrong Origin:** a missing, non-loopback or foreign `Origin` (and a
+   foreign `Host`) is refused before the ticket is even looked at.
+6. **P6 sandbox:** the server refuses under `ES_SANDBOX`; an agent
+   context cannot apply even with a ticket in hand.
+7. **P7 passphrase hygiene (I1/I4):** a wrong passphrase is refused with
+   remaining-attempts, five wrong ones lock out with an audit entry, and
+   the probe passphrase appears in no response, log, state file, snapshot
+   or reactive UI state (grep the state dir, logs and rendered DOM).
+8. **P8 scope (I6/I7):** `gates` content submitted for browser apply is
+   refused as terminal-only; `fleet.config.apply` is still an unknown RPC
+   method; no agent (`es_*`) tool and no MCP tool reaches the apply.
+9. **P9 happy path:** a config edit previewed in the browser applies there
+   with the passphrase, and the bytes on disk equal the previewed bytes
+   (hash-equal); drift is quiet and the audit entry records channel
+   `web`.
