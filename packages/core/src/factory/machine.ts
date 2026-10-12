@@ -208,9 +208,10 @@ function sealProblemMessage(problem: SidecarProblem, dir: string | undefined): s
     const sandbox = process.env.ES_SANDBOX
     return (
       `Cannot verify .factory/runtime/state.json: there is no engine key at ${key}. ` +
+      `If engine.key was deleted by hand (for example while replacing the human key with \`es key reset\`), restart opencode to recreate it, then review the state and run \`es reseal --sign\` (the re-sign is audited); cached sources sealed under the old key stop verifying. ` +
       (sandbox
-        ? `This is an agent shell (sandbox "${sandbox}"), where Epistemic Swarm's private state dir is masked: call the es_status tool instead of \`es status\`.`
-        : "The plugin may be using another state dir (its stateDir option): point this shell at it with ES_STATE_DIR, then retry.")
+        ? `This is also an agent shell (sandbox "${sandbox}"), where Epistemic Swarm's private state dir is masked: call the es_status tool instead of \`es status\`.`
+        : "Otherwise the plugin may be using another state dir (its stateDir option): point this shell at it with ES_STATE_DIR, then retry.")
     )
   }
   if (problem === "missing sidecar")
@@ -821,7 +822,12 @@ export class Factory {
           notes: `${findings.length} findings`,
         })
       })
-      return { ok: false, summary: `Not complete: ${gates.summary}\nBlocked findings:\n${describeBlockedFindings(findings).join("\n")}`, findings, criteria }
+      return {
+        ok: false,
+        summary: `Not complete: ${gates.summary}\nBlocked findings:\n${describeBlockedFindings(findings).join("\n")}`,
+        findings,
+        criteria,
+      }
     }
     await this.mutate(`agent:${agentId}`, async (state) => {
       this.requireStage(state, "BUILD")

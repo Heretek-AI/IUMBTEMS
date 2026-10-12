@@ -55,6 +55,7 @@ import {
   renderResearchRun,
   researchOptions,
   researchTools,
+  resetHumanKey,
   SlotLoop,
   scanSource,
   startRun as startBrainstorm,
@@ -125,6 +126,7 @@ Checkpoints and exceptions
   reseal [--sign]               Verify engine sidecars (re-sign reviewed files)   [human, TTY]
   waive <rule> --reason "…" [--files <glob>] [--expires 7d] [--id <name>]   [human, TTY]
   key seal                      Create the passphrase-sealed human key   [human, TTY]
+  key reset                     Replace only the human key (never touches engine.key)   [human, TTY]
   key status                    Show the human key fingerprint
 
 Gates
@@ -271,7 +273,31 @@ export async function main(argv: readonly string[], io: MainIO): Promise<number>
       case "key": {
         if (sub === "seal") return await keySeal(io)
         if (sub === "status") return await keyStatus(io)
-        io.print("Usage: es key seal | status")
+        if (sub === "reset") {
+          // #354: guarded replacement without hand-deleting the state dir.
+          // Human-only TTY; replaces only human.key/human.pub, never engine.key.
+          if (!io.confirm.interactive) throw new NotInteractive("es key reset")
+          const first = await io.confirm.readSecret(
+            "Your NEW Epistemic Swarm passphrase (at least 10 characters, empty cancels): ",
+          )
+          if (!first) {
+            io.print("Cancelled; the human key is unchanged.")
+            return 1
+          }
+          const second = await io.confirm.readSecret("Type it again to confirm: ")
+          if (!second) {
+            io.print("Cancelled; the human key is unchanged.")
+            return 1
+          }
+          if (first !== second) {
+            io.print("The two passphrases do not match; the human key is unchanged.")
+            return 1
+          }
+          const { keyId, mustRerecord } = await resetHumanKey(first, io.stateDir)
+          io.print(`Replaced the human key ${keyId}; ${mustRerecord}.`)
+          return 0
+        }
+        io.print("Usage: es key seal | reset | status")
         return 2
       }
       case "research": {
