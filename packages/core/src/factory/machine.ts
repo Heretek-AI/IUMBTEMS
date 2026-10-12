@@ -12,7 +12,7 @@
 //   the spend ceiling and the runtime cap, halting on any breach.
 // - Side effects (worktrees, commits, branch moves, PRs) are journaled.
 import { randomBytes } from "node:crypto"
-import { readFile, symlink } from "node:fs/promises"
+import { mkdir, readdir, readFile, readlink, symlink } from "node:fs/promises"
 import path from "node:path"
 import { assertModelDiversity, ModelDiversityError, type SeatModelMap } from "../agents/models.ts"
 import { seatOf } from "../agents/registry.ts"
@@ -659,10 +659,18 @@ export class Factory {
   }
 
   private async ensureExcludes() {
-    const exclude = path.join((await Git.git(this.root, ["rev-parse", "--git-path", "info/exclude"])).stdout.trim())
-    const file = path.isAbsolute(exclude) ? exclude : path.join(this.root, exclude)
+    await this.ensureExcluded(this.root, [
+      ".factory/runtime/",
+      ".factory/runs/",
+      ".factory/worktrees/",
+      ".factory/STOP",
+    ])
+  }
+
+  private async ensureExcluded(cwd: string, wanted: string[]) {
+    const exclude = path.join((await Git.git(cwd, ["rev-parse", "--git-path", "info/exclude"])).stdout.trim())
+    const file = path.isAbsolute(exclude) ? exclude : path.join(cwd, exclude)
     const current = await readFile(file, "utf8").catch(() => "")
-    const wanted = [".factory/runtime/", ".factory/runs/", ".factory/worktrees/", ".factory/STOP"]
     const missing = wanted.filter((line) => !current.split("\n").includes(line))
     if (missing.length) await appendLine(file, `# epistemic-swarm\n${missing.join("\n")}`)
   }
@@ -680,12 +688,79 @@ export class Factory {
     for (const name of ["node_modules", ".venv", "venv"])
       if ((await exists(path.join(this.root, name))) && !(await exists(path.join(dir, name))))
         await symlink(path.join(this.root, name), path.join(dir, name), "dir").catch(() => undefined)
+    // Mirror workspace package links (#358): members resolve their own
+    // node_modules first, so without this a fresh worktree cannot typecheck
+    // until a seat reinstalls. Keep the factory's links out of phase commits
+    // and status whatever the project's ignore rules say.
+    await this.linkWorkspacePackages(dir)
+    await this.ensureExcluded(dir, ["/node_modules", "/.venv", "/venv"])
     phase.baseCommit = result.base
     phase.status = "building"
     phase.qa = {}
     state.activePhase = phase.id
     state.stage = "BUILD"
     phase.history.push({ at: this.now().toISOString(), event: "activated", notes: phase.branch })
+  }
+
+  /**
+   * Mirror workspace package links into a fresh phase worktree (#358). The
+   * root store is shared by symlink (above), but each workspace member
+   * resolves its own `node_modules` first: recreate every symlink the package
+   * manager left under each member's `node_modules`, so sibling links resolve
+   * inside the worktree instead of leaking into the main checkout. Relative
+   * targets are copied verbatim (they stay valid at the mirrored layout);
+   * absolute targets under the project root are rewritten to the worktree.
+   * Real files and directories are never copied.
+   */
+  private async linkWorkspacePackages(dir: string) {
+    const pkgText = await readFile(path.join(this.root, "package.json"), "utf8").catch(() => undefined)
+    if (!pkgText) return
+    let raw: { workspaces?: unknown }
+    try {
+      raw = JSON.parse(pkgText) as { workspaces?: unknown }
+    } catch {
+      return
+    }
+    const workspaces = Array.isArray(raw.workspaces)
+      ? raw.workspaces
+      : typeof raw.workspaces === "object" &&
+          raw.workspaces !== null &&
+          Array.isArray((raw.workspaces as { packages?: unknown }).packages)
+        ? (raw.workspaces as { packages: unknown[] }).packages
+        : []
+    const pkgDirs = new Set<string>()
+    for (const pattern of workspaces) {
+      if (typeof pattern !== "string" || pattern.startsWith("!")) continue
+      if (pattern.endsWith("/*")) {
+        const parent = pattern.slice(0, -2)
+        const entries = await readdir(path.join(this.root, parent), { withFileTypes: true }).catch(() => [])
+        for (const entry of entries) if (entry.isDirectory()) pkgDirs.add(path.join(parent, entry.name))
+      } else pkgDirs.add(pattern)
+    }
+    for (const pkg of pkgDirs)
+      await this.mirrorLinks(dir, path.join(this.root, pkg, "node_modules"), path.join(dir, pkg, "node_modules"))
+  }
+
+  private async mirrorLinks(worktree: string, from: string, to: string) {
+    const entries = await readdir(from, { withFileTypes: true }).catch(() => undefined)
+    if (!entries) return
+    for (const entry of entries) {
+      const src = path.join(from, entry.name)
+      const dst = path.join(to, entry.name)
+      if (entry.isSymbolicLink()) {
+        if (await exists(dst)) continue
+        let target = await readlink(src).catch(() => undefined)
+        if (target === undefined) continue
+        if (path.isAbsolute(target)) {
+          const rel = relativeInside(this.root, target)
+          if (rel !== undefined) target = path.join(worktree, rel)
+        }
+        await mkdir(path.dirname(dst), { recursive: true })
+        await symlink(target, dst, "dir").catch(() => undefined)
+      } else if (entry.isDirectory()) {
+        await this.mirrorLinks(worktree, src, dst)
+      }
+    }
   }
 
   /** Absolute path of the active phase worktree (for policy and gates). */
