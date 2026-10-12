@@ -16,7 +16,7 @@
 //   (temp symlink + rename under a lock).
 // - The build/spawn/shadow pipeline is an explicit seam: production wires
 //   the real fleet worker spawner (a human exercise, marked at `runCanary`).
-import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { lstat, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { withLock } from "@heretek-ai/es-core"
 import { FleetError } from "./lifecycle.ts"
@@ -153,7 +153,10 @@ export class CanaryRunner {
   /**
    * Guarded canary write: allowed only inside the staging sandbox, and never
    * to the rollback tree, the active link, or outside paths. The canary
-   * cannot modify its own rollback mechanism.
+   * cannot modify its own rollback mechanism. Symlink confinement: the
+   * nearest existing ancestor is realpath-resolved and re-checked, so a
+   * staging symlink into the rollback tree (or out of the sandbox) is
+   * refused even though it resolves lexically inside staging.
    */
   async canaryWrite(file: string, content: string): Promise<void> {
     const resolved = path.resolve(file)
@@ -165,8 +168,38 @@ export class CanaryRunner {
       throw new CanaryError(`refusing canary write to the active link: ${file}`)
     if (!resolved.startsWith(staging))
       throw new CanaryError(`refusing canary write outside the staging sandbox: ${file}`)
+    const real = await this.realTarget(resolved)
+    if (real === path.resolve(this.rollbackTarget) || real.startsWith(rollback))
+      throw new CanaryError(`refusing canary write through a symlink into the rollback tree: ${file}`)
+    if (real === path.resolve(this.activeLink))
+      throw new CanaryError(`refusing canary write through a symlink to the active link: ${file}`)
+    if (!real.startsWith(staging))
+      throw new CanaryError(`refusing canary write through a symlink outside the staging sandbox: ${file}`)
     await mkdir(path.dirname(resolved), { recursive: true })
     await writeFile(resolved, content)
+  }
+
+  /** Realpath of the nearest existing ancestor, with the missing suffix re-attached. */
+  private async realTarget(resolved: string): Promise<string> {
+    let ancestor = resolved
+    for (;;) {
+      try {
+        await lstat(ancestor)
+        break
+      } catch {
+        const parent = path.dirname(ancestor)
+        if (parent === ancestor) return resolved
+        ancestor = parent
+      }
+    }
+    let real: string
+    try {
+      real = await realpath(ancestor)
+    } catch {
+      return resolved
+    }
+    const suffix = path.relative(ancestor, resolved)
+    return suffix ? path.join(real, suffix) : real
   }
 
   /**
