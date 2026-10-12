@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test"
 import {
   createMachineKeyStore,
   type GateProofBundle,
+  isMachineScope,
   MachineKeyError,
   signStageTransition,
   verifyMachineTransition,
@@ -195,5 +196,34 @@ describe("MachineKeyStore (proof-carrying transitions)", () => {
         proof: green(),
       }),
     ).toThrow(MachineKeyError)
+  })
+
+  test("isMachineScope pins the ADR 0004 branch boundary", () => {
+    for (const branch of ["integration/x", "integration/phase-11", "factory/run-1/phase-p1", "factory/x"]) {
+      expect(isMachineScope(branch)).toBe(true)
+    }
+    for (const branch of ["main", "main/evil", "feature/shiny", "staging/autonomous", "rewrite", "", "integration"]) {
+      expect(isMachineScope(branch)).toBe(false)
+    }
+  })
+
+  test("B2: records outlive the key for verification only — a new key cannot extend old signatures", async () => {
+    const a = createMachineKeyStore()
+    const record = signStageTransition(a, {
+      branch: "integration/x",
+      target: "integration/x",
+      kind: "stage-transition",
+      stage: "SPEC",
+      proof: green({ branch: "integration/x" }),
+    })
+    const savedPem = a.publicKeyPem
+    a.destroy()
+    // Historical verification still works under the saved public key (no private needed).
+    expect(await verifyMachineTransition(record, savedPem)).toBe(true)
+    // But the identity is gone: a new store mints a new keyId and the old
+    // record does not verify under it (post-exit minting is impossible).
+    const b = createMachineKeyStore()
+    expect(b.keyId).not.toBe(a.keyId)
+    expect(await verifyMachineTransition(record, b.publicKeyPem)).toBe(false)
   })
 })
