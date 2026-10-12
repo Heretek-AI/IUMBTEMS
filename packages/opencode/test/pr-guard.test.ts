@@ -8,7 +8,7 @@
 // guard and argv shape); the audit side additionally proves against a real
 // repo with a bare remote that refused attempts move no ref.
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { buildPrArgs } from "@heretek-ai/es-core"
@@ -122,5 +122,105 @@ describe("release PR argv", () => {
     expect(argv.slice(0, 4)).toEqual(["gh", "pr", "create", "--draft"])
     expect(argv.slice(argv.indexOf("--head") + 1, argv.indexOf("--head") + 2)).toEqual(["factory/run-1/integration"])
     expect(argv.slice(argv.indexOf("--base") + 1, argv.indexOf("--base") + 2)).toEqual(["main"])
+  })
+})
+
+// Publish tag guard (#328): the `publish.yml` publish guard refuses a
+// non-dry-run publish when the release tag already exists, before `npm
+// publish` runs. Fake-binary style: the extracted workflow step runs against
+// fake `bun`/`git` binaries over a fixture with agreeing manifests.
+const workflowRoot = path.resolve(import.meta.dir, "../../..")
+const readWorkflow = () => readFile(path.join(workflowRoot, ".github/workflows/publish.yml"), "utf8")
+
+/** The `run: |` body of the step called `name`, dedented. Fails when absent. */
+const extractStep = (yml: string, name: string): string => {
+  const lines = yml.split("\n")
+  const plain = (line: string) => line.trim().replace(/^(- name: )"(.*)"$/, "$1$2")
+  const at = lines.findIndex((line) => plain(line) === `- name: ${name}`)
+  expect(at).toBeGreaterThan(-1)
+  const runAt = lines.findIndex((line, index) => index > at && /^\s*run: \|/.test(line))
+  expect(runAt).toBeGreaterThan(-1)
+  const indent = lines[runAt]!.search(/\S/)
+  const body: string[] = []
+  for (let i = runAt + 1; i < lines.length; i++) {
+    const line = lines[i]!
+    if (line.trim() === "") {
+      body.push("")
+      continue
+    }
+    if (line.search(/\S/) <= indent) break
+    body.push(line.slice(indent + 2))
+  }
+  const script = body.join("\n").replace(/\n+$/, "")
+  expect(script).not.toBe("")
+  return script
+}
+
+/** A fixture repo root with agreeing manifests, a CHANGELOG and fake `bun`/`git`. */
+const tagFixture = async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "es-publish-tag-"))
+  const bin = await mkdtemp(path.join(tmpdir(), "es-publish-tag-bin-"))
+  for (const dir of ["core", "cli", "opencode"]) {
+    await mkdir(path.join(root, "packages", dir), { recursive: true })
+    await writeFile(
+      path.join(root, "packages", dir, "package.json"),
+      `${JSON.stringify({ name: `@scope/${dir}`, version: "2.3.0" }, null, 2)}\n`,
+    )
+  }
+  await writeFile(
+    path.join(root, "CHANGELOG.md"),
+    "# Changelog\n\n## 2.3.0 — 2026-10-11\n\nThe headline feature ships.\n",
+  )
+  await writeFile(
+    path.join(bin, "bun"),
+    "#!/bin/sh\nprintf 'core heretek-ai-es-core\\ncli heretek-ai-es-cli\\nopencode heretek-ai-epistemic-swarm\\n'\nexit 0\n",
+  )
+  await writeFile(
+    path.join(bin, "git"),
+    '#!/bin/sh\nif [ "$1" = "ls-remote" ]; then\nif [ "${FAKE_GIT_TAG_EXISTS:-0}" = "1" ]; then exit 0; else exit 1; fi\nfi\nexit 0\n',
+  )
+  for (const tool of ["bun", "git"]) await chmod(path.join(bin, tool), 0o755)
+  return { root, bin }
+}
+
+/** Run the extracted guard step with the fixture on PATH. */
+const runGuard = (script: string, fx: { root: string; bin: string }, env: Record<string, string>) => {
+  // NOTE: Bun.spawnSync does not pick up process.env mutations, so the
+  // environment is passed explicitly (spread first, so the current PATH
+  // and HOME survive under the fake bin dir).
+  const result = Bun.spawnSync(["bash", "-e", "-o", "pipefail", "-c", script], {
+    cwd: fx.root,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, ...env, PATH: `${fx.bin}${path.delimiter}${process.env.PATH}` },
+  })
+  return { exitCode: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() }
+}
+
+describe("publish tag guard (#328)", () => {
+  test("an existing tag refuses the publish before npm publish runs", async () => {
+    const fx = await tagFixture()
+    try {
+      const script = extractStep(await readWorkflow(), "Publish guard: version parity and free tag")
+      const run = runGuard(script, fx, { DRY_RUN: "false", FAKE_GIT_TAG_EXISTS: "1" })
+      expect(run.exitCode).not.toBe(0)
+      expect(run.stderr).toMatch(/tag v2\.3\.0 already exists/)
+    } finally {
+      await rm(fx.root, { recursive: true, force: true })
+      await rm(fx.bin, { recursive: true, force: true })
+    }
+  })
+
+  test("a free tag lets the guarded publish proceed", async () => {
+    const fx = await tagFixture()
+    try {
+      const script = extractStep(await readWorkflow(), "Publish guard: version parity and free tag")
+      const run = runGuard(script, fx, { DRY_RUN: "false", FAKE_GIT_TAG_EXISTS: "0" })
+      expect(run.exitCode).toBe(0)
+      expect(run.stdout).toMatch(/tag v2\.3\.0 free/)
+    } finally {
+      await rm(fx.root, { recursive: true, force: true })
+      await rm(fx.bin, { recursive: true, force: true })
+    }
   })
 })

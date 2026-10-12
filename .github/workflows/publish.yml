@@ -4,6 +4,14 @@ name: Publish
 # (OIDC) and provenance; no long-lived token is stored. Configure each package
 # as a trusted publisher for this workflow before the first run. Defaults to a
 # dry run.
+#
+# Publish hardening (#328): a non-dry-run publish is guarded (the three
+# release manifests must agree with each other and with the top CHANGELOG
+# entry, and tag v<version> must not exist yet), and a successful publish
+# tags the published commit (annotated v<version>) and creates the GitHub
+# release from the CHANGELOG entry — no manual step. The second gate stays
+# human: the IUMBTEMS environment requires a reviewer's approval and runs
+# only on main (set in GitHub settings, never by an agent).
 on:
   workflow_dispatch:
     inputs:
@@ -36,6 +44,37 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.4.2"
+      # Publish guard (#328): a non-dry-run publish needs one agreed version
+      # across the release manifests and the top CHANGELOG entry, and a free
+      # tag — otherwise a second publish of the same version stops here,
+      # before `npm publish`. Needs only checkout and bun (no install):
+      # it runs first so a skewed tree fails fast. Dry runs skip every check.
+      - name: "Publish guard: version parity and free tag"
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "${DRY_RUN:-true}" = "true" ]; then
+            echo "publish guard: dry run, skipping version and tag checks"
+            exit 0
+          fi
+          versions="$(bun scripts/packages.ts --release | while read -r pkg _slug; do
+            grep -m1 '"version"' "packages/$pkg/package.json" | sed 's/.*"version": *"//;s/".*//'
+          done | sort -u)"
+          if [ "$(printf '%s\n' "$versions" | wc -l)" -ne 1 ]; then
+            echo "publish guard: refusing: release manifests disagree:" >&2
+            printf '%s\n' "$versions" >&2
+            exit 1
+          fi
+          top="$(sed -n 's/^## \([0-9][0-9.]*\).*/\1/p' CHANGELOG.md | head -n 1)"
+          if [ "$top" != "$versions" ]; then
+            echo "publish guard: refusing: top CHANGELOG entry ($top) disagrees with manifests ($versions)" >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code origin "refs/tags/v$versions" >/dev/null 2>&1; then
+            echo "publish guard: refusing: tag v$versions already exists; a second publish of the same version stops here" >&2
+            exit 1
+          fi
+          echo "publish guard: version $versions agreed, tag v$versions free"
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run check
       - run: bun run docs:check
@@ -78,3 +117,37 @@ jobs:
             fi
             echo "::endgroup::"
           done
+
+  # Tag and release (#328): after a successful non-dry-run publish, the
+  # published commit gets the annotated tag v<version> and the GitHub release
+  # with the CHANGELOG entry as notes — no manual step. `contents: write`
+  # lives on this job only; everything above stays read-only. The `git push`
+  # fails if the tag appeared since the guard ran, so a double publish still
+  # stops here.
+  tag-and-release:
+    needs: [publish]
+    if: ${{ inputs.dry_run == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+      - name: Create tag and GitHub release
+        run: |
+          version="$(bun scripts/packages.ts --release | while read -r pkg _slug; do
+            grep -m1 '"version"' "packages/$pkg/package.json" | sed 's/.*"version": *"//;s/".*//'
+          done | sort -u)"
+          if [ "$(printf '%s\n' "$version" | wc -l)" -ne 1 ]; then
+            echo "tag-and-release: refusing: release manifests disagree" >&2
+            printf '%s\n' "$version" >&2
+            exit 1
+          fi
+          notes="$(awk '/^## /{count++; if (count == 2) exit; next} count == 1' CHANGELOG.md)"
+          git -c user.name="github-actions[bot]" -c user.email="github-actions[bot]@users.noreply.github.com" \
+            tag -a "v$version" -m "Release v$version" "${GITHUB_SHA:?}"
+          git push origin "v$version"
+          gh release create "v$version" --target "${GITHUB_SHA:?}" --title "Release v$version" --notes "$notes"
