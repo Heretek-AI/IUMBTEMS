@@ -9,7 +9,18 @@
 // terminal — no agent path mints one.
 //
 // The proof shape mirrors `GateProofBundle` (#164) field-for-field, so once
-// both land a machine proof passes here structurally with zero adaptation.
+// both land a machine proof passes here structurally with zero adaptation
+// (#344 integration point, #345: `stagingProofProblems` and `landOnStaging`
+// accept the bundle type structurally; no import of approval/machine.ts, so
+// the staging proof stays its own type).
+//
+// Hardening (#345, audit follow-up #365): the distinguisher is shape +
+// provenance + terminal context (16-hex key id, destroy() lifecycle, 64-byte
+// Ed25519 sig, fail-closed terminal invocation on cli/tui/web, optional
+// expectedKeyId binding) — NOT a cryptographic verify against human.pub. A
+// well-formed stub that forges all of those still passes shape; closing it
+// needs verifyRecordSignature under the sealed human key — the human ceremony
+// at a terminal (see `es staging countersign`).
 
 import { randomInt } from "node:crypto"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -287,13 +298,62 @@ interface HumanSignerLike {
   sign(record: Record<string, unknown>): { readonly alg: "ed25519"; readonly keyId: string; readonly sig: string }
 }
 
+/** Terminal proof a countersign call must carry (#345). Core cannot see a TTY. */
+export interface CountersignInvocation {
+  readonly terminal: boolean
+  readonly channel: "cli" | "tui" | "web"
+}
+
+export interface CountersignOptions {
+  /**
+   * Terminal-only invocation context. Fail-closed: absent or non-terminal
+   * callers are refused, so only a human at a terminal (cli/tui/web channel)
+   * exercises the veto. An agent calling core directly must forge this
+   * record — and still faces the shell policy (human-only verb), the sealed
+   * key (passphrase it does not know) and, when bound, the expectedKeyId.
+   */
+  readonly invocation?: CountersignInvocation
+  /**
+   * Fingerprint the signer must present (the CLI binds this to human.pub via
+   * humanKeyId()). A stub guessing a 16-hex id still has to guess THIS one.
+   */
+  readonly expectedKeyId?: string
+}
+
+const HUMAN_KEY_ID = /^[0-9a-f]{16}$/
+const TERMINAL_CHANNELS = new Set(["cli", "tui", "web"])
+
+/** An Ed25519 signature is 64 bytes; stubs like "stub" are refused here. */
+function isEd25519SigBytes(sig: unknown): boolean {
+  if (typeof sig !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(sig)) return false
+  try {
+    return Buffer.from(sig, "base64").length === 64
+  } catch {
+    return false
+  }
+}
+
 /**
  * Countersign a release cut with the HUMAN key. The signer must be the
- * passphrase-unlocked HumanSigner (has sign(), has no machine key material):
- * machine-shaped signers (publicKeyPem, kind: "machine") are refused, so no
- * agent path can exercise the veto — a human does, at a terminal.
+ * passphrase-unlocked HumanSigner (has sign() + destroy(), a 16-hex key id,
+ * 64-byte Ed25519 signatures, no machine key material) invoked from a human
+ * terminal (cli/tui/web channel): machine-shaped signers (publicKeyPem,
+ * kind: "machine") are refused, so no agent path can exercise the veto — a
+ * human does, at a terminal.
+ *
+ * Hardening (#345, follow-up #365) is shape + provenance + terminal context,
+ * NOT cryptographic verification: a well-formed stub that also forges
+ * {terminal:true,channel:"cli"}, a 16-hex keyId, a destroy() and a 64-byte
+ * sig still passes shape. Closing that needs verifyRecordSignature against
+ * the sealed human.pub — the human ceremony (passphrase at a terminal, no
+ * agent path mints one). Do not mistake this distinguisher for a signature
+ * verify.
  */
-export function countersignReleaseCut(cut: ReleaseCut, signer: HumanSignerLike): ReleaseCut {
+export function countersignReleaseCut(
+  cut: ReleaseCut,
+  signer: HumanSignerLike,
+  options?: CountersignOptions,
+): ReleaseCut {
   const shape = signer as unknown as Record<string, unknown>
   // Machine-shaped signers are refused first: no agent path exercises the veto.
   if (shape !== null && typeof shape === "object" && ("publicKeyPem" in shape || shape.kind === "machine"))
@@ -302,10 +362,40 @@ export function countersignReleaseCut(cut: ReleaseCut, signer: HumanSignerLike):
     throw new StagingError("a release cut needs a human signer (this object cannot sign)")
   if (typeof shape.keyId !== "string" || !shape.keyId)
     throw new StagingError("a release cut needs a human signer with a key id")
+  // Key provenance (#345): the real HumanSigner carries a 16-hex fingerprint
+  // (approval/keystore keyIdOf). "stub-key"/"x" shapes are malformed here —
+  // phrased as malformed so the shape bar reads as one gate.
+  if (!HUMAN_KEY_ID.test(shape.keyId as string))
+    throw new StagingError(
+      "the human signature is malformed: the key id must be the 16-hex human fingerprint (stub-shaped signers refused)",
+    )
   const unsigned = { title: cut.title, body: cut.body, head: cut.head, base: cut.base }
   const signature = (signer as HumanSignerLike).sign(unsigned)
   if (signature?.alg !== "ed25519" || typeof signature.sig !== "string" || signature.keyId !== shape.keyId)
     throw new StagingError("the human signature is malformed; the cut stays unsigned")
+  if (!isEd25519SigBytes(signature.sig))
+    throw new StagingError("the human signature is malformed: an Ed25519 signature is 64 bytes (stub sig refused)")
+  // Lifecycle provenance: the unlocked HumanSigner has destroy(); a bare
+  // {keyId,sign} stub does not. Checked after signature shape so malformed
+  // signatures keep their malformed verdict.
+  if (typeof (shape as { destroy?: unknown }).destroy !== "function")
+    throw new StagingError(
+      "stub-shaped signers cannot countersign a release: the human signer lacks key provenance (no destroy lifecycle)",
+    )
+  // Terminal-only invocation context (#345): the veto is exercised by a human
+  // at a terminal on the cli/tui/web channel. Checked last so shape verdicts
+  // stay stable; well-formed shapes without this context are still refused.
+  const invocation = options?.invocation
+  if (invocation?.terminal !== true)
+    throw new StagingError(
+      "a release cut needs a human at an interactive terminal (stdin and stdout must be a TTY); agents may request, never grant",
+    )
+  if (!TERMINAL_CHANNELS.has(invocation.channel))
+    throw new StagingError(
+      `unknown countersign channel "${invocation.channel}": the human veto runs on cli, tui or web only`,
+    )
+  if (options?.expectedKeyId !== undefined && signature.keyId !== options.expectedKeyId)
+    throw new StagingError("the signer key does not match this machine's human key; the cut stays unsigned")
   return { ...cut, signed: true, signature, signedBy: `human:${String(shape.keyId)}` }
 }
 
