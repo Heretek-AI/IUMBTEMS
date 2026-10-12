@@ -176,3 +176,25 @@ sealed evidence.
 - A failed run is evidence: fix the harness, re-grill if the design changed,
   and re-run. The tree-sitter complexity budget is a small feature on purpose —
   the point is the loop.
+
+## Lost passphrase or lost engine key
+
+Two files in the state directory matter: `human.key`/`human.pub` (your
+passphrase-unlocked Ed25519 key) and `engine.key` (the engine seal every run
+state and cached source is verified against). Never delete files there by
+hand — one extra removal breaks verification for every project on the
+machine.
+
+- **Replacing the human key** (new passphrase, same machine): run
+  `es key reset` at an interactive terminal. It replaces only the human pair
+  and lists which approvals must be recorded again. (`es key seal` refuses
+  while a key exists; `reset` is the guarded path.)
+- **Lost passphrase**: there is no recovery — the sealed key cannot be
+  unlocked. Run `es key reset` with a new passphrase and re-record your
+  approvals.
+- **Deleted or lost `engine.key`**: status commands fail naming the missing
+  file and its recovery: restart the host (opencode recreates the key on
+  setup), then re-sign reviewed run state with `es reseal --sign` at a
+  terminal. The re-sign is written to the audit log naming the files.
+  Cached sources sealed under the old engine key stop verifying, and
+  approvals signed by an old human key must be recorded again.
