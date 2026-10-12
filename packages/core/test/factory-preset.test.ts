@@ -245,6 +245,13 @@ describe("a preset-seeded run end to end (S2.2)", () => {
       await Bun.write(roadmapFile, `${JSON.stringify({ ...roadmap, baseBranch: "main" }, null, 2)}\n`)
     }
     await recordApproval(fx.root, { stage: "spec", channel: "cli", approvedBy: "tester", signer })
+    // #359: the run waits at the SPEC to BUILD boundary until a human trusts
+    // the gate commands. The helper models that human `es trust` step.
+    const { loadGatesConfig } = await import("../src/gates/engine.ts")
+    const { commandSetHash, trustProject } = await import("../src/trust/store.ts")
+    const { config: seedConfig } = await loadGatesConfig(fx.root)
+    const seedTrust = await commandSetHash(fx.root, seedConfig.commands)
+    await trustProject(fx.root, seedTrust.hash, seedTrust.lines, { signer, stateDir: fx.state })
     return { fx, factory, opened, begun, writeFrontier }
   }
 
