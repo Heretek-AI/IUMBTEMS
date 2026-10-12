@@ -14,7 +14,9 @@ import {
   gitleaks,
   installed,
   isTrusted,
+  isWaived,
   loadGatesConfig,
+  loadWaivers,
   parseOutput,
   recordWaiver,
   runGates,
@@ -304,6 +306,30 @@ describe("built-in checks", () => {
     const live = await plant(new Date(Date.now() + 86_400_000))
     expect(live.findings.some((finding) => finding.rule === "security/secret-github-token")).toBe(false)
     expect(live.waived).toBe(1)
+  })
+
+  test("a signed acceptance/unmet waiver matches a GOAL.md criterion finding (#360)", async () => {
+    // The waivers module must not exclude criterion findings: a human waiver
+    // for an unmet acceptance criterion has to match the GOAL.md#<id> file the
+    // factory reports it under. Enforcement (complete() consulting waivers) is
+    // outside this package surface; this pins the matching half.
+    await recordWaiver(fx.root, {
+      id: "unmet-check",
+      rule: "acceptance/unmet",
+      files: "GOAL.md#check",
+      reason: "human reviewed the criterion output and accepted the result",
+      expiresAt: new Date(Date.now() + 86_400_000),
+      channel: "cli",
+      signer,
+    })
+    const { active } = await loadWaivers(fx.root, { stateDir: fx.state })
+    expect(
+      isWaived({ file: "GOAL.md#check", rule: "acceptance/unmet", severity: "error", message: "exit null" }, active),
+    ).toBe(true)
+    // Control: a waiver for another criterion does not match.
+    expect(isWaived({ file: "GOAL.md#other", rule: "acceptance/unmet", severity: "error", message: "x" }, active)).toBe(
+      false,
+    )
   })
 
   test("budgets: behaviour change without a test change, file length, complexity", async () => {
@@ -651,6 +677,24 @@ describe("proof gaps (#239)", () => {
       expect(report.checks.find((check) => check.id === "test")?.status).toBe("fail")
       expect(report.testsFailed).toBe(true)
       expect(report.findings.some((finding) => finding.rule === "test/command-failed")).toBe(true)
+    } finally {
+      resetBwrapProbe()
+    }
+  })
+
+  test("a timed-out command reports the duration cap, not a bare exit code (#360)", async () => {
+    const cfg = config([{ id: "slow", kind: "test", command: "sleep 5", parser: "generic", timeoutMs: 300 }])
+    await trust(cfg)
+    resetBwrapProbe(false)
+    try {
+      const report = await gates({ scope: "full", config: cfg })
+      expect(report.checks.find((check) => check.id === "slow")?.status).toBe("fail")
+      const finding = report.findings.find((finding) => finding.rule === "slow/timeout")
+      expect(finding).toBeDefined()
+      expect(finding?.message).toContain("timed out")
+      // A kill at the limit must name the cap: "exit null" with no mention of
+      // a timeout is the #360 report shape.
+      expect(finding?.message).toContain("300")
     } finally {
       resetBwrapProbe()
     }
