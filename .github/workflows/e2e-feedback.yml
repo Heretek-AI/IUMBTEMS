@@ -8,6 +8,10 @@ name: E2E feedback (opencode + plugin)
 # - `bun run evals` runs one real, step-capped turn per `evals/cases/*.json`
 #   in an isolated workspace loading this repo's plugin; a failed case keeps
 #   its workspace, event stream and stderr under evals/results/<stamp>/.
+#   Its exit is 0 when every failure carries a `modelLimited` note (#322:
+#   an explicit, reviewed statement in the case file, listed as
+#   FAIL (model-limited)), 1 on any other failure — but the evals step below
+#   is `continue-on-error`, so the regression gate owns the job's verdict.
 # - `bun scripts/e2e-report.ts` renders the deterministic report, and
 #   evals/results/ is uploaded as the `e2e-feedback` artifact.
 # - `bun scripts/e2e-gate.ts` decides the verdict (#68, option 1): the job
