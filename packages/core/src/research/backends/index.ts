@@ -177,34 +177,69 @@ export interface ChainOptions {
   /** Clock for cooldowns (tests); default Date.now. */
   readonly now?: () => number
   /**
-   * Shared cooldown state (backend id → cooldown expiry and cause). Defaults
-   * to a module-level map; the research tools keep one per plugin process so
-   * a down backend is not retried on every call.
+   * Shared cooldown state (cooldown key → expiry and cause). Defaults to a
+   * module-level map; the research tools keep one per plugin process so a
+   * down backend is not retried on every call. Fetch cooldowns for the
+   * direct backend are keyed per origin hostname (#357: a 403 from host A
+   * must not cool fetches for host B); every other backend cools globally
+   * by backend id.
    */
   readonly cooldowns?: Map<string, { until: number; kind: BackendErrorKind }>
 }
 
 const sharedCooldowns = new Map<string, { until: number; kind: BackendErrorKind }>()
 
-const NO_BACKEND =
+const NO_SEARCH_BACKEND =
   "No search provider is configured: set BRAVE_API_KEY, FIRECRAWL_API_KEY or SEARXNG_URL (or fetch known URLs directly)."
+const NO_FETCH_BACKEND =
+  "No fetch backend is available: the direct fetcher is always configured, so every fetch backend is cooling — retry shortly."
+
+/** Origin hostname of a fetch URL, lowercased; undefined when unparseable. */
+function originHost(url: string): string | undefined {
+  try {
+    return new URL(url).hostname.toLowerCase()
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * #357: cooldown key for one attempt. Direct-backend fetches scope to the
+ * origin hostname (a site refusing us is a result for that URL, not a
+ * backend outage); everything else cools by backend id.
+ */
+export function cooldownKey(backendId: string, kind: "search" | "fetch", url?: string): string {
+  if (kind === "fetch" && backendId === "direct") {
+    const host = url ? originHost(url) : undefined
+    if (host) return `direct@${host}`
+  }
+  return backendId
+}
 
 async function runChain<T>(
   backends: readonly SourceBackend[],
   kind: "search" | "fetch",
   invoke: (backend: SourceBackend) => Promise<T>,
-  options?: ChainOptions,
+  options?: ChainOptions & { readonly url?: string },
 ): Promise<ChainSuccess<T>> {
   const now = options?.now ?? Date.now
   const cooldowns = options?.cooldowns ?? sharedCooldowns
+  const url = options?.url
   const attempts: BackendAttempt[] = []
   let lastError: BackendError | undefined
+  // #357: when every backend is cooling, report that with the retry time —
+  // never the search-provider text for a fetch.
+  const coolingUntils: number[] = []
+  const coolingCauses: string[] = []
   for (const backend of backends) {
     if (kind === "search" && (!backend.capabilities.search || !backend.search)) continue
     if (kind === "fetch" && (!backend.capabilities.fetch || !backend.fetch)) continue
-    const cooling = cooldowns.get(backend.id)
+    const key = cooldownKey(backend.id, kind, url)
+    const cooling = cooldowns.get(key)
     if (cooling && cooling.until > now()) {
       attempts.push({ backend: backend.id, ok: false, kind: cooling.kind })
+      coolingUntils.push(cooling.until)
+      coolingCauses.push(`${key}: ${cooling.kind}`)
       continue
     }
     try {
@@ -217,10 +252,20 @@ async function runChain<T>(
       attempts.push({ backend: backend.id, ok: false, kind: classified.kind })
       // A safety refusal is never routed around: stop the chain here.
       if (classified.kind === "blocked") throw classified
-      cooldowns.set(backend.id, { until: now() + backoffFor(classified), kind: classified.kind })
+      cooldowns.set(key, { until: now() + backoffFor(classified), kind: classified.kind })
     }
   }
-  throw lastError ?? new BackendError("unavailable", NO_BACKEND)
+  if (lastError) throw lastError
+  if (coolingUntils.length) {
+    const retryMs = Math.max(0, Math.min(...coolingUntils) - now())
+    const retrySec = Math.max(1, Math.ceil(retryMs / 1000))
+    throw new BackendError(
+      "rate_limited",
+      `Every ${kind} backend is cooling (${coolingCauses.join("; ")}): retry in ${retrySec}s.`,
+      { retryAfterMs: retryMs },
+    )
+  }
+  throw new BackendError("unavailable", kind === "fetch" ? NO_FETCH_BACKEND : NO_SEARCH_BACKEND)
 }
 
 /** Search through the chain in order; availability is checked per call. */
@@ -256,7 +301,7 @@ export async function runFetchChain(
     backends.filter((backend) => backend.available(env)),
     "fetch",
     (backend) => backend.fetch!(url, { ...fetchOptions, ...(env ? { env } : {}) }),
-    { now, cooldowns },
+    { now, cooldowns, url },
   )
   return { ...result, attempts: [...unavailable, ...result.attempts] }
 }
