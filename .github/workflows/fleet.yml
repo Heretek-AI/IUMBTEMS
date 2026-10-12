@@ -29,6 +29,6 @@ jobs:
           bun-version: "1.4.2"
       - run: bun install --frozen-lockfile --ignore-scripts
       # Local lockfile-pinned binary (not bun x: S8543, no unverified downloads).
-      - run: ./node_modules/.bin/biome check packages/fleet
+      - run: ./node_modules/.bin/biome check ./packages/fleet
       - run: bun run typecheck
-      - run: bun test packages/fleet
+      - run: bun test ./packages/fleet

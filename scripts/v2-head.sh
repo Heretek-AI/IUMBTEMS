@@ -3,8 +3,8 @@
 # locally). Clones/fetches the v2 branch, installs it, points the published
 # @opencode packages at the checkout for this run, and runs the given tests.
 #
-#   scripts/v2-head.sh                       # bun test packages/opencode
-#   scripts/v2-head.sh packages/opencode packages/testkit
+#   scripts/v2-head.sh                       # bun test ./packages/opencode
+#   scripts/v2-head.sh ./packages/opencode ./packages/testkit
 #
 # This repoints node_modules symlinks; `bun install` restores them.
 set -euo pipefail
@@ -38,4 +38,4 @@ cd "$root"
 if [[ "$#" -gt 0 ]]; then
   exec bun test "$@"
 fi
-exec bun test packages/opencode
+exec bun test ./packages/opencode
