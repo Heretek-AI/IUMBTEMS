@@ -5,16 +5,12 @@
 // both land. State reads during the race never observe a half-signed
 // (state, sidecar) pair: a refusal would reject the Promise.all.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtemp } from "node:fs/promises"
-import { tmpdir } from "node:os"
 import path from "node:path"
 import { recordApproval } from "../src/approval/index.ts"
 import type { HumanSigner } from "../src/approval/keystore.ts"
 import { sealHumanKey, unlockHumanKey } from "../src/approval/keystore.ts"
 import { Factory } from "../src/factory/index.ts"
 import { once, readJournal } from "../src/factory/journal.ts"
-import { gateRunner } from "../src/gates/index.ts"
-import { factoryLayout } from "../src/layout.ts"
 import { esTools } from "../src/ops/tools.ts"
 import { type Fixture, frontier, gitRepo, writeReport, writeSpecs } from "./helpers.ts"
 
@@ -115,4 +111,30 @@ describe("concurrent runtime-state writes (issue #179)", () => {
     expect(state.spend.usd).toBe(10)
     expect(state.spend.events).toBe(10)
   })
+})
+
+describe("benchmark baseline idempotence (issue #327)", () => {
+  test("two smoke runs leave the tracked baseline byte-identical when only durations change", async () => {
+    const root = path.resolve(import.meta.dir, "..", "..", "..")
+    const baselineFile = path.join(root, "evals/benchmarks/baseline.json")
+    const { readFile, writeFile } = await import("node:fs/promises")
+    const { $ } = await import("bun")
+    const original = await readFile(baselineFile, "utf8")
+    try {
+      // First smoke run must stay green (references pass, seeds fail).
+      await $`bun scripts/benchmarks.ts`.cwd(root).quiet()
+      // Pin every duration to a sentinel, keeping pass/fail: a second run
+      // that only re-times must preserve these bytes exactly.
+      const pinned: Record<string, { pass: boolean; durationMs: number }> = JSON.parse(
+        await readFile(baselineFile, "utf8"),
+      )
+      for (const id of Object.keys(pinned)) pinned[id] = { pass: pinned[id]!.pass, durationMs: 1 }
+      const pinnedBytes = `${JSON.stringify(pinned, null, 2)}\n`
+      await writeFile(baselineFile, pinnedBytes)
+      await $`bun scripts/benchmarks.ts`.cwd(root).quiet()
+      expect(await readFile(baselineFile, "utf8")).toBe(pinnedBytes)
+    } finally {
+      await writeFile(baselineFile, original)
+    }
+  }, 300_000)
 })
