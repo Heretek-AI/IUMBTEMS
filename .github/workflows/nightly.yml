@@ -68,15 +68,15 @@ jobs:
       - run: bun install --frozen-lockfile --ignore-scripts
       - name: Evals
         env:
-          ES_EVAL_API_KEY: ${{ secrets.ES_EVAL_API_KEY }}
-          ES_EVAL_MODEL: ${{ vars.ES_EVAL_MODEL }}
-          ES_EVAL_KEY_VAR: ${{ vars.ES_EVAL_KEY_VAR || 'ANTHROPIC_API_KEY' }}
+          ES_EVAL_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          ES_EVAL_MODEL: ${{ vars.OPENCODE_MODEL || 'opencode/muse-spark-1.3-contributor' }}
+          ES_EVAL_KEY_VAR: ${{ vars.OPENCODE_KEY_VAR || 'OPENCODE_API_KEY' }}
           ES_EVAL_MAX_STEPS: "24"
           ES_EVAL_TIMEOUT_MS: "300000"
           ES_EVAL_MAX_USD: "1.00"
         run: |
           if [ -z "$ES_EVAL_API_KEY" ] || [ -z "$ES_EVAL_MODEL" ]; then
-            echo "evals: secrets.ES_EVAL_API_KEY and vars.ES_EVAL_MODEL are not both set; skipping."
+            echo "evals: secrets.OPENCODE_API_KEY and vars.OPENCODE_MODEL are not both set; skipping."
             exit 0
           fi
           # The platform package carries the binary itself, so no install script runs.
